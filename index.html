@@ -2,205 +2,194 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SECURE WATCHDOG</title>
+<title>Secure Watchdog Dashboard</title>
 
 <style>
-*{
-  box-sizing:border-box;
-  user-select:none;
-}
 body{
   margin:0;
+  font-family:Segoe UI,system-ui;
   background:#020617;
   color:#e5e7eb;
-  font-family:Segoe UI,system-ui;
-  overflow:hidden;
 }
-#lockScreen{
-  position:fixed;
-  inset:0;
+header{
   display:flex;
+  justify-content:space-between;
   align-items:center;
-  justify-content:center;
-  background:#020617;
-  z-index:9999;
-  text-align:center;
-}
-#app{
-  display:none;
-  padding:20px;
-}
-input,button{
-  padding:10px;
-  margin:5px;
+  padding:15px 20px;
+  background:#0b1220;
 }
 button{
+  padding:8px 14px;
   cursor:pointer;
 }
+section{
+  padding:20px;
+}
+h3{margin-top:0}
 table{
-  border-collapse:collapse;
   width:100%;
-  margin-top:20px;
+  border-collapse:collapse;
+  margin-top:10px;
 }
 th,td{
   border:1px solid #334155;
-  padding:8px;
+  padding:6px;
 }
 input.cell{
+  width:100%;
   background:transparent;
   border:none;
   color:#e5e7eb;
-  width:100%;
 }
-.blur{
-  filter:blur(20px);
+.hidden{display:none}
+.panel{
+  background:#0b1220;
+  padding:15px;
+  border-radius:10px;
+  margin-bottom:20px;
 }
 </style>
 </head>
 
 <body>
 
-<!-- LOCK SCREEN -->
-<div id="lockScreen">
+<header>
+  <div><strong>SECURE WATCHDOG</strong></div>
   <div>
-    <h1>🔒 SECURE WATCHDOG</h1>
-    <p>Authentication Required</p>
-    <input id="email" placeholder="Email"><br>
-    <input id="password" type="password" placeholder="Password"><br>
-    <button onclick="login()">LOGIN</button>
+    <span id="userInfo"></span>
+    <button onclick="logout()">Logout</button>
   </div>
-</div>
+</header>
 
-<!-- MAIN APP -->
-<div id="app">
-  <h2>Secure Dashboard</h2>
-  <p id="roleInfo"></p>
+<section id="loginSection">
+  <h3>Login</h3>
+  <input id="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Password">
+  <button onclick="login()">Login</button>
+</section>
 
-  <button onclick="addRow()">Add Row</button>
+<section id="appSection" class="hidden">
 
-  <table>
-    <thead>
-      <tr>
-        <th>A</th><th>B</th><th>C</th><th id="adminCol">Action</th>
-      </tr>
-    </thead>
-    <tbody id="sheetBody"></tbody>
-  </table>
-</div>
+  <!-- NEW SESSION DATA -->
+  <div class="panel">
+    <h3>🆕 New Data Entry (Current Session)</h3>
+    <button onclick="addSessionRow()">Add Row</button>
+    <button onclick="submitSession()">Submit Session</button>
+    <table>
+      <thead><tr><th>A</th><th>B</th><th>C</th></tr></thead>
+      <tbody id="sessionBody"></tbody>
+    </table>
+  </div>
+
+  <!-- HISTORY -->
+  <div class="panel">
+    <h3>📁 Old Data (History)</h3>
+    <table>
+      <thead><tr><th>A</th><th>B</th><th>C</th><th>User</th><th>Date</th></tr></thead>
+      <tbody id="historyBody"></tbody>
+    </table>
+  </div>
+
+</section>
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
-import {
-  getAuth,
-  signInWithEmailAndPassword,
-  onAuthStateChanged
-} from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
-import {
-  getDatabase,
-  ref,
-  push,
-  set,
-  onValue,
-  remove,
-  get
-} from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
+import { getDatabase, ref, push, set, onValue, remove } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
-/* FIREBASE CONFIG */
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
   authDomain: "metro-railway-project.firebaseapp.com",
   databaseURL: "https://metro-railway-project-default-rtdb.firebaseio.com",
-  projectId: "metro-railway-project",
-  storageBucket: "metro-railway-project.firebasestorage.app",
-  messagingSenderId: "376569064381",
-  appId: "1:376569064381:web:492cae73871212158180d4"
+  projectId: "metro-railway-project"
 };
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getDatabase(app);
 
-let role = "user";
+let currentUser;
 
 /* LOGIN */
-window.login = ()=>{
+window.login = ()=> {
   signInWithEmailAndPassword(auth,email.value,password.value)
-    .catch(e=>alert("Access Denied"));
+    .catch(()=>alert("Login failed"));
 };
 
+/* LOGOUT */
+window.logout = ()=> signOut(auth);
+
 /* AUTH STATE */
-onAuthStateChanged(auth, async user=>{
-  if(!user) return;
-
-  document.getElementById("lockScreen").style.display="none";
-  document.getElementById("app").style.display="block";
-
-  if(user.email === "soham@metro.project"){
-    role="admin";
-  }else{
-    const snap = await get(ref(db,"users/"+user.uid+"/role"));
-    role = snap.val() || "user";
+onAuthStateChanged(auth,user=>{
+  if(!user){
+    loginSection.classList.remove("hidden");
+    appSection.classList.add("hidden");
+    return;
   }
+  currentUser = user;
+  userInfo.innerText = user.email;
+  loginSection.classList.add("hidden");
+  appSection.classList.remove("hidden");
 
-  roleInfo.innerText = "Role: " + role.toUpperCase();
-  loadData();
+  loadSession();
+  loadHistory();
 });
 
-/* LOAD DATA */
-function loadData(){
-  onValue(ref(db,"excelData"), snap=>{
-    sheetBody.innerHTML="";
-    snap.forEach(row=>{
-      const id=row.key;
-      const d=row.val();
+/* SESSION DATA */
+function loadSession(){
+  onValue(ref(db,"excelData/session/"+currentUser.uid), snap=>{
+    sessionBody.innerHTML="";
+    snap.forEach(r=>{
       const tr=document.createElement("tr");
-
       ["A","B","C"].forEach(c=>{
         const td=document.createElement("td");
         const i=document.createElement("input");
         i.className="cell";
-        i.value=d[c]||"";
-        i.onchange=()=>set(ref(db,`excelData/${id}/${c}`),i.value);
+        i.value=r.val()[c]||"";
+        i.onchange=()=>set(ref(db,`excelData/session/${currentUser.uid}/${r.key}/${c}`),i.value);
         td.appendChild(i);
         tr.appendChild(td);
       });
-
-      if(role==="admin"){
-        const td=document.createElement("td");
-        const b=document.createElement("button");
-        b.innerText="Delete";
-        b.onclick=()=>remove(ref(db,"excelData/"+id));
-        td.appendChild(b);
-        tr.appendChild(td);
-      }
-
-      sheetBody.appendChild(tr);
+      sessionBody.appendChild(tr);
     });
   });
 }
 
-window.addRow=()=>push(ref(db,"excelData"),{A:"",B:"",C:""});
+window.addSessionRow=()=>{
+  push(ref(db,"excelData/session/"+currentUser.uid),{A:"",B:"",C:""});
+};
 
-/* MAX SECURITY */
-document.addEventListener("contextmenu",e=>e.preventDefault());
-document.addEventListener("keydown",e=>{
-  if(
-    e.key==="PrintScreen" ||
-    e.ctrlKey || e.altKey || e.metaKey ||
-    ["F12","F5","F11","F10"].includes(e.key)
-  ){
-    e.preventDefault();
-    document.body.classList.add("blur");
-    setTimeout(()=>document.body.classList.remove("blur"),1000);
-  }
-});
-document.addEventListener("visibilitychange",()=>{
-  if(document.hidden){
-    document.body.classList.add("blur");
-  }else{
-    document.body.classList.remove("blur");
-  }
-});
+/* SUBMIT SESSION */
+window.submitSession=()=>{
+  onValue(ref(db,"excelData/session/"+currentUser.uid), snap=>{
+    snap.forEach(r=>{
+      push(ref(db,"excelData/history"),{
+        ...r.val(),
+        user: currentUser.email,
+        date: new Date().toLocaleString()
+      });
+    });
+    remove(ref(db,"excelData/session/"+currentUser.uid));
+    alert("Session submitted");
+  },{onlyOnce:true});
+};
+
+/* HISTORY */
+function loadHistory(){
+  onValue(ref(db,"excelData/history"), snap=>{
+    historyBody.innerHTML="";
+    snap.forEach(r=>{
+      const d=r.val();
+      const tr=document.createElement("tr");
+      ["A","B","C","user","date"].forEach(k=>{
+        const td=document.createElement("td");
+        td.innerText=d[k]||"";
+        tr.appendChild(td);
+      });
+      historyBody.appendChild(tr);
+    });
+  });
+}
 </script>
 
 </body>
