@@ -300,6 +300,12 @@ onAuthStateChanged(auth, user => {
   
   isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
   
+  // *** CRITICAL UPDATE: AUTOMATICALLY SAVE USER ID ON LOGIN ***
+  // This ensures the Admin Panel has data to display, even if they log in for the first time.
+  update(ref(db, `users/${user.uid}`), { email: user.email })
+    .catch(err => console.error("Auto-Save Failed (Check Rules): ", err));
+
+  // START APP LOGIC
   const userRef = ref(db, `users/${user.uid}`);
   onValue(userRef, (snap) => {
     const userData = snap.val();
@@ -379,7 +385,6 @@ window.handleFaceCapture = () => {
   } 
   else if (verificationMode === "verify") {
     compareFace(capturedImg, tempPhotos).then(matchScore => {
-        // STRICT 60% MINIMUM
         if(matchScore >= 60) {
             status.style.color = "#28a745";
             status.innerText = `Match Verified (${matchScore}%). Access Granted.`;
@@ -399,7 +404,6 @@ function accessGranted() {
     initializeAppUI();
 }
 
-// --- UPDATED MATCHING LOGIC (FACE FOCUS) ---
 function compareFace(newImg, storedImages) {
     return new Promise(resolve => {
         let bestScore = 0;
@@ -421,43 +425,31 @@ function getSimilarity(img1, img2) {
     const c = document.getElementById("compareCanvas");
     const ctx = c.getContext("2d");
     
-    // Draw Image 1
     ctx.drawImage(img1, 0, 0, 32, 32);
     const d1 = ctx.getImageData(0,0,32,32).data;
     
-    // Draw Image 2
     ctx.clearRect(0,0,32,32);
     ctx.drawImage(img2, 0, 0, 32, 32);
     const d2 = ctx.getImageData(0,0,32,32).data;
     
     let diff = 0;
     let pixelsChecked = 0;
-
-    // --- CROP LOGIC: Focus on Face (Top-Center), Ignore Dress (Bottom) ---
-    // 32x32 Grid
-    // We only check X: 5 to 27 (Center width)
-    // We only check Y: 4 to 20 (Top to Middle - avoids shoulders/dress)
     
+    // Check Top-Center Region (Face) Only
     for (let y = 4; y < 20; y++) {
         for (let x = 5; x < 27; x++) {
-            const i = (y * 32 + x) * 4; // Index in data array
-            
-            // Compare RGB
-            diff += Math.abs(d1[i] - d2[i]);     // R
-            diff += Math.abs(d1[i+1] - d2[i+1]); // G
-            diff += Math.abs(d1[i+2] - d2[i+2]); // B
-            
+            const i = (y * 32 + x) * 4;
+            diff += Math.abs(d1[i] - d2[i]);
+            diff += Math.abs(d1[i+1] - d2[i+1]);
+            diff += Math.abs(d1[i+2] - d2[i+2]);
             pixelsChecked++;
         }
     }
     
     const maxDiff = 255 * 3 * pixelsChecked;
     let match = 100 - ((diff / maxDiff) * 100);
-    
-    // Boost slightly for webcams
     if(match > 80) return match + 10;
     if(match > 70) return match + 5;
-    
     return match;
 }
 
@@ -473,7 +465,6 @@ function initializeAppUI() {
     loadAdminPanel();
   }
 
-  update(ref(db, `users/${currentUser.uid}`), { email: currentUser.email });
   loadSession();
   loadHistory();
   loadAssignments();
@@ -575,9 +566,18 @@ function loadAdminPanel() {
     
     const currAudit = selectAudit.value;
     
+    // Clear and Rebuild
     selectAssign.innerHTML = "<option value=''>-- Select User --</option>";
     selectAudit.innerHTML = "<option value=''>-- Select User to Inspect --</option>";
     tbody.innerHTML = "";
+
+    // If Database is empty/permission block
+    if(!snap.exists()) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td colspan='4' style='text-align:center; color:red;'>No users found. Check Database Rules or have users log in once.</td>";
+        tbody.appendChild(tr);
+        return;
+    }
 
     snap.forEach(u => {
       const user = u.val();
@@ -603,10 +603,13 @@ function loadAdminPanel() {
       tbody.appendChild(tr);
     });
     if(currAudit) selectAudit.value = currAudit;
+  }, (err) => {
+      // PERMISSION ERROR HANDLING
+      console.error(err);
+      alert("Admin Panel Error: " + err.message + "\n\nPlease update your Database Rules to '.read': 'auth != null'");
   });
 }
 
-// ADMIN: AUDIT USER DATA (Fixed & Case Insensitive)
 window.auditUser = () => {
     const email = document.getElementById("userSelectAudit").value;
     const body = document.getElementById("auditBody");
@@ -622,7 +625,6 @@ window.auditUser = () => {
         let count = 0;
         snap.forEach(r => {
             const d = r.val();
-            // CHECKING IF EMAIL MATCHES (Case Insensitive)
             if(d.user && d.user.toLowerCase() === email.toLowerCase()) {
                 count++;
                 const tr = document.createElement("tr");
