@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Metro Railway Safety System | Official Portal</title>
+<title>Metro Railway Safety System | Official Portal (Pro)</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+
 <style>
 /* --- OFFICIAL THEME (Light Mode) --- */
 :root {
@@ -113,9 +116,10 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 input.cell { border: none; background: transparent; width: 100%; font-size: 13px; }
 input.cell:focus { background: #fff; outline: 1px solid #80bdff; }
 
-/* MODAL */
+/* MODAL & SECURITY */
 #faceModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: flex; justify-content: center; align-items: center; flex-direction: column; z-index: 999; }
-#cameraFeed { border: 5px solid white; box-shadow: 0 0 20px rgba(0,0,0,0.5); width: 320px; height: 240px; background: #000; margin-bottom: 15px; }
+#cameraFeed { border: 5px solid white; box-shadow: 0 0 20px rgba(0,0,0,0.5); width: 320px; height: 240px; background: #000; margin-bottom: 15px; transform: scaleX(-1); }
+#countdownDisplay { font-size: 4rem; color: #ffc107; font-weight: bold; margin-bottom: 10px; text-shadow: 0 0 10px orange; }
 </style>
 </head>
 
@@ -128,7 +132,7 @@ input.cell:focus { background: #fff; outline: 1px solid #80bdff; }
       <h1 style="margin:0; line-height:1.2">Metro Railway Safety Project</h1>
       <small>Secure Data Management Portal</small>
     </div>
-    <span id="adminBadge" class="hidden admin-badge">ADMINISTRATOR</span>
+    <span id="adminBadge" class="hidden status-badge" style="background:#dc3545; color:white; margin-left:10px;">ADMINISTRATOR</span>
   </div>
   <div id="authContainer" class="hidden">
     <span style="font-size:12px; margin-right:5px; opacity:0.8">User ID:</span>
@@ -147,12 +151,13 @@ input.cell:focus { background: #fff; outline: 1px solid #80bdff; }
 </section>
 
 <div id="faceModal" class="hidden">
+  <div id="countdownDisplay" class="hidden">5</div>
   <h2 id="modalTitle" style="color:white; margin-bottom:5px;">Biometric Verification</h2>
-  <p id="modalDesc" style="color:#ccc; margin-bottom:15px; font-size:14px;">Identity confirmation required.</p>
-  <video id="cameraFeed" autoplay playsinline></video>
+  <p id="modalDesc" style="color:#ccc; margin-bottom:15px; font-size:14px;">Initializing AI Models...</p>
+  <video id="cameraFeed" autoplay playsinline muted></video>
   <canvas id="faceCanvas" width="320" height="240" class="hidden"></canvas>
   <canvas id="compareCanvas" width="32" height="32" class="hidden"></canvas>
-  <button id="btnCapture" onclick="handleFaceCapture()" style="background:white; color:black; border:none; padding:10px 20px;">📸 Capture Photo</button>
+  <button id="btnCapture" onclick="handleFaceCapture(false)" style="background:white; color:black; border:none; padding:10px 20px;">📸 Capture Photo</button>
   <p id="faceStatus" style="color:#ffc107; margin-top:15px; font-weight:bold;"></p>
 </div>
 
@@ -193,7 +198,7 @@ input.cell:focus { background: #fff; outline: 1px solid #80bdff; }
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <h3>📦 Inventory & Stock</h3>
             <span id="adminInvControls" class="hidden">
-                <button class="success" onclick="document.getElementById('addInvForm').classList.toggle('hidden')">+ Add New Item</button>
+                <button class="success" onclick="toggleInvForm()">+ Add New Item</button>
             </span>
         </div>
 
@@ -236,7 +241,6 @@ input.cell:focus { background: #fff; outline: 1px solid #80bdff; }
   </div>
 
   <div id="tab-adminPanel" class="hidden">
-    
     <div class="panel">
       <h3>🛠 Work Assignment</h3>
       <div style="display:grid; grid-template-columns: 1fr 2fr 100px; gap:10px;">
@@ -245,7 +249,6 @@ input.cell:focus { background: #fff; outline: 1px solid #80bdff; }
         <button onclick="assignTask()">Assign</button>
       </div>
     </div>
-
     <div class="panel" style="border-top: 4px solid var(--official-blue);">
       <h3>📊 Audit & Surveillance</h3>
       <div style="display:flex; gap:10px; margin-bottom:15px; align-items:center;">
@@ -261,7 +264,6 @@ input.cell:focus { background: #fff; outline: 1px solid #80bdff; }
         <tbody id="auditBody"><tr><td colspan="5" style="text-align:center;">Select user and report type.</td></tr></tbody>
       </table>
     </div>
-
     <div class="panel">
       <h3>👤 User Access Control</h3>
       <table>
@@ -293,15 +295,29 @@ let currentUser;
 let isAdmin = false;
 const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project"];
 
-// BIOMETRIC & AUTH
+// BIOMETRIC AI
 let tempPhotos = [];
 let verificationMode = "register"; 
 let videoStream = null;
-let autoVerifyInterval = null;
+let reVerifyTimer = null;
+let faceModel = null; // AI Model
 
 setPersistence(auth, browserSessionPersistence);
 
-// --- ACTIVITY LOGGING & WATCHDOG ---
+// --- LOAD AI MODEL ---
+async function loadAI() {
+    document.getElementById("modalDesc").innerText = "Loading AI Face Detection Model...";
+    try {
+        faceModel = await blazeface.load();
+        console.log("AI Model Loaded");
+        document.getElementById("modalDesc").innerText = "AI Ready. Position your face.";
+    } catch(e) {
+        console.error("AI Load Failed", e);
+        alert("CRITICAL ERROR: AI Face Model failed to load. Check internet.");
+    }
+}
+
+// --- ACTIVITY LOGGING ---
 function logActivity(type, desc) {
   if(!currentUser) return;
   push(ref(db, "activityLogs"), {
@@ -313,17 +329,11 @@ function logActivity(type, desc) {
   });
 }
 
-document.addEventListener("visibilitychange", () => {
-  if (currentUser && document.hidden) {
-    logActivity("VIOLATION", "User switched browser tab / Minimized window.");
-  }
-});
-
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert("Auth Failed: " + e.message));
 
 window.logout = () => {
-  logActivity("LOGOUT", "User initiated logout.");
-  if(autoVerifyInterval) clearInterval(autoVerifyInterval);
+  logActivity("LOGOUT", "User initiated logout or failed check.");
+  if(reVerifyTimer) clearTimeout(reVerifyTimer);
   email.value = ""; password.value = ""; signOut(auth);
 };
 
@@ -333,7 +343,6 @@ onAuthStateChanged(auth, user => {
     appSection.classList.add("hidden");
     document.getElementById("authContainer").classList.add("hidden");
     stopCamera();
-    if(autoVerifyInterval) clearInterval(autoVerifyInterval);
     return;
   }
   currentUser = user;
@@ -349,7 +358,7 @@ onAuthStateChanged(auth, user => {
 
     loginSection.classList.add("hidden");
     document.getElementById("faceModal").classList.remove("hidden");
-    startCamera(); // Camera starts once and stays active for periodic checks
+    startCamera(); 
 
     if (!userData || !userData.faceData) {
         verificationMode = "register"; tempPhotos = [];
@@ -357,86 +366,122 @@ onAuthStateChanged(auth, user => {
     } else {
         verificationMode = "verify";
         tempPhotos = [userData.faceData.photo1, userData.faceData.photo2];
-        updateModalUI("Identity Verification", "Verify Identity");
+        updateModalUI("Identity Verification", "AI Scanning for human face...");
     }
   }, { onlyOnce: true });
 });
 
-/* --- FACE LOGIC & CONTINUOUS VERIFICATION --- */
-async function startCamera() { try { videoStream = await navigator.mediaDevices.getUserMedia({ video: true }); document.getElementById("cameraFeed").srcObject = videoStream; } catch(e) {} }
+/* --- FACE LOGIC & 15 MINUTE CHECK --- */
+async function startCamera() { 
+    try { 
+        videoStream = await navigator.mediaDevices.getUserMedia({ video: true }); 
+        document.getElementById("cameraFeed").srcObject = videoStream;
+        if(!faceModel) await loadAI();
+    } catch(e) { alert("Camera Error: " + e.message); } 
+}
+
 function stopCamera() { if (videoStream) { videoStream.getTracks().forEach(track => track.stop()); videoStream = null; } }
 function updateModalUI(title, desc) { document.getElementById("modalTitle").innerText = title; document.getElementById("modalDesc").innerText = desc; document.getElementById("btnCapture").disabled = false; document.getElementById("faceStatus").innerText = ""; }
 
-window.handleFaceCapture = () => {
-  const video = document.getElementById("cameraFeed");
-  const canvas = document.getElementById("faceCanvas");
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, 320, 240);
-  const capturedImg = canvas.toDataURL("image/png");
-  
-  // If manual trigger
-  if(document.getElementById("faceModal").classList.contains("hidden") === false) {
-      const status = document.getElementById("faceStatus");
-      document.getElementById("btnCapture").disabled = true;
-      status.innerText = "Processing...";
-  }
+// GLOBAL FUNCTION FOR BUTTON CLICK
+window.handleFaceCapture = async (isAuto = false) => {
+    const video = document.getElementById("cameraFeed");
+    const status = document.getElementById("faceStatus");
+    const btn = document.getElementById("btnCapture");
 
-  if (verificationMode === "register") {
-    if (tempPhotos.length === 0) {
-        tempPhotos.push(capturedImg); 
-        document.getElementById("faceStatus").innerText = "Photo 1 Saved."; 
-        setTimeout(() => updateModalUI("Biometric Registration", "Step 2: Capture Photo 2"), 1000);
+    btn.disabled = true;
+    status.innerText = "AI Analyzing...";
+
+    // 1. AI FACE DETECTION (The "Wall" Fix)
+    if(faceModel) {
+        const predictions = await faceModel.estimateFaces(video, false);
+        if (predictions.length === 0) {
+            status.style.color = "red";
+            status.innerText = "❌ NO HUMAN FACE DETECTED";
+            btn.disabled = false;
+            if(isAuto) {
+                logActivity("VIOLATION", "Auto-check failed: No face detected.");
+                setTimeout(logout, 2000);
+            }
+            return;
+        }
+    }
+
+    // 2. CAPTURE & COMPARE
+    const canvas = document.getElementById("faceCanvas");
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, 320, 240);
+    const capturedImg = canvas.toDataURL("image/png");
+
+    if (verificationMode === "register") {
+        if (tempPhotos.length === 0) {
+            tempPhotos.push(capturedImg); 
+            status.innerText = "Photo 1 Saved. Move slightly."; 
+            btn.disabled = false;
+            setTimeout(() => updateModalUI("Biometric Registration", "Step 2: Capture Photo 2"), 1000);
+        } else {
+            update(ref(db, `users/${currentUser.uid}/faceData`), { photo1: tempPhotos[0], photo2: capturedImg }).then(() => { 
+                status.innerText = "Registration Complete."; 
+                setTimeout(() => { logActivity("LOGIN", "Registration success."); accessGranted(); }, 1500); 
+            });
+        }
     } else {
-        update(ref(db, `users/${currentUser.uid}/faceData`), { photo1: tempPhotos[0], photo2: capturedImg }).then(() => { 
-            document.getElementById("faceStatus").innerText = "Success. Entering..."; 
-            setTimeout(() => { logActivity("LOGIN", "First time registration success."); accessGranted(); }, 1500); 
+        // VERIFY
+        compareFace(capturedImg, tempPhotos).then(score => {
+            if(score >= 75) { // Increased threshold for security
+                status.style.color = "#28a745"; 
+                status.innerText = `Verified (Match: ${score}%).`; 
+                setTimeout(() => { 
+                    if(isAuto) logActivity("AUTO", "15-min Security Check Passed.");
+                    else logActivity("LOGIN", "Login Verification Passed.");
+                    accessGranted(); 
+                }, 1000);
+            } else { 
+                status.style.color = "#dc3545"; 
+                status.innerText = `Identity Mismatch (${score}%).`;
+                logActivity("VIOLATION", `Face mismatch during ${isAuto ? 'Auto-Check' : 'Login'}`);
+                setTimeout(() => logout(), 2000); 
+            }
         });
     }
-  } else {
-    // VERIFICATION (Manual or Auto)
-    compareFace(capturedImg, tempPhotos).then(score => {
-        if(score >= 60) { 
-            // SUCCESS
-            if(!document.getElementById("faceModal").classList.contains("hidden")) {
-                // Initial login success
-                document.getElementById("faceStatus").style.color = "#28a745"; 
-                document.getElementById("faceStatus").innerText = `Verified (${score}%).`; 
-                setTimeout(() => { logActivity("LOGIN", "Biometric verification success."); accessGranted(); }, 1500);
-            } else {
-                // Background check success
-                console.log("Auto-verify success: " + score + "%");
-                logActivity("AUTO", `Silent verification passed (${score}%).`);
-            }
-        } else { 
-            // FAIL
-            logActivity("VIOLATION", `Biometric verification failed (Score: ${score}%).`);
-            if(document.getElementById("faceModal").classList.contains("hidden")) {
-                alert("Security Check Failed: Face not matched. Logging out.");
-            } else {
-                document.getElementById("faceStatus").style.color = "#dc3545"; 
-                document.getElementById("faceStatus").innerText = `Failed (${score}%).`;
-            }
-            setTimeout(() => signOut(auth), 2000); 
-        }
-    });
-  }
 };
 
 function accessGranted() { 
     document.getElementById("faceModal").classList.add("hidden"); 
-    // Do NOT stop camera, needed for background checks
+    document.getElementById("countdownDisplay").classList.add("hidden");
     initializeAppUI();
     
-    // START HIDDEN TIMER (15 Minutes)
-    if(autoVerifyInterval) clearInterval(autoVerifyInterval);
-    autoVerifyInterval = setInterval(() => {
-        if(videoStream && currentUser) {
-             // Re-use logic but in verify mode
-             handleFaceCapture();
-        }
-    }, 15 * 60 * 1000); // 15 Minutes
+    // START 15 MINUTE TIMER
+    if(reVerifyTimer) clearTimeout(reVerifyTimer);
+    console.log("Timer started: 15 Minutes");
+    reVerifyTimer = setTimeout(triggerSecurityCheck, 15 * 60 * 1000); // 15 Mins
 }
 
+function triggerSecurityCheck() {
+    const modal = document.getElementById("faceModal");
+    const countDisplay = document.getElementById("countdownDisplay");
+    
+    modal.classList.remove("hidden");
+    countDisplay.classList.remove("hidden");
+    document.getElementById("modalTitle").innerText = "SECURITY CHECK";
+    document.getElementById("modalDesc").innerText = "Presence Verification Required";
+    document.getElementById("btnCapture").disabled = true;
+
+    let timeLeft = 5;
+    countDisplay.innerText = timeLeft;
+
+    const countdownInterval = setInterval(() => {
+        timeLeft--;
+        countDisplay.innerText = timeLeft;
+        if(timeLeft <= 0) {
+            clearInterval(countdownInterval);
+            countDisplay.innerText = "SCANNING";
+            window.handleFaceCapture(true); // Auto Trigger
+        }
+    }, 1000);
+}
+
+// PIXEL COMPARISON (Secondary Layer)
 function compareFace(newImg, storedImages) {
     return new Promise(resolve => {
         let best = 0; let count = 0;
@@ -468,7 +513,7 @@ function initializeAppUI() {
     document.getElementById("adminBadge").classList.remove("hidden");
     document.getElementById("btnAdmin").classList.remove("hidden");
     document.getElementById("adminDelHead").classList.remove("hidden");
-    document.getElementById("adminInvControls").classList.remove("hidden");
+    document.getElementById("adminInvControls").classList.remove("hidden"); // Admin sees button
     document.getElementById("invActionHead").classList.remove("hidden");
     loadAdminPanel();
   }
@@ -484,25 +529,35 @@ window.switchTab = (t) => {
   logActivity("NAV", `Switched to tab: ${t}`);
 };
 
-/* --- INVENTORY LOGIC (NEW) --- */
+/* --- INVENTORY LOGIC FIXED --- */
+// Exposed function for HTML button
+window.toggleInvForm = () => {
+    document.getElementById('addInvForm').classList.toggle('hidden');
+}
+
 window.addInventory = () => {
     const n = document.getElementById("invName").value;
     const s = document.getElementById("invSource").value;
     const q = document.getElementById("invQty").value;
     const c = document.getElementById("invCond").value;
-    if(!n || !q) return alert("Enter Name and Qty");
+    
+    if(!n || !q) { alert("Error: Product Name and Quantity are required."); return; }
     
     push(ref(db, "inventory"), {
         name: n, source: s, qty: q, condition: c, updatedBy: currentUser.email, timestamp: new Date().toLocaleString()
-    });
-    logActivity("ACTION", `Added inventory: ${n}`);
-    document.getElementById("invName").value = "";
-    document.getElementById("addInvForm").classList.add("hidden");
+    }).then(() => {
+        logActivity("ACTION", `Added inventory: ${n}`);
+        document.getElementById("invName").value = "";
+        document.getElementById("invQty").value = "";
+        alert("Inventory Saved Successfully!");
+        document.getElementById("addInvForm").classList.add("hidden");
+    }).catch(err => alert("DB Error: " + err.message));
 };
 
 function loadInventory() {
     onValue(ref(db, "inventory"), snap => {
         const tbody = document.getElementById("inventoryBody"); tbody.innerHTML = "";
+        if(!snap.exists()) return;
         snap.forEach(r => {
             const d = r.val();
             const tr = document.createElement("tr");
@@ -540,7 +595,6 @@ function loadStationDraft() {
 
 window.addDistanceRow = () => {
     push(ref(db, `excelData/session/${currentUser.uid}/rows`), { rakeNo: "", rakeType: "", distFront: "", distRear: "" });
-    logActivity("ACTION", "Added new distance row.");
 };
 
 function renderRow(key, data, slNo) {
@@ -589,10 +643,8 @@ function loadAssignments() {
     snap.forEach(t => {
       const val = t.val();
       const d = document.createElement("div"); d.className="panel"; d.style.borderLeft="4px solid #ffc107";
-      
       const isDone = val.status === "Completed";
       if(isDone) d.style.borderLeft = "4px solid #28a745";
-      
       d.innerHTML = `
         <div style="display:flex;justify-content:space-between">
             <strong>Task</strong>
@@ -608,7 +660,6 @@ function loadAssignments() {
 }
 window.markTaskDone = (k) => {
     update(ref(db, `assignments/${currentUser.uid}/${k}`), { status: "Completed", completedAt: new Date().toLocaleString() });
-    logActivity("ACTION", "Marked task as completed.");
 };
 
 /* --- ADMIN PANEL --- */
@@ -636,7 +687,6 @@ window.auditUser = (mode) => {
     const body = document.getElementById("auditBody");
     const header = document.getElementById("auditHeader");
     if(!email) return alert("Select user");
-    
     body.innerHTML = "<tr><td colspan='5'>Loading...</td></tr>";
 
     if(mode === 'data') {
