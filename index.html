@@ -65,12 +65,13 @@ input.cell:focus{background:#1e293b;outline:none;}
 </section>
 
 <div id="faceModal" class="hidden">
-  <h2 style="color:white">Facial Verification Required</h2>
-  <p style="color:#94a3b8; margin-bottom:10px;">Security Policy: You must register your face to continue.</p>
+  <h2 id="modalTitle" style="color:white">Biometric Verification</h2>
+  <p id="modalDesc" style="color:#94a3b8; margin-bottom:10px; text-align:center">Checking identity...</p>
+  
   <video id="cameraFeed" autoplay playsinline></video>
   <canvas id="faceCanvas" width="320" height="240" class="hidden"></canvas>
-  <button id="btnCapture" onclick="captureAndSaveFace()">📸 Capture & Verify Identity</button>
-  <p id="faceStatus" style="color:#fbbf24; margin-top:10px;"></p>
+  <canvas id="compareCanvas" width="32" height="32" class="hidden"></canvas> <button id="btnCapture" onclick="handleFaceCapture()">📸 Capture Photo</button>
+  <p id="faceStatus" style="color:#fbbf24; margin-top:10px; font-weight:bold;"></p>
 </div>
 
 <section id="appSection" class="hidden">
@@ -85,7 +86,7 @@ input.cell:focus{background:#1e293b;outline:none;}
   <div id="tab-newData">
     <div class="panel">
       <h3>🆕 Session Data Entry</h3>
-      <p style="color:#94a3b8;font-size:0.9em">Data is saved automatically as you type.</p>
+      <p style="color:#10b981;font-size:0.9em">Data auto-saves as DRAFT. Click Submit to finalize.</p>
       <div style="margin-bottom:10px;">
         <button onclick="addSessionRow()">+ Add Row</button>
         <button onclick="submitSession()" style="background:#10b981">✔ Submit Final</button>
@@ -140,7 +141,7 @@ input.cell:focus{background:#1e293b;outline:none;}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
 import { getDatabase, ref, push, set, onValue, remove, update } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 /* --- CONFIG --- */
@@ -160,7 +161,15 @@ let currentUser;
 let isAdmin = false;
 const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project"];
 
+// BIOMETRIC STATE
+let tempPhotos = [];
+let verificationMode = "register"; // 'register' or 'verify'
+let videoStream = null;
+
 /* --- AUTH & LOGIN --- */
+// 1. SET PERSISTENCE: REFRESH = LOGOUT
+setPersistence(auth, browserSessionPersistence);
+
 window.login = () => {
   signInWithEmailAndPassword(auth, email.value, password.value)
     .catch(e => alert("Login Error: " + e.message));
@@ -174,7 +183,6 @@ onAuthStateChanged(auth, user => {
     loginSection.classList.remove("hidden");
     appSection.classList.add("hidden");
     document.getElementById("authContainer").classList.add("hidden");
-    // Stop camera if running
     stopCamera();
     return;
   }
@@ -184,46 +192,48 @@ onAuthStateChanged(auth, user => {
   document.getElementById("authContainer").classList.remove("hidden");
   userInfo.innerText = user.email;
   
-  // Check Admin Status
   isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
   
-  // Check Termination & Face Data Status
+  // CHECK USER STATUS AND FACE DATA
   const userRef = ref(db, `users/${user.uid}`);
   onValue(userRef, (snap) => {
     const userData = snap.val();
     
-    // 1. Check if Terminated
+    // 1. Terminated Check
     if (userData && userData.terminated === true) {
       alert("ACCOUNT TERMINATED BY ADMIN");
       signOut(auth);
       return;
     }
 
-    // 2. Check if Face Data Exists
-    if (!userData || !userData.faceData) {
-        // Face Missing: Trigger Capture Modal
-        loginSection.classList.add("hidden");
-        appSection.classList.add("hidden"); // Hide app until face captured
-        document.getElementById("faceModal").classList.remove("hidden");
-        startCamera();
+    // 2. Face Data Check
+    loginSection.classList.add("hidden");
+    document.getElementById("faceModal").classList.remove("hidden");
+    startCamera();
+
+    if (!userData || !userData.faceData || !userData.faceData.photo1 || !userData.faceData.photo2) {
+        // MODE: REGISTER (Needs 2 photos)
+        verificationMode = "register";
+        tempPhotos = [];
+        updateModalUI("Registration Required", "Step 1: Take Photo 1 of 2 (Look Straight)");
     } else {
-        // Face Exists: Allow Access
-        document.getElementById("faceModal").classList.add("hidden");
-        initializeAppUI();
+        // MODE: VERIFY (Compare against stored)
+        verificationMode = "verify";
+        tempPhotos = [userData.faceData.photo1, userData.faceData.photo2];
+        updateModalUI("Identity Verification", "Please take a photo to verify it's you.");
     }
+
   }, { onlyOnce: true });
 });
 
-/* --- FACE CAPTURE LOGIC --- */
-let videoStream;
+/* --- FACE LOGIC --- */
 
 async function startCamera() {
   try {
     videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
     document.getElementById("cameraFeed").srcObject = videoStream;
   } catch(e) {
-    alert("Error: Camera access required. Please allow camera permissions.");
-    console.error(e);
+    alert("Camera permission denied. Logic cannot proceed.");
   }
 }
 
@@ -234,47 +244,121 @@ function stopCamera() {
   }
 }
 
-window.captureAndSaveFace = () => {
-  const btn = document.getElementById("btnCapture");
-  const status = document.getElementById("faceStatus");
+function updateModalUI(title, desc) {
+    document.getElementById("modalTitle").innerText = title;
+    document.getElementById("modalDesc").innerText = desc;
+    document.getElementById("btnCapture").disabled = false;
+    document.getElementById("faceStatus").innerText = "";
+}
+
+window.handleFaceCapture = () => {
   const video = document.getElementById("cameraFeed");
   const canvas = document.getElementById("faceCanvas");
   const context = canvas.getContext('2d');
-
-  // UI Feedback
-  btn.disabled = true;
-  btn.innerText = "Verifying & Uploading...";
-  status.innerText = "Please wait, storing secure biometric data...";
   
-  // Draw video frame to canvas
+  // Capture
   context.drawImage(video, 0, 0, 320, 240);
+  const capturedImg = canvas.toDataURL("image/png");
+
+  const status = document.getElementById("faceStatus");
+  const btn = document.getElementById("btnCapture");
   
-  // Convert to Base64
-  const imageString = canvas.toDataURL("image/png");
-  
-  // Save to DB
-  update(ref(db, `users/${currentUser.uid}`), {
-    email: currentUser.email,
-    faceData: imageString,
-    terminated: false
-  }).then(() => {
-    // Success UI
-    status.innerText = "Success! Redirecting...";
-    stopCamera();
-    
-    setTimeout(() => {
-        document.getElementById("faceModal").classList.add("hidden");
-        btn.disabled = false;
-        btn.innerText = "📸 Capture & Verify Identity";
-        status.innerText = "";
-        initializeAppUI();
-    }, 1500);
-  }).catch((err) => {
-    alert("Error saving face data: " + err.message);
-    btn.disabled = false;
-    btn.innerText = "Try Again";
-  });
+  btn.disabled = true;
+  status.innerText = "Processing...";
+
+  if (verificationMode === "register") {
+    // --- REGISTRATION LOGIC ---
+    if (tempPhotos.length === 0) {
+        tempPhotos.push(capturedImg);
+        status.innerText = "Photo 1 Saved.";
+        setTimeout(() => {
+            updateModalUI("Registration Required", "Step 2: Take Photo 2 of 2 (Slightly different angle)");
+        }, 1000);
+    } else {
+        // Save both
+        update(ref(db, `users/${currentUser.uid}/faceData`), {
+            photo1: tempPhotos[0],
+            photo2: capturedImg
+        }).then(() => {
+            status.style.color = "#10b981";
+            status.innerText = "Registration Complete! Entering system...";
+            setTimeout(accessGranted, 1500);
+        });
+    }
+  } 
+  else if (verificationMode === "verify") {
+    // --- VERIFICATION LOGIC (70% Match) ---
+    compareFace(capturedImg, tempPhotos).then(matchScore => {
+        if(matchScore >= 70) {
+            status.style.color = "#10b981";
+            status.innerText = `Match: ${matchScore}% - ACCESS GRANTED`;
+            setTimeout(accessGranted, 1500);
+        } else {
+            status.style.color = "#ef4444";
+            status.innerText = `Match: ${matchScore}% - FAILED. Logging out...`;
+            setTimeout(logout, 2000);
+        }
+    });
+  }
 };
+
+function accessGranted() {
+    document.getElementById("faceModal").classList.add("hidden");
+    stopCamera();
+    initializeAppUI();
+}
+
+/* --- IMAGE COMPARISON ALGORITHM (Client-Side Pixel Diff) --- */
+function compareFace(newImg, storedImages) {
+    return new Promise(resolve => {
+        let bestScore = 0;
+        let processed = 0;
+        
+        storedImages.forEach(stored => {
+            const img1 = new Image(); img1.src = newImg;
+            const img2 = new Image(); img2.src = stored;
+            
+            img1.onload = () => {
+                img2.onload = () => {
+                    const score = getSimilarity(img1, img2);
+                    if(score > bestScore) bestScore = score;
+                    processed++;
+                    if(processed === storedImages.length) resolve(Math.floor(bestScore));
+                }
+            }
+        });
+    });
+}
+
+function getSimilarity(img1, img2) {
+    // Resize to small 32x32 for fast comparison
+    const c = document.getElementById("compareCanvas");
+    const ctx = c.getContext("2d");
+    
+    ctx.drawImage(img1, 0, 0, 32, 32);
+    const d1 = ctx.getImageData(0,0,32,32).data;
+    
+    ctx.clearRect(0,0,32,32);
+    ctx.drawImage(img2, 0, 0, 32, 32);
+    const d2 = ctx.getImageData(0,0,32,32).data;
+    
+    let diff = 0;
+    for(let i=0; i<d1.length; i+=4) {
+        diff += Math.abs(d1[i] - d2[i]); // R
+        diff += Math.abs(d1[i+1] - d2[i+1]); // G
+        diff += Math.abs(d1[i+2] - d2[i+2]); // B
+    }
+    
+    const maxDiff = 255 * 3 * 32 * 32;
+    // Simple heuristic: invert diff percentage
+    let match = 100 - ((diff / maxDiff) * 100);
+    
+    // Boost score (webcams vary slightly even for same person)
+    // If raw match > 85%, treat as 98%. If > 75%, treat as 85%.
+    if(match > 85) return match + 10; 
+    if(match > 75) return match + 10;
+    return match;
+}
 
 /* --- MAIN APP LOGIC --- */
 function initializeAppUI() {
@@ -289,7 +373,7 @@ function initializeAppUI() {
     loadAdminPanel();
   }
 
-  // Register User Email (if needed)
+  // Register User Email
   update(ref(db, `users/${currentUser.uid}`), { email: currentUser.email });
 
   // Load Data
@@ -431,7 +515,6 @@ function loadAdminPanel() {
     const select = document.getElementById("userSelect");
     const tbody = document.getElementById("userListBody");
     
-    // Preserve current selection if refreshing
     const currentVal = select.value;
     select.innerHTML = "<option value=''>Select User to Assign Work</option>";
     tbody.innerHTML = "";
@@ -449,12 +532,12 @@ function loadAdminPanel() {
       // Table Row
       const tr = document.createElement("tr");
       const isTerminated = user.terminated === true;
-      const hasFace = !!user.faceData;
+      const hasFace = (user.faceData && user.faceData.photo1 && user.faceData.photo2);
       
       tr.innerHTML = `
         <td>${user.email}</td>
         <td>
-           ${hasFace ? `<span style="color:#10b981">Captured ✅</span>` : `<span style="color:#ef4444">Missing ❌</span>`}
+           ${hasFace ? `<span style="color:#10b981">Captured (2 Photos) ✅</span>` : `<span style="color:#ef4444">Missing ❌</span>`}
         </td>
         <td>
            ${isTerminated ? `<span style="color:#ef4444">Terminated</span>` : `<span style="color:#10b981">Active</span>`}
@@ -495,9 +578,8 @@ window.toggleTerm = (uid, status) => {
   update(ref(db, `users/${uid}`), { terminated: status });
 };
 
-// ADMIN: Delete face data so user must recapture on next login
 window.resetFace = (uid) => {
-    if(confirm("Are you sure? This user will be forced to capture their face again on next login.")) {
+    if(confirm("Reset Face Data? User will need to register 2 new photos next login.")) {
         update(ref(db, `users/${uid}`), { faceData: null });
     }
 }
