@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Metro Railway Safety System | Official Portal (Privacy Secure)</title>
+<title>Metro Railway Safety System | Official Portal</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
 
@@ -93,10 +93,8 @@ section { padding: 20px; max-width: 1100px; margin: 0 auto; }
 .log-tag { font-weight: bold; padding: 2px 6px; border-radius: 3px; color: white; font-size: 11px; display: inline-block; width: 60px; text-align: center; }
 .tag-LOGIN { background: #28a745; }
 .tag-LOGOUT { background: #6c757d; }
-.tag-NAV { background: #17a2b8; }
-.tag-ACTION { background: #007bff; }
-.tag-VIOLATION { background: #dc3545; animation: blink 2s infinite; }
-.tag-AUTO { background: #6610f2; }
+.tag-SAVE { background: #007bff; }
+.tag-DELETE { background: #dc3545; }
 
 .status-badge { padding: 4px 8px; border-radius: 10px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
 .status-pending { background: #ffefc1; color: #856404; border: 1px solid #ffeeba; }
@@ -290,7 +288,7 @@ input.cell:focus { background: #fff; outline: 1px solid #80bdff; }
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
-import { getDatabase, ref, push, set, onValue, remove, update } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+import { getDatabase, ref, push, set, onValue, remove, update, query, orderByChild, equalTo, get } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
@@ -330,16 +328,48 @@ async function loadAI() {
     }
 }
 
-// --- ACTIVITY LOGGING ---
-function logActivity(type, desc) {
+// --- ACTIVITY LOGGING & CLEANUP (LAST 50 RULE) ---
+async function logActivity(type, desc) {
   if(!currentUser) return;
-  push(ref(db, "activityLogs"), {
-    user: currentUser.email,
+  // STRICT FILTER: ONLY LOGIN, LOGOUT, SAVE, DELETE, SUBMIT
+  const allowed = ["LOGIN", "LOGOUT", "SAVE", "DELETE", "SUBMIT"];
+  if(!allowed.includes(type)) return; 
+
+  const userEmail = currentUser.email;
+
+  // 1. ADD NEW LOG
+  await push(ref(db, "activityLogs"), {
+    user: userEmail,
     uid: currentUser.uid,
     type: type, 
     description: desc,
     timestamp: new Date().toLocaleString()
   });
+
+  // 2. CLEANUP: Keep only last 50 for this user
+  try {
+      const logsRef = ref(db, "activityLogs");
+      const q = query(logsRef, orderByChild("user"), equalTo(userEmail));
+      
+      const snapshot = await get(q);
+      if (snapshot.exists()) {
+          const logs = [];
+          snapshot.forEach(child => {
+              logs.push({ key: child.key, ...child.val() });
+          });
+
+          // If more than 50, delete oldest
+          if (logs.length > 50) {
+              // logs are usually returned in order of creation by default in Firebase
+              const toDeleteCount = logs.length - 50;
+              for (let i = 0; i < toDeleteCount; i++) {
+                  remove(ref(db, `activityLogs/${logs[i].key}`));
+              }
+          }
+      }
+  } catch(e) {
+      console.error("Auto-cleanup failed (check rules):", e);
+  }
 }
 
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert("Auth Failed: " + e.message));
@@ -425,7 +455,7 @@ window.handleFaceCapture = async (isAuto = false) => {
             status.innerText = "❌ NO HUMAN FACE DETECTED";
             btn.disabled = false;
             if(isAuto) {
-                logActivity("VIOLATION", "Auto-check failed: No face detected.");
+                // Auto check fail doesn't log explicitly unless it causes logout
                 setTimeout(logout, 2000);
             }
             return;
@@ -446,7 +476,7 @@ window.handleFaceCapture = async (isAuto = false) => {
         } else {
             update(ref(db, `users/${currentUser.uid}/faceData`), { photo1: tempPhotos[0], photo2: capturedImg }).then(() => { 
                 status.innerText = "Registration Complete."; 
-                setTimeout(() => { logActivity("LOGIN", "Registration success."); accessGranted(); }, 1500); 
+                setTimeout(() => { logActivity("LOGIN", "First time registration."); accessGranted(); }, 1500); 
             });
         }
     } else {
@@ -456,15 +486,13 @@ window.handleFaceCapture = async (isAuto = false) => {
                 status.innerText = `Verified (Match: ${score}%).`; 
                 retryAttempts = 0; 
                 setTimeout(() => { 
-                    if(isAuto) logActivity("AUTO", "15-min Security Check Passed.");
-                    else logActivity("LOGIN", "Login Verification Passed.");
+                    if(!isAuto) logActivity("LOGIN", "Login Success");
                     accessGranted(); 
                 }, 1000);
             } else { 
                 retryAttempts++;
                 const triesLeft = 3 - retryAttempts;
-                logActivity("VIOLATION", `Face mismatch (${score}%). Attempt ${retryAttempts}/3`);
-
+                
                 if (triesLeft > 0) {
                     status.style.color = "#ffc107";
                     status.innerText = `Mismatch (${score}%). Try Again (${triesLeft} left).`;
@@ -482,21 +510,15 @@ window.handleFaceCapture = async (isAuto = false) => {
 function accessGranted() { 
     document.getElementById("faceModal").classList.add("hidden"); 
     document.getElementById("countdownDisplay").classList.add("hidden");
-    
-    // PRIVACY: CUT CAMERA FEED HERE
-    stopCamera();
-
+    stopCamera(); // Privacy enforcement
     initializeAppUI();
     
     if(reVerifyTimer) clearTimeout(reVerifyTimer);
-    console.log("Timer started: 15 Minutes");
     reVerifyTimer = setTimeout(triggerSecurityCheck, 15 * 60 * 1000); 
 }
 
 async function triggerSecurityCheck() {
-    // RESTART CAMERA FOR CHECK
     await startCamera();
-
     const modal = document.getElementById("faceModal");
     const countDisplay = document.getElementById("countdownDisplay");
     
@@ -564,10 +586,10 @@ window.switchTab = (t) => {
   document.getElementById(`tab-${t}`).classList.remove("hidden");
   const map = {'newData':'btnNew','inventory':'btnInventory','oldData':'btnOld','assigned':'btnAssign','adminPanel':'btnAdmin'};
   if(map[t]) document.getElementById(map[t]).classList.add("active");
-  logActivity("NAV", `Switched to tab: ${t}`);
+  // No NAV log here per user request
 };
 
-/* --- INVENTORY LOGIC (FIXED PERMISSION ERROR) --- */
+/* --- INVENTORY LOGIC --- */
 window.toggleInvForm = () => {
     document.getElementById('addInvForm').classList.toggle('hidden');
 }
@@ -582,7 +604,7 @@ window.addInventory = () => {
     push(ref(db, "inventory"), {
         name: n, source: s, qty: q, condition: c, updatedBy: currentUser.email, timestamp: new Date().toLocaleString()
     }).then(() => {
-        logActivity("ACTION", `Added inventory: ${n}`);
+        logActivity("SAVE", `Added inventory: ${n}`);
         document.getElementById("invName").value = "";
         document.getElementById("invQty").value = "";
         alert("Inventory Saved Successfully!");
@@ -610,9 +632,15 @@ function loadInventory() {
         document.getElementById("inventoryBody").innerHTML = `<tr><td colspan='6' style='color:red;'>Error: ${error.message} (Fix Database Rules)</td></tr>`;
     });
 }
-window.deleteInv = (k) => confirm("Remove Item?") && remove(ref(db, `inventory/${k}`));
 
-/* --- DATA ENTRY (SEPARATE SAVES & RENAMING) --- */
+window.deleteInv = (k) => {
+    if(confirm("Remove Item?")) {
+        remove(ref(db, `inventory/${k}`));
+        logActivity("DELETE", "Removed Inventory Item");
+    }
+};
+
+/* --- DATA ENTRY --- */
 function loadStationDraft() {
   onValue(ref(db, "excelData/session/" + currentUser.uid), snap => {
     const data = snap.val() || {};
@@ -639,7 +667,7 @@ window.saveStationDetails = () => {
     update(ref(db, `excelData/session/${currentUser.uid}/details`), { 
         stationName: sName, stationLength: sLen, yellowDist: yDist, yellowThick: yThick 
     }).then(() => {
-        logActivity("ACTION", `Saved draft details for ${sName}`);
+        logActivity("SAVE", `Saved draft details for ${sName}`);
         alert("Station Details Saved (Draft). Now add rows.");
     });
 }
@@ -696,7 +724,12 @@ function loadHistory() {
     });
   });
 }
-window.deleteHistory = (k) => confirm("Delete?") && remove(ref(db, `excelData/history/${k}`));
+window.deleteHistory = (k) => {
+    if(confirm("Delete?")) {
+        remove(ref(db, `excelData/history/${k}`));
+        logActivity("DELETE", "Deleted History Record");
+    }
+};
 
 function loadAssignments() {
   onValue(ref(db, `assignments/${currentUser.uid}`), snap => {
@@ -721,9 +754,10 @@ function loadAssignments() {
 }
 window.markTaskDone = (k) => {
     update(ref(db, `assignments/${currentUser.uid}/${k}`), { status: "Completed", completedAt: new Date().toLocaleString() });
+    logActivity("SAVE", "Task marked completed");
 };
 
-/* --- ADMIN PANEL (LOG & ERROR HANDLING) --- */
+/* --- ADMIN PANEL --- */
 function loadAdminPanel() {
   onValue(ref(db, "users"), snap => {
     const selAss = document.getElementById("userSelectAssign");
@@ -752,7 +786,7 @@ window.auditUser = (mode) => {
     const header = document.getElementById("auditHeader");
     
     if(!email) return alert("Select user");
-    body.innerHTML = "<tr><td colspan='5'>Loading (Check Permissions if stuck)...</td></tr>";
+    body.innerHTML = "<tr><td colspan='5'>Loading...</td></tr>";
 
     if(mode === 'data') {
         header.innerText = `Excel Data: ${email}`;
@@ -763,32 +797,35 @@ window.auditUser = (mode) => {
                 if(d.user && d.user.toLowerCase() === email.toLowerCase()) {
                     c++;
                     const tr = document.createElement("tr");
-                    tr.innerHTML = `<td>${d.date}</td><td><span class="log-tag tag-ACTION">DATA</span></td><td>Station: ${d.stationName} (${d.rowCount} rows)</td>`;
+                    tr.innerHTML = `<td>${d.date}</td><td><span class="log-tag tag-SAVE">DATA</span></td><td>Station: ${d.stationName} (${d.rowCount} rows)</td>`;
                     body.appendChild(tr);
                 }
             });
             if(c===0) body.innerHTML = "<tr><td colspan='5'>No Data Found</td></tr>";
-        }, (error) => {
-            body.innerHTML = `<tr><td colspan='5' style="color:red">PERMISSION DENIED (Fix Firebase Rules)</td></tr>`;
         });
     } else {
         header.innerText = `Activity Logs: ${email}`;
-        onValue(ref(db, "activityLogs"), snap => {
-            body.innerHTML = ""; let c = 0;
-            const entries = [];
-            snap.forEach(r => { 
-                if(r.val().user && r.val().user.toLowerCase().trim() === email.toLowerCase().trim()) {
-                    entries.push(r.val()); 
-                }
-            });
-            entries.reverse().forEach(log => {
-                c++;
+        // Query to get user specific logs
+        const logsRef = ref(db, "activityLogs");
+        const q = query(logsRef, orderByChild("user"), equalTo(email));
+        
+        get(q).then((snap) => {
+             body.innerHTML = ""; 
+             if(!snap.exists()) {
+                 body.innerHTML = "<tr><td colspan='5'>No Logs Found for ${email}</td></tr>";
+                 return;
+             }
+             
+             const logs = [];
+             snap.forEach(c => logs.push(c.val()));
+             logs.reverse(); // Show newest first
+             
+             logs.forEach(log => {
                 const tr = document.createElement("tr");
                 tr.innerHTML = `<td>${log.timestamp}</td><td><span class="log-tag tag-${log.type}">${log.type}</span></td><td>${log.description}</td>`;
                 body.appendChild(tr);
-            });
-            if(c===0) body.innerHTML = "<tr><td colspan='5'>No Logs Found for ${email}</td></tr>";
-        }, (error) => {
+             });
+        }).catch(error => {
             body.innerHTML = `<tr><td colspan='5' style="color:red">PERMISSION DENIED (Fix Firebase Rules)</td></tr>`;
         });
     }
