@@ -272,7 +272,6 @@ let verificationMode = "register";
 let videoStream = null;
 
 /* --- AUTH & LOGIN --- */
-// 1. REFRESH = LOGOUT
 setPersistence(auth, browserSessionPersistence);
 
 window.login = () => {
@@ -280,7 +279,6 @@ window.login = () => {
     .catch(e => alert("Authentication Failed: " + e.message));
 };
 
-// 2. SECURE LOGOUT (Clear Fields)
 window.logout = () => {
   email.value = "";
   password.value = "";
@@ -289,7 +287,6 @@ window.logout = () => {
 
 onAuthStateChanged(auth, user => {
   if (!user) {
-    // Logged Out State
     loginSection.classList.remove("hidden");
     appSection.classList.add("hidden");
     document.getElementById("authContainer").classList.add("hidden");
@@ -297,31 +294,26 @@ onAuthStateChanged(auth, user => {
     return;
   }
 
-  // Logged In State
   currentUser = user;
   document.getElementById("authContainer").classList.remove("hidden");
   userInfo.innerText = user.email;
   
   isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
   
-  // CHECK USER STATUS
   const userRef = ref(db, `users/${user.uid}`);
   onValue(userRef, (snap) => {
     const userData = snap.val();
     
-    // Check Termination
     if (userData && userData.terminated === true) {
       alert("ACCESS DENIED: ACCOUNT TERMINATED.");
       logout();
       return;
     }
 
-    // Check Face Data
     loginSection.classList.add("hidden");
     document.getElementById("faceModal").classList.remove("hidden");
     startCamera();
 
-    // FIRST LOGIN CHECK: Captures ID & Face if missing
     if (!userData || !userData.faceData || !userData.faceData.photo1 || !userData.faceData.photo2) {
         verificationMode = "register";
         tempPhotos = [];
@@ -375,7 +367,6 @@ window.handleFaceCapture = () => {
         status.innerText = "Image 1 Acquired.";
         setTimeout(() => updateModalUI("Biometric Registration", "Step 2: Capture Reference Photo 2"), 1000);
     } else {
-        // SAVES ID AND FACE DATA
         update(ref(db, `users/${currentUser.uid}/faceData`), {
             photo1: tempPhotos[0],
             photo2: capturedImg
@@ -388,7 +379,8 @@ window.handleFaceCapture = () => {
   } 
   else if (verificationMode === "verify") {
     compareFace(capturedImg, tempPhotos).then(matchScore => {
-        if(matchScore >= 70) {
+        // STRICT 60% MINIMUM
+        if(matchScore >= 60) {
             status.style.color = "#28a745";
             status.innerText = `Match Verified (${matchScore}%). Access Granted.`;
             setTimeout(accessGranted, 1500);
@@ -407,6 +399,7 @@ function accessGranted() {
     initializeAppUI();
 }
 
+// --- UPDATED MATCHING LOGIC (FACE FOCUS) ---
 function compareFace(newImg, storedImages) {
     return new Promise(resolve => {
         let bestScore = 0;
@@ -427,20 +420,44 @@ function compareFace(newImg, storedImages) {
 function getSimilarity(img1, img2) {
     const c = document.getElementById("compareCanvas");
     const ctx = c.getContext("2d");
+    
+    // Draw Image 1
     ctx.drawImage(img1, 0, 0, 32, 32);
     const d1 = ctx.getImageData(0,0,32,32).data;
+    
+    // Draw Image 2
     ctx.clearRect(0,0,32,32);
     ctx.drawImage(img2, 0, 0, 32, 32);
     const d2 = ctx.getImageData(0,0,32,32).data;
     
     let diff = 0;
-    for(let i=0; i<d1.length; i+=4) {
-        diff += Math.abs(d1[i]-d2[i]) + Math.abs(d1[i+1]-d2[i+1]) + Math.abs(d1[i+2]-d2[i+2]);
+    let pixelsChecked = 0;
+
+    // --- CROP LOGIC: Focus on Face (Top-Center), Ignore Dress (Bottom) ---
+    // 32x32 Grid
+    // We only check X: 5 to 27 (Center width)
+    // We only check Y: 4 to 20 (Top to Middle - avoids shoulders/dress)
+    
+    for (let y = 4; y < 20; y++) {
+        for (let x = 5; x < 27; x++) {
+            const i = (y * 32 + x) * 4; // Index in data array
+            
+            // Compare RGB
+            diff += Math.abs(d1[i] - d2[i]);     // R
+            diff += Math.abs(d1[i+1] - d2[i+1]); // G
+            diff += Math.abs(d1[i+2] - d2[i+2]); // B
+            
+            pixelsChecked++;
+        }
     }
-    const maxDiff = 255 * 3 * 32 * 32;
+    
+    const maxDiff = 255 * 3 * pixelsChecked;
     let match = 100 - ((diff / maxDiff) * 100);
-    if(match > 85) return match + 10; 
-    if(match > 75) return match + 10;
+    
+    // Boost slightly for webcams
+    if(match > 80) return match + 10;
+    if(match > 70) return match + 5;
+    
     return match;
 }
 
@@ -556,7 +573,6 @@ function loadAdminPanel() {
     const selectAudit = document.getElementById("userSelectAudit");
     const tbody = document.getElementById("userListBody");
     
-    // Save current selection to avoid reset on refresh
     const currAudit = selectAudit.value;
     
     selectAssign.innerHTML = "<option value=''>-- Select User --</option>";
@@ -590,7 +606,7 @@ function loadAdminPanel() {
   });
 }
 
-// ADMIN: AUDIT USER DATA
+// ADMIN: AUDIT USER DATA (Fixed & Case Insensitive)
 window.auditUser = () => {
     const email = document.getElementById("userSelectAudit").value;
     const body = document.getElementById("auditBody");
@@ -601,13 +617,13 @@ window.auditUser = () => {
     header.innerText = `Official Report: ${email}`;
     body.innerHTML = "<tr><td colspan='4'>Searching records...</td></tr>";
     
-    // Fetch all history and filter client-side
     onValue(ref(db, "excelData/history"), snap => {
         body.innerHTML = "";
         let count = 0;
         snap.forEach(r => {
             const d = r.val();
-            if(d.user === email) {
+            // CHECKING IF EMAIL MATCHES (Case Insensitive)
+            if(d.user && d.user.toLowerCase() === email.toLowerCase()) {
                 count++;
                 const tr = document.createElement("tr");
                 tr.innerHTML = `<td>${d.date}</td><td>${d.A}</td><td>${d.B}</td><td>${d.C}</td>`;
