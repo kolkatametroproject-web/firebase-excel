@@ -9,8 +9,12 @@ body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:#020617;col
 header{display:flex;justify-content:space-between;align-items:center;padding:15px 20px;background:#0f172a;border-bottom:1px solid #1e293b;}
 button{padding:8px 16px;cursor:pointer;background:#2563eb;color:white;border:none;border-radius:4px;transition:0.2s;}
 button:hover{background:#1d4ed8;}
+button:disabled{background:#475569;cursor:not-allowed;}
 button.danger{background:#dc2626;}
 button.danger:hover{background:#b91c1c;}
+button.warning{background:#d97706;}
+button.warning:hover{background:#b45309;}
+
 section{padding:20px;max-width:1200px;margin:0 auto;}
 h3{margin-top:0;color:#60a5fa;}
 input, select, textarea{background:#1e293b;border:1px solid #334155;color:white;padding:8px;border-radius:4px;width:100%;box-sizing:border-box;margin-bottom:10px;}
@@ -45,7 +49,7 @@ input.cell:focus{background:#1e293b;outline:none;}
     <strong>METRO WATCHDOG</strong>
     <span id="adminBadge" class="hidden admin-badge">ADMIN ACCESS</span>
   </div>
-  <div id="authContainer">
+  <div id="authContainer" class="hidden">
     <span id="userInfo" style="margin-right:10px;color:#94a3b8;"></span>
     <button onclick="logout()">Logout</button>
   </div>
@@ -54,17 +58,19 @@ input.cell:focus{background:#1e293b;outline:none;}
 <section id="loginSection">
   <div class="panel" style="max-width:400px;margin:50px auto;">
     <h3>Secure Login</h3>
-    <input id="email" placeholder="Email (e.g., soham@metro.project)">
+    <input id="email" placeholder="Email">
     <input id="password" type="password" placeholder="Password">
     <button onclick="login()" style="width:100%">Login</button>
   </div>
 </section>
 
 <div id="faceModal" class="hidden">
-  <h2 style="color:white">First Login: Facial Verification Required</h2>
+  <h2 style="color:white">Facial Verification Required</h2>
+  <p style="color:#94a3b8; margin-bottom:10px;">Security Policy: You must register your face to continue.</p>
   <video id="cameraFeed" autoplay playsinline></video>
   <canvas id="faceCanvas" width="320" height="240" class="hidden"></canvas>
-  <button onclick="captureAndSaveFace()">Capture & Verify Identity</button>
+  <button id="btnCapture" onclick="captureAndSaveFace()">📸 Capture & Verify Identity</button>
+  <p id="faceStatus" style="color:#fbbf24; margin-top:10px;"></p>
 </div>
 
 <section id="appSection" class="hidden">
@@ -123,7 +129,7 @@ input.cell:focus{background:#1e293b;outline:none;}
       <div>
         <h4>User Management</h4>
         <table>
-          <thead><tr><th>Email</th><th>UID</th><th>Face Data</th><th>Status</th></tr></thead>
+          <thead><tr><th>Email</th><th>Face Data</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody id="userListBody"></tbody>
         </table>
       </div>
@@ -168,6 +174,8 @@ onAuthStateChanged(auth, user => {
     loginSection.classList.remove("hidden");
     appSection.classList.add("hidden");
     document.getElementById("authContainer").classList.add("hidden");
+    // Stop camera if running
+    stopCamera();
     return;
   }
 
@@ -179,47 +187,64 @@ onAuthStateChanged(auth, user => {
   // Check Admin Status
   isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
   
-  // Check Termination Status First
-  const termRef = ref(db, `users/${user.uid}/terminated`);
-  onValue(termRef, (snap) => {
-    if (snap.val() === true) {
+  // Check Termination & Face Data Status
+  const userRef = ref(db, `users/${user.uid}`);
+  onValue(userRef, (snap) => {
+    const userData = snap.val();
+    
+    // 1. Check if Terminated
+    if (userData && userData.terminated === true) {
       alert("ACCOUNT TERMINATED BY ADMIN");
       signOut(auth);
+      return;
+    }
+
+    // 2. Check if Face Data Exists
+    if (!userData || !userData.faceData) {
+        // Face Missing: Trigger Capture Modal
+        loginSection.classList.add("hidden");
+        appSection.classList.add("hidden"); // Hide app until face captured
+        document.getElementById("faceModal").classList.remove("hidden");
+        startCamera();
     } else {
-      checkFaceData();
+        // Face Exists: Allow Access
+        document.getElementById("faceModal").classList.add("hidden");
+        initializeAppUI();
     }
   }, { onlyOnce: true });
 });
 
 /* --- FACE CAPTURE LOGIC --- */
-function checkFaceData() {
-  const faceRef = ref(db, `users/${currentUser.uid}/faceData`);
-  onValue(faceRef, (snap) => {
-    if (!snap.exists()) {
-      // First time login - Require Face Capture
-      loginSection.classList.add("hidden");
-      document.getElementById("faceModal").classList.remove("hidden");
-      startCamera();
-    } else {
-      // Face exists - Proceed to App
-      initializeAppUI();
-    }
-  }, { onlyOnce: true });
-}
+let videoStream;
 
 async function startCamera() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    document.getElementById("cameraFeed").srcObject = stream;
+    videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    document.getElementById("cameraFeed").srcObject = videoStream;
   } catch(e) {
-    alert("Camera access required for first login.");
+    alert("Error: Camera access required. Please allow camera permissions.");
+    console.error(e);
+  }
+}
+
+function stopCamera() {
+  if (videoStream) {
+    videoStream.getTracks().forEach(track => track.stop());
+    videoStream = null;
   }
 }
 
 window.captureAndSaveFace = () => {
+  const btn = document.getElementById("btnCapture");
+  const status = document.getElementById("faceStatus");
   const video = document.getElementById("cameraFeed");
   const canvas = document.getElementById("faceCanvas");
   const context = canvas.getContext('2d');
+
+  // UI Feedback
+  btn.disabled = true;
+  btn.innerText = "Verifying & Uploading...";
+  status.innerText = "Please wait, storing secure biometric data...";
   
   // Draw video frame to canvas
   context.drawImage(video, 0, 0, 320, 240);
@@ -231,15 +256,23 @@ window.captureAndSaveFace = () => {
   update(ref(db, `users/${currentUser.uid}`), {
     email: currentUser.email,
     faceData: imageString,
-    terminated: false // Default status
+    terminated: false
   }).then(() => {
-    // Stop Camera
-    const stream = video.srcObject;
-    const tracks = stream.getTracks();
-    tracks.forEach(track => track.stop());
+    // Success UI
+    status.innerText = "Success! Redirecting...";
+    stopCamera();
     
-    document.getElementById("faceModal").classList.add("hidden");
-    initializeAppUI();
+    setTimeout(() => {
+        document.getElementById("faceModal").classList.add("hidden");
+        btn.disabled = false;
+        btn.innerText = "📸 Capture & Verify Identity";
+        status.innerText = "";
+        initializeAppUI();
+    }, 1500);
+  }).catch((err) => {
+    alert("Error saving face data: " + err.message);
+    btn.disabled = false;
+    btn.innerText = "Try Again";
   });
 };
 
@@ -256,7 +289,7 @@ function initializeAppUI() {
     loadAdminPanel();
   }
 
-  // Register User in Global List (For admin assignment visibility)
+  // Register User Email (if needed)
   update(ref(db, `users/${currentUser.uid}`), { email: currentUser.email });
 
   // Load Data
@@ -267,19 +300,13 @@ function initializeAppUI() {
 
 /* --- TAB NAVIGATION --- */
 window.switchTab = (tabName) => {
-  // Hide all contents
   ['newData', 'oldData', 'assigned', 'adminPanel'].forEach(t => {
     const el = document.getElementById(`tab-${t}`);
     if(el) el.classList.add("hidden");
   });
-  
-  // Deactivate all buttons
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-
-  // Activate selected
   document.getElementById(`tab-${tabName}`).classList.remove("hidden");
   
-  // Highlight button (mapping tab name to ID logic)
   const map = { 'newData': 'btnNew', 'oldData': 'btnOld', 'assigned': 'btnAssign', 'adminPanel': 'btnAdmin' };
   if(map[tabName]) document.getElementById(map[tabName]).classList.add("active");
 };
@@ -295,12 +322,10 @@ function loadSession() {
         const i = document.createElement("input");
         i.className = "cell";
         i.value = r.val()[c] || "";
-        // Auto-save on change
         i.onchange = () => set(ref(db, `excelData/session/${currentUser.uid}/${r.key}/${c}`), i.value);
         td.appendChild(i);
         tr.appendChild(td);
       });
-      // Delete Draft Row Button
       const delTd = document.createElement("td");
       delTd.innerHTML = `<button class="danger" onclick="deleteDraft('${r.key}')">X</button>`;
       tr.appendChild(delTd);
@@ -340,8 +365,6 @@ function loadHistory() {
         td.innerText = d[k] || "";
         tr.appendChild(td);
       });
-      
-      // Admin Delete Button
       const actionTd = document.createElement("td");
       if(isAdmin) {
         actionTd.innerHTML = `<button class="danger" style="padding:4px 8px" onclick="deleteHistory('${r.key}')">Delete</button>`;
@@ -350,7 +373,6 @@ function loadHistory() {
         actionTd.style.display = "none";
       }
       tr.appendChild(actionTd);
-      
       historyBody.appendChild(tr);
     });
   });
@@ -387,8 +409,6 @@ function loadAssignments() {
 
     if(count > 0) {
         document.getElementById("noWorkMsg").classList.add("hidden");
-        // NOTIFICATION ALERT
-        // Using a flag to ensure it doesn't spam on every refresh
         if(!sessionStorage.getItem("notified")) {
             alert("🔔 NOTIFICATION: You have " + count + " new assigned tasks!");
             sessionStorage.setItem("notified", "true");
@@ -407,11 +427,12 @@ window.completeTask = (key) => {
 
 /* --- 4. ADMIN PANEL FUNCTIONS --- */
 function loadAdminPanel() {
-  // Load Users List for Assignment Dropdown and Management Table
   onValue(ref(db, "users"), snap => {
     const select = document.getElementById("userSelect");
     const tbody = document.getElementById("userListBody");
     
+    // Preserve current selection if refreshing
+    const currentVal = select.value;
     select.innerHTML = "<option value=''>Select User to Assign Work</option>";
     tbody.innerHTML = "";
 
@@ -419,29 +440,38 @@ function loadAdminPanel() {
       const user = u.val();
       const uid = u.key;
       
-      // Add to Dropdown
+      // Dropdown
       const opt = document.createElement("option");
       opt.value = uid;
       opt.innerText = user.email;
       select.appendChild(opt);
 
-      // Add to Management Table
+      // Table Row
       const tr = document.createElement("tr");
       const isTerminated = user.terminated === true;
-      const faceStatus = user.faceData ? "Captured ✅" : "Pending ❌";
+      const hasFace = !!user.faceData;
       
       tr.innerHTML = `
         <td>${user.email}</td>
-        <td style="font-family:monospace;font-size:0.8em">${uid}</td>
-        <td>${faceStatus}</td>
         <td>
+           ${hasFace ? `<span style="color:#10b981">Captured ✅</span>` : `<span style="color:#ef4444">Missing ❌</span>`}
+        </td>
+        <td>
+           ${isTerminated ? `<span style="color:#ef4444">Terminated</span>` : `<span style="color:#10b981">Active</span>`}
+        </td>
+        <td style="display:flex; gap:5px;">
             ${isTerminated 
                 ? `<button style="background:#10b981" onclick="toggleTerm('${uid}', false)">Activate</button>` 
                 : `<button class="danger" onclick="toggleTerm('${uid}', true)">Terminate</button>`}
+            
+            ${hasFace 
+                ? `<button class="warning" onclick="resetFace('${uid}')">Reset Face</button>`
+                : ``}
         </td>
       `;
       tbody.appendChild(tr);
     });
+    if(currentVal) select.value = currentVal;
   });
 }
 
@@ -464,6 +494,13 @@ window.assignTask = () => {
 window.toggleTerm = (uid, status) => {
   update(ref(db, `users/${uid}`), { terminated: status });
 };
+
+// ADMIN: Delete face data so user must recapture on next login
+window.resetFace = (uid) => {
+    if(confirm("Are you sure? This user will be forced to capture their face again on next login.")) {
+        update(ref(db, `users/${uid}`), { faceData: null });
+    }
+}
 
 </script>
 </body>
