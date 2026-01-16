@@ -174,21 +174,34 @@ input.cell:focus { background: #fff; outline: 1px solid #80bdff; }
   <div id="tab-newData">
     <div class="panel">
       <h3>🆕 Station Data Entry</h3>
-      <h4 style="border-bottom:1px solid #ccc; padding-bottom:5px;">A. Station Remarks</h4>
+      <h4 style="border-bottom:1px solid #ccc; padding-bottom:5px;">A. Station Remarks (Save Separately)</h4>
       <div class="station-grid">
-          <div><label class="station-label">STATION NAME</label><input id="inpStationName" placeholder="e.g., Mahanayak Uttam Kumar"></div>
+          <div><label class="station-label">STATION NAME (Required)</label><input id="inpStationName" placeholder="e.g., Mahanayak Uttam Kumar"></div>
           <div><label class="station-label">STATION LENGTH (M)</label><input id="inpStationLength" placeholder="e.g., 172.8 M"></div>
           <div><label class="station-label">YELLOW LINE DISTANCE</label><input id="inpYellowDist" placeholder="e.g., 70 CM"></div>
           <div><label class="station-label">YELLOW LINE THICKNESS</label><input id="inpYellowThick" placeholder="e.g., 10 CM"></div>
       </div>
-      <h4 style="border-bottom:1px solid #ccc; padding-bottom:5px; margin-top:20px;">B. Distance Data</h4>
+      <div style="text-align:right; margin-bottom:20px;">
+          <button class="success" onclick="saveStationDetails()">💾 Save Station Details Only</button>
+      </div>
+
+      <h4 style="border-bottom:1px solid #ccc; padding-bottom:5px; margin-top:20px;">B. Distance Data (Save Separately)</h4>
       <table id="distanceTable">
-        <thead><tr><th style="width:50px">SL</th><th>RAKE NO</th><th>RAKE TYPE</th><th>FRONT</th><th>REAR</th><th style="width:50px">ACT</th></tr></thead>
+        <thead>
+            <tr>
+                <th style="width:50px">SL</th>
+                <th>RAKE NO</th>
+                <th>RAKE TYPE</th>
+                <th style="color:#003366">SHAID KHUDIRAM END</th>
+                <th style="color:#003366">DAKSHINESWAR END</th>
+                <th style="width:50px">ACT</th>
+            </tr>
+        </thead>
         <tbody id="distanceBody"></tbody>
       </table>
       <div style="margin-top:10px; display:flex; justify-content:space-between;">
           <button onclick="addDistanceRow()">+ Add Row</button>
-          <button onclick="submitStationData()" style="background:#28a745; border-color:#1e7e34;">✔ Submit Data</button>
+          <button onclick="submitStationData()" style="background:#003366; border-color:#002244;">✔ Submit Final Dataset (Archives)</button>
       </div>
     </div>
   </div>
@@ -300,7 +313,8 @@ let tempPhotos = [];
 let verificationMode = "register"; 
 let videoStream = null;
 let reVerifyTimer = null;
-let faceModel = null; // AI Model
+let faceModel = null;
+let retryAttempts = 0; // NEW: Track retries
 
 setPersistence(auth, browserSessionPersistence);
 
@@ -346,6 +360,7 @@ onAuthStateChanged(auth, user => {
     return;
   }
   currentUser = user;
+  retryAttempts = 0; // Reset retries on new session
   document.getElementById("authContainer").classList.remove("hidden");
   userInfo.innerText = user.email;
   isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
@@ -392,7 +407,7 @@ window.handleFaceCapture = async (isAuto = false) => {
     btn.disabled = true;
     status.innerText = "AI Analyzing...";
 
-    // 1. AI FACE DETECTION (The "Wall" Fix)
+    // 1. AI FACE DETECTION
     if(faceModel) {
         const predictions = await faceModel.estimateFaces(video, false);
         if (predictions.length === 0) {
@@ -426,21 +441,33 @@ window.handleFaceCapture = async (isAuto = false) => {
             });
         }
     } else {
-        // VERIFY
+        // VERIFY WITH RETRY LOGIC
         compareFace(capturedImg, tempPhotos).then(score => {
-            if(score >= 75) { // Increased threshold for security
+            if(score >= 75) { 
                 status.style.color = "#28a745"; 
                 status.innerText = `Verified (Match: ${score}%).`; 
+                retryAttempts = 0; // Reset on success
                 setTimeout(() => { 
                     if(isAuto) logActivity("AUTO", "15-min Security Check Passed.");
                     else logActivity("LOGIN", "Login Verification Passed.");
                     accessGranted(); 
                 }, 1000);
             } else { 
-                status.style.color = "#dc3545"; 
-                status.innerText = `Identity Mismatch (${score}%).`;
-                logActivity("VIOLATION", `Face mismatch during ${isAuto ? 'Auto-Check' : 'Login'}`);
-                setTimeout(() => logout(), 2000); 
+                // RETRY LOGIC HERE
+                retryAttempts++;
+                const triesLeft = 3 - retryAttempts;
+                
+                logActivity("VIOLATION", `Face mismatch (${score}%). Attempt ${retryAttempts}/3`);
+
+                if (triesLeft > 0) {
+                    status.style.color = "#ffc107";
+                    status.innerText = `Mismatch (${score}%). Try Again (${triesLeft} left).`;
+                    btn.disabled = false; // Re-enable button
+                } else {
+                    status.style.color = "#dc3545";
+                    status.innerText = `Identity Mismatch. Locked Out.`;
+                    setTimeout(() => logout(), 2000); 
+                }
             }
         });
     }
@@ -454,7 +481,7 @@ function accessGranted() {
     // START 15 MINUTE TIMER
     if(reVerifyTimer) clearTimeout(reVerifyTimer);
     console.log("Timer started: 15 Minutes");
-    reVerifyTimer = setTimeout(triggerSecurityCheck, 15 * 60 * 1000); // 15 Mins
+    reVerifyTimer = setTimeout(triggerSecurityCheck, 15 * 60 * 1000); 
 }
 
 function triggerSecurityCheck() {
@@ -513,7 +540,7 @@ function initializeAppUI() {
     document.getElementById("adminBadge").classList.remove("hidden");
     document.getElementById("btnAdmin").classList.remove("hidden");
     document.getElementById("adminDelHead").classList.remove("hidden");
-    document.getElementById("adminInvControls").classList.remove("hidden"); // Admin sees button
+    document.getElementById("adminInvControls").classList.remove("hidden"); 
     document.getElementById("invActionHead").classList.remove("hidden");
     loadAdminPanel();
   }
@@ -529,8 +556,7 @@ window.switchTab = (t) => {
   logActivity("NAV", `Switched to tab: ${t}`);
 };
 
-/* --- INVENTORY LOGIC FIXED --- */
-// Exposed function for HTML button
+/* --- INVENTORY LOGIC --- */
 window.toggleInvForm = () => {
     document.getElementById('addInvForm').classList.toggle('hidden');
 }
@@ -540,7 +566,6 @@ window.addInventory = () => {
     const s = document.getElementById("invSource").value;
     const q = document.getElementById("invQty").value;
     const c = document.getElementById("invCond").value;
-    
     if(!n || !q) { alert("Error: Product Name and Quantity are required."); return; }
     
     push(ref(db, "inventory"), {
@@ -573,27 +598,45 @@ function loadInventory() {
 }
 window.deleteInv = (k) => confirm("Remove Item?") && remove(ref(db, `inventory/${k}`));
 
-/* --- DATA ENTRY --- */
+/* --- DATA ENTRY (SEPARATE SAVES & RENAMING) --- */
 function loadStationDraft() {
   onValue(ref(db, "excelData/session/" + currentUser.uid), snap => {
     const data = snap.val() || {};
-    document.getElementById("inpStationName").value = data.stationName || "";
-    document.getElementById("inpStationLength").value = data.stationLength || "";
-    document.getElementById("inpYellowDist").value = data.yellowDist || "";
-    document.getElementById("inpYellowThick").value = data.yellowThick || "";
+    // Load station details only
+    if(data.details) {
+        document.getElementById("inpStationName").value = data.details.stationName || "";
+        document.getElementById("inpStationLength").value = data.details.stationLength || "";
+        document.getElementById("inpYellowDist").value = data.details.yellowDist || "";
+        document.getElementById("inpYellowThick").value = data.details.yellowThick || "";
+    }
     const tbody = document.getElementById("distanceBody");
     tbody.innerHTML = "";
     if(data.rows) { Object.entries(data.rows).forEach(([key, row], index) => { renderRow(key, row, index + 1); }); }
   });
 }
 
-['inpStationName','inpStationLength','inpYellowDist','inpYellowThick'].forEach(id => {
-    document.getElementById(id).addEventListener('change', (e) => {
-        update(ref(db, `excelData/session/${currentUser.uid}`), { [id.replace('inp','').replace( /^[A-Z]/, c => c.toLowerCase() )]: e.target.value });
+// NEW: Save ONLY station details
+window.saveStationDetails = () => {
+    const sName = document.getElementById("inpStationName").value;
+    const sLen = document.getElementById("inpStationLength").value;
+    const yDist = document.getElementById("inpYellowDist").value;
+    const yThick = document.getElementById("inpYellowThick").value;
+
+    if(!sName) return alert("Please enter Station Name before saving.");
+
+    update(ref(db, `excelData/session/${currentUser.uid}/details`), { 
+        stationName: sName, stationLength: sLen, yellowDist: yDist, yellowThick: yThick 
+    }).then(() => {
+        logActivity("ACTION", `Saved draft details for ${sName}`);
+        alert("Station Details Saved (Draft). Now add rows.");
     });
-});
+}
 
 window.addDistanceRow = () => {
+    // ENFORCE STATION NAME FIRST
+    const sName = document.getElementById("inpStationName").value;
+    if(!sName) return alert("STOP: Please enter and SAVE the Station Name first.");
+    
     push(ref(db, `excelData/session/${currentUser.uid}/rows`), { rakeNo: "", rakeType: "", distFront: "", distRear: "" });
 };
 
@@ -610,12 +653,22 @@ window.removeRow = (k) => remove(ref(db, `excelData/session/${currentUser.uid}/r
 window.submitStationData = () => {
   onValue(ref(db, "excelData/session/" + currentUser.uid), snap => {
     const d = snap.val();
-    if(!d || !d.stationName) return alert("Fill Station Name.");
-    if(confirm("Submit Final Data?")) {
-        push(ref(db, "excelData/history"), { ...d, user: currentUser.email, date: new Date().toLocaleString(), rowCount: d.rows ? Object.keys(d.rows).length : 0 });
+    if(!d || !d.details || !d.details.stationName) return alert("Fill Station Name and Save Details first.");
+    
+    if(confirm("Submit Final Data to Archives?")) {
+        // Flatten structure for history
+        const finalObj = { 
+            ...d.details, 
+            rows: d.rows || {},
+            user: currentUser.email, 
+            date: new Date().toLocaleString(), 
+            rowCount: d.rows ? Object.keys(d.rows).length : 0 
+        };
+
+        push(ref(db, "excelData/history"), finalObj);
         remove(ref(db, "excelData/session/" + currentUser.uid));
-        logActivity("SUBMIT", `Submitted data for ${d.stationName}`);
-        alert("Submitted."); switchTab('oldData');
+        logActivity("SUBMIT", `Submitted data for ${d.details.stationName}`);
+        alert("Submitted Successfully."); switchTab('oldData');
     }
   }, { onlyOnce: true });
 };
@@ -662,7 +715,7 @@ window.markTaskDone = (k) => {
     update(ref(db, `assignments/${currentUser.uid}/${k}`), { status: "Completed", completedAt: new Date().toLocaleString() });
 };
 
-/* --- ADMIN PANEL --- */
+/* --- ADMIN PANEL (LOG FIX APPLIED) --- */
 function loadAdminPanel() {
   onValue(ref(db, "users"), snap => {
     const selAss = document.getElementById("userSelectAssign");
@@ -686,6 +739,7 @@ window.auditUser = (mode) => {
     const email = document.getElementById("userSelectAudit").value;
     const body = document.getElementById("auditBody");
     const header = document.getElementById("auditHeader");
+    
     if(!email) return alert("Select user");
     body.innerHTML = "<tr><td colspan='5'>Loading...</td></tr>";
 
@@ -709,14 +763,19 @@ window.auditUser = (mode) => {
         onValue(ref(db, "activityLogs"), snap => {
             body.innerHTML = ""; let c = 0;
             const entries = [];
-            snap.forEach(r => { if(r.val().user.toLowerCase() === email.toLowerCase()) entries.push(r.val()); });
+            snap.forEach(r => { 
+                // Strict lowercase check to ensure data pull
+                if(r.val().user && r.val().user.toLowerCase().trim() === email.toLowerCase().trim()) {
+                    entries.push(r.val()); 
+                }
+            });
             entries.reverse().forEach(log => {
                 c++;
                 const tr = document.createElement("tr");
                 tr.innerHTML = `<td>${log.timestamp}</td><td><span class="log-tag tag-${log.type}">${log.type}</span></td><td>${log.description}</td>`;
                 body.appendChild(tr);
             });
-            if(c===0) body.innerHTML = "<tr><td colspan='5'>No Logs Found</td></tr>";
+            if(c===0) body.innerHTML = "<tr><td colspan='5'>No Logs Found for ${email}</td></tr>";
         }, {onlyOnce:true});
     }
 };
