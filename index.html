@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Firebase Excel Sheet</title>
+
+<style>
+body{
+  font-family: Arial, sans-serif;
+  background:#0f172a;
+  color:#e5e7eb;
+  padding:20px;
+}
+input,button{
+  padding:6px;
+  margin:4px;
+}
+table{
+  border-collapse:collapse;
+  margin-top:20px;
+}
+th,td{
+  border:1px solid #475569;
+  padding:6px;
+}
+input.cell{
+  width:120px;
+  background:transparent;
+  border:none;
+  color:#e5e7eb;
+}
+.hidden{
+  display:none;
+}
+button{
+  cursor:pointer;
+}
+</style>
+</head>
+
+<body>
+
+<h2>Realtime Excel Sheet</h2>
+
+<div>
+  <input id="email" type="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Password">
+  <button onclick="login()">Login</button>
+  <button onclick="logout()">Logout</button>
+</div>
+
+<p id="roleInfo"></p>
+
+<table>
+<thead>
+<tr>
+  <th>A</th>
+  <th>B</th>
+  <th>C</th>
+  <th id="adminHead" class="hidden">Action</th>
+</tr>
+</thead>
+<tbody id="sheetBody"></tbody>
+</table>
+
+<button onclick="addRow()">Add Row</button>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
+import {
+  getDatabase,
+  ref,
+  set,
+  push,
+  onValue,
+  remove,
+  get
+} from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+
+/* 🔴 YOUR FIREBASE CONFIG */
+const firebaseConfig = {
+  apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
+  authDomain: "metro-railway-project.firebaseapp.com",
+  databaseURL: "https://metro-railway-project-default-rtdb.firebaseio.com",
+  projectId: "metro-railway-project",
+  storageBucket: "metro-railway-project.firebasestorage.app",
+  messagingSenderId: "376569064381",
+  appId: "1:376569064381:web:492cae73871212158180d4"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getDatabase(app);
+
+let role = "user";
+
+/* LOGIN */
+window.login = () => {
+  signInWithEmailAndPassword(auth, email.value, password.value)
+    .catch(e => alert(e.message));
+};
+
+/* LOGOUT */
+window.logout = () => signOut(auth);
+
+/* AUTH CHECK */
+onAuthStateChanged(auth, async user => {
+  if(!user) return;
+
+  const snap = await get(ref(db,"users/"+user.uid+"/role"));
+  role = snap.val() || "user";
+
+  roleInfo.innerText = "Logged in as: " + role;
+  if(role === "admin") adminHead.classList.remove("hidden");
+
+  loadSheet();
+});
+
+/* LOAD TABLE */
+function loadSheet(){
+  onValue(ref(db,"excelData"), snap=>{
+    sheetBody.innerHTML = "";
+    snap.forEach(row=>{
+      const id = row.key;
+      const data = row.val();
+      const tr = document.createElement("tr");
+
+      ["A","B","C"].forEach(c=>{
+        const td = document.createElement("td");
+        const i = document.createElement("input");
+        i.className = "cell";
+        i.value = data[c] || "";
+        i.onchange = () =>
+          set(ref(db,`excelData/${id}/${c}`), i.value);
+        td.appendChild(i);
+        tr.appendChild(td);
+      });
+
+      if(role === "admin"){
+        const td = document.createElement("td");
+        const b = document.createElement("button");
+        b.innerText = "Delete";
+        b.onclick = ()=>remove(ref(db,"excelData/"+id));
+        td.appendChild(b);
+        tr.appendChild(td);
+      }
+
+      sheetBody.appendChild(tr);
+    });
+  });
+}
+
+/* ADD ROW */
+window.addRow = () => {
+  push(ref(db,"excelData"), {A:"",B:"",C:""});
+};
+
+console.log("Firebase connected");
+</script>
+
+</body>
+</html>
