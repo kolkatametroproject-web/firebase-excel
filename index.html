@@ -604,20 +604,35 @@ function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e
 window.handleFaceScan = async () => {
     const btn = document.getElementById("btnCapture");
     
+    // 1. Instant Check: Do we have a target?
     if(!currentDescriptor) {
-        updateStatus("❌ No Face Lock! Hold steady.", "red");
+        updateStatus("❌ No Face Detected. Look at camera.", "red");
         return;
     }
 
     btn.disabled = true; 
-    updateStatus("Verifying...", "cyan");
+    btn.innerText = "Processing...";
+    updateStatus("Verifying Identity...", "cyan");
 
-    const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
-    const storedData = snap.val();
-    let matchFound = false;
-    
-    if(storedData) {
-        // Check against cache
+    try {
+        // 2. Set a 5-Second Timeout Limit (Prevents hanging)
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("Network Timeout")), 5000)
+        );
+
+        // 3. Race: Database Fetch vs 5-Second Timer
+        const snap = await Promise.race([
+            get(ref(db, `users/${currentUser.uid}/faceData`)),
+            timeoutPromise
+        ]);
+
+        const storedData = snap.val();
+
+        if (!storedData) throw new Error("No face data found.");
+
+        let matchFound = false;
+        
+        // 4. Compare Face (Math is instant)
         if(storedData[0] instanceof Array || Array.isArray(storedData[0])) {
              for (let sample of storedData) {
                  const dist = faceapi.euclideanDistance(sample, currentDescriptor);
@@ -627,16 +642,21 @@ window.handleFaceScan = async () => {
              const dist = faceapi.euclideanDistance(storedData, currentDescriptor);
              if(dist < 0.55) matchFound = true;
         }
-    }
 
-    if(matchFound) {
-        updateStatus("✅ ACCESS GRANTED", "#00ff00");
-        await recordLogin("Biometric (Fast)");
-        enterApp();
-    } else {
-        updateStatus("❌ Face Mismatch.", "red");
-        handleFail();
+        if(matchFound) {
+            updateStatus("✅ VERIFIED", "#00ff00");
+            await recordLogin("Biometric");
+            enterApp();
+        } else {
+            throw new Error("Face Mismatch");
+        }
+
+    } catch (error) {
+        console.error(error);
+        updateStatus("❌ " + (error.message.includes("Timeout") ? "Slow Connection" : "Access Denied"), "red");
         btn.disabled = false;
+        btn.innerText = "📸 Retry Scan";
+        handleFail();
     }
 };
 
@@ -778,9 +798,13 @@ window.loadAdminPanel = async () => {
     const globBody = document.getElementById("globalLogBody");
     
     userList.innerHTML = "Loading...";
-    userTable.innerHTML = "<tr><td colspan='4'>Loading Status...</td></tr>";
+    // Update Header to include Biometric Status
+    const tableHeader = document.querySelector("#tab-adminPanel table thead tr");
+    if(tableHeader) tableHeader.innerHTML = `<th>Name (User)</th><th>Online Status</th><th>Biometric Status</th><th>Admin Actions</th>`;
 
-    // FETCH DATA
+    userTable.innerHTML = "<tr><td colspan='4'>Loading Database...</td></tr>";
+
+    // FETCH DATA FASTER (Parallel)
     const [userSnap, statusSnap] = await Promise.all([
         get(ref(db, "users")),
         get(ref(db, "status"))
@@ -795,53 +819,46 @@ window.loadAdminPanel = async () => {
         const uid = c.key;
         const displayName = u.name || u.email;
 
-        // Checkbox for assignments
+        // 1. Checkbox for assignments
         userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
 
-        // STATUS BADGE CALCULATION
+        // 2. ONLINE BADGE
         let isOnline = false;
         const s = statusMap[uid];
         if(s && s.state === 'online') {
             const diff = Date.now() - (s.last_seen || 0);
-            if(diff < 20000) isOnline = true; // 20s grace period
+            if(diff < 20000) isOnline = true; 
         }
-        
         const statusBadge = isOnline ? 
-            `<span class="badge-online">● ONLINE</span>` : 
-            `<span class="badge-offline">○ OFFLINE</span>`;
+            `<span class="badge-online" style="background:#28a745; color:white; padding:4px 8px; border-radius:12px;">● ONLINE</span>` : 
+            `<span class="badge-offline" style="background:#6c757d; color:white; padding:4px 8px; border-radius:12px;">○ OFFLINE</span>`;
 
-        const pinInput = `<input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:50px; text-align:center;"> <button onclick="savePin('${uid}')" style="padding:2px 5px;">Set</button>`;
-        const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Reset Face</button>`;
-        const resetNameBtn = `<button class="warning" style="padding:2px 5px;" onclick="retakeName('${uid}')">Reset Name</button>`;
+        // 3. BIOMETRIC STATUS BADGE (New Feature)
+        const bioBadge = u.faceData ? 
+            `<span style="color:#003366; font-weight:bold; background:#e6f0ff; padding:4px 8px; border:1px solid #003366; border-radius:4px;">✔ Registered</span>` : 
+            `<span style="color:#721c24; font-weight:bold; background:#f8d7da; padding:4px 8px; border:1px solid #f5c6cb; border-radius:4px;">❌ Pending</span>`;
 
+        // 4. Action Buttons
+        const pinInput = `<input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:60px; text-align:center; margin-right:5px;"> <button onclick="savePin('${uid}')" style="padding:4px 8px; font-size:11px;">Set PIN</button>`;
+        const reUploadBtn = `<button class="danger" style="padding:4px 8px; font-size:11px; margin-top:5px;" onclick="forceReUpload('${uid}')">Reset Face ID</button>`;
+
+        // RENDER ROW
         userTable.innerHTML += `<tr>
-            <td>${u.name}<br><small>${u.email}</small></td>
-            <td>${statusBadge}</td>
-            <td>${u.terminated ? "BANNED" : "Active"}</td>
-            <td>${pinInput}<br>${reUploadBtn} ${resetNameBtn}</td>
+            <td><strong>${u.name}</strong><br><small style="color:#666;">${u.email}</small></td>
+            <td style="text-align:center;">${statusBadge}</td>
+            <td style="text-align:center;">${bioBadge}</td>
+            <td>${pinInput}<br>${reUploadBtn}</td>
         </tr>`;
     });
 
-    // GLOBAL LOGS
+    // LOAD LOGS
     onValue(query(ref(db, "logs"), limitToLast(15)), (snap) => {
         globBody.innerHTML = "";
         const logs = [];
         snap.forEach(c => logs.push(c.val()));
-        
         logs.reverse().forEach(x => {
-            let color = "#333";
-            let bg = "transparent";
-            if(x.type.includes("LOGIN")) { color = "green"; bg = "#eaffea"; }
-            if(x.type.includes("LOGOUT")) { color = "red"; bg = "#ffeaea"; }
-            
-            globBody.innerHTML += `
-            <tr style="background:${bg}">
-                <td style="font-size:12px; white-space:nowrap;">${formatTime(x.time)}</td>
-                <td style="font-size:12px;">${x.user}</td>
-                <td style="color:${color}; font-weight:bold; font-size:12px;">
-                    ${x.type} <span style="font-weight:normal; color:#666;">(${x.method})</span>
-                </td>
-            </tr>`;
+            let bg = x.type.includes("LOGIN") ? "#eaffea" : (x.type.includes("LOGOUT") ? "#ffeaea" : "transparent");
+            globBody.innerHTML += `<tr style="background:${bg}"><td style="font-size:11px;">${formatTime(x.time)}</td><td style="font-size:11px;">${x.user}</td><td style="font-size:11px;"><b>${x.type}</b> (${x.method})</td></tr>`;
         });
     });
 }
