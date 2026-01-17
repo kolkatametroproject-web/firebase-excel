@@ -2,11 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Metro Railway Safety System | Official Portal</title>
+
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 
 <style>
-/* --- OFFICIAL METRO THEME (KEPT EXACTLY AS YOU WROTE IT) --- */
+/* --- OFFICIAL METRO THEME --- */
 :root {
   --metro-blue: #003366;
   --metro-gold: #b38600;
@@ -123,7 +125,6 @@ tr:nth-child(even) { background-color: #fcfcfc; }
    
   <canvas id="procCanvas" width="320" height="240" class="hidden"></canvas>
   <canvas id="compCanvas" width="32" height="32" class="hidden"></canvas>
-  <img id="refImg" class="hidden" crossorigin="anonymous">
 </div>
 
 <section id="appScreen" class="container hidden">
@@ -210,7 +211,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebas
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
 import { getDatabase, ref, push, set, onValue, remove, update, query, orderByChild, equalTo, get, limitToLast } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
-// --- FIREBASE CONFIG (KEPT EXACTLY AS YOU WROTE IT) ---
+// --- FIREBASE CONFIG ---
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
   authDomain: "metro-railway-project.firebaseapp.com",
@@ -227,7 +228,7 @@ let currentUser = null;
 let isAdmin = false;
 const ADMINS = ["soham@metro.project", "heerok@metro.project"];
 let stream = null;
-let tempDescriptor = null; // Changed to store math descriptor, not just image
+let tempDescriptor = null; // Stores math for registration
 let mode = "verify"; 
 
 // --- 1. AUTH & INIT ---
@@ -239,17 +240,17 @@ onAuthStateChanged(auth, (user) => {
         document.getElementById("loginScreen").classList.add("hidden");
         document.getElementById("authNav").classList.remove("hidden");
         
-        // Check Admin Status
         if(isAdmin) {
             document.getElementById("adminBtn").classList.remove("hidden");
             document.getElementById("histAction").classList.remove("hidden");
             loadUserList();
         }
 
-        // Check Facial Data
+        // Check Biometric Data
         onValue(ref(db, `users/${user.uid}/faceData`), (snap) => {
             document.getElementById("faceModal").classList.remove("hidden");
-            initCamera(snap.exists()); // Pass existence check to init
+            // Pass existence check to init
+            initCamera(snap.exists()); 
         }, { onlyOnce: true });
 
     } else {
@@ -275,43 +276,31 @@ window.logout = () => {
 async function logAction(type, desc) {
     if(!currentUser) return;
     const email = currentUser.email;
-    
-    // Push new log
     await push(ref(db, "logs"), {
-        user: email,
-        type: type,
-        desc: desc,
-        time: new Date().toLocaleString()
+        user: email, type, desc, time: new Date().toLocaleString()
     });
 
-    // CLEANUP: Keep only last 10
     const logRef = ref(db, "logs");
     const q = query(logRef, orderByChild("user"), equalTo(email));
-    
     get(q).then((snap) => {
         if(snap.exists()) {
             const logs = [];
             snap.forEach(c => logs.push({key: c.key, ...c.val()}));
-            
-            // Sort by time
             if(logs.length > 10) {
                 const toDelete = logs.length - 10;
-                for(let i=0; i<toDelete; i++) {
-                    remove(ref(db, `logs/${logs[i].key}`));
-                }
+                for(let i=0; i<toDelete; i++) remove(ref(db, `logs/${logs[i].key}`));
             }
         }
     });
 }
 
-// --- 3. BIOMETRIC LOGIC (UPDATED: FACE-API.JS) ---
-// This entire section is updated to fix the 11% match and slow load
+// --- 3. BIOMETRIC LOGIC (MOBILE & PC COMPATIBLE) ---
 async function initCamera(hasData) {
     const vid = document.getElementById("cameraFeed");
     try {
-        updateStatus("🔄 Loading AI (Fast Mode)...", "yellow");
+        updateStatus("🔄 Loading AI (Mobile Mode)...", "yellow");
         
-        // LOAD NEW MODELS from CDN
+        // Load professional face-api models (Fast & Accurate)
         const modelUrl = 'https://justadudewhohacks.github.io/face-api.js/models';
         await Promise.all([
             faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
@@ -319,7 +308,14 @@ async function initCamera(hasData) {
             faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl)
         ]);
 
-        stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+        // MOBILE FIX: Constrain resolution to 640x480 to prevent crash
+        stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { 
+                facingMode: "user",
+                width: { ideal: 640 }, 
+                height: { ideal: 480 } 
+            } 
+        });
         vid.srcObject = stream;
         
         if (!hasData) {
@@ -331,7 +327,7 @@ async function initCamera(hasData) {
         }
     } catch(e) { 
         console.error(e);
-        alert("Camera/AI Error: " + e.message); 
+        alert("Camera Error: " + e.message); 
     }
 }
 
@@ -346,13 +342,15 @@ function updateStatus(msg, color) {
     el.style.color = color;
 }
 
-// Helper: Convert stored Base64 image to Face Descriptor
+// HELPER: Convert Old/Large Images to Math Descriptors (With Resizing)
 async function getDescriptorFromImage(base64Str) {
     return new Promise((resolve) => {
         const img = document.createElement('img');
         img.src = base64Str;
         img.onload = async () => {
-            const detection = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+            // FIX: Resize large mobile photos to 512px for the AI
+            const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
+            const detection = await faceapi.detectSingleFace(img, options).withFaceLandmarks().withFaceDescriptor();
             resolve(detection ? detection.descriptor : null);
         };
         img.onerror = () => resolve(null);
@@ -365,23 +363,22 @@ window.handleFaceScan = async () => {
     btn.disabled = true;
     updateStatus("🧠 Analyzing Biometrics...", "cyan");
 
-    // 1. Get Live Face Descriptor
-    const detection = await faceapi.detectSingleFace(vid, new faceapi.TinyFaceDetectorOptions())
-                                   .withFaceLandmarks()
-                                   .withFaceDescriptor();
+    // 1. Get Live Face Descriptor (Using inputSize 512 for speed)
+    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
+    const detection = await faceapi.detectSingleFace(vid, options).withFaceLandmarks().withFaceDescriptor();
 
     if (!detection) {
-        updateStatus("❌ No Face Detected. Adjust Light.", "red");
+        updateStatus("❌ No Face Detected. Hold steady.", "red");
         btn.disabled = false;
         return;
     }
 
     const currentDescriptor = detection.descriptor;
     
-    // Capture visual just for storage/reference
+    // Capture visual snapshot (resized for storage)
     const canvas = document.getElementById("procCanvas");
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(vid, 0, 0, 320, 240);
+    ctx.drawImage(vid, 0, 0, 320, 240); // Force standard size
     const currentImg = canvas.toDataURL("image/png");
 
     if (mode === "register") {
@@ -390,11 +387,10 @@ window.handleFaceScan = async () => {
             updateStatus("✅ Photo 1 Saved. Move slightly & Capture Photo 2.", "lime");
             btn.disabled = false;
         } else {
-            // Save Images (for backward compatibility) AND Descriptors (for new accuracy)
-            // Note: We convert Float32Array to standard Array for Firebase storage
+            // Save Descriptors (Math) + Image (Visual)
             await update(ref(db, `users/${currentUser.uid}/faceData`), {
-                img1: currentImg, // Keep for display if needed
-                desc1: Array.from(tempDescriptor), // Store the math
+                img1: currentImg, 
+                desc1: Array.from(tempDescriptor),
                 desc2: Array.from(currentDescriptor)
             });
             logAction("LOGIN", "Biometric Registration Complete");
@@ -407,12 +403,12 @@ window.handleFaceScan = async () => {
         
         let storedDescriptor = null;
 
-        // CHECK: Do we have new math data or old image data?
         if (stored.desc1) {
+            // Use existing math data
             storedDescriptor = new Float32Array(stored.desc1);
         } else if (stored.img1) {
-            // BACKWARD COMPATIBILITY: Convert old image to descriptor on the fly
-            updateStatus("⚠️ Upgrading old profile...", "orange");
+            // BACKWARD COMPATIBILITY: Convert old photo to math (Resized)
+            updateStatus("⚠️ optimizing profile...", "orange");
             storedDescriptor = await getDescriptorFromImage(stored.img1);
             if(storedDescriptor) {
                 // Save it so next time is fast
@@ -423,22 +419,20 @@ window.handleFaceScan = async () => {
         }
 
         if (!storedDescriptor) {
-             updateStatus("❌ Profile corrupted. Re-register required.", "red");
-             // Optional: reset profile logic here
+             updateStatus("❌ Profile unreadable. Re-registering...", "red");
+             await remove(ref(db, `users/${currentUser.uid}/faceData`));
+             setTimeout(() => location.reload(), 2000);
              return;
         }
         
-        // MATH COMPARISON (Euclidean Distance)
+        // MATH: Euclidean Distance (Lower is better)
         const distance = faceapi.euclideanDistance(currentDescriptor, storedDescriptor);
         
-        // Distance < 0.6 is a match. 
-        // We convert this to a percentage for your UI.
-        // 0.0 distance = 100% match. 0.6 distance = ~40% match (threshold).
-        // Let's scale it: Match = (1 - distance) * 100 roughly.
+        // Convert to percentage (0.6 dist is approx cutoff)
         let score = Math.floor((1 - distance) * 100); 
         if(score > 99) score = 99;
 
-        if (distance < 0.55) { // Professional Threshold
+        if (distance < 0.55) { 
             updateStatus(`✅ Verified: ${score}% Match`, "lime");
             logAction("LOGIN", `Biometric Success (${score}%)`);
             setTimeout(enterApp, 1000);
@@ -458,7 +452,7 @@ function enterApp() {
     loadInventory();
 }
 
-// --- 4. DATA ENTRY LOGIC (KEPT EXACTLY AS YOU WROTE IT) ---
+// --- 4. APP LOGIC (UNCHANGED) ---
 window.showTab = (id) => {
     document.querySelectorAll('#appScreen > .panel').forEach(p => p.classList.add('hidden'));
     document.getElementById(`tab-${id}`).classList.remove('hidden');
@@ -525,7 +519,7 @@ window.submitFinal = () => {
     }
 }
 
-// --- 5. HISTORY & INVENTORY (KEPT EXACTLY AS YOU WROTE IT) ---
+// --- 5. HISTORY & INVENTORY ---
 function loadHistory() {
     onValue(ref(db, "history"), snap => {
         const b = document.getElementById("histBody"); b.innerHTML = "";
@@ -560,7 +554,7 @@ window.addInventory = () => {
 }
 window.delInv = (k) => { logAction("DELETE", "Removed Inventory"); remove(ref(db, `inventory/${k}`)); }
 
-// --- 6. ADMIN (KEPT EXACTLY AS YOU WROTE IT) ---
+// --- 6. ADMIN ---
 function loadUserList() {
     onValue(ref(db, "logs"), snap => {
         const users = new Set();
@@ -573,7 +567,7 @@ function loadUserList() {
 
 window.fetchLogs = () => {
     const u = document.getElementById("userSelect").value;
-    const q = query(ref(db, "logs"), orderByChild("user"), equalTo(u), limitToLast(10)); // DB Limit
+    const q = query(ref(db, "logs"), orderByChild("user"), equalTo(u), limitToLast(10));
     onValue(q, snap => {
         const b = document.getElementById("logBody"); b.innerHTML = "";
         const logs = [];
@@ -583,7 +577,6 @@ window.fetchLogs = () => {
         });
     });
 }
-
 </script>
 </body>
 </html>
