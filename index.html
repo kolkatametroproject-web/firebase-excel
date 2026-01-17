@@ -94,9 +94,6 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: flex; justify-content: center; align-items: center; flex-direction: column; z-index: 2000; }
 #cameraFeed { border: 5px solid white; box-shadow: 0 0 20px rgba(0,0,0,0.5); width: 320px; height: 240px; background: #000; margin-bottom: 15px; transform: scaleX(-1); }
 
-/* UPLOAD SECTION SPECIFIC */
-.upload-panel { border: 2px dashed #003366; background: #eef2f7; padding: 20px; text-align: center; border-radius: 6px; margin-top: 20px; }
-
 /* GALLERY GRID */
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; }
 .gallery-item { border: 1px solid #ddd; padding: 10px; border-radius: 4px; text-align: center; background: #fff; }
@@ -146,7 +143,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
   <div id="otpUI" class="hidden" style="text-align:center; background:white; padding:20px; border-radius:5px; width:280px; box-shadow: 0 0 15px black;">
     <h3 style="color:#dc3545; margin-top:0;">Face ID Failed (3/3)</h3>
     <p style="color:#333; font-size:13px;">Camera Disabled for Privacy.<br>Enter OTP/PIN:</p>
-    <input id="otpInput" type="password" placeholder="PIN (Default: 1234)" style="text-align:center; font-size:18px; letter-spacing:5px; border:2px solid #dc3545;">
+    <input id="otpInput" type="password" placeholder="PIN" style="text-align:center; font-size:18px; letter-spacing:5px; border:2px solid #dc3545;">
     <button class="success" onclick="verifyOTP()" style="width:100%;">Verify PIN</button>
   </div>
 
@@ -186,7 +183,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
       </div>
     </div>
 
-    <div class="panel upload-panel">
+    <div class="panel" style="border: 2px dashed #003366; background: #eef2f7; padding: 20px; text-align: center;">
       <h3 style="color:#003366; margin-top:0;">📎 Evidence Upload Section</h3>
       <p style="font-size:12px; color:#666;">Upload site photos, videos, or PDFs separately here.</p>
       
@@ -259,10 +256,16 @@ tr:nth-child(even) { background-color: #f8f9fa; }
           <tbody id="globalTaskBody"></tbody>
       </table>
 
-      <h4 style="background:#eee; padding:5px;">2. User Access & Logs</h4>
-      <table><thead><tr><th>Name (User)</th><th>Status</th><th>Action</th><th>Logs</th></tr></thead><tbody id="userListBody"></tbody></table>
+      <h4 style="background:#eee; padding:5px;">2. User Access & Corrections</h4>
+      <table><thead><tr><th>Name (User)</th><th>Status</th><th>Admin Actions (PIN / Biometric)</th><th>Profile</th></tr></thead><tbody id="userListBody"></tbody></table>
       
-      <h5 style="color:#666;">Detailed Login Logs</h5>
+      <h4 style="background:#eee; padding:5px;">3. Detailed Login/Logout Logs (Last 10)</h4>
+      <div style="display:flex; gap:10px; margin-bottom:10px;">
+          <select id="logUserSelect" onchange="viewUserLogs()">
+              <option value="">-- Select User to View Logs --</option>
+          </select>
+          <button onclick="viewUserLogs()" class="primary">Fetch Logs</button>
+      </div>
       <div style="max-height:200px; overflow-y:scroll; border:1px solid #ddd;">
         <table><thead><tr><th>Time</th><th>User</th><th>Method</th><th>Details</th></tr></thead><tbody id="detailedLogBody"></tbody></table>
       </div>
@@ -294,7 +297,7 @@ let stream = null;
 let mode = "verify";
 let currentFileBase64 = null;
 let currentFileType = null;
-let failCount = 0; // COUNTER FOR FAILS
+let failCount = 0;
 
 // --- AUTH ---
 onAuthStateChanged(auth, (user) => {
@@ -308,7 +311,7 @@ onAuthStateChanged(auth, (user) => {
 
     currentUser = user;
     isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
-    failCount = 0; // Reset fails on fresh login
+    failCount = 0;
     
     if (!u.name) {
         document.getElementById("nameModal").classList.remove("hidden");
@@ -316,7 +319,6 @@ onAuthStateChanged(auth, (user) => {
         return;
     }
 
-    // Set PIN if missing
     if (!u.pin) { update(ref(db, `users/${user.uid}`), { pin: "1234" }); }
 
     document.getElementById("userInfo").innerText = `${u.name} (${user.email})`;
@@ -353,7 +355,7 @@ function showLogin() {
 }
 
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert(e.message));
-window.logout = () => { if(currentUser) logActivity("LOGOUT", "Exit"); signOut(auth); };
+window.logout = () => { if(currentUser) logActivity("LOGOUT", "Exit").then(() => signOut(auth)); };
 
 // --- BIOMETRICS ---
 async function initCamera(hasData) {
@@ -375,7 +377,7 @@ async function initCamera(hasData) {
 // *** PRIVACY PROTECTION: HARD STOP ***
 function stopCamera() { 
     if(stream) {
-        stream.getTracks().forEach(t => t.stop()); // Kill hardware light
+        stream.getTracks().forEach(t => t.stop()); 
         stream = null;
     }
     const vid = document.getElementById("cameraFeed");
@@ -400,26 +402,22 @@ window.handleFaceScan = async () => {
         return; 
     }
     
-    // Logic: In prod, compare detection.descriptor. Demo: Simulating 50% threshold logic.
-    // If logic passes:
+    // Demo Logic
     logActivity("LOGIN [Face]", "Biometric Success");
     enterApp();
-    // If fail logic needed: handleFail();
 };
 
 function handleFail() {
     failCount++;
-    const attemptsLeft = 3 - failCount;
     if(failCount >= 3) {
-        // TRIGGER OTP MODE
-        stopCamera(); // Hard Stop Camera
-        document.getElementById("faceModal").classList.remove("hidden"); // Keep modal open
+        stopCamera(); 
+        document.getElementById("faceModal").classList.remove("hidden");
         document.getElementById("cameraFeed").classList.add("hidden");
         document.getElementById("camControls").classList.add("hidden");
-        document.getElementById("otpUI").classList.remove("hidden"); // Show PIN Input
+        document.getElementById("otpUI").classList.remove("hidden"); 
         updateStatus("⚠️ Camera Disabled. Enter PIN.", "red");
     } else {
-        updateStatus(`❌ Failed. Attempts left: ${attemptsLeft}`, "orange");
+        updateStatus(`❌ Failed. Attempts left: ${3 - failCount}`, "orange");
     }
 }
 
@@ -428,7 +426,6 @@ window.verifyOTP = () => {
     get(ref(db, `users/${currentUser.uid}/pin`)).then(snap => {
         const actualPin = snap.val() || "1234";
         if(input === actualPin) {
-            alert("PIN Verified ✅");
             logActivity("LOGIN [OTP]", "PIN Entry Success");
             enterApp();
         } else {
@@ -444,7 +441,7 @@ window.forceAdminEntry = () => {
 }
 
 function enterApp() {
-    stopCamera(); // Double Ensure camera is DEAD
+    stopCamera(); 
     document.getElementById("appScreen").classList.remove("hidden");
     switchTab('newData');
     loadDraft(); loadGallery(); loadInventory(); loadAssignments();
@@ -454,26 +451,20 @@ function enterApp() {
 
 window.saveStationDetails = () => {
     const name = document.getElementById("inpStationName").value.trim();
-    const len = document.getElementById("inpStationLength").value.trim();
-    const yl = document.getElementById("inpYellowDist").value.trim();
-    const th = document.getElementById("inpYellowThick").value.trim();
-    const rem = document.getElementById("inpRemarks").value.trim();
-
-    if(!name || !len || !yl || !th || !rem) {
-        return alert("❌ ERROR: All fields (including Remarks) must be filled.");
-    }
-
+    if(!name) return alert("Station Name Required");
     update(ref(db, `drafts/${currentUser.uid}/details`), {
-        name: name, len: len, yl: yl, th: th, remarks: rem
+        name: name,
+        len: document.getElementById("inpStationLength").value,
+        yl: document.getElementById("inpYellowDist").value,
+        th: document.getElementById("inpYellowThick").value,
+        remarks: document.getElementById("inpRemarks").value
     });
     logActivity("SAVE", "Draft Updated"); alert("Draft Saved");
 };
 
-// SEPARATE EVIDENCE UPLOAD FUNCTION
 window.uploadEvidenceOnly = () => {
-    if(!currentFileBase64) return alert("Please select a file first.");
-    
-    if(confirm("Upload this file to the Evidence Gallery?")) {
+    if(!currentFileBase64) return alert("Select a file first.");
+    if(confirm("Upload Evidence?")) {
         push(ref(db, "history"), { 
             name: "Evidence Upload", 
             user: currentUser.email, 
@@ -482,68 +473,60 @@ window.uploadEvidenceOnly = () => {
             fileData: currentFileBase64, 
             fileType: currentFileType
         });
-        
-        // Reset inputs
         document.getElementById("evidenceFile").value = "";
         document.getElementById("fileStatus").innerText = "";
         currentFileBase64 = null;
-        alert("Evidence Uploaded Successfully.");
-        switchTab('gallery');
+        alert("Evidence Uploaded."); switchTab('gallery');
     }
 };
 
 window.submitStationData = () => {
     get(ref(db, `drafts/${currentUser.uid}`)).then(s => {
         const d = s.val();
-        if(!d || !d.details || !d.details.name || !d.details.len || !d.details.yl || !d.details.th || !d.details.remarks) {
-            return alert("❌ ERROR: Station Details incomplete.");
-        }
-        if(!d.rows) return alert("❌ ERROR: Distance Data table is empty.");
-
-        let isValid = true;
-        Object.values(d.rows).forEach(row => { if(!row.rake || !row.type || !row.f || !row.r) isValid = false; });
-        if(!isValid) return alert("❌ ERROR: Table rows are incomplete.");
-
-        if(confirm("Submit Final Data?")) {
+        if(!d || !d.details) return alert("No Data.");
+        if(confirm("Submit Final?")) {
             push(ref(db, "history"), { 
                 ...d.details, rows: d.rows, user: currentUser.email, userName: currentUser.name, date: new Date().toLocaleString()
             });
             remove(ref(db, `drafts/${currentUser.uid}`));
-            alert("Submitted Successfully"); switchTab('gallery');
+            alert("Submitted"); switchTab('gallery');
         }
     });
 };
 
-// 2. Admin Logic
+// --- ADMIN LOGIC ---
 window.loadAdminPanel = () => {
     const targetSel = document.getElementById("assignTarget");
     const userTable = document.getElementById("userListBody");
     const reportTable = document.getElementById("globalTaskBody");
-    const logTable = document.getElementById("detailedLogBody");
+    const logUserSel = document.getElementById("logUserSelect");
     
     targetSel.innerHTML = `<option value="ALL">-- Assign to ALL Users --</option>`;
+    logUserSel.innerHTML = `<option value="">-- Select User --</option>`;
 
+    // Groups
     get(ref(db, "groups")).then(snap => {
-        if(snap.exists()) {
-            snap.forEach(g => { targetSel.innerHTML += `<option value="GRP_${g.key}">👥 Group: ${g.val().name}</option>`; });
-        }
+        if(snap.exists()) snap.forEach(g => targetSel.innerHTML += `<option value="GRP_${g.key}">👥 Group: ${g.val().name}</option>`);
     });
 
+    // Users
     get(ref(db, "users")).then(snap => {
         userTable.innerHTML = "";
         snap.forEach(c => {
             const u = c.val();
             const uid = c.key;
             targetSel.innerHTML += `<option value="${uid}">👤 ${u.name || u.email}</option>`;
+            logUserSel.innerHTML += `<option value="${u.email}">${u.email} (${u.name})</option>`;
 
-            const pinDisplay = `<small>PIN: ${u.pin || '1234'}</small>`;
-            const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Force Re-upload</button>`;
-            const retakeNameBtn = `<button class="warning" style="padding:2px 5px;" onclick="retakeName('${uid}')">Reset Name</button>`;
+            const pinInput = `<input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:50px; text-align:center;"> <button onclick="savePin('${uid}')" style="padding:2px 5px;">Set</button>`;
+            const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Re-upload Face</button>`;
+            const resetNameBtn = `<button class="warning" style="padding:2px 5px;" onclick="retakeName('${uid}')">Reset Name</button>`;
 
-            userTable.innerHTML += `<tr><td>${u.name || "Unknown"} <br><small>${u.email}</small></td><td>${u.terminated ? "BANNED" : "Active"}</td><td>${pinDisplay} ${reUploadBtn}</td><td>${retakeNameBtn}</td></tr>`;
+            userTable.innerHTML += `<tr><td>${u.name}<br><small>${u.email}</small></td><td>${u.terminated ? "BANNED" : "Active"}</td><td>${pinInput}<br>${reUploadBtn}</td><td>${resetNameBtn}</td></tr>`;
         });
     });
 
+    // Tasks
     get(ref(db, "assignments")).then(snap => {
         reportTable.innerHTML = "";
         snap.forEach(userNode => {
@@ -554,12 +537,36 @@ window.loadAdminPanel = () => {
             });
         });
     });
+}
 
-    // NEW LOG VIEWER
-    onValue(query(ref(db, "logs"), limitToLast(20)), s => {
+// Admin Functions
+window.savePin = (uid) => {
+    const p = document.getElementById(`pin_${uid}`).value;
+    if(p.length >= 4) { update(ref(db, `users/${uid}`), { pin: p }); alert("PIN Updated"); }
+}
+
+window.viewUserLogs = () => {
+    const email = document.getElementById("logUserSelect").value;
+    if(!email) return;
+    const logTable = document.getElementById("detailedLogBody");
+    logTable.innerHTML = "<tr><td colspan='4'>Loading...</td></tr>";
+    
+    // Query Logs for specific user
+    const q = query(ref(db, "logs"), orderByChild("user"), equalTo(email), limitToLast(10));
+    onValue(q, (s) => {
         logTable.innerHTML = "";
-        const l = []; s.forEach(c=>l.push(c.val()));
-        l.reverse().forEach(x => logTable.innerHTML += `<tr><td>${x.time}</td><td>${x.user}</td><td>${x.type}</td><td>${x.desc}</td></tr>`);
+        const l = [];
+        if(s.exists()) {
+            s.forEach(c => l.push(c.val()));
+            l.reverse().forEach(x => {
+                let color = "black";
+                if(x.type.includes("LOGIN")) color = "green";
+                if(x.type.includes("LOGOUT")) color = "red";
+                logTable.innerHTML += `<tr><td>${x.time}</td><td>${x.user}</td><td style="color:${color}; font-weight:bold;">${x.type}</td><td>${x.desc}</td></tr>`;
+            });
+        } else {
+            logTable.innerHTML = "<tr><td colspan='4'>No logs found for this user.</td></tr>";
+        }
     });
 }
 
@@ -569,7 +576,7 @@ window.createGroup = () => {
 }
 
 window.forceReUpload = (uid) => {
-    if(confirm("Delete user's biometric data?")) { remove(ref(db, `users/${uid}/faceData`)).then(() => alert("Face Data Reset.")); }
+    if(confirm("Reset Face Data?")) { remove(ref(db, `users/${uid}/faceData`)).then(() => alert("Face Data Reset.")); }
 }
 window.retakeName = (uid) => update(ref(db, `users/${uid}`), { name: null }).then(() => alert("Name Reset."));
 window.removeTask = (uid, tid) => remove(ref(db, `assignments/${uid}/${tid}`)).then(loadAdminPanel);
