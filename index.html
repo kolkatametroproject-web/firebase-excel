@@ -389,6 +389,7 @@ let modelsLoaded = false;
 // --- NEW HIGH-PERFORMANCE VARS ---
 let detectionLoop;
 let currentDescriptor = null;
+let disconnectRef; // ADDED: Variable to store disconnect reference
 
 // --- 1. LOAD AI MODELS ---
 async function preloadModels() {
@@ -489,6 +490,15 @@ function startPresenceSystem(user) {
         email: user.email
     });
 
+    // ADDED: Create automatic logout log on disconnect (Tab Close)
+    disconnectRef = push(ref(db, "logs"));
+    onDisconnect(disconnectRef).set({
+        user: user.email,
+        type: "LOGOUT",
+        method: "Tab Closed / Connection Lost",
+        time: serverTimestamp()
+    });
+
     // 3. Update heartbeat every 5 sec
     setInterval(() => {
         if(currentUser) update(userStatusRef, { last_seen: serverTimestamp() });
@@ -542,6 +552,9 @@ window.login = () => signInWithEmailAndPassword(auth, email.value, password.valu
 
 window.logout = async () => { 
     if(currentUser) {
+        // ADDED: Cancel the automatic tab-close log if user manually logs out
+        if(disconnectRef) onDisconnect(disconnectRef).cancel();
+
         const logData = { user: currentUser.email, type: "LOGOUT", method: "Manual Click", time: serverTimestamp() };
         await push(ref(db, "logs"), logData);
         signOut(auth);
@@ -934,7 +947,6 @@ window.loadSysLogs = () => {
     const q = query(ref(db, "logs"), limitToLast(60));
 
     onValue(q, (snap) => {
-        tbody.innerHTML = "";
         const logs = [];
         
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
@@ -945,6 +957,7 @@ window.loadSysLogs = () => {
             return;
         }
 
+        tbody.innerHTML = "";
         logs.forEach(x => {
             let color = "black";
             let bg = "transparent";
