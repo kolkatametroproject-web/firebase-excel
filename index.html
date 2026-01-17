@@ -332,7 +332,25 @@ let currentFileType = null;
 let failCount = 0;
 let idleTimer;
 let logListenerUnsubscribe = null; 
-let regSamples = []; // To store 3 samples
+let regSamples = []; 
+let modelsLoaded = false; // Flag to prevent re-loading
+
+// --- 1. OPTIMIZATION: LOAD AI MODELS IMMEDIATELY ---
+async function preloadModels() {
+    if(modelsLoaded) return; 
+    const modelUrl = 'https://justadudewhohacks.github.io/face-api.js/models';
+    console.log("Starting Model Preload...");
+    try {
+        await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
+            faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
+            faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl)
+        ]);
+        modelsLoaded = true;
+        console.log("Models Loaded Successfully");
+    } catch(e) { console.error("Model Load Failed", e); }
+}
+preloadModels(); // Call immediately on script load
 
 // --- AUTH & AUTO LOGOUT ---
 onAuthStateChanged(auth, (user) => {
@@ -374,11 +392,10 @@ onAuthStateChanged(auth, (user) => {
     faceModal.classList.remove("hidden");
     
     if(!u.faceData) {
-        // ENROLLMENT MODE (Multi-Sample)
+        // ENROLLMENT MODE
         document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup (3 Steps)";
         document.getElementById("modalDesc").innerText = "Security Requirement: We need 3 scans of your face.";
         
-        // Show progress dots
         document.getElementById("regProgress").classList.remove("hidden");
         updateRegDots(regSamples.length);
         
@@ -387,9 +404,9 @@ onAuthStateChanged(auth, (user) => {
         updateStatus("Ready to Register. Look at camera.", "cyan");
         initCamera(false);
     } else {
-        // VERIFICATION MODE (Normal)
+        // VERIFICATION MODE
         document.getElementById("modalTitle").innerText = "Biometric Verification";
-        document.getElementById("modalDesc").innerText = "Initializing AI Models...";
+        document.getElementById("modalDesc").innerText = "System Ready.";
         document.getElementById("regProgress").classList.add("hidden");
         document.getElementById("btnCapture").innerText = "📸 Face Scan";
         document.getElementById("btnCapture").onclick = handleFaceScan; 
@@ -449,15 +466,15 @@ window.logout = () => {
 async function initCamera(isVerify) {
     const vid = document.getElementById("cameraFeed");
     try {
-        updateStatus("Loading AI...", "yellow");
-        const modelUrl = 'https://justadudewhohacks.github.io/face-api.js/models';
-        await Promise.all([
-            faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
-            faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
-            faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl)
-        ]);
+        if(!modelsLoaded) updateStatus("Loading AI Models...", "yellow");
+        else updateStatus("Starting Camera...", "white");
+
+        // Wait for models if not ready
+        if(!modelsLoaded) await preloadModels();
+
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
         vid.srcObject = stream;
+        
         if(isVerify) updateStatus("🔒 VERIFICATION REQUIRED", "white");
         else updateStatus("📝 REGISTRATION MODE", "cyan");
     } catch(e) { updateStatus("Camera Failed.", "red"); }
@@ -473,34 +490,31 @@ function stopCamera() {
     document.getElementById("faceModal").classList.add("hidden"); 
 }
 
-function updateStatus(m,c) { const e=document.getElementById("faceStatus"); e.innerText=m; e.style.color=c; }
+function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
 
-// --- ENROLLMENT LOGIC (3 PICTURES) ---
+// --- ENROLLMENT LOGIC (OPTIMIZED: 224px) ---
 window.registerNewFace = async () => {
     const vid = document.getElementById("cameraFeed");
     const btn = document.getElementById("btnCapture");
     updateStatus("Scanning...", "cyan");
     
-    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
+    // Tiny options with 224 input size is VERY FAST
+    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
     const detection = await faceapi.detectSingleFace(vid, options).withFaceLandmarks().withFaceDescriptor();
 
     if(detection) {
-        // Save descriptor to temporary array
         regSamples.push(Array.from(detection.descriptor));
         
         const count = regSamples.length;
         updateRegDots(count);
 
         if(count < 3) {
-            updateStatus(`✅ Sample ${count}/3 Saved! Move slightly & click again.`, "lightgreen");
+            updateStatus(`✅ Sample ${count}/3 Saved! Move head & click.`, "lightgreen");
             btn.innerText = `📸 Capture Sample ${count + 1} of 3`;
         } else {
-            // ALL 3 DONE
-            updateStatus("Processing Final Data...", "yellow");
+            updateStatus("Finalizing...", "yellow");
             await update(ref(db, `users/${currentUser.uid}`), { faceData: regSamples });
-            alert("Registration Complete! 3 Samples Secured.");
-            regSamples = []; // Reset local
-            // The onValue listener will detect the new data and switch UI automatically
+            alert("Registration Complete!");
         }
 
     } else {
@@ -508,13 +522,13 @@ window.registerNewFace = async () => {
     }
 };
 
-// --- VERIFICATION LOGIC (MULTI-SAMPLE SUPPORT) ---
+// --- VERIFICATION LOGIC (OPTIMIZED) ---
 window.handleFaceScan = async () => {
     const vid = document.getElementById("cameraFeed");
     const btn = document.getElementById("btnCapture");
     btn.disabled = true; updateStatus("Scanning...", "cyan");
 
-    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
+    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
     const detection = await faceapi.detectSingleFace(vid, options).withFaceLandmarks().withFaceDescriptor();
 
     if(!detection) { 
@@ -527,22 +541,16 @@ window.handleFaceScan = async () => {
     // Retrieve stored data
     const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
     const storedData = snap.val();
-    
     let matchFound = false;
     
-    // CHECK AGAINST ALL STORED SAMPLES
-    // We handle both old format (single array) and new format (array of arrays)
     if(storedData) {
         const currentDesc = detection.descriptor;
-        
         if(storedData[0] instanceof Array || Array.isArray(storedData[0])) {
-             // NEW FORMAT: Iterate through all 3 samples
              for (let sample of storedData) {
                  const dist = faceapi.euclideanDistance(sample, currentDesc);
-                 if(dist < 0.5) { matchFound = true; break; } // 0.5 is strict threshold
+                 if(dist < 0.5) { matchFound = true; break; } 
              }
         } else {
-             // OLD FORMAT: Single check
              const dist = faceapi.euclideanDistance(storedData, currentDesc);
              if(dist < 0.5) matchFound = true;
         }
@@ -592,7 +600,7 @@ window.forceAdminEntry = () => {
 }
 
 function enterApp() {
-    stopCamera(); // Privacy: Cut camera immediately
+    stopCamera(); 
     document.getElementById("appScreen").classList.remove("hidden");
     switchTab('newData');
     loadDraft(); loadGallery(); loadInventory(); loadAssignments();
@@ -711,14 +719,13 @@ window.loadAdminPanel = async () => {
         });
     });
 
-    // 3. Global Logs Listener (Last 15 ONLY)
+    // 3. Global Logs Listener
     const globBody = document.getElementById("globalLogBody");
     onValue(query(ref(db, "logs"), limitToLast(15)), (snap) => {
         globBody.innerHTML = "";
         const logs = [];
         snap.forEach(c => logs.push(c.val()));
         
-        // Reverse to show Newest First
         logs.reverse().forEach(x => {
             let color = "#333";
             let bg = "transparent";
@@ -741,6 +748,7 @@ window.loadAdminPanel = async () => {
     });
 }
 
+// --- 2. LOGGING FIXED ---
 // REAL-TIME USER SPECIFIC LOGS (UPDATED to userLogs/{uid})
 window.viewSpecificUserLogs = () => {
     const targetUid = document.getElementById("searchUserDropdown").value;
@@ -814,7 +822,7 @@ window.forceReUpload = (uid) => {
 window.retakeName = (uid) => update(ref(db, `users/${uid}`), { name: null }).then(() => alert("Name Reset."));
 window.removeTask = (uid, tid) => remove(ref(db, `assignments/${uid}/${tid}`)).then(loadAdminPanel);
 
-// UPDATED LOGGING FUNCTION
+// UPDATED LOGGING FUNCTION: Writes to TWO places
 async function logActivity(type, desc) { 
     if(currentUser) {
         const logData = { user: currentUser.email, type, desc, time: new Date().toLocaleString() };
@@ -822,7 +830,7 @@ async function logActivity(type, desc) {
         // 1. Global System Log (Kept for overall admin view)
         await push(ref(db, "logs"), logData);
 
-        // 2. User Specific Log (New requirement)
+        // 2. User Specific Log (Fixed path)
         await push(ref(db, `userLogs/${currentUser.uid}`), logData);
     } 
 }
