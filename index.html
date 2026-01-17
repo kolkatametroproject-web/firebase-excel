@@ -157,7 +157,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
   
   <div id="otpUI" class="hidden" style="text-align:center; background:white; padding:20px; border-radius:5px; width:280px; box-shadow: 0 0 15px black;">
     <h3 style="color:#dc3545; margin-top:0;">Face ID Failed (3/3)</h3>
-    <p style="color:#333; font-size:13px;">Camera Disabled for Privacy.<br>Enter OTP/PIN:</p>
+    <p style="color:#333; font-size:13px;">Camera Disabled.<br>Enter OTP/PIN:</p>
     <input id="otpInput" type="password" placeholder="PIN (Default: 1234)" style="text-align:center; font-size:18px; letter-spacing:5px; border:2px solid #dc3545;">
     <button class="success" onclick="verifyOTP()" style="width:100%;">Verify PIN</button>
   </div>
@@ -192,7 +192,6 @@ tr:nth-child(even) { background-color: #f8f9fa; }
           <input id="inpYellowThick" placeholder="YELLOW LINE THICKNESS (CM)">
       </div>
       <textarea id="inpRemarks" placeholder="Remarks / Observations (Mandatory)" rows="2"></textarea>
-      
       <div style="text-align:right;">
           <button class="success" onclick="saveStationDetails()">💾 Save Station Draft</button>
       </div>
@@ -206,7 +205,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
       <div id="fileStatus" style="font-size:13px; color:green; font-weight:bold; margin:10px 0;"></div>
       
       <button class="warning" onclick="uploadEvidenceOnly()">⬆ Upload Evidence to Database</button>
-      <div style="margin-top:5px;"><small style="color:red;">* Max 1.5 MB per file (Strict Limit)</small></div>
+      <div style="margin-top:5px;"><small style="color:red;">* Max 1.5 MB per file</small></div>
     </div>
 
     <div class="panel">
@@ -249,33 +248,23 @@ tr:nth-child(even) { background-color: #f8f9fa; }
         <button onclick="loadAdminPanel()" class="primary">🔄 Refresh</button>
       </div>
 
-      <h4 style="background:#eee; padding:5px;">1. Work Assignment (Multi-Select Grouping)</h4>
-      
+      <h4 style="background:#eee; padding:5px;">1. Work Assignment</h4>
       <label>Select Students/Users:</label>
-      <div id="userCheckboxList" class="checkbox-list">
-          </div>
-
+      <div id="userCheckboxList" class="checkbox-list"></div>
       <div style="margin-top:15px;">
         <textarea id="taskDesc" rows="1" placeholder="Enter Task Details..."></textarea>
         <button onclick="assignTaskMulti()" style="width:100%; margin-top:5px;">Assign to Selected Users</button>
       </div>
 
       <h5 style="color:#666;">Global Task Status Report</h5>
-      <table style="margin-bottom:20px;">
-          <thead><tr><th>To</th><th>Task</th><th>Status</th><th>Action</th></tr></thead>
-          <tbody id="globalTaskBody"></tbody>
-      </table>
+      <table style="margin-bottom:20px;"><thead><tr><th>To</th><th>Task</th><th>Status</th><th>Action</th></tr></thead><tbody id="globalTaskBody"></tbody></table>
 
       <h4 style="background:#eee; padding:5px;">2. User Access & Corrections</h4>
-      <table><thead><tr><th>Name (User)</th><th>Status</th><th>Admin Actions</th><th>Profile</th></tr></thead><tbody id="userListBody"></tbody></table>
+      <table><thead><tr><th>Name (User)</th><th>Face ID Status</th><th>Account Status</th><th>Actions</th></tr></thead><tbody id="userListBody"></tbody></table>
       
-      <h4 style="background:#eee; padding:5px;">3. Detailed Login Logs</h4>
-      <div style="display:flex; gap:10px; margin-bottom:10px;">
-          <select id="logUserSelect" onchange="viewUserLogs()"><option value="">-- Select User --</option></select>
-          <button onclick="viewUserLogs()" class="primary">Fetch Logs</button>
-      </div>
-      <div style="max-height:200px; overflow-y:scroll; border:1px solid #ddd;">
-        <table><thead><tr><th>Time</th><th>User</th><th>Method</th><th>Details</th></tr></thead><tbody id="detailedLogBody"></tbody></table>
+      <h4 style="background:#eee; padding:5px;">3. Real-Time System Logs (Last 20 Events)</h4>
+      <div style="max-height:300px; overflow-y:scroll; border:1px solid #ddd;">
+        <table><thead><tr><th>Time</th><th>User</th><th>Event Type</th><th>Details</th></tr></thead><tbody id="detailedLogBody"></tbody></table>
       </div>
     </div>
   </div>
@@ -302,14 +291,16 @@ let currentUser;
 let isAdmin = false;
 const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project"];
 let stream = null;
-let mode = "verify";
 let currentFileBase64 = null;
 let currentFileType = null;
 let failCount = 0;
+let idleTimer;
 
-// --- AUTH ---
+// --- AUTH & AUTO LOGOUT ---
 onAuthStateChanged(auth, (user) => {
   if (!user) { showLogin(); return; }
+  
+  setupIdleTimer();
   update(ref(db, `users/${user.uid}`), { email: user.email });
 
   onValue(ref(db, `users/${user.uid}`), (snap) => {
@@ -343,6 +334,25 @@ onAuthStateChanged(auth, (user) => {
     initCamera(true);
   });
 });
+
+// --- IDLE LOGIC (4 MINS) ---
+function setupIdleTimer() {
+    clearTimeout(idleTimer);
+    window.onmousemove = resetTimer;
+    window.onkeypress = resetTimer;
+    window.onclick = resetTimer;
+    resetTimer(); 
+}
+
+function resetTimer() {
+    clearTimeout(idleTimer);
+    if(currentUser) {
+        idleTimer = setTimeout(() => {
+            alert("Session Timeout. Logging out.");
+            logActivity("LOGOUT", "Auto-Timeout").then(()=>signOut(auth));
+        }, 4 * 60 * 1000); 
+    }
+}
 
 window.saveOfficialName = () => {
     const name = document.getElementById("officialNameInput").value;
@@ -381,10 +391,9 @@ async function initCamera(hasData) {
     } catch(e) { updateStatus("Camera Failed.", "red"); }
 }
 
-// *** PRIVACY PROTECTION: HARD STOP ***
 function stopCamera() { 
     if(stream) {
-        stream.getTracks().forEach(t => t.stop()); // Kill hardware
+        stream.getTracks().forEach(t => t.stop()); 
         stream = null;
     }
     const vid = document.getElementById("cameraFeed");
@@ -409,7 +418,6 @@ window.handleFaceScan = async () => {
         return; 
     }
     
-    // Demo Logic: Assume Success if Face Found
     logActivity("LOGIN [Face]", "Biometric Success");
     enterApp();
 };
@@ -469,7 +477,6 @@ window.saveStationDetails = () => {
     logActivity("SAVE", "Draft Updated"); alert("Draft Saved");
 };
 
-// FIXED FILE UPLOAD (1.5MB Limit)
 window.uploadEvidenceOnly = () => {
     if(!currentFileBase64) return alert("Select a file first.");
     
@@ -481,11 +488,13 @@ window.uploadEvidenceOnly = () => {
             date: new Date().toLocaleString(),
             fileData: currentFileBase64, 
             fileType: currentFileType
+        }).then(() => {
+            document.getElementById("evidenceFile").value = "";
+            document.getElementById("fileStatus").innerText = "";
+            currentFileBase64 = null;
+            alert("Evidence Uploaded."); 
+            switchTab('gallery');
         });
-        document.getElementById("evidenceFile").value = "";
-        document.getElementById("fileStatus").innerText = "";
-        currentFileBase64 = null;
-        alert("Evidence Uploaded."); switchTab('gallery');
     }
 };
 
@@ -496,9 +505,10 @@ window.submitStationData = () => {
         if(confirm("Submit Final?")) {
             push(ref(db, "history"), { 
                 ...d.details, rows: d.rows, user: currentUser.email, userName: currentUser.name, date: new Date().toLocaleString()
+            }).then(() => {
+                remove(ref(db, `drafts/${currentUser.uid}`));
+                alert("Submitted"); switchTab('gallery');
             });
-            remove(ref(db, `drafts/${currentUser.uid}`));
-            alert("Submitted"); switchTab('gallery');
         }
     });
 };
@@ -508,12 +518,11 @@ window.loadAdminPanel = () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
     const reportTable = document.getElementById("globalTaskBody");
-    const logUserSel = document.getElementById("logUserSelect");
+    const logTable = document.getElementById("detailedLogBody");
     
     userList.innerHTML = "Loading...";
-    logUserSel.innerHTML = `<option value="">-- Select User --</option>`;
 
-    // Users
+    // 1. Users & Status
     get(ref(db, "users")).then(snap => {
         userTable.innerHTML = "";
         userList.innerHTML = "";
@@ -523,24 +532,24 @@ window.loadAdminPanel = () => {
             const uid = c.key;
             
             // Checkbox for Multi-Assign
-            userList.innerHTML += `
-            <label class="checkbox-item">
-                <input type="checkbox" class="user-check" value="${uid}"> ${u.name} <small>(${u.email})</small>
-            </label>`;
+            userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${u.name} <small>(${u.email})</small></label>`;
 
-            // Dropdown for Logs
-            logUserSel.innerHTML += `<option value="${u.email}">${u.email} (${u.name})</option>`;
-
-            // Access Table
+            // Access Table with Biometric Status
+            const bioStatus = u.faceData ? '<span style="color:green; font-weight:bold;">✔ Registered</span>' : '<span style="color:red; font-weight:bold;">❌ Not Set</span>';
             const pinInput = `<input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:50px; text-align:center;"> <button onclick="savePin('${uid}')" style="padding:2px 5px;">Set</button>`;
             const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Re-upload Face</button>`;
             const resetNameBtn = `<button class="warning" style="padding:2px 5px;" onclick="retakeName('${uid}')">Reset Name</button>`;
 
-            userTable.innerHTML += `<tr><td>${u.name}<br><small>${u.email}</small></td><td>${u.terminated ? "BANNED" : "Active"}</td><td>${pinInput}<br>${reUploadBtn}</td><td>${resetNameBtn}</td></tr>`;
+            userTable.innerHTML += `<tr>
+                <td>${u.name}<br><small>${u.email}</small></td>
+                <td>${bioStatus}</td>
+                <td>${u.terminated ? "BANNED" : "Active"}</td>
+                <td>${pinInput}<br>${reUploadBtn} ${resetNameBtn}</td>
+            </tr>`;
         });
     });
 
-    // Tasks
+    // 2. Tasks
     get(ref(db, "assignments")).then(snap => {
         reportTable.innerHTML = "";
         snap.forEach(userNode => {
@@ -549,6 +558,20 @@ window.loadAdminPanel = () => {
                 const clearBtn = `<button class="danger" style="padding:2px 5px; font-size:10px;" onclick="removeTask('${userNode.key}', '${task.key}')">Clear</button>`;
                 reportTable.innerHTML += `<tr><td>${userNode.key.substring(0,5)}...</td><td>${t.desc}</td><td style="color:${t.status=='Done'?'green':'red'}">${t.status}</td><td>${clearBtn}</td></tr>`;
             });
+        });
+    });
+
+    // 3. REAL-TIME LOGS (Auto Update)
+    onValue(query(ref(db, "logs"), limitToLast(20)), (snap) => {
+        logTable.innerHTML = "";
+        const l = [];
+        snap.forEach(c => l.push(c.val()));
+        l.reverse().forEach(x => {
+            let color = "black";
+            if (x.type.includes("LOGIN")) color = "green";
+            if (x.type.includes("LOGOUT")) color = "red";
+            if (x.type.includes("Fail") || x.type.includes("Error")) color = "orange";
+            logTable.innerHTML += `<tr><td>${x.time}</td><td>${x.user}</td><td style="color:${color}; font-weight:bold;">${x.type}</td><td>${x.desc}</td></tr>`;
         });
     });
 }
@@ -569,39 +592,13 @@ window.assignTaskMulti = () => {
 
     alert(`Task assigned to ${checkboxes.length} user(s).`);
     document.getElementById("taskDesc").value = "";
-    // Uncheck all
     checkboxes.forEach(cb => cb.checked = false);
     loadAdminPanel();
 };
 
-// Admin Functions
 window.savePin = (uid) => {
     const p = document.getElementById(`pin_${uid}`).value;
     if(p.length >= 4) { update(ref(db, `users/${uid}`), { pin: p }); alert("PIN Updated"); }
-}
-
-window.viewUserLogs = () => {
-    const email = document.getElementById("logUserSelect").value;
-    if(!email) return;
-    const logTable = document.getElementById("detailedLogBody");
-    logTable.innerHTML = "<tr><td colspan='4'>Loading...</td></tr>";
-    
-    const q = query(ref(db, "logs"), orderByChild("user"), equalTo(email), limitToLast(10));
-    onValue(q, (s) => {
-        logTable.innerHTML = "";
-        const l = [];
-        if(s.exists()) {
-            s.forEach(c => l.push(c.val()));
-            l.reverse().forEach(x => {
-                let color = "black";
-                if(x.type.includes("LOGIN")) color = "green";
-                if(x.type.includes("LOGOUT")) color = "red";
-                logTable.innerHTML += `<tr><td>${x.time}</td><td>${x.user}</td><td style="color:${color}; font-weight:bold;">${x.type}</td><td>${x.desc}</td></tr>`;
-            });
-        } else {
-            logTable.innerHTML = "<tr><td colspan='4'>No logs found for this user.</td></tr>";
-        }
-    });
 }
 
 window.forceReUpload = (uid) => {
@@ -623,7 +620,7 @@ window.switchTab = (t) => {
 window.handleFileUpload = () => {
     const file = document.getElementById("evidenceFile").files[0];
     document.getElementById("fileStatus").innerText = "Processing...";
-    if(file && file.size < 1.5*1024*1024) { // 1.5MB Limit for Safety
+    if(file && file.size < 1.5*1024*1024) { 
         const reader = new FileReader();
         reader.onload = e => { currentFileBase64 = e.target.result; currentFileType = file.type; document.getElementById("fileStatus").innerText = "Ready: " + file.name; };
         reader.readAsDataURL(file);
@@ -636,8 +633,12 @@ window.handleFileUpload = () => {
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
 function loadGallery() {
+    // Force clean UI first
+    const div = document.getElementById("galleryContainer"); 
+    div.innerHTML = "<p>Loading...</p>";
+
     onValue(ref(db, "history"), snap => {
-        const div = document.getElementById("galleryContainer"); div.innerHTML = "";
+        div.innerHTML = "";
         snap.forEach(c => {
             const v = c.val();
             if(v.fileData) {
@@ -652,11 +653,12 @@ function loadGallery() {
                 div.innerHTML += `<div class="gallery-item">${media}<div style="font-size:11px; margin-top:5px;"><b>${v.name}</b><br>by ${v.userName}</div>${controls}</div>`;
             }
         });
+        if(div.innerHTML === "") div.innerHTML = "<p>No evidence found.</p>";
     });
 }
 
 window.removeFile = (k) => {
-    if(confirm("Remove attached file to save space?")) {
+    if(confirm("Remove attached file?")) {
         update(ref(db, `history/${k}`), { fileData: null, fileType: null, fileRemoved: true });
     }
 }
