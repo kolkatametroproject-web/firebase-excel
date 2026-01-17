@@ -30,9 +30,8 @@ header {
   justify-content: space-between;
   align-items: center;
   box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+  position: relative; z-index: 1001; /* Ensure header stays on top */
 }
-header h1 { margin: 0; font-size: 1.2rem; text-transform: uppercase; letter-spacing: 1px; }
-header small { font-size: 0.8rem; opacity: 0.9; display: block; font-weight: normal; }
 
 /* BUTTONS */
 button {
@@ -46,7 +45,6 @@ button {
   font-size: 13px;
 }
 button:hover { background: #004494; }
-button:disabled { background: #6c757d; cursor: not-allowed; border-color: #6c757d; }
 button.danger { background: #dc3545; border-color: #bd2130; }
 button.success { background: #28a745; border-color: #1e7e34; }
 button.warning { background: #ffc107; color: black; border-color: #d39e00; }
@@ -86,22 +84,6 @@ section { padding: 20px; max-width: 1100px; margin: 0 auto; }
   font-size: 1.1rem;
 }
 
-/* FORMATTING */
-.station-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; background: #fdfdfd; padding: 15px; border: 1px solid #eee; }
-.station-label { font-weight: bold; font-size: 12px; color: var(--metro-blue); margin-bottom: 4px; display: block; }
-
-/* LOGS & STATUS */
-.log-tag { font-weight: bold; padding: 2px 6px; border-radius: 3px; color: white; font-size: 11px; display: inline-block; width: 60px; text-align: center; }
-.tag-LOGIN { background: #28a745; }
-.tag-LOGOUT { background: #6c757d; }
-.tag-SAVE { background: #007bff; }
-.tag-DELETE { background: #dc3545; }
-.tag-SUBMIT { background: #6610f2; }
-
-.status-badge { padding: 4px 8px; border-radius: 10px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
-.status-pending { background: #ffefc1; color: #856404; border: 1px solid #ffeeba; }
-.status-completed { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-
 /* NAVIGATION */
 .nav-bar { display: flex; gap: 5px; margin-bottom: 20px; border-bottom: 1px solid #dee2e6; padding-bottom: 10px; }
 .nav-btn { background: #e9ecef; color: #495057; border: 1px solid #dee2e6; }
@@ -113,7 +95,7 @@ th, td { border: 1px solid #dee2e6; padding: 10px; text-align: left; }
 th { background: #e9ecef; color: #212529; font-weight: bold; text-transform: uppercase; font-size: 12px; }
 tr:nth-child(even) { background-color: #f8f9fa; }
 
-/* MODAL & SECURITY */
+/* MODAL */
 #faceModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: flex; justify-content: center; align-items: center; flex-direction: column; z-index: 999; }
 #cameraFeed { border: 5px solid white; box-shadow: 0 0 20px rgba(0,0,0,0.5); width: 320px; height: 240px; background: #000; margin-bottom: 15px; transform: scaleX(-1); }
 </style>
@@ -124,11 +106,8 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 <header>
   <div style="display:flex; align-items:center">
     <div style="width:40px;height:40px;background:white;color:var(--metro-blue);display:flex;align-items:center;justify-content:center;font-weight:bold;margin-right:15px;border-radius:3px;">M</div>
-    <div>
-      <h1 style="margin:0; line-height:1.2">Metro Railway Safety Project</h1>
-      <small>Secure Data Management Portal</small>
-    </div>
-    <span id="adminBadge" class="hidden status-badge" style="background:#dc3545; color:white; margin-left:10px;">ADMINISTRATOR</span>
+    <div><h1 style="margin:0; line-height:1.2">Metro Railway Safety Project</h1><small>Secure Data Management Portal</small></div>
+    <span id="adminBadge" class="hidden" style="background:#dc3545; color:white; margin-left:10px; padding:4px 8px; border-radius:10px; font-size:11px; font-weight:bold;">ADMINISTRATOR</span>
   </div>
   <div id="authContainer" class="hidden">
     <span style="font-size:12px; margin-right:5px; opacity:0.8">User ID:</span>
@@ -151,14 +130,18 @@ tr:nth-child(even) { background-color: #f8f9fa; }
   <p id="modalDesc" style="color:#ccc; margin-bottom:15px; font-size:14px;">Initializing AI Models...</p>
   <video id="cameraFeed" autoplay playsinline muted></video>
   <div id="faceStatus" style="color:#ffc107; margin-bottom:15px; font-weight:bold;"></div>
+  
   <div style="display:flex; gap:10px;">
     <button id="btnCapture" onclick="handleFaceScan()" style="background:white; color:black; border:none; padding:10px 20px;">📸 Capture & Verify</button>
     <button id="btnReRegister" class="warning hidden" onclick="startReRegistration()">⚠️ Update Face Data</button>
   </div>
+  
+  <button id="adminBypassBtn" class="danger hidden" style="margin-top:20px;" onclick="forceAdminEntry()">⚠️ ADMIN FORCE ENTRY (Camera Failed)</button>
+
   <canvas id="procCanvas" width="320" height="240" class="hidden"></canvas>
 </div>
 
-<section id="appSection" class="hidden">
+<section id="appScreen" class="hidden">
   
   <div class="nav-bar">
     <button class="nav-btn active" onclick="switchTab('newData')" id="btnNew">1. New Data</button>
@@ -171,111 +154,74 @@ tr:nth-child(even) { background-color: #f8f9fa; }
   <div id="tab-newData">
     <div class="panel">
       <h3>🆕 Station Data Entry</h3>
-      <div class="station-grid">
-          <div><label class="station-label">STATION NAME</label><input id="inpStationName" placeholder="e.g., Mahanayak Uttam Kumar"></div>
-          <div><label class="station-label">STATION LENGTH (M)</label><input id="inpStationLength" placeholder="e.g., 172.8 M"></div>
-          <div><label class="station-label">YELLOW LINE DISTANCE</label><input id="inpYellowDist" placeholder="e.g., 70 CM"></div>
-          <div><label class="station-label">YELLOW LINE THICKNESS</label><input id="inpYellowThick" placeholder="e.g., 10 CM"></div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
+          <input id="inpStationName" placeholder="STATION NAME">
+          <input id="inpStationLength" placeholder="STATION LENGTH (M)">
+          <input id="inpYellowDist" placeholder="YELLOW LINE DIST">
+          <input id="inpYellowThick" placeholder="YELLOW LINE THICKNESS">
       </div>
-      <div style="text-align:right; margin-bottom:20px;">
-          <button class="success" onclick="saveStationDetails()">💾 Save Draft</button>
-      </div>
-
-      <h4 style="border-bottom:1px solid #ccc; padding-bottom:5px;">Distance Data (Measurements)</h4>
-      <table id="distanceTable">
-        <thead>
-            <tr>
-                <th style="width:50px">SL</th>
-                <th>RAKE NO</th>
-                <th>RAKE TYPE</th>
-                <th>FRONT DIST</th>
-                <th>REAR DIST</th>
-                <th style="width:50px">ACT</th>
-            </tr>
-        </thead>
+      <button class="success" onclick="saveStationDetails()">💾 Save Draft</button>
+      <h4 style="margin-top:20px; border-bottom:1px solid #ccc;">Distance Data</h4>
+      <table>
+        <thead><tr><th>SL</th><th>RAKE NO</th><th>TYPE</th><th>FRONT</th><th>REAR</th><th>ACT</th></tr></thead>
         <tbody id="distanceBody"></tbody>
       </table>
       <div style="margin-top:10px; display:flex; justify-content:space-between;">
           <button onclick="addDistanceRow()">+ Add Row</button>
-          <button onclick="submitStationData()" style="background:#003366; border-color:#002244;">✔ Submit Final Dataset</button>
+          <button onclick="submitStationData()" style="background:#003366;">✔ Submit Final</button>
       </div>
     </div>
   </div>
 
   <div id="tab-inventory" class="hidden">
     <div class="panel">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h3>📦 Inventory & Stock</h3>
-            <button class="success" onclick="document.getElementById('addInvForm').classList.toggle('hidden')">+ Add New Item</button>
+        <div style="display:flex; justify-content:space-between;">
+            <h3>📦 Inventory</h3>
+            <button class="success" onclick="document.getElementById('addInvForm').classList.toggle('hidden')">+ New Item</button>
         </div>
-        <div id="addInvForm" class="hidden" style="background:#f1f5f9; padding:15px; margin-bottom:15px; border:1px solid #cbd5e1;">
+        <div id="addInvForm" class="hidden" style="padding:15px; border:1px solid #ccc; margin-bottom:10px;">
             <div style="display:grid; grid-template-columns: 2fr 1fr 100px; gap:10px;">
-                <input id="invName" placeholder="Product Name">
-                <input id="invQty" type="number" placeholder="Qty">
-                <button onclick="addInventory()">Save</button>
+                <input id="invName" placeholder="Product Name"><input id="invQty" type="number" placeholder="Qty"><button onclick="addInventory()">Save</button>
             </div>
         </div>
-        <table>
-            <thead><tr><th>Product Name</th><th>Qty</th><th>Updated By</th><th>Action</th></tr></thead>
-            <tbody id="inventoryBody"></tbody>
-        </table>
+        <table><thead><tr><th>Product</th><th>Qty</th><th>User</th><th>Action</th></tr></thead><tbody id="inventoryBody"></tbody></table>
     </div>
   </div>
 
   <div id="tab-oldData" class="hidden">
     <div class="panel">
-      <h3>📁 Global Data History</h3>
-      <table>
-        <thead><tr><th>Date</th><th>Station</th><th>User</th><th>Rows</th><th id="adminDelHead" class="hidden">Action</th></tr></thead>
-        <tbody id="historyBody"></tbody>
-      </table>
+      <h3>📁 History</h3>
+      <table><thead><tr><th>Date</th><th>Station</th><th>User</th><th>Rows</th><th>Action</th></tr></thead><tbody id="historyBody"></tbody></table>
     </div>
   </div>
 
   <div id="tab-assigned" class="hidden">
-    <div class="panel">
-      <h3>📋 Assigned Tasks</h3>
-      <div id="taskList"></div>
-    </div>
+    <div class="panel"><h3>📋 Assigned Tasks</h3><div id="taskList"></div></div>
   </div>
 
   <div id="tab-adminPanel" class="hidden">
     <div class="panel">
-      <h3>🛠 Work Assignment (Govt Order)</h3>
-      <div style="display:grid; grid-template-columns: 1fr 2fr 100px; gap:10px;">
-        <select id="userSelectAssign"><option>Loading...</option></select>
-        <textarea id="taskDesc" rows="1" placeholder="Enter specific task directives..."></textarea>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>🛡️ Administrator Console</h3>
+        <button onclick="loadAdminPanel()" class="primary">🔄 Refresh Data</button>
+      </div>
+
+      <h4 style="background:#eee; padding:5px; margin-top:10px;">1. Work Assignment</h4>
+      <div style="display:grid; grid-template-columns: 1fr 2fr 100px; gap:10px; margin-bottom:20px;">
+        <select id="userSelectAssign"><option>Loading Users...</option></select>
+        <textarea id="taskDesc" rows="1" placeholder="Task details..."></textarea>
         <button onclick="assignTask()">Assign</button>
       </div>
-    </div>
 
-    <div class="panel" style="border-top: 4px solid var(--metro-blue);">
-      <h3>📊 Audit & Surveillance</h3>
-      <div style="display:flex; gap:10px; margin-bottom:15px; align-items:center;">
-        <select id="userSelectAudit" style="max-width:300px;"><option value="">-- Select User --</option></select>
-        <button onclick="fetchLogs()" style="background:#17a2b8; border-color:#117a8b;">View Activity Logs</button>
+      <h4 style="background:#eee; padding:5px;">2. Surveillance (Logs)</h4>
+      <div style="display:flex; gap:10px; margin-bottom:10px;">
+        <select id="userSelectAudit" style="max-width:300px;"><option>Loading Users...</option></select>
+        <button onclick="fetchLogs()" style="background:#17a2b8; border-color:#117a8b;">View Logs</button>
       </div>
-      <table class="audit-table">
-        <thead>
-            <tr style="background:#f0f0f0; color:#333;"><th>Time</th><th>Type</th><th>Activity Details</th></tr>
-        </thead>
-        <tbody id="logBody"><tr><td colspan="3" style="text-align:center;">Select user to generate report.</td></tr></tbody>
-      </table>
-    </div>
+      <table style="margin-bottom:20px;"><thead><tr><th>Time</th><th>Type</th><th>Activity</th></tr></thead><tbody id="logBody"></tbody></table>
 
-    <div class="panel">
-      <h3>👤 User Access Control & Biometric Status</h3>
-      <table>
-        <thead>
-            <tr>
-                <th>Email ID</th>
-                <th style="text-align:center">Biometric</th>
-                <th>Status</th>
-                <th>Govt Actions</th>
-            </tr>
-        </thead>
-        <tbody id="userListBody"></tbody>
-      </table>
+      <h4 style="background:#eee; padding:5px;">3. User Access Control</h4>
+      <table><thead><tr><th>Email</th><th>Biometric</th><th>Status</th><th>Actions</th></tr></thead><tbody id="userListBody"></tbody></table>
     </div>
   </div>
 
@@ -284,7 +230,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
-import { getDatabase, ref, push, set, onValue, remove, update, query, orderByChild, equalTo, get } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+import { getDatabase, ref, push, set, onValue, remove, update, query, orderByChild, equalTo, get, limitToLast } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
@@ -299,33 +245,33 @@ const db = getDatabase(app);
 
 let currentUser;
 let isAdmin = false;
-const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project"];
+// ADMIN LIST (Case Insensitive in logic below)
+const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project", "admin@metro.project"];
 let stream = null;
 let tempDescriptor = null;
 let mode = "verify";
 
-// --- AUTH ---
+// --- AUTH & STATE MANAGEMENT ---
 onAuthStateChanged(auth, (user) => {
   if (!user) {
     showLogin();
     return;
   }
   
-  // Ensure user exists in DB for Admin List
+  // 1. Save email to DB for Admin Panel dropdowns
   update(ref(db, `users/${user.uid}`), { email: user.email });
 
-  // Check if banned
+  // 2. Check User Status
   onValue(ref(db, `users/${user.uid}`), (snap) => {
     const userData = snap.val();
     if (userData && userData.terminated === true) {
-        alert("ACCOUNT TERMINATED BY ADMINISTRATION.\nContact Safety Dept.");
-        signOut(auth);
-        return;
+        alert("ACCOUNT TERMINATED."); signOut(auth); return;
     }
 
-    // Proceed if not banned
     currentUser = user;
-    isAdmin = ADMIN_EMAILS.includes(user.email);
+    isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
+    
+    // UI Update
     document.getElementById("userInfo").innerText = user.email;
     document.getElementById("authContainer").classList.remove("hidden");
     document.getElementById("loginSection").classList.add("hidden");
@@ -333,29 +279,29 @@ onAuthStateChanged(auth, (user) => {
     if (isAdmin) {
       document.getElementById("adminBadge").classList.remove("hidden");
       document.getElementById("btnAdmin").classList.remove("hidden");
-      document.getElementById("adminDelHead").classList.remove("hidden");
-      loadAdminPanel();
+      // Show Failsafe button for Admins
+      document.getElementById("adminBypassBtn").classList.remove("hidden");
     }
 
-    // Face Check
+    // 3. Trigger Biometrics
     onValue(ref(db, `users/${user.uid}/faceData`), (faceSnap) => {
         document.getElementById("faceModal").classList.remove("hidden");
         initCamera(faceSnap.exists());
     }, { onlyOnce: true });
-  }, { onlyOnce: true });
+  });
 });
 
 function showLogin() {
-    loginSection.classList.remove("hidden");
-    appSection.classList.add("hidden");
-    authContainer.classList.add("hidden");
+    document.getElementById("loginSection").classList.remove("hidden");
+    document.getElementById("appScreen").classList.add("hidden");
+    document.getElementById("authContainer").classList.add("hidden");
     stopCamera();
 }
 
-window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert("Auth Error: " + e.message));
-window.logout = () => { logActivity("LOGOUT", "User Initiated"); signOut(auth); };
+window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert(e.message));
+window.logout = () => { if(currentUser) logActivity("LOGOUT", "Exit"); signOut(auth); };
 
-// --- BIOMETRICS ---
+// --- BIOMETRICS (50% RULE) ---
 async function initCamera(hasData) {
     const vid = document.getElementById("cameraFeed");
     try {
@@ -370,11 +316,12 @@ async function initCamera(hasData) {
         vid.srcObject = stream;
         
         if (!hasData) startRegistration();
-        else {
-            mode = "verify";
-            updateStatus("🔒 VERIFICATION: Look at camera", "white");
-        }
-    } catch(e) { alert("Camera Error: " + e.message); }
+        else { mode = "verify"; updateStatus("🔒 VERIFICATION: Look at camera", "white"); }
+    } catch(e) { 
+        alert("Camera Error: " + e.message); 
+        updateStatus("Camera Failed.", "red");
+        // If admin, they can see the bypass button
+    }
 }
 
 function startRegistration() {
@@ -384,7 +331,7 @@ function startRegistration() {
     document.getElementById("btnCapture").disabled = false;
 }
 
-window.startReRegistration = () => confirm("Re-register face?") && startRegistration();
+window.startReRegistration = () => confirm("Re-register?") && startRegistration();
 function stopCamera() { if(stream) stream.getTracks().forEach(t=>t.stop()); document.getElementById("faceModal").classList.add("hidden"); }
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); e.innerText=m; e.style.color=c; }
 
@@ -396,9 +343,9 @@ window.handleFaceScan = async () => {
     const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
     const detection = await faceapi.detectSingleFace(vid, options).withFaceLandmarks().withFaceDescriptor();
 
-    if(!detection) { updateStatus("❌ No Face Detected", "red"); btn.disabled=false; return; }
+    if(!detection) { updateStatus("❌ No Face", "red"); btn.disabled=false; return; }
     
-    // Capture Image
+    // Process Image
     const canvas = document.getElementById("procCanvas");
     canvas.getContext("2d").drawImage(vid, 0, 0, 320, 240);
     const img = canvas.toDataURL("image/png");
@@ -406,13 +353,13 @@ window.handleFaceScan = async () => {
     if(mode === "register") {
         if(!tempDescriptor) {
             tempDescriptor = detection.descriptor;
-            updateStatus("✅ Saved. Tilt head slightly & Capture 2.", "lime");
+            updateStatus("✅ Saved. Capture Photo 2.", "lime");
             btn.disabled = false;
         } else {
             await update(ref(db, `users/${currentUser.uid}/faceData`), {
                 img1: img, desc1: Array.from(tempDescriptor), desc2: Array.from(detection.descriptor)
             });
-            logActivity("LOGIN", "Registration Complete");
+            logActivity("LOGIN", "Register Success");
             enterApp();
         }
     } else {
@@ -424,25 +371,37 @@ window.handleFaceScan = async () => {
         let score = Math.floor((1 - dist) * 100);
         if(score > 99) score = 99;
 
-        if(score >= 58) {
+        // --- UPDATED 50% RULE ---
+        if(score >= 50) {
             updateStatus(`✅ Verified (${score}%)`, "lime");
             logActivity("LOGIN", `Biometric Success ${score}%`);
             setTimeout(enterApp, 1000);
         } else {
-            updateStatus(`⛔ Denied (${score}%). Try Again.`, "red");
+            updateStatus(`⛔ Denied (${score}%). Need 50%.`, "red");
             btn.disabled = false;
         }
     }
 };
 
+window.forceAdminEntry = () => {
+    if(isAdmin) {
+        if(confirm("Force entry skipping biometrics? This will be logged.")) {
+            logActivity("LOGIN", "ADMIN FORCED ENTRY (BYPASS)");
+            enterApp();
+        }
+    } else {
+        alert("Restricted to Administrators.");
+    }
+}
+
 function enterApp() {
     stopCamera();
     document.getElementById("appScreen").classList.remove("hidden");
+    // Ensure we start on the main tab
     switchTab('newData');
     loadDraft(); loadHistory(); loadInventory(); loadAssignments();
 }
 
-// --- APP LOGIC ---
 async function logActivity(type, desc) {
     if(!currentUser) return;
     await push(ref(db, "logs"), { user: currentUser.email, type, desc, time: new Date().toLocaleString() });
@@ -452,11 +411,17 @@ window.switchTab = (t) => {
     ['newData','inventory','oldData','assigned','adminPanel'].forEach(x => document.getElementById(`tab-${x}`).classList.add("hidden"));
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(`tab-${t}`).classList.remove("hidden");
+    
     const map = {'newData':'btnNew','inventory':'btnInventory','oldData':'btnOld','assigned':'btnAssign','adminPanel':'btnAdmin'};
     if(map[t]) document.getElementById(map[t]).classList.add("active");
+    
+    if(t === 'adminPanel' && isAdmin) {
+        // Trigger load explicitly to fix blank screen issues
+        window.loadAdminPanel();
+    }
 };
 
-// Data Entry
+// --- DATA LOGIC ---
 function loadDraft() {
     onValue(ref(db, `drafts/${currentUser.uid}`), snap => {
         const d = snap.val();
@@ -484,24 +449,23 @@ function renderRow(k,v,i) {
 window.upRow = (k,f,v) => update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), {[f]:v});
 window.delRow = (k) => remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
 window.submitStationData = () => {
-    if(confirm("Submit Final?")) {
+    if(confirm("Submit?")) {
         get(ref(db, `drafts/${currentUser.uid}`)).then(s => {
             const d = s.val();
             push(ref(db, "history"), { ...d.details, rows: d.rows, user: currentUser.email, date: new Date().toLocaleString() });
             remove(ref(db, `drafts/${currentUser.uid}`));
-            logActivity("SUBMIT", `Final Data: ${d.details.name}`);
-            alert("Submitted"); switchTab('oldData');
+            logActivity("SUBMIT", `Final Data`); alert("Submitted"); switchTab('oldData');
         });
     }
 };
 
-// History & Inventory
+// --- ADMIN & LISTS ---
 function loadHistory() {
     onValue(ref(db, "history"), snap => {
         const b = document.getElementById("historyBody"); b.innerHTML = "";
         snap.forEach(c => {
             const v = c.val();
-            const btn = isAdmin ? `<td><button class="danger" onclick="delHist('${c.key}')">Del</button></td>` : '';
+            const btn = isAdmin ? `<td><button class="danger" onclick="delHist('${c.key}')">Del</button></td>` : '<td>-</td>';
             b.innerHTML += `<tr><td>${v.date}</td><td>${v.name}</td><td>${v.user}</td><td>${v.rows?Object.keys(v.rows).length:0}</td>${btn}</tr>`;
         });
     });
@@ -517,60 +481,49 @@ function loadInventory() {
         });
     });
 }
-window.addInventory = () => {
-    push(ref(db, "inventory"), { item: invName.value, qty: invQty.value, user: currentUser.email });
-    document.getElementById("addInvForm").classList.add("hidden");
-};
+window.addInventory = () => { push(ref(db, "inventory"), { item: invName.value, qty: invQty.value, user: currentUser.email }); document.getElementById("addInvForm").classList.add("hidden"); };
 window.delInv = (k) => remove(ref(db, `inventory/${k}`));
 
-// --- NEW FEATURES ---
-
-// 1. User Assignments (User View)
 function loadAssignments() {
     onValue(ref(db, `assignments/${currentUser.uid}`), snap => {
-        const list = document.getElementById("taskList");
-        list.innerHTML = "";
-        if(!snap.exists()) { list.innerHTML = "<p>No tasks assigned.</p>"; return; }
-        
+        const list = document.getElementById("taskList"); list.innerHTML = "";
+        if(!snap.exists()) { list.innerHTML = "<p>No tasks.</p>"; return; }
         snap.forEach(c => {
-            const task = c.val();
-            const div = document.createElement("div");
-            div.className = "panel";
-            div.style.borderLeft = task.status === 'Done' ? "5px solid green" : "5px solid #ffc107";
-            div.innerHTML = `
-                <div style="display:flex; justify-content:space-between">
-                    <strong>Task: ${task.desc}</strong>
-                    <span class="status-badge ${task.status === 'Done' ? 'status-completed' : 'status-pending'}">${task.status}</span>
-                </div>
-                <small>Assigned by: ${task.by} on ${task.date}</small>
-                ${task.status !== 'Done' ? `<br><button onclick="completeTask('${c.key}')" style="margin-top:10px;">Mark Done</button>` : ''}
-            `;
+            const t = c.val();
+            const div = document.createElement("div"); div.className = "panel";
+            div.style.borderLeft = t.status === 'Done' ? "5px solid green" : "5px solid #ffc107";
+            div.innerHTML = `<strong>${t.desc}</strong><br><small>By: ${t.by}</small><br>${t.status !== 'Done' ? `<button onclick="completeTask('${c.key}')">Done</button>` : 'Completed'}`;
             list.appendChild(div);
         });
     });
 }
 window.completeTask = (k) => update(ref(db, `assignments/${currentUser.uid}/${k}`), { status: "Done" });
 
-// 2. Admin Logic
-function loadAdminPanel() {
-    // Load Users for Dropdowns & Table
+// --- ADMIN PANEL FUNCTIONS ---
+window.loadAdminPanel = () => {
+    // Force clean first
+    const assignSel = document.getElementById("userSelectAssign");
+    const auditSel = document.getElementById("userSelectAudit");
+    const tableBody = document.getElementById("userListBody");
+    
+    assignSel.innerHTML = "<option>Loading...</option>";
+    
     onValue(ref(db, "users"), snap => {
-        const assignSel = document.getElementById("userSelectAssign");
-        const auditSel = document.getElementById("userSelectAudit");
-        const tableBody = document.getElementById("userListBody");
-        
         assignSel.innerHTML = "<option>Select User</option>";
         auditSel.innerHTML = "<option>Select User</option>";
         tableBody.innerHTML = "";
+
+        if(!snap.exists()) {
+             tableBody.innerHTML = "<tr><td colspan='4'>No users found in database.</td></tr>";
+             return;
+        }
 
         snap.forEach(c => {
             const u = c.val();
             const uid = c.key;
             // Dropdowns
-            const opt = `<option value="${uid}">${u.email}</option>`;
-            const optEmail = `<option value="${u.email}">${u.email}</option>`;
-            assignSel.innerHTML += opt;
-            auditSel.innerHTML += optEmail;
+            assignSel.innerHTML += `<option value="${uid}">${u.email}</option>`;
+            auditSel.innerHTML += `<option value="${u.email}">${u.email}</option>`;
 
             // Table Row
             const hasBio = u.faceData ? "✅ Done" : "❌ Pending";
@@ -581,14 +534,7 @@ function loadAdminPanel() {
             const btnReset = u.faceData ? 
                 `<button class="warning" style="padding:2px 8px;" onclick="resetFace('${uid}')">Reset Face</button>` : "";
 
-            tableBody.innerHTML += `
-                <tr>
-                    <td>${u.email}</td>
-                    <td style="text-align:center">${hasBio}</td>
-                    <td>${status}</td>
-                    <td>${btnBan} ${btnReset}</td>
-                </tr>
-            `;
+            tableBody.innerHTML += `<tr><td>${u.email}</td><td style="text-align:center">${hasBio}</td><td>${status}</td><td>${btnBan} ${btnReset}</td></tr>`;
         });
     });
 }
@@ -598,8 +544,7 @@ window.assignTask = () => {
     const desc = document.getElementById("taskDesc").value;
     if(!uid || !desc) return alert("Fill fields");
     push(ref(db, `assignments/${uid}`), { desc, by: currentUser.email, date: new Date().toLocaleString(), status: "Pending" });
-    alert("Task Assigned");
-    document.getElementById("taskDesc").value = "";
+    alert("Assigned");
 };
 
 window.fetchLogs = () => {
@@ -607,21 +552,12 @@ window.fetchLogs = () => {
     onValue(query(ref(db, "logs"), orderByChild("user"), equalTo(u), limitToLast(10)), s => {
         const b = document.getElementById("logBody"); b.innerHTML = "";
         const l = []; s.forEach(c=>l.push(c.val()));
-        l.reverse().forEach(x => b.innerHTML += `<tr><td>${x.time}</td><td><span class="log-tag tag-${x.type}">${x.type}</span></td><td>${x.desc}</td></tr>`);
+        l.reverse().forEach(x => b.innerHTML += `<tr><td>${x.time}</td><td>${x.type}</td><td>${x.desc}</td></tr>`);
     });
 };
 
-window.toggleBan = (uid, status) => {
-    if(confirm(status ? "BAN this user? They will be logged out." : "Unban user?")) {
-        update(ref(db, `users/${uid}`), { terminated: status });
-    }
-};
-
-window.resetFace = (uid) => {
-    if(confirm("DELETE biometric data for this user? They must re-register.")) {
-        remove(ref(db, `users/${uid}/faceData`));
-    }
-};
+window.toggleBan = (uid, status) => { if(confirm("Change Ban Status?")) update(ref(db, `users/${uid}`), { terminated: status }); };
+window.resetFace = (uid) => { if(confirm("Reset Face Data?")) remove(ref(db, `users/${uid}/faceData`)); };
 
 </script>
 </body>
