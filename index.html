@@ -118,6 +118,11 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 .step-dots { display: flex; gap: 10px; margin-bottom: 15px; }
 .dot { width: 12px; height: 12px; border-radius: 50%; background: #555; border: 2px solid #888; }
 .dot.active { background: #00ff00; border-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
+
+/* REAL TIME STATUS DOTS */
+.status-indicator { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.status-online { background-color: #28a745; box-shadow: 0 0 5px #28a745; }
+.status-offline { background-color: #dc3545; opacity: 0.5; }
 </style>
 </head>
 
@@ -266,8 +271,8 @@ tr:nth-child(even) { background-color: #f8f9fa; }
         <button onclick="assignTaskMulti()" style="width:100%; margin-top:5px;">Assign to Selected Users</button>
       </div>
 
-      <h4 style="background:#eee; padding:5px;">2. User Access & Corrections</h4>
-      <table><thead><tr><th>Name (User)</th><th>Biometric Status</th><th>Status</th><th>Admin Actions</th></tr></thead><tbody id="userListBody"></tbody></table>
+      <h4 style="background:#eee; padding:5px;">2. User Access & Corrections (Live Status)</h4>
+      <table><thead><tr><th>Name (User)</th><th>Real-Time</th><th>Biometric Status</th><th>Status</th><th>Admin Actions</th></tr></thead><tbody id="userListBody"></tbody></table>
       
       <h4 style="background:#eee; padding:5px;">3. Monitor Specific User (Real-Time)</h4>
       <div style="margin-bottom:10px;">
@@ -310,7 +315,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
-import { getDatabase, ref, push, set, onValue, remove, update, query, orderByChild, equalTo, get, limitToLast } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+import { getDatabase, ref, push, set, onValue, remove, update, query, orderByChild, equalTo, get, limitToLast, onDisconnect } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
@@ -356,6 +361,12 @@ preloadModels(); // Call immediately on script load
 onAuthStateChanged(auth, (user) => {
   if (!user) { showLogin(); return; }
   
+  // --- REAL-TIME PRESENCE LOGIC ---
+  const userStatusRef = ref(db, `status/${user.uid}`);
+  onDisconnect(userStatusRef).set({ state: 'offline', last_changed: new Date().toLocaleString() });
+  set(userStatusRef, { state: 'online', last_changed: new Date().toLocaleString() });
+  // --------------------------------
+
   setupIdleTimer();
   update(ref(db, `users/${user.uid}`), { email: user.email });
 
@@ -458,6 +469,8 @@ function showLogin() {
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert(e.message));
 window.logout = () => { 
     if(currentUser) {
+        // Manually set offline status on logout click to ensure immediate update
+        set(ref(db, `status/${currentUser.uid}`), { state: 'offline', last_changed: new Date().toLocaleString() });
         logActivity("LOGOUT", "User Clicked Logout").then(() => signOut(auth));
     }
 };
@@ -692,12 +705,29 @@ window.loadAdminPanel = async () => {
         const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Re-upload Face</button>`;
         const resetNameBtn = `<button class="warning" style="padding:2px 5px;" onclick="retakeName('${uid}')">Reset Name</button>`;
 
+        // Status Placeholder (Filled by real-time listener below)
+        const statusId = `status-${uid}`;
+
         userTable.innerHTML += `<tr>
             <td>${u.name}<br><small>${u.email}</small></td>
+            <td id="${statusId}"><span class="status-indicator status-offline"></span> Offline</td>
             <td>${bioStatus}</td>
             <td>${u.terminated ? "BANNED" : "Active"}</td>
             <td>${pinInput}<br>${reUploadBtn} ${resetNameBtn}</td>
         </tr>`;
+
+        // Listen for Real-Time Status for this user
+        onValue(ref(db, `status/${uid}`), (sSnap) => {
+            const statusData = sSnap.val();
+            const cell = document.getElementById(statusId);
+            if(cell && statusData) {
+                if(statusData.state === 'online') {
+                    cell.innerHTML = `<span class="status-indicator status-online"></span> <b style="color:green">Online</b>`;
+                } else {
+                    cell.innerHTML = `<span class="status-indicator status-offline"></span> <span style="color:grey">Offline</span>`;
+                }
+            }
+        });
     });
 
     // 2. Fetch Tasks
