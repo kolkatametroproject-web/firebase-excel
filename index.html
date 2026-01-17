@@ -118,11 +118,6 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 .step-dots { display: flex; gap: 10px; margin-bottom: 15px; }
 .dot { width: 12px; height: 12px; border-radius: 50%; background: #555; border: 2px solid #888; }
 .dot.active { background: #00ff00; border-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
-
-/* REAL TIME STATUS DOTS */
-.status-indicator { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-.status-online { background-color: #28a745; box-shadow: 0 0 5px #28a745; }
-.status-offline { background-color: #dc3545; opacity: 0.5; }
 </style>
 </head>
 
@@ -271,8 +266,8 @@ tr:nth-child(even) { background-color: #f8f9fa; }
         <button onclick="assignTaskMulti()" style="width:100%; margin-top:5px;">Assign to Selected Users</button>
       </div>
 
-      <h4 style="background:#eee; padding:5px;">2. User Access & Corrections (Live Status)</h4>
-      <table><thead><tr><th>Name (User)</th><th>Real-Time</th><th>Biometric Status</th><th>Status</th><th>Admin Actions</th></tr></thead><tbody id="userListBody"></tbody></table>
+      <h4 style="background:#eee; padding:5px;">2. User Access & Corrections</h4>
+      <table><thead><tr><th>Name (User)</th><th>Biometric Status</th><th>Status</th><th>Admin Actions</th></tr></thead><tbody id="userListBody"></tbody></table>
       
       <h4 style="background:#eee; padding:5px;">3. Monitor Specific User (Real-Time)</h4>
       <div style="margin-bottom:10px;">
@@ -283,7 +278,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
       </div>
       <div style="border:1px solid #ccc; padding:10px; margin-bottom:20px; max-height:150px; overflow-y:scroll; background:#fafafa;">
           <table style="margin-top:0;">
-              <thead><tr><th>Time</th><th>Type</th><th>Details</th></tr></thead>
+              <thead><tr><th>Time</th><th>Type</th><th>Method</th></tr></thead>
               <tbody id="searchLogBody"><tr><td colspan="3" style="text-align:center; color:grey;">Select a user to view live activity.</td></tr></tbody>
           </table>
       </div>
@@ -291,18 +286,19 @@ tr:nth-child(even) { background-color: #f8f9fa; }
       <h4 style="background:#eee; padding:5px;">4. Global Task Status Report</h4>
       <table style="margin-bottom:20px;"><thead><tr><th>To (Name)</th><th>Task</th><th>Status</th><th>Action</th></tr></thead><tbody id="globalTaskBody"></tbody></table>
 
-      <h4 style="background:#eee; padding:5px;">5. Recent System Activity (Global Log)</h4>
+      <h4 style="background:#eee; padding:5px;">5. System Activity (Global Log)</h4>
       <div style="height:300px; overflow-y:scroll; border:1px solid #ccc; background:#fff;">
         <table>
           <thead>
             <tr>
               <th style="position:sticky; top:0; background:#e9ecef;">Time</th>
               <th style="position:sticky; top:0; background:#e9ecef;">User</th>
-              <th style="position:sticky; top:0; background:#e9ecef;">Action / Method</th>
+              <th style="position:sticky; top:0; background:#e9ecef;">Action</th>
+              <th style="position:sticky; top:0; background:#e9ecef;">Method</th>
             </tr>
           </thead>
           <tbody id="globalLogBody">
-             <tr><td colspan="3" style="text-align:center;">Loading logs...</td></tr>
+             <tr><td colspan="4" style="text-align:center;">Loading logs...</td></tr>
           </tbody>
         </table>
       </div>
@@ -315,7 +311,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
-import { getDatabase, ref, push, set, onValue, remove, update, query, orderByChild, equalTo, get, limitToLast, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+import { getDatabase, ref, push, set, onValue, remove, update, query, limitToLast, onDisconnect, serverTimestamp, get } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
@@ -340,47 +336,46 @@ let logListenerUnsubscribe = null;
 let regSamples = []; 
 let modelsLoaded = false; 
 
-// --- 1. OPTIMIZATION: LOAD AI MODELS IMMEDIATELY ---
+// Trackers for Auto-Logout Hooks
+let globalDisconnectRef = null;
+let userDisconnectRef = null;
+
+// --- 1. LOAD AI MODELS ---
 async function preloadModels() {
     if(modelsLoaded) return; 
-    const modelUrl = 'https://justadudewhohacks.github.io/face-api.js/models';
     try {
         await Promise.all([
-            faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
-            faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
-            faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl)
+            faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
+            faceapi.nets.faceLandmark68Net.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
+            faceapi.nets.faceRecognitionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models')
         ]);
         modelsLoaded = true;
-    } catch(e) { console.error("Model Load Failed", e); }
+    } catch(e) { console.error("Model Error", e); }
 }
 preloadModels(); 
 
-// --- AUTH & PRESENCE & AUTO-LOGOUT LOGIC ---
-let pendingLogKeys = { global: null, specific: null };
-
+// --- 2. AUTH STATE & LOGGING LOGIC ---
 onAuthStateChanged(auth, (user) => {
   if (!user) { showLogin(); return; }
   
-  // --- REAL-TIME PRESENCE ---
-  const userStatusRef = ref(db, `status/${user.uid}`);
-  onDisconnect(userStatusRef).set({ state: 'offline', last_changed: serverTimestamp() });
-  set(userStatusRef, { state: 'online', last_changed: serverTimestamp() });
+  currentUser = user;
 
-  // --- AUTO-LOGOUT LOGGING (Connection Loss/Tab Close) ---
-  // Pre-book the logout entry. If connection dies, server writes this.
-  pendingLogKeys.global = push(ref(db, 'logs')).key;
-  pendingLogKeys.specific = push(ref(db, `userLogs/${user.uid}`)).key;
+  // --- CRITICAL: SETUP FAIL-SAFE AUTO LOGOUT ---
+  // Create references for the logs we *might* need if connection drops
+  globalDisconnectRef = push(ref(db, "logs"));
+  userDisconnectRef = push(ref(db, `userLogs/${user.uid}`));
 
-  const autoLogoutData = {
-    user: user.email,
-    type: "LOGOUT [Auto]",
-    desc: "Connection Lost / Tab Closed",
-    time: serverTimestamp() // Server will write ITS time on disconnect
+  const autoLog = {
+      user: user.email,
+      type: "LOGOUT",
+      method: "Tab Closed / Connection Lost",
+      time: serverTimestamp() // SERVER TIME
   };
 
-  onDisconnect(ref(db, `logs/${pendingLogKeys.global}`)).set(autoLogoutData);
-  onDisconnect(ref(db, `userLogs/${user.uid}/${pendingLogKeys.specific}`)).set(autoLogoutData);
-  // ----------------------------------------------------
+  // Queue these commands on the server: "If user disconnects, write this."
+  onDisconnect(globalDisconnectRef).set(autoLog);
+  onDisconnect(userDisconnectRef).set(autoLog);
+  // ---------------------------------------------
 
   setupIdleTimer();
   update(ref(db, `users/${user.uid}`), { email: user.email });
@@ -389,7 +384,6 @@ onAuthStateChanged(auth, (user) => {
     const u = snap.val();
     if (u && u.terminated) { alert("ACCOUNT TERMINATED."); signOut(auth); return; }
 
-    currentUser = user;
     isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
     failCount = 0;
     
@@ -413,7 +407,7 @@ onAuthStateChanged(auth, (user) => {
       setTimeout(loadAdminPanel, 1000); 
     }
 
-    // 2. CHECK FACE DATA FOR REGISTRATION
+    // 2. CHECK FACE DATA
     const faceModal = document.getElementById("faceModal");
     faceModal.classList.remove("hidden");
     
@@ -455,7 +449,14 @@ function resetTimer() {
     if(currentUser) {
         idleTimer = setTimeout(() => {
             alert("Session Timeout. Logging out.");
-            logActivity("LOGOUT", "Auto-Timeout").then(()=>window.logout());
+            // Log as Auto-Timeout
+            const logData = { user: currentUser.email, type: "LOGOUT", method: "Auto-Timeout", time: serverTimestamp() };
+            push(ref(db, "logs"), logData);
+            push(ref(db, `userLogs/${currentUser.uid}`), logData);
+            // Cancel disconnect hooks to prevent double log
+            if(globalDisconnectRef) onDisconnect(globalDisconnectRef).cancel();
+            if(userDisconnectRef) onDisconnect(userDisconnectRef).cancel();
+            signOut(auth);
         }, 4 * 60 * 1000); 
     }
 }
@@ -479,21 +480,30 @@ function showLogin() {
 
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert(e.message));
 
+// MANUAL LOGOUT
 window.logout = async () => { 
     if(currentUser) {
-        // Cancel the "Auto Logout" hook because we are doing a manual logout
-        if(pendingLogKeys.global) onDisconnect(ref(db, `logs/${pendingLogKeys.global}`)).cancel();
-        if(pendingLogKeys.specific) onDisconnect(ref(db, `userLogs/${currentUser.uid}/${pendingLogKeys.specific}`)).cancel();
+        // 1. Cancel the "Auto Logout" hook because this is a deliberate action
+        if(globalDisconnectRef) onDisconnect(globalDisconnectRef).cancel();
+        if(userDisconnectRef) onDisconnect(userDisconnectRef).cancel();
 
-        // Write "Manual Logout" immediately
-        await logActivity("LOGOUT [Manual]", "User Clicked Logout");
-        
-        // Update status immediately
-        await set(ref(db, `status/${currentUser.uid}`), { state: 'offline', last_changed: serverTimestamp() });
-        
+        // 2. Write the "Manual Logout" log immediately
+        const logData = { user: currentUser.email, type: "LOGOUT", method: "Manual Click", time: serverTimestamp() };
+        await push(ref(db, "logs"), logData);
+        await push(ref(db, `userLogs/${currentUser.uid}`), logData);
+
         signOut(auth);
     }
 };
+
+// HELPER: RECORD LOGIN
+async function recordLogin(method) {
+    if(currentUser) {
+        const logData = { user: currentUser.email, type: "LOGIN", method: method, time: serverTimestamp() };
+        await push(ref(db, "logs"), logData);
+        await push(ref(db, `userLogs/${currentUser.uid}`), logData);
+    }
+}
 
 // --- BIOMETRICS ---
 async function initCamera(isVerify) {
@@ -512,10 +522,7 @@ async function initCamera(isVerify) {
 }
 
 function stopCamera() { 
-    if(stream) {
-        stream.getTracks().forEach(t => t.stop()); 
-        stream = null;
-    }
+    if(stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     const vid = document.getElementById("cameraFeed");
     if(vid) vid.srcObject = null;
     document.getElementById("faceModal").classList.add("hidden"); 
@@ -544,7 +551,6 @@ window.registerNewFace = async () => {
             await update(ref(db, `users/${currentUser.uid}`), { faceData: regSamples });
             alert("Registration Complete!");
         }
-
     } else {
         updateStatus("❌ No Face Detected. Try Again.", "red");
     }
@@ -583,7 +589,7 @@ window.handleFaceScan = async () => {
     }
 
     if(matchFound) {
-        logActivity("LOGIN [Face]", "Biometric Success");
+        await recordLogin("Face ID");
         enterApp();
     } else {
         updateStatus("❌ Face Mismatch.", "red");
@@ -608,10 +614,10 @@ function handleFail() {
 
 window.verifyOTP = () => {
     const input = document.getElementById("otpInput").value;
-    get(ref(db, `users/${currentUser.uid}/pin`)).then(snap => {
+    get(ref(db, `users/${currentUser.uid}/pin`)).then(async snap => {
         const actualPin = snap.val() || "1234";
         if(input === actualPin) {
-            logActivity("LOGIN [OTP]", "PIN Entry Success");
+            await recordLogin("PIN Entry");
             enterApp();
         } else {
             alert("Wrong PIN ❌");
@@ -619,9 +625,9 @@ window.verifyOTP = () => {
     });
 }
 
-window.forceAdminEntry = () => {
+window.forceAdminEntry = async () => {
     if(!isAdmin) return;
-    logActivity("LOGIN [Admin Bypass]", "Force Entry Used");
+    await recordLogin("Admin Bypass");
     enterApp();
 }
 
@@ -631,6 +637,8 @@ function enterApp() {
     switchTab('newData');
     loadDraft(); loadGallery(); loadInventory(); loadAssignments();
 }
+
+// --- APP FEATURES (RESTORED COMPLETELY) ---
 
 window.saveStationDetails = () => {
     const name = document.getElementById("inpStationName").value.trim();
@@ -642,17 +650,19 @@ window.saveStationDetails = () => {
         th: document.getElementById("inpYellowThick").value,
         remarks: document.getElementById("inpRemarks").value
     });
-    logActivity("SAVE", "Draft Updated"); alert("Draft Saved");
+    alert("Draft Saved");
 };
 
+// COMPLETE FILE UPLOAD RESTORED
 window.uploadEvidenceOnly = () => {
     if(!currentFileBase64) return alert("Select a file first.");
+    
     if(confirm("Upload Evidence?")) {
         push(ref(db, "history"), { 
             name: "Evidence Upload", 
             user: currentUser.email, 
             userName: currentUser.name, 
-            date: new Date().toLocaleString(),
+            date: new Date().toLocaleString(), // Metadata date (can differ from server log time)
             fileData: currentFileBase64, 
             fileType: currentFileType
         }).then(() => {
@@ -664,6 +674,19 @@ window.uploadEvidenceOnly = () => {
         });
     }
 };
+
+window.handleFileUpload = () => {
+    const file = document.getElementById("evidenceFile").files[0];
+    document.getElementById("fileStatus").innerText = "Processing...";
+    if(file && file.size < 1.5*1024*1024) { 
+        const reader = new FileReader();
+        reader.onload = e => { currentFileBase64 = e.target.result; currentFileType = file.type; document.getElementById("fileStatus").innerText = "Ready: " + file.name; };
+        reader.readAsDataURL(file);
+    } else { 
+        alert("File too large! Max 1.5MB"); 
+        document.getElementById("fileStatus").innerText = "Error: File too large";
+    }
+}
 
 window.submitStationData = () => {
     get(ref(db, `drafts/${currentUser.uid}`)).then(s => {
@@ -681,7 +704,6 @@ window.submitStationData = () => {
 };
 
 // --- ADMIN LOGIC ---
-// Helper to format Server Timestamp
 function formatTime(ts) {
     if(!ts) return "N/A";
     return new Date(ts).toLocaleString();
@@ -717,32 +739,15 @@ window.loadAdminPanel = async () => {
         const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Re-upload Face</button>`;
         const resetNameBtn = `<button class="warning" style="padding:2px 5px;" onclick="retakeName('${uid}')">Reset Name</button>`;
 
-        const statusId = `status-${uid}`;
-
         userTable.innerHTML += `<tr>
             <td>${u.name}<br><small>${u.email}</small></td>
-            <td id="${statusId}"><span class="status-indicator status-offline"></span> Offline</td>
             <td>${bioStatus}</td>
             <td>${u.terminated ? "BANNED" : "Active"}</td>
             <td>${pinInput}<br>${reUploadBtn} ${resetNameBtn}</td>
         </tr>`;
-
-        // Real-Time Status Listener
-        onValue(ref(db, `status/${uid}`), (sSnap) => {
-            const statusData = sSnap.val();
-            const cell = document.getElementById(statusId);
-            if(cell && statusData) {
-                if(statusData.state === 'online') {
-                    cell.innerHTML = `<span class="status-indicator status-online"></span> <b style="color:green">Online</b>`;
-                } else {
-                    const lastSeen = formatTime(statusData.last_changed);
-                    cell.innerHTML = `<span class="status-indicator status-offline"></span> <span style="color:grey">Offline<br><small>${lastSeen}</small></span>`;
-                }
-            }
-        });
     });
 
-    // 2. Fetch Tasks
+    // 2. Tasks
     const taskSnap = await get(ref(db, "assignments"));
     reportTable.innerHTML = "";
     taskSnap.forEach(userNode => {
@@ -760,7 +765,7 @@ window.loadAdminPanel = async () => {
         });
     });
 
-    // 3. Global Logs (With Server Timestamp Formatting)
+    // 3. Global Logs (With Method & Server Time)
     const globBody = document.getElementById("globalLogBody");
     onValue(query(ref(db, "logs"), limitToLast(15)), (snap) => {
         globBody.innerHTML = "";
@@ -780,14 +785,14 @@ window.loadAdminPanel = async () => {
                 <td style="font-size:12px;">${x.user}</td>
                 <td style="color:${color}; font-weight:bold; font-size:12px;">
                     ${x.type} <br>
-                    <span style="font-weight:normal; color:#666; font-size:10px;">${x.desc}</span>
+                    <span style="font-weight:normal; color:#666; font-size:10px;">${x.method}</span>
                 </td>
             </tr>`;
         });
     });
 }
 
-// REAL-TIME USER SPECIFIC LOGS (With Server Timestamp Formatting)
+// REAL-TIME USER SPECIFIC LOGS
 window.viewSpecificUserLogs = () => {
     const targetUid = document.getElementById("searchUserDropdown").value;
     const body = document.getElementById("searchLogBody");
@@ -814,7 +819,7 @@ window.viewSpecificUserLogs = () => {
             body.innerHTML += `<tr>
                 <td style="font-size:12px;">${formatTime(x.time)}</td>
                 <td style="color:${color}; font-weight:bold;">${x.type}</td>
-                <td>${x.desc}</td>
+                <td>${x.method}</td>
             </tr>`;
         });
     });
@@ -848,15 +853,6 @@ window.forceReUpload = (uid) => {
 window.retakeName = (uid) => update(ref(db, `users/${uid}`), { name: null }).then(() => alert("Name Reset."));
 window.removeTask = (uid, tid) => remove(ref(db, `assignments/${uid}/${tid}`)).then(loadAdminPanel);
 
-// UPDATED: Use SERVER TIMESTAMP for accuracy
-async function logActivity(type, desc) { 
-    if(currentUser) {
-        const logData = { user: currentUser.email, type, desc, time: serverTimestamp() };
-        await push(ref(db, "logs"), logData);
-        await push(ref(db, `userLogs/${currentUser.uid}`), logData);
-    } 
-}
-
 window.switchTab = (t) => {
     ['newData','inventory','gallery','assigned','adminPanel'].forEach(x => document.getElementById(`tab-${x}`).classList.add("hidden"));
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -865,21 +861,9 @@ window.switchTab = (t) => {
     if(t==='gallery') loadGallery();
 };
 
-window.handleFileUpload = () => {
-    const file = document.getElementById("evidenceFile").files[0];
-    document.getElementById("fileStatus").innerText = "Processing...";
-    if(file && file.size < 1.5*1024*1024) { 
-        const reader = new FileReader();
-        reader.onload = e => { currentFileBase64 = e.target.result; currentFileType = file.type; document.getElementById("fileStatus").innerText = "Ready: " + file.name; };
-        reader.readAsDataURL(file);
-    } else { 
-        alert("File too large! Max 1.5MB"); 
-        document.getElementById("fileStatus").innerText = "Error: File too large";
-    }
-}
-
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
+// RESTORED GALLERY
 function loadGallery() {
     const div = document.getElementById("galleryContainer"); 
     div.innerHTML = "<p>Loading...</p>";
@@ -910,6 +894,7 @@ window.removeFile = (k) => {
     }
 }
 
+// RESTORED DRAFT
 function loadDraft() {
     onValue(ref(db, `drafts/${currentUser.uid}`), snap => {
         const d = snap.val();
@@ -930,6 +915,8 @@ function renderRow(k,v,i) {
 }
 window.upRow = (k,f,v) => update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), {[f]:v});
 window.delRow = (k) => remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
+
+// RESTORED INVENTORY
 function loadInventory() {
     onValue(ref(db, "inventory"), snap => {
         const b = document.getElementById("inventoryBody"); b.innerHTML = "";
@@ -941,6 +928,8 @@ function loadInventory() {
 }
 window.addInventory = () => { push(ref(db, "inventory"), { item: invName.value, qty: invQty.value, user: currentUser.email }); document.getElementById("addInvForm").classList.add("hidden"); };
 window.delInv = (k) => remove(ref(db, `inventory/${k}`));
+
+// RESTORED ASSIGNMENTS
 function loadAssignments() {
     onValue(ref(db, `assignments/${currentUser.uid}`), snap => {
         const list = document.getElementById("taskList"); list.innerHTML = "";
