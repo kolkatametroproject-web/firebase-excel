@@ -113,6 +113,11 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; }
 .gallery-item { border: 1px solid #ddd; padding: 10px; border-radius: 4px; text-align: center; background: #fff; }
 .gallery-item img { max-width: 100%; height: 100px; object-fit: cover; border-radius: 4px; }
+
+/* REGISTRATION DOTS */
+.step-dots { display: flex; gap: 10px; margin-bottom: 15px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; background: #555; border: 2px solid #888; }
+.dot.active { background: #00ff00; border-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
 </style>
 </head>
 
@@ -153,6 +158,12 @@ tr:nth-child(even) { background-color: #f8f9fa; }
   <h2 id="modalTitle" style="color:white; margin-bottom:5px;">Biometric Verification</h2>
   <p id="modalDesc" style="color:#ccc; margin-bottom:15px; font-size:14px;">Initializing AI Models...</p>
   
+  <div id="regProgress" class="step-dots hidden" style="justify-content:center;">
+      <div id="dot1" class="dot"></div>
+      <div id="dot2" class="dot"></div>
+      <div id="dot3" class="dot"></div>
+  </div>
+
   <video id="cameraFeed" autoplay playsinline muted></video>
   
   <div id="otpUI" class="hidden" style="text-align:center; background:white; padding:20px; border-radius:5px; width:280px; box-shadow: 0 0 15px black;">
@@ -169,7 +180,6 @@ tr:nth-child(even) { background-color: #f8f9fa; }
   </div>
 
   <button id="adminBypassBtn" class="danger hidden" style="margin-top:20px;" onclick="forceAdminEntry()">⚠️ ADMIN FORCE ENTRY</button>
-  <canvas id="procCanvas" width="320" height="240" class="hidden"></canvas>
 </div>
 
 <section id="appScreen" class="hidden">
@@ -322,6 +332,7 @@ let currentFileType = null;
 let failCount = 0;
 let idleTimer;
 let logListenerUnsubscribe = null; 
+let regSamples = []; // To store 3 samples
 
 // --- AUTH & AUTO LOGOUT ---
 onAuthStateChanged(auth, (user) => {
@@ -363,23 +374,35 @@ onAuthStateChanged(auth, (user) => {
     faceModal.classList.remove("hidden");
     
     if(!u.faceData) {
-        // ENROLLMENT MODE (If admin re-triggered or new user)
-        document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup Required";
-        document.getElementById("modalDesc").innerText = "Admin requested re-enrollment. Scan face to save.";
-        document.getElementById("btnCapture").innerText = "💾 Save New Face Data";
-        document.getElementById("btnCapture").onclick = registerNewFace; // Use Registration Function
-        updateStatus("Ready to Register Face", "cyan");
+        // ENROLLMENT MODE (Multi-Sample)
+        document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup (3 Steps)";
+        document.getElementById("modalDesc").innerText = "Security Requirement: We need 3 scans of your face.";
+        
+        // Show progress dots
+        document.getElementById("regProgress").classList.remove("hidden");
+        updateRegDots(regSamples.length);
+        
+        document.getElementById("btnCapture").innerText = `📸 Capture Sample ${regSamples.length + 1} of 3`;
+        document.getElementById("btnCapture").onclick = registerNewFace; 
+        updateStatus("Ready to Register. Look at camera.", "cyan");
         initCamera(false);
     } else {
         // VERIFICATION MODE (Normal)
         document.getElementById("modalTitle").innerText = "Biometric Verification";
         document.getElementById("modalDesc").innerText = "Initializing AI Models...";
+        document.getElementById("regProgress").classList.add("hidden");
         document.getElementById("btnCapture").innerText = "📸 Face Scan";
-        document.getElementById("btnCapture").onclick = handleFaceScan; // Use Verify Function
+        document.getElementById("btnCapture").onclick = handleFaceScan; 
         initCamera(true);
     }
   });
 });
+
+function updateRegDots(count) {
+    document.getElementById("dot1").className = count >= 1 ? "dot active" : "dot";
+    document.getElementById("dot2").className = count >= 2 ? "dot active" : "dot";
+    document.getElementById("dot3").className = count >= 3 ? "dot active" : "dot";
+}
 
 // --- IDLE LOGIC ---
 function setupIdleTimer() {
@@ -452,27 +475,40 @@ function stopCamera() {
 
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); e.innerText=m; e.style.color=c; }
 
-// --- ENROLLMENT LOGIC (NEW) ---
+// --- ENROLLMENT LOGIC (3 PICTURES) ---
 window.registerNewFace = async () => {
     const vid = document.getElementById("cameraFeed");
-    updateStatus("Registering Face...", "cyan");
+    const btn = document.getElementById("btnCapture");
+    updateStatus("Scanning...", "cyan");
     
     const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
     const detection = await faceapi.detectSingleFace(vid, options).withFaceLandmarks().withFaceDescriptor();
 
     if(detection) {
-        // Save descriptor to DB
-        // Converting Float32Array to standard Array for Firebase storage
-        const descriptorArray = Array.from(detection.descriptor);
-        await update(ref(db, `users/${currentUser.uid}`), { faceData: descriptorArray });
-        alert("Face Registered Successfully! You can now log in.");
-        // Logic will auto-refresh due to onValue listener, switching to Verify mode
+        // Save descriptor to temporary array
+        regSamples.push(Array.from(detection.descriptor));
+        
+        const count = regSamples.length;
+        updateRegDots(count);
+
+        if(count < 3) {
+            updateStatus(`✅ Sample ${count}/3 Saved! Move slightly & click again.`, "lightgreen");
+            btn.innerText = `📸 Capture Sample ${count + 1} of 3`;
+        } else {
+            // ALL 3 DONE
+            updateStatus("Processing Final Data...", "yellow");
+            await update(ref(db, `users/${currentUser.uid}`), { faceData: regSamples });
+            alert("Registration Complete! 3 Samples Secured.");
+            regSamples = []; // Reset local
+            // The onValue listener will detect the new data and switch UI automatically
+        }
+
     } else {
         updateStatus("❌ No Face Detected. Try Again.", "red");
     }
 };
 
-// --- VERIFICATION LOGIC ---
+// --- VERIFICATION LOGIC (MULTI-SAMPLE SUPPORT) ---
 window.handleFaceScan = async () => {
     const vid = document.getElementById("cameraFeed");
     const btn = document.getElementById("btnCapture");
@@ -488,10 +524,38 @@ window.handleFaceScan = async () => {
         return; 
     }
     
-    // NOTE: Privacy enforced. We do NOT save the image. We only log success.
-    // In a real match scenario, we would compare detection.descriptor with stored db.faceData
-    logActivity("LOGIN [Face]", "Biometric Success");
-    enterApp();
+    // Retrieve stored data
+    const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+    const storedData = snap.val();
+    
+    let matchFound = false;
+    
+    // CHECK AGAINST ALL STORED SAMPLES
+    // We handle both old format (single array) and new format (array of arrays)
+    if(storedData) {
+        const currentDesc = detection.descriptor;
+        
+        if(storedData[0] instanceof Array || Array.isArray(storedData[0])) {
+             // NEW FORMAT: Iterate through all 3 samples
+             for (let sample of storedData) {
+                 const dist = faceapi.euclideanDistance(sample, currentDesc);
+                 if(dist < 0.5) { matchFound = true; break; } // 0.5 is strict threshold
+             }
+        } else {
+             // OLD FORMAT: Single check
+             const dist = faceapi.euclideanDistance(storedData, currentDesc);
+             if(dist < 0.5) matchFound = true;
+        }
+    }
+
+    if(matchFound) {
+        logActivity("LOGIN [Face]", "Biometric Success");
+        enterApp();
+    } else {
+        updateStatus("❌ Face Mismatch.", "red");
+        handleFail();
+        btn.disabled = false;
+    }
 };
 
 function handleFail() {
