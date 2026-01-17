@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Metro Railway Safety System | Official Portal</title>
-
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 
 <style>
@@ -42,6 +41,7 @@ button.primary { background: #0056b3; color: white; border-color: #004085; }
 button.primary:hover { background: #004085; }
 button.danger { background: #dc3545; color: white; border-color: #bd2130; }
 button.success { background: #28a745; color: white; border-color: #1e7e34; }
+button.warning { background: #ffc107; color: #212529; border-color: #ffc107; } 
 button:disabled { background: #6c757d; cursor: not-allowed; opacity: 0.7; }
 
 /* FORMS */
@@ -119,8 +119,10 @@ tr:nth-child(even) { background-color: #fcfcfc; }
    
   <div id="faceStatus" class="face-status"></div>
    
-  <div style="margin-top:20px;">
+  <div style="margin-top:20px; display:flex; gap:10px;">
     <button id="btnCapture" class="primary" style="background:white; color:black; border:none; padding:10px 25px;" onclick="handleFaceScan()">📸 Capture & Verify</button>
+    
+    <button id="btnReRegister" class="warning hidden" onclick="startReRegistration()">⚠️ Update Face Data</button>
   </div>
    
   <canvas id="procCanvas" width="320" height="240" class="hidden"></canvas>
@@ -226,9 +228,10 @@ const db = getDatabase(app);
 // --- GLOBAL STATE ---
 let currentUser = null;
 let isAdmin = false;
+// ADMIN LIST: Ensure your email is here to see the Admin Tab
 const ADMINS = ["soham@metro.project", "heerok@metro.project"];
 let stream = null;
-let tempDescriptor = null; // Stores math for registration
+let tempDescriptor = null;
 let mode = "verify"; 
 
 // --- 1. AUTH & INIT ---
@@ -240,16 +243,15 @@ onAuthStateChanged(auth, (user) => {
         document.getElementById("loginScreen").classList.add("hidden");
         document.getElementById("authNav").classList.remove("hidden");
         
+        // --- ADMIN CHECK RESTORED ---
         if(isAdmin) {
             document.getElementById("adminBtn").classList.remove("hidden");
             document.getElementById("histAction").classList.remove("hidden");
             loadUserList();
         }
 
-        // Check Biometric Data
         onValue(ref(db, `users/${user.uid}/faceData`), (snap) => {
             document.getElementById("faceModal").classList.remove("hidden");
-            // Pass existence check to init
             initCamera(snap.exists()); 
         }, { onlyOnce: true });
 
@@ -272,13 +274,11 @@ window.logout = () => {
     logAction("LOGOUT", "User signed out").then(() => signOut(auth));
 };
 
-// --- 2. LOGGING (LAST 10 RULE) ---
+// --- 2. LOGGING ---
 async function logAction(type, desc) {
     if(!currentUser) return;
     const email = currentUser.email;
-    await push(ref(db, "logs"), {
-        user: email, type, desc, time: new Date().toLocaleString()
-    });
+    await push(ref(db, "logs"), { user: email, type, desc, time: new Date().toLocaleString() });
 
     const logRef = ref(db, "logs");
     const q = query(logRef, orderByChild("user"), equalTo(email));
@@ -294,13 +294,11 @@ async function logAction(type, desc) {
     });
 }
 
-// --- 3. BIOMETRIC LOGIC (MOBILE & PC COMPATIBLE) ---
+// --- 3. BIOMETRIC LOGIC ---
 async function initCamera(hasData) {
     const vid = document.getElementById("cameraFeed");
     try {
-        updateStatus("🔄 Loading AI (Mobile Mode)...", "yellow");
-        
-        // Load professional face-api models (Fast & Accurate)
+        updateStatus("🔄 Loading AI...", "yellow");
         const modelUrl = 'https://justadudewhohacks.github.io/face-api.js/models';
         await Promise.all([
             faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
@@ -308,26 +306,34 @@ async function initCamera(hasData) {
             faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl)
         ]);
 
-        // MOBILE FIX: Constrain resolution to 640x480 to prevent crash
         stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { 
-                facingMode: "user",
-                width: { ideal: 640 }, 
-                height: { ideal: 480 } 
-            } 
+            video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } } 
         });
         vid.srcObject = stream;
         
         if (!hasData) {
-            mode = "register";
-            updateStatus("⚠️ REGISTRATION: Capture Photo 1", "white");
+            startRegistration();
         } else {
             mode = "verify";
             updateStatus("🔒 VERIFICATION: Look at camera", "white");
         }
     } catch(e) { 
-        console.error(e);
+        console.error(e); 
         alert("Camera Error: " + e.message); 
+    }
+}
+
+function startRegistration() {
+    mode = "register";
+    tempDescriptor = null;
+    updateStatus("⚠️ REGISTRATION: Capture Photo 1", "white");
+    document.getElementById("btnReRegister").classList.add("hidden");
+    document.getElementById("btnCapture").disabled = false;
+}
+
+window.startReRegistration = () => {
+    if(confirm("Start Face Re-registration process?")) {
+        startRegistration();
     }
 }
 
@@ -342,13 +348,12 @@ function updateStatus(msg, color) {
     el.style.color = color;
 }
 
-// HELPER: Convert Old/Large Images to Math Descriptors (With Resizing)
+// Helper: Resize & Detect for Backward Compatibility
 async function getDescriptorFromImage(base64Str) {
     return new Promise((resolve) => {
         const img = document.createElement('img');
         img.src = base64Str;
         img.onload = async () => {
-            // FIX: Resize large mobile photos to 512px for the AI
             const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
             const detection = await faceapi.detectSingleFace(img, options).withFaceLandmarks().withFaceDescriptor();
             resolve(detection ? detection.descriptor : null);
@@ -361,33 +366,31 @@ window.handleFaceScan = async () => {
     const vid = document.getElementById("cameraFeed");
     const btn = document.getElementById("btnCapture");
     btn.disabled = true;
-    updateStatus("🧠 Analyzing Biometrics...", "cyan");
+    updateStatus("🧠 Analyzing...", "cyan");
 
-    // 1. Get Live Face Descriptor (Using inputSize 512 for speed)
     const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
     const detection = await faceapi.detectSingleFace(vid, options).withFaceLandmarks().withFaceDescriptor();
 
     if (!detection) {
-        updateStatus("❌ No Face Detected. Hold steady.", "red");
+        updateStatus("❌ No Face Detected.", "red");
         btn.disabled = false;
         return;
     }
 
     const currentDescriptor = detection.descriptor;
     
-    // Capture visual snapshot (resized for storage)
+    // Capture Visual
     const canvas = document.getElementById("procCanvas");
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(vid, 0, 0, 320, 240); // Force standard size
+    canvas.getContext("2d").drawImage(vid, 0, 0, 320, 240);
     const currentImg = canvas.toDataURL("image/png");
 
     if (mode === "register") {
         if (!tempDescriptor) {
             tempDescriptor = currentDescriptor;
-            updateStatus("✅ Photo 1 Saved. Move slightly & Capture Photo 2.", "lime");
+            updateStatus("✅ Photo 1 Saved. Tilt Head & Capture Photo 2.", "lime");
             btn.disabled = false;
         } else {
-            // Save Descriptors (Math) + Image (Visual)
+            // Save Both
             await update(ref(db, `users/${currentUser.uid}/faceData`), {
                 img1: currentImg, 
                 desc1: Array.from(tempDescriptor),
@@ -397,47 +400,49 @@ window.handleFaceScan = async () => {
             enterApp();
         }
     } else {
-        // VERIFY MODE
+        // --- VERIFY LOGIC WITH NEW THRESHOLDS ---
         const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
         const stored = snap.val();
         
         let storedDescriptor = null;
-
         if (stored.desc1) {
-            // Use existing math data
             storedDescriptor = new Float32Array(stored.desc1);
         } else if (stored.img1) {
-            // BACKWARD COMPATIBILITY: Convert old photo to math (Resized)
-            updateStatus("⚠️ optimizing profile...", "orange");
+            updateStatus("⚠️ Upgrading profile...", "orange");
             storedDescriptor = await getDescriptorFromImage(stored.img1);
             if(storedDescriptor) {
-                // Save it so next time is fast
-                await update(ref(db, `users/${currentUser.uid}/faceData`), {
-                    desc1: Array.from(storedDescriptor)
-                });
+                 await update(ref(db, `users/${currentUser.uid}/faceData`), { desc1: Array.from(storedDescriptor) });
             }
         }
 
         if (!storedDescriptor) {
-             updateStatus("❌ Profile unreadable. Re-registering...", "red");
-             await remove(ref(db, `users/${currentUser.uid}/faceData`));
-             setTimeout(() => location.reload(), 2000);
+             updateStatus("❌ Error. Resetting Profile.", "red");
+             startRegistration();
              return;
         }
         
-        // MATH: Euclidean Distance (Lower is better)
+        // Calc Score
         const distance = faceapi.euclideanDistance(currentDescriptor, storedDescriptor);
-        
-        // Convert to percentage (0.6 dist is approx cutoff)
-        let score = Math.floor((1 - distance) * 100); 
+        let score = Math.floor((1 - distance) * 100);
         if(score > 99) score = 99;
 
-        if (distance < 0.55) { 
+        // --- STRICT RULES ---
+        // 1. Score >= 65: ALLOW
+        if (score >= 65) { 
             updateStatus(`✅ Verified: ${score}% Match`, "lime");
             logAction("LOGIN", `Biometric Success (${score}%)`);
             setTimeout(enterApp, 1000);
+            
+        // 2. Score 58 to 64: WEAK -> Allow Re-register
+        } else if (score >= 58) {
+            updateStatus(`⚠️ Weak Match (${score}%). Update Needed.`, "orange");
+            document.getElementById("btnReRegister").classList.remove("hidden");
+            btn.disabled = false; // Let them try again or click re-register
+            
+        // 3. Score < 58: DENY
         } else {
-            updateStatus(`⛔ Mismatch: ${score}%. Try Again.`, "red");
+            updateStatus(`⛔ Access Denied: ${score}% (Below 58)`, "red");
+            document.getElementById("btnReRegister").classList.add("hidden");
             btn.disabled = false;
         }
     }
@@ -452,7 +457,7 @@ function enterApp() {
     loadInventory();
 }
 
-// --- 4. APP LOGIC (UNCHANGED) ---
+// --- 4. APP LOGIC (ADMIN INCLUDED) ---
 window.showTab = (id) => {
     document.querySelectorAll('#appScreen > .panel').forEach(p => p.classList.add('hidden'));
     document.getElementById(`tab-${id}`).classList.remove('hidden');
