@@ -44,12 +44,13 @@ button {
   border-radius: 3px;
   font-weight: bold;
   font-size: 13px;
+  transition: all 0.2s;
 }
 button:hover { background: #004494; }
+button:disabled { background: #6c757d; cursor: not-allowed; border-color: #6c757d; opacity: 0.7; }
 button.danger { background: #dc3545; border-color: #bd2130; }
 button.success { background: #28a745; border-color: #1e7e34; }
 button.warning { background: #ffc107; color: black; border-color: #d39e00; }
-button:disabled { background: #6c757d; cursor: not-allowed; border-color: #6c757d; }
 
 /* INPUTS */
 input, select, textarea {
@@ -92,7 +93,32 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 
 /* MODALS */
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: flex; justify-content: center; align-items: center; flex-direction: column; z-index: 2000; }
-#cameraFeed { border: 5px solid white; box-shadow: 0 0 20px rgba(0,0,0,0.5); width: 320px; height: 240px; background: #000; margin-bottom: 15px; transform: scaleX(-1); }
+
+/* NEW HIGH PERFORMANCE CAMERA UI */
+#videoContainer { 
+    position: relative; 
+    width: 320px; 
+    height: 240px; 
+    background: #000; 
+    margin-bottom: 15px; 
+    border: 5px solid white; 
+    box-shadow: 0 0 20px rgba(0,255,0,0.2);
+}
+#cameraFeed { 
+    width: 100%; 
+    height: 100%; 
+    object-fit: cover; 
+    transform: scaleX(-1); /* Mirror effect */
+}
+#overlayCanvas { 
+    position: absolute; 
+    top: 0; 
+    left: 0; 
+    width: 100%; 
+    height: 100%; 
+    z-index: 10; 
+    transform: scaleX(-1); /* Mirror overlay to match video */
+}
 
 /* UPLOAD SECTION SPECIFIC */
 .upload-panel { border: 2px dashed #003366; background: #eef2f7; padding: 20px; text-align: center; border-radius: 6px; margin-top: 20px; }
@@ -118,6 +144,10 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 .step-dots { display: flex; gap: 10px; margin-bottom: 15px; }
 .dot { width: 12px; height: 12px; border-radius: 50%; background: #555; border: 2px solid #888; }
 .dot.active { background: #00ff00; border-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
+
+/* STATUS BADGES */
+.badge-online { background: #28a745; color: white; padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; text-transform: uppercase; }
+.badge-offline { background: #6c757d; color: white; padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; text-transform: uppercase; }
 </style>
 </head>
 
@@ -164,16 +194,19 @@ tr:nth-child(even) { background-color: #f8f9fa; }
       <div id="dot3" class="dot"></div>
   </div>
 
-  <video id="cameraFeed" autoplay playsinline muted></video>
+  <div id="videoContainer">
+    <video id="cameraFeed" autoplay playsinline muted></video>
+    <canvas id="overlayCanvas"></canvas>
+  </div>
   
-  <div id="otpUI" class="hidden" style="text-align:center; background:white; padding:20px; border-radius:5px; width:280px; box-shadow: 0 0 15px black;">
+  <div id="otpUI" class="hidden" style="text-align:center; background:white; padding:20px; border-radius:5px; width:280px; box-shadow: 0 0 15px black; position:absolute; z-index:20;">
     <h3 style="color:#dc3545; margin-top:0;">Face ID Failed (3/3)</h3>
     <p style="color:#333; font-size:13px;">Camera Disabled.<br>Enter OTP/PIN:</p>
     <input id="otpInput" type="password" placeholder="PIN (Default: 1234)" style="text-align:center; font-size:18px; letter-spacing:5px; border:2px solid #dc3545;">
     <button class="success" onclick="verifyOTP()" style="width:100%;">Verify PIN</button>
   </div>
 
-  <div id="faceStatus" style="color:#ffc107; margin-bottom:15px; font-weight:bold;"></div>
+  <div id="faceStatus" style="color:#ffc107; margin-bottom:15px; font-weight:bold; height:20px;"></div>
   
   <div id="camControls" style="display:flex; gap:10px;">
     <button id="btnCapture" onclick="handleFaceScan()" style="background:white; color:black; border:none; padding:10px 20px;">📸 Face Scan</button>
@@ -207,7 +240,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
       </div>
     </div>
 
-    <div class="panel upload-panel" style="border: 2px dashed #003366; background: #eef2f7; padding: 20px; text-align: center;">
+    <div class="panel upload-panel">
       <h3 style="color:#003366; margin-top:0;">📎 Evidence Upload Section</h3>
       <p style="font-size:12px; color:#666;">Upload site photos, videos, or PDFs separately here.</p>
       
@@ -258,7 +291,10 @@ tr:nth-child(even) { background-color: #f8f9fa; }
         <button onclick="loadAdminPanel()" class="primary">🔄 Refresh</button>
       </div>
 
-      <h4 style="background:#eee; padding:5px;">1. Work Assignment (Multi-Select)</h4>
+      <h4 style="background:#eee; padding:5px;">1. User Status & Permissions</h4>
+      <table><thead><tr><th>Name (User)</th><th>Status</th><th>Access</th><th>Admin Actions</th></tr></thead><tbody id="userListBody"></tbody></table>
+      
+      <h4 style="background:#eee; padding:5px;">2. Assign Work</h4>
       <label>Select Students/Users:</label>
       <div id="userCheckboxList" class="checkbox-list"></div>
       <div style="margin-top:15px;">
@@ -266,27 +302,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
         <button onclick="assignTaskMulti()" style="width:100%; margin-top:5px;">Assign to Selected Users</button>
       </div>
 
-      <h4 style="background:#eee; padding:5px;">2. User Access & Corrections</h4>
-      <table><thead><tr><th>Name (User)</th><th>Biometric Status</th><th>Status</th><th>Admin Actions</th></tr></thead><tbody id="userListBody"></tbody></table>
-      
-      <h4 style="background:#eee; padding:5px;">3. Monitor Specific User (Real-Time)</h4>
-      <div style="margin-bottom:10px;">
-          <label>Select User to Monitor:</label>
-          <select id="searchUserDropdown" style="width:100%; padding:8px; border:1px solid #003366;" onchange="viewSpecificUserLogs()">
-              <option value="">-- Select User --</option>
-          </select>
-      </div>
-      <div style="border:1px solid #ccc; padding:10px; margin-bottom:20px; max-height:150px; overflow-y:scroll; background:#fafafa;">
-          <table style="margin-top:0;">
-              <thead><tr><th>Time</th><th>Type</th><th>Method</th></tr></thead>
-              <tbody id="searchLogBody"><tr><td colspan="3" style="text-align:center; color:grey;">Select a user to view live activity.</td></tr></tbody>
-          </table>
-      </div>
-
-      <h4 style="background:#eee; padding:5px;">4. Global Task Status Report</h4>
-      <table style="margin-bottom:20px;"><thead><tr><th>To (Name)</th><th>Task</th><th>Status</th><th>Action</th></tr></thead><tbody id="globalTaskBody"></tbody></table>
-
-      <h4 style="background:#eee; padding:5px;">5. System Activity (Global Log)</h4>
+      <h4 style="background:#eee; padding:5px;">3. Global Logs (Security)</h4>
       <div style="height:300px; overflow-y:scroll; border:1px solid #ccc; background:#fff;">
         <table>
           <thead>
@@ -294,11 +310,10 @@ tr:nth-child(even) { background-color: #f8f9fa; }
               <th style="position:sticky; top:0; background:#e9ecef;">Time</th>
               <th style="position:sticky; top:0; background:#e9ecef;">User</th>
               <th style="position:sticky; top:0; background:#e9ecef;">Action</th>
-              <th style="position:sticky; top:0; background:#e9ecef;">Method</th>
             </tr>
           </thead>
           <tbody id="globalLogBody">
-             <tr><td colspan="4" style="text-align:center;">Loading logs...</td></tr>
+             <tr><td colspan="3" style="text-align:center;">Loading logs...</td></tr>
           </tbody>
         </table>
       </div>
@@ -332,13 +347,12 @@ let currentFileBase64 = null;
 let currentFileType = null;
 let failCount = 0;
 let idleTimer;
-let logListenerUnsubscribe = null; 
 let regSamples = []; 
 let modelsLoaded = false; 
 
-// Trackers for Auto-Logout Hooks
-let globalDisconnectRef = null;
-let userDisconnectRef = null;
+// --- NEW HIGH-PERFORMANCE VARS ---
+let detectionLoop;
+let currentDescriptor = null;
 
 // --- 1. LOAD AI MODELS ---
 async function preloadModels() {
@@ -354,29 +368,15 @@ async function preloadModels() {
 }
 preloadModels(); 
 
-// --- 2. AUTH STATE & LOGGING LOGIC ---
+// --- 2. AUTH & WATCHDOG ---
 onAuthStateChanged(auth, (user) => {
   if (!user) { showLogin(); return; }
   
   currentUser = user;
-
-  // --- CRITICAL: SETUP FAIL-SAFE AUTO LOGOUT ---
-  // Create references for the logs we *might* need if connection drops
-  globalDisconnectRef = push(ref(db, "logs"));
-  userDisconnectRef = push(ref(db, `userLogs/${user.uid}`));
-
-  const autoLog = {
-      user: user.email,
-      type: "LOGOUT",
-      method: "Tab Closed / Connection Lost",
-      time: serverTimestamp() // SERVER TIME
-  };
-
-  // Queue these commands on the server: "If user disconnects, write this."
-  onDisconnect(globalDisconnectRef).set(autoLog);
-  onDisconnect(userDisconnectRef).set(autoLog);
-  // ---------------------------------------------
-
+  
+  // START HEARTBEAT MONITORING
+  startPresenceSystem(user);
+  
   setupIdleTimer();
   update(ref(db, `users/${user.uid}`), { email: user.email });
 
@@ -387,7 +387,7 @@ onAuthStateChanged(auth, (user) => {
     isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
     failCount = 0;
     
-    // 1. Check Name
+    // Check Name
     if (!u.name) {
         document.getElementById("nameModal").classList.remove("hidden");
         document.getElementById("loginSection").classList.add("hidden");
@@ -404,32 +404,59 @@ onAuthStateChanged(auth, (user) => {
       document.getElementById("adminBadge").classList.remove("hidden");
       document.getElementById("btnAdmin").classList.remove("hidden");
       document.getElementById("adminBypassBtn").classList.remove("hidden");
-      setTimeout(loadAdminPanel, 1000); 
+      // Pre-load admin data
+      setTimeout(loadAdminPanel, 2000); 
     }
 
-    // 2. CHECK FACE DATA
+    // BIOMETRICS
     const faceModal = document.getElementById("faceModal");
     faceModal.classList.remove("hidden");
     
     if(!u.faceData) {
+        // REGISTRATION MODE
         document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup (3 Steps)";
-        document.getElementById("modalDesc").innerText = "Security Requirement: We need 3 scans of your face.";
+        document.getElementById("modalDesc").innerText = "Center your face in the box.";
         document.getElementById("regProgress").classList.remove("hidden");
         updateRegDots(regSamples.length);
         document.getElementById("btnCapture").innerText = `📸 Capture Sample ${regSamples.length + 1} of 3`;
         document.getElementById("btnCapture").onclick = registerNewFace; 
-        updateStatus("Ready to Register. Look at camera.", "cyan");
         initCamera(false);
     } else {
+        // VERIFICATION MODE
         document.getElementById("modalTitle").innerText = "Biometric Verification";
         document.getElementById("modalDesc").innerText = "System Ready.";
         document.getElementById("regProgress").classList.add("hidden");
-        document.getElementById("btnCapture").innerText = "📸 Face Scan";
+        document.getElementById("btnCapture").innerText = "📸 Verify Identity";
         document.getElementById("btnCapture").onclick = handleFaceScan; 
         initCamera(true);
     }
   });
 });
+
+// --- NEW HEARTBEAT SYSTEM ---
+function startPresenceSystem(user) {
+    const userStatusRef = ref(db, `status/${user.uid}`);
+    
+    // 1. Set online
+    set(userStatusRef, {
+        state: 'online',
+        last_changed: serverTimestamp(),
+        email: user.email,
+        name: user.displayName || "User"
+    });
+
+    // 2. Set offline on disconnect
+    onDisconnect(userStatusRef).set({
+        state: 'offline',
+        last_changed: serverTimestamp(),
+        email: user.email
+    });
+
+    // 3. Update heartbeat every 5 sec
+    setInterval(() => {
+        if(currentUser) update(userStatusRef, { last_seen: serverTimestamp() });
+    }, 5000);
+}
 
 function updateRegDots(count) {
     document.getElementById("dot1").className = count >= 1 ? "dot active" : "dot";
@@ -448,16 +475,12 @@ function resetTimer() {
     clearTimeout(idleTimer);
     if(currentUser) {
         idleTimer = setTimeout(() => {
-            alert("Session Timeout. Logging out.");
-            // Log as Auto-Timeout
+            // Auto Logout
             const logData = { user: currentUser.email, type: "LOGOUT", method: "Auto-Timeout", time: serverTimestamp() };
             push(ref(db, "logs"), logData);
-            push(ref(db, `userLogs/${currentUser.uid}`), logData);
-            // Cancel disconnect hooks to prevent double log
-            if(globalDisconnectRef) onDisconnect(globalDisconnectRef).cancel();
-            if(userDisconnectRef) onDisconnect(userDisconnectRef).cancel();
             signOut(auth);
-        }, 4 * 60 * 1000); 
+            alert("Session Timeout.");
+        }, 5 * 60 * 1000); 
     }
 }
 
@@ -480,116 +503,135 @@ function showLogin() {
 
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert(e.message));
 
-// MANUAL LOGOUT
 window.logout = async () => { 
     if(currentUser) {
-        // 1. Cancel the "Auto Logout" hook because this is a deliberate action
-        if(globalDisconnectRef) onDisconnect(globalDisconnectRef).cancel();
-        if(userDisconnectRef) onDisconnect(userDisconnectRef).cancel();
-
-        // 2. Write the "Manual Logout" log immediately
         const logData = { user: currentUser.email, type: "LOGOUT", method: "Manual Click", time: serverTimestamp() };
         await push(ref(db, "logs"), logData);
-        await push(ref(db, `userLogs/${currentUser.uid}`), logData);
-
         signOut(auth);
     }
 };
 
-// HELPER: RECORD LOGIN
 async function recordLogin(method) {
     if(currentUser) {
         const logData = { user: currentUser.email, type: "LOGIN", method: method, time: serverTimestamp() };
         await push(ref(db, "logs"), logData);
-        await push(ref(db, `userLogs/${currentUser.uid}`), logData);
     }
 }
 
-// --- BIOMETRICS ---
+// --- 3. HIGH PERFORMANCE CAMERA LOGIC ---
+
 async function initCamera(isVerify) {
     const vid = document.getElementById("cameraFeed");
+    const canvas = document.getElementById("overlayCanvas");
+    
     try {
-        if(!modelsLoaded) updateStatus("Loading AI Models...", "yellow");
-        else updateStatus("Starting Camera...", "white");
-        if(!modelsLoaded) await preloadModels();
-
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+        if(!modelsLoaded) {
+            updateStatus("Loading AI Models...", "yellow");
+            await preloadModels();
+        }
+        
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 320, height: 240 } });
         vid.srcObject = stream;
         
-        if(isVerify) updateStatus("🔒 VERIFICATION REQUIRED", "white");
-        else updateStatus("📝 REGISTRATION MODE", "cyan");
-    } catch(e) { updateStatus("Camera Failed.", "red"); }
+        // Wait for video to actually play before starting detection loop
+        vid.onloadedmetadata = () => {
+            vid.play();
+            startRealTimeDetection(vid, canvas); // START THE LOOP
+        };
+
+        if(isVerify) updateStatus("LOOK AT CAMERA", "white");
+        else updateStatus("REGISTRATION: CENTER FACE", "cyan");
+
+    } catch(e) { 
+        console.error(e);
+        updateStatus("Camera Hardware Error", "red"); 
+    }
+}
+
+async function startRealTimeDetection(video, canvas) {
+    const displaySize = { width: video.videoWidth || 320, height: video.videoHeight || 240 };
+    faceapi.matchDimensions(canvas, displaySize);
+
+    if (detectionLoop) clearInterval(detectionLoop);
+
+    detectionLoop = setInterval(async () => {
+        if (!stream) return;
+
+        // Optimized settings for speed
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+        
+        const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
+
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (detection) {
+            // Draw Box
+            const resizedDetections = faceapi.resizeResults(detection, displaySize);
+            const box = resizedDetections.detection.box;
+            const drawBox = new faceapi.draw.DrawBox(box, { label: "Face Locked", boxColor: "#00ff00" });
+            drawBox.draw(canvas);
+            
+            currentDescriptor = detection.descriptor;
+            
+            // Visual Cue
+            const btn = document.getElementById("btnCapture");
+            if(btn && !btn.disabled) btn.style.border = "2px solid #00ff00"; 
+            
+        } else {
+            currentDescriptor = null;
+            const btn = document.getElementById("btnCapture");
+            if(btn) btn.style.border = "1px solid #004494";
+        }
+    }, 100); // 10 FPS
 }
 
 function stopCamera() { 
+    if(detectionLoop) clearInterval(detectionLoop);
     if(stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    
     const vid = document.getElementById("cameraFeed");
+    const canvas = document.getElementById("overlayCanvas");
     if(vid) vid.srcObject = null;
+    if(canvas) { const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width, canvas.height); }
+    
     document.getElementById("faceModal").classList.add("hidden"); 
 }
 
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
 
-window.registerNewFace = async () => {
-    const vid = document.getElementById("cameraFeed");
-    const btn = document.getElementById("btnCapture");
-    updateStatus("Scanning...", "cyan");
-    
-    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
-    const detection = await faceapi.detectSingleFace(vid, options).withFaceLandmarks().withFaceDescriptor();
-
-    if(detection) {
-        regSamples.push(Array.from(detection.descriptor));
-        const count = regSamples.length;
-        updateRegDots(count);
-
-        if(count < 3) {
-            updateStatus(`✅ Sample ${count}/3 Saved! Move head & click.`, "lightgreen");
-            btn.innerText = `📸 Capture Sample ${count + 1} of 3`;
-        } else {
-            updateStatus("Finalizing...", "yellow");
-            await update(ref(db, `users/${currentUser.uid}`), { faceData: regSamples });
-            alert("Registration Complete!");
-        }
-    } else {
-        updateStatus("❌ No Face Detected. Try Again.", "red");
-    }
-};
-
+// FAST CAPTURE
 window.handleFaceScan = async () => {
-    const vid = document.getElementById("cameraFeed");
     const btn = document.getElementById("btnCapture");
-    btn.disabled = true; updateStatus("Scanning...", "cyan");
-
-    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
-    const detection = await faceapi.detectSingleFace(vid, options).withFaceLandmarks().withFaceDescriptor();
-
-    if(!detection) { 
-        updateStatus("❌ No Face Detected", "red"); 
-        handleFail();
-        btn.disabled = false;
-        return; 
-    }
     
+    if(!currentDescriptor) {
+        updateStatus("❌ No Face Lock! Hold steady.", "red");
+        return;
+    }
+
+    btn.disabled = true; 
+    updateStatus("Verifying...", "cyan");
+
     const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
     const storedData = snap.val();
     let matchFound = false;
     
     if(storedData) {
-        const currentDesc = detection.descriptor;
+        // Check against cache
         if(storedData[0] instanceof Array || Array.isArray(storedData[0])) {
              for (let sample of storedData) {
-                 const dist = faceapi.euclideanDistance(sample, currentDesc);
-                 if(dist < 0.5) { matchFound = true; break; } 
+                 const dist = faceapi.euclideanDistance(sample, currentDescriptor);
+                 if(dist < 0.55) { matchFound = true; break; } 
              }
         } else {
-             const dist = faceapi.euclideanDistance(storedData, currentDesc);
-             if(dist < 0.5) matchFound = true;
+             const dist = faceapi.euclideanDistance(storedData, currentDescriptor);
+             if(dist < 0.55) matchFound = true;
         }
     }
 
     if(matchFound) {
-        await recordLogin("Face ID");
+        updateStatus("✅ ACCESS GRANTED", "#00ff00");
+        await recordLogin("Biometric (Fast)");
         enterApp();
     } else {
         updateStatus("❌ Face Mismatch.", "red");
@@ -598,12 +640,33 @@ window.handleFaceScan = async () => {
     }
 };
 
+window.registerNewFace = async () => {
+    if(!currentDescriptor) {
+        updateStatus("❌ Camera cannot see face clearly.", "orange");
+        return;
+    }
+
+    regSamples.push(Array.from(currentDescriptor));
+    const count = regSamples.length;
+    updateRegDots(count);
+
+    if(count < 3) {
+        updateStatus(`✅ Sample ${count}/3 Captured. Move head slightly.`, "lightgreen");
+        document.getElementById("btnCapture").innerText = `📸 Capture Sample ${count + 1} of 3`;
+    } else {
+        updateStatus("💾 Saving Biometric Profile...", "yellow");
+        await update(ref(db, `users/${currentUser.uid}`), { faceData: regSamples });
+        alert("Registration Complete!");
+        location.reload();
+    }
+};
+
 function handleFail() {
     failCount++;
     if(failCount >= 3) {
         stopCamera(); 
         document.getElementById("faceModal").classList.remove("hidden");
-        document.getElementById("cameraFeed").classList.add("hidden");
+        document.getElementById("videoContainer").classList.add("hidden"); // Hide video on fail
         document.getElementById("camControls").classList.add("hidden");
         document.getElementById("otpUI").classList.remove("hidden"); 
         updateStatus("⚠️ Camera Disabled. Enter PIN.", "red");
@@ -633,12 +696,13 @@ window.forceAdminEntry = async () => {
 
 function enterApp() {
     stopCamera(); 
+    document.getElementById("faceModal").classList.add("hidden");
     document.getElementById("appScreen").classList.remove("hidden");
     switchTab('newData');
     loadDraft(); loadGallery(); loadInventory(); loadAssignments();
 }
 
-// --- APP FEATURES (RESTORED COMPLETELY) ---
+// --- APP FEATURES ---
 
 window.saveStationDetails = () => {
     const name = document.getElementById("inpStationName").value.trim();
@@ -653,7 +717,6 @@ window.saveStationDetails = () => {
     alert("Draft Saved");
 };
 
-// COMPLETE FILE UPLOAD RESTORED
 window.uploadEvidenceOnly = () => {
     if(!currentFileBase64) return alert("Select a file first.");
     
@@ -662,7 +725,7 @@ window.uploadEvidenceOnly = () => {
             name: "Evidence Upload", 
             user: currentUser.email, 
             userName: currentUser.name, 
-            date: new Date().toLocaleString(), // Metadata date (can differ from server log time)
+            date: new Date().toLocaleString(),
             fileData: currentFileBase64, 
             fileType: currentFileType
         }).then(() => {
@@ -712,16 +775,18 @@ function formatTime(ts) {
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
-    const reportTable = document.getElementById("globalTaskBody");
-    const searchDropdown = document.getElementById("searchUserDropdown");
+    const globBody = document.getElementById("globalLogBody");
     
     userList.innerHTML = "Loading...";
-    searchDropdown.innerHTML = `<option value="">-- Select User to Monitor --</option>`;
+    userTable.innerHTML = "<tr><td colspan='4'>Loading Status...</td></tr>";
 
-    // 1. Fetch Users
-    const userMap = {};
-    const userSnap = await get(ref(db, "users"));
+    // FETCH DATA
+    const [userSnap, statusSnap] = await Promise.all([
+        get(ref(db, "users")),
+        get(ref(db, "status"))
+    ]);
     
+    const statusMap = statusSnap.val() || {};
     userTable.innerHTML = "";
     userList.innerHTML = "";
 
@@ -729,44 +794,35 @@ window.loadAdminPanel = async () => {
         const u = c.val();
         const uid = c.key;
         const displayName = u.name || u.email;
-        userMap[uid] = displayName; 
 
+        // Checkbox for assignments
         userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
-        searchDropdown.innerHTML += `<option value="${uid}">${displayName} (${u.email})</option>`;
 
-        const bioStatus = u.faceData ? '<span style="color:green; font-weight:bold;">✔ Registered</span>' : '<span style="color:red; font-weight:bold;">❌ Not Set</span>';
+        // STATUS BADGE CALCULATION
+        let isOnline = false;
+        const s = statusMap[uid];
+        if(s && s.state === 'online') {
+            const diff = Date.now() - (s.last_seen || 0);
+            if(diff < 20000) isOnline = true; // 20s grace period
+        }
+        
+        const statusBadge = isOnline ? 
+            `<span class="badge-online">● ONLINE</span>` : 
+            `<span class="badge-offline">○ OFFLINE</span>`;
+
         const pinInput = `<input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:50px; text-align:center;"> <button onclick="savePin('${uid}')" style="padding:2px 5px;">Set</button>`;
-        const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Re-upload Face</button>`;
+        const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Reset Face</button>`;
         const resetNameBtn = `<button class="warning" style="padding:2px 5px;" onclick="retakeName('${uid}')">Reset Name</button>`;
 
         userTable.innerHTML += `<tr>
             <td>${u.name}<br><small>${u.email}</small></td>
-            <td>${bioStatus}</td>
+            <td>${statusBadge}</td>
             <td>${u.terminated ? "BANNED" : "Active"}</td>
             <td>${pinInput}<br>${reUploadBtn} ${resetNameBtn}</td>
         </tr>`;
     });
 
-    // 2. Tasks
-    const taskSnap = await get(ref(db, "assignments"));
-    reportTable.innerHTML = "";
-    taskSnap.forEach(userNode => {
-        const uid = userNode.key;
-        const recipientName = userMap[uid] || "Unknown User"; 
-        userNode.forEach(task => {
-            const t = task.val();
-            const clearBtn = `<button class="danger" style="padding:2px 5px; font-size:10px;" onclick="removeTask('${userNode.key}', '${task.key}')">Clear</button>`;
-            reportTable.innerHTML += `<tr>
-                <td>${recipientName}</td>
-                <td>${t.desc}</td>
-                <td style="color:${t.status=='Done'?'green':'red'}">${t.status}</td>
-                <td>${clearBtn}</td>
-            </tr>`;
-        });
-    });
-
-    // 3. Global Logs (With Method & Server Time)
-    const globBody = document.getElementById("globalLogBody");
+    // GLOBAL LOGS
     onValue(query(ref(db, "logs"), limitToLast(15)), (snap) => {
         globBody.innerHTML = "";
         const logs = [];
@@ -777,49 +833,14 @@ window.loadAdminPanel = async () => {
             let bg = "transparent";
             if(x.type.includes("LOGIN")) { color = "green"; bg = "#eaffea"; }
             if(x.type.includes("LOGOUT")) { color = "red"; bg = "#ffeaea"; }
-            if(x.type.includes("Fail") || x.type.includes("Bypass")) { color = "orange"; }
-
+            
             globBody.innerHTML += `
             <tr style="background:${bg}">
                 <td style="font-size:12px; white-space:nowrap;">${formatTime(x.time)}</td>
                 <td style="font-size:12px;">${x.user}</td>
                 <td style="color:${color}; font-weight:bold; font-size:12px;">
-                    ${x.type} <br>
-                    <span style="font-weight:normal; color:#666; font-size:10px;">${x.method}</span>
+                    ${x.type} <span style="font-weight:normal; color:#666;">(${x.method})</span>
                 </td>
-            </tr>`;
-        });
-    });
-}
-
-// REAL-TIME USER SPECIFIC LOGS
-window.viewSpecificUserLogs = () => {
-    const targetUid = document.getElementById("searchUserDropdown").value;
-    const body = document.getElementById("searchLogBody");
-
-    if(logListenerUnsubscribe) { logListenerUnsubscribe(); logListenerUnsubscribe = null; }
-    if(!targetUid) { body.innerHTML = "<tr><td colspan='3' style='text-align:center;color:gray'>Select a user to monitor.</td></tr>"; return; }
-    
-    body.innerHTML = "<tr><td colspan='3'>Connecting to live feed...</td></tr>";
-
-    const q = query(ref(db, `userLogs/${targetUid}`), limitToLast(20));
-    
-    logListenerUnsubscribe = onValue(q, (snap) => {
-        body.innerHTML = "";
-        if(!snap.exists()) { body.innerHTML = "<tr><td colspan='3'>No logs found for this user yet.</td></tr>"; return; }
-        const logs = [];
-        snap.forEach(c => logs.push(c.val()));
-        
-        logs.reverse().forEach(x => {
-            let color = "black";
-            if (x.type.includes("LOGIN")) color = "green";
-            if (x.type.includes("LOGOUT")) color = "red";
-            if (x.type.includes("Fail")) color = "orange";
-            
-            body.innerHTML += `<tr>
-                <td style="font-size:12px;">${formatTime(x.time)}</td>
-                <td style="color:${color}; font-weight:bold;">${x.type}</td>
-                <td>${x.method}</td>
             </tr>`;
         });
     });
@@ -839,7 +860,6 @@ window.assignTaskMulti = () => {
     alert(`Task assigned to ${checkboxes.length} user(s).`);
     document.getElementById("taskDesc").value = "";
     checkboxes.forEach(cb => cb.checked = false);
-    loadAdminPanel();
 };
 
 window.savePin = (uid) => {
@@ -851,7 +871,6 @@ window.forceReUpload = (uid) => {
     if(confirm("Reset Face Data?")) { remove(ref(db, `users/${uid}/faceData`)).then(() => alert("Face Data Reset. User must scan face on next login.")); }
 }
 window.retakeName = (uid) => update(ref(db, `users/${uid}`), { name: null }).then(() => alert("Name Reset."));
-window.removeTask = (uid, tid) => remove(ref(db, `assignments/${uid}/${tid}`)).then(loadAdminPanel);
 
 window.switchTab = (t) => {
     ['newData','inventory','gallery','assigned','adminPanel'].forEach(x => document.getElementById(`tab-${x}`).classList.add("hidden"));
@@ -863,7 +882,6 @@ window.switchTab = (t) => {
 
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
-// RESTORED GALLERY
 function loadGallery() {
     const div = document.getElementById("galleryContainer"); 
     div.innerHTML = "<p>Loading...</p>";
@@ -894,7 +912,6 @@ window.removeFile = (k) => {
     }
 }
 
-// RESTORED DRAFT
 function loadDraft() {
     onValue(ref(db, `drafts/${currentUser.uid}`), snap => {
         const d = snap.val();
@@ -916,7 +933,6 @@ function renderRow(k,v,i) {
 window.upRow = (k,f,v) => update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), {[f]:v});
 window.delRow = (k) => remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
 
-// RESTORED INVENTORY
 function loadInventory() {
     onValue(ref(db, "inventory"), snap => {
         const b = document.getElementById("inventoryBody"); b.innerHTML = "";
@@ -929,7 +945,6 @@ function loadInventory() {
 window.addInventory = () => { push(ref(db, "inventory"), { item: invName.value, qty: invQty.value, user: currentUser.email }); document.getElementById("addInvForm").classList.add("hidden"); };
 window.delInv = (k) => remove(ref(db, `inventory/${k}`));
 
-// RESTORED ASSIGNMENTS
 function loadAssignments() {
     onValue(ref(db, `assignments/${currentUser.uid}`), snap => {
         const list = document.getElementById("taskList"); list.innerHTML = "";
