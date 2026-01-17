@@ -303,7 +303,7 @@ tr:hover { background-color: #e2e6ea; } /* Highlight row on mouse over */
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
-import { getDatabase, ref, push, set, onValue, remove, update, query, limitToLast, onDisconnect, serverTimestamp, get } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+import { getDatabase, ref, push, set, onValue, remove, update, query, limitToLast, onDisconnect, serverTimestamp, get, off } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
@@ -327,10 +327,11 @@ let idleTimer;
 let regSamples = []; 
 let modelsLoaded = false; 
 
-// --- NEW HIGH-PERFORMANCE VARS ---
+// --- VARS FOR LOGIC ---
 let detectionLoop;
 let currentDescriptor = null;
-let disconnectRef; // ADDED: Variable to store disconnect reference
+let disconnectRef; 
+let logsListener = null; // To manage the Refresh button cleanly
 
 // --- 1. LOAD AI MODELS ---
 async function preloadModels() {
@@ -431,7 +432,7 @@ function startPresenceSystem(user) {
         email: user.email
     });
 
-    // ADDED: Create automatic logout log on disconnect (Tab Close)
+    // 3. Tab Closed / Disconnect Logic
     disconnectRef = push(ref(db, "logs"));
     onDisconnect(disconnectRef).set({
         user: user.email,
@@ -440,7 +441,7 @@ function startPresenceSystem(user) {
         time: serverTimestamp()
     });
 
-    // 3. Update heartbeat every 5 sec
+    // 4. Update heartbeat every 5 sec
     setInterval(() => {
         if(currentUser) update(userStatusRef, { last_seen: serverTimestamp() });
     }, 5000);
@@ -465,6 +466,7 @@ function resetTimer() {
         idleTimer = setTimeout(() => {
             // Auto Logout
             const logData = { user: currentUser.email, type: "LOGOUT", method: "Auto-Timeout", time: serverTimestamp() };
+            if(disconnectRef) onDisconnect(disconnectRef).cancel(); // Cancel auto-log to prevent duplicate
             push(ref(db, "logs"), logData);
             signOut(auth);
             alert("Session Timeout.");
@@ -493,8 +495,8 @@ window.login = () => signInWithEmailAndPassword(auth, email.value, password.valu
 
 window.logout = async () => { 
     if(currentUser) {
-        // ADDED: Cancel the automatic tab-close log if user manually logs out
-        if(disconnectRef) onDisconnect(disconnectRef).cancel();
+        // Cancel the automatic tab-close log if user manually logs out
+        if(disconnectRef) await onDisconnect(disconnectRef).cancel();
 
         const logData = { user: currentUser.email, type: "LOGOUT", method: "Manual Click", time: serverTimestamp() };
         await push(ref(db, "logs"), logData);
@@ -510,7 +512,6 @@ async function recordLogin(method) {
 }
 
 // --- 3. HIGH PERFORMANCE CAMERA LOGIC ---
-
 async function initCamera(isVerify) {
     const vid = document.getElementById("cameraFeed");
     const canvas = document.getElementById("overlayCanvas");
@@ -524,10 +525,9 @@ async function initCamera(isVerify) {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 320, height: 240 } });
         vid.srcObject = stream;
         
-        // Wait for video to actually play before starting detection loop
         vid.onloadedmetadata = () => {
             vid.play();
-            startRealTimeDetection(vid, canvas); // START THE LOOP
+            startRealTimeDetection(vid, canvas); 
         };
 
         if(isVerify) updateStatus("LOOK AT CAMERA", "white");
@@ -548,16 +548,13 @@ async function startRealTimeDetection(video, canvas) {
     detectionLoop = setInterval(async () => {
         if (!stream) return;
 
-        // Optimized settings for speed
         const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
-        
         const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
 
         const ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         if (detection) {
-            // Draw Box
             const resizedDetections = faceapi.resizeResults(detection, displaySize);
             const box = resizedDetections.detection.box;
             const drawBox = new faceapi.draw.DrawBox(box, { label: "Face Locked", boxColor: "#00ff00" });
@@ -565,7 +562,6 @@ async function startRealTimeDetection(video, canvas) {
             
             currentDescriptor = detection.descriptor;
             
-            // Visual Cue
             const btn = document.getElementById("btnCapture");
             if(btn && !btn.disabled) btn.style.border = "2px solid #00ff00"; 
             
@@ -574,7 +570,7 @@ async function startRealTimeDetection(video, canvas) {
             const btn = document.getElementById("btnCapture");
             if(btn) btn.style.border = "1px solid #004494";
         }
-    }, 100); // 10 FPS
+    }, 100); 
 }
 
 function stopCamera() { 
@@ -591,7 +587,6 @@ function stopCamera() {
 
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
 
-// FAST CAPTURE WITH TIMEOUT AND TRY/CATCH
 window.handleFaceScan = async () => {
     const btn = document.getElementById("btnCapture");
     
@@ -605,24 +600,20 @@ window.handleFaceScan = async () => {
     updateStatus("Verifying Identity...", "cyan");
 
     try {
-        // 5-Second Timeout Limit (Prevents hanging)
         const timeoutPromise = new Promise((_, reject) => 
             setTimeout(() => reject(new Error("Network Timeout")), 5000)
         );
 
-        // Race: Database Fetch vs 5-Second Timer
         const snap = await Promise.race([
             get(ref(db, `users/${currentUser.uid}/faceData`)),
             timeoutPromise
         ]);
 
         const storedData = snap.val();
-
         if (!storedData) throw new Error("No face data found.");
 
         let matchFound = false;
         
-        // Compare Face
         if(storedData[0] instanceof Array || Array.isArray(storedData[0])) {
              for (let sample of storedData) {
                  const dist = faceapi.euclideanDistance(sample, currentDescriptor);
@@ -777,6 +768,7 @@ window.submitStationData = () => {
 };
 
 // --- ADMIN LOGIC ---
+
 function formatTime(ts) {
     if(!ts) return "Processing...";
     return new Date(ts).toLocaleString("en-IN", { 
@@ -786,26 +778,26 @@ function formatTime(ts) {
         hour: '2-digit', minute: '2-digit', second: '2-digit'
     });
 }
+
 // --- UPDATED ADMIN PANEL LOADER ---
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
-    const taskBody = document.getElementById("adminTaskBody"); // New Target
+    const taskBody = document.getElementById("adminTaskBody");
     
     userList.innerHTML = "Loading...";
     userTable.innerHTML = "<tr><td colspan='4'>Loading Status...</td></tr>";
 
-    // FETCH USERS, STATUS, AND ASSIGNMENTS
     const [userSnap, statusSnap, assignSnap] = await Promise.all([
         get(ref(db, "users")),
         get(ref(db, "status")),
-        get(ref(db, "assignments")) // Now fetching assignments too
+        get(ref(db, "assignments"))
     ]);
     
     const statusMap = statusSnap.val() || {};
     userTable.innerHTML = "";
     userList.innerHTML = "";
-    taskBody.innerHTML = ""; // Clear task table
+    taskBody.innerHTML = "";
 
     // 1. RENDER USER LIST & STATUS
     userSnap.forEach(c => {
@@ -813,10 +805,8 @@ window.loadAdminPanel = async () => {
         const uid = c.key;
         const displayName = u.name || u.email;
 
-        // Checkbox
         userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
 
-        // Online/Offline Logic
         let isOnline = false;
         const s = statusMap[uid];
         if(s && s.state === 'online') {
@@ -844,13 +834,12 @@ window.loadAdminPanel = async () => {
         </tr>`;
     });
 
-    // 2. RENDER ASSIGNMENT TRACKER (NEW LOGIC)
+    // 2. RENDER ASSIGNMENT TRACKER
     if (!assignSnap.exists()) {
         taskBody.innerHTML = "<tr><td colspan='4' style='text-align:center'>No active assignments found.</td></tr>";
     } else {
         assignSnap.forEach(userNode => {
             const uid = userNode.key;
-            // Resolve Name from User Snapshot
             const userName = userSnap.child(uid).val()?.name || "Unknown User";
 
             userNode.forEach(taskNode => {
@@ -875,40 +864,40 @@ window.loadAdminPanel = async () => {
     }
 };
 
-// NEW FUNCTION TO DELETE ASSIGNMENT
 window.delTask = (uid, taskId) => {
     if(confirm("Permanently delete this assignment?")) {
         remove(ref(db, `assignments/${uid}/${taskId}`))
-            .then(() => loadAdminPanel()) // Refresh to see changes
+            .then(() => loadAdminPanel()) 
             .catch(e => alert(e.message));
     }
 };
 
-// --- TAB 5: SYSTEM LOGS LOGIC ---
+// --- SYSTEM LOGS LOGIC (FIXED) ---
 window.loadSysLogs = () => {
+    // 1. Clear previous listeners (prevents duplicates)
+    if(logsListener) {
+        off(ref(db, "logs"), "value", logsListener);
+        logsListener = null;
+    }
+
     const tbody = document.getElementById("fullLogBody");
-    // Clear the table properly BEFORE the loop starts
     tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:15px;'>Loading latest data...</td></tr>";
 
     const q = query(ref(db, "logs"), limitToLast(60));
 
-    onValue(q, (snap) => {
+    // 2. Attach new listener (Real-time updates)
+    logsListener = onValue(q, (snap) => {
         const logs = [];
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        
-        // Reverse so the NEWEST event is at the TOP
-        logs.reverse();
+        logs.reverse(); // Newest first
 
-        // Check if empty
         if(logs.length === 0) {
             tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:15px;'>No logs found.</td></tr>";
             return;
         }
 
-        // 2. Clear the "Loading" message
+        // 3. Clear and Rebuild Table
         tbody.innerHTML = "";
-
-        // 3. Loop and ADD rows (using +=) instead of overwriting (=)
         logs.forEach(x => {
             let color = "black";
             let bg = "transparent";
@@ -922,7 +911,6 @@ window.loadSysLogs = () => {
                 ? `<button class="danger" style="padding:2px 6px; font-size:11px;" onclick="deleteLogEntry('${x.key}')">🗑️</button>` 
                 : `<span style="color:#ccc; font-size:10px;">🔒</span>`;
 
-            // APPEND the row to the existing table content
             tbody.innerHTML += `
             <tr style="background:${bg}; border-left: 5px solid ${color}">
                 <td style="font-weight:bold; color:#555;">${formatTime(x.time)}</td>
