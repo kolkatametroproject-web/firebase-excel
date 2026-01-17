@@ -883,67 +883,54 @@ window.loadAdminPanel = async () => {
 }
 
 // --- TAB 5: SYSTEM LOGS LOGIC ---
-window.loadSysLogs = async () => {
+window.loadSysLogs = () => {
     const tbody = document.getElementById("fullLogBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Loading logs...</td></tr>";
 
-    try {
-        const q = query(ref(db, "logs"), limitToLast(60));
-        const snap = await get(q);
+    tbody.innerHTML = "<tr><td colspan='5'>Listening...</td></tr>";
 
+    const logRef = query(
+        ref(db, "logs"),
+        orderByChild("clientTime"),
+        limitToLast(60)
+    );
+
+    onValue(logRef, (snap) => {
         tbody.innerHTML = "";
 
         if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No logs found.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='5'>No logs found</td></tr>";
             return;
         }
 
         const logs = [];
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        logs.reverse(); // latest first
+
+        logs.reverse(); // newest first
 
         logs.forEach(x => {
-            setTimeout(autoScrollLogs, 100);
-            let color = "#000";
-            let bg = "transparent";
-            let icon = "📝";
-
-            if (x.type === "LOGIN") {
-                color = "green"; bg = "#eaffea"; icon = "🟢";
-            }
-            else if (x.type === "LOGOUT") {
-                color = "red"; bg = "#ffeaea"; icon = "🔴";
-            }
-            else if (x.type === "UPLOAD") {
-                color = "#003366"; bg = "#eef2ff"; icon = "⬆️";
-            }
-            else if (x.type === "SUBMIT") {
-                color = "#155724"; bg = "#d4edda"; icon = "✔️";
-            }
-            else if (x.type === "FAIL") {
-                color = "orange"; bg = "#fff3cd"; icon = "⚠️";
-            }
+            const time = x.clientTime
+                ? new Date(x.clientTime).toLocaleString()
+                : "N/A";
 
             const delBtn = isAdmin
-                ? `<button class="danger" style="padding:2px 6px; font-size:11px;" onclick="deleteLogEntry('${x.key}')">🗑️</button>`
-                : `<span style="color:#ccc; font-size:10px;">🔒</span>`;
+                ? `<button class="danger" onclick="deleteLogEntry('${x.key}')">X</button>`
+                : "🔒";
 
             tbody.innerHTML += `
-                <tr style="background:${bg}">
-                    <td style="font-size:12px;">${formatTime(x.time || x.clientTime)}</td>
-                    <td style="font-size:12px; font-weight:bold;">${x.user || "-"}</td>
-                    <td style="color:${color}; font-size:12px;">${icon} ${x.type}</td>
-                    <td style="font-size:12px;">${x.method || "-"}</td>
-                    <td style="text-align:center;">${delBtn}</td>
+                <tr>
+                    <td>${time}</td>
+                    <td>${x.user || "-"}</td>
+                    <td>${x.type}</td>
+                    <td>${x.method || "-"}</td>
+                    <td>${delBtn}</td>
                 </tr>
             `;
         });
 
-    } catch (e) {
-        console.error(e);
-        tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;color:red;'>Failed to load logs.</td></tr>";
-    }
+        autoScrollLogs();
+    });
 };
+
 window.deleteLogEntry = async (key) => {
     if (!isAdmin) return alert("Admins only.");
     if (!confirm("Delete this log permanently?")) return;
@@ -955,6 +942,10 @@ window.deleteLogEntry = async (key) => {
         alert("Delete failed.");
     }
 };
+function autoScrollLogs() {
+    const box = document.querySelector("#tab-sysLogs div[style*='overflow-y']");
+    if (box) box.scrollTop = 0;
+}
 
 window.assignTaskMulti = () => {
     const desc = document.getElementById("taskDesc").value;
