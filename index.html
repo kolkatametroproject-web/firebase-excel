@@ -315,7 +315,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
-import { getDatabase, ref, push, set, onValue, remove, update, query, orderByChild, equalTo, get, limitToLast, onDisconnect } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+import { getDatabase, ref, push, set, onValue, remove, update, query, orderByChild, equalTo, get, limitToLast, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
@@ -338,13 +338,12 @@ let failCount = 0;
 let idleTimer;
 let logListenerUnsubscribe = null; 
 let regSamples = []; 
-let modelsLoaded = false; // Flag to prevent re-loading
+let modelsLoaded = false; 
 
 // --- 1. OPTIMIZATION: LOAD AI MODELS IMMEDIATELY ---
 async function preloadModels() {
     if(modelsLoaded) return; 
     const modelUrl = 'https://justadudewhohacks.github.io/face-api.js/models';
-    console.log("Starting Model Preload...");
     try {
         await Promise.all([
             faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
@@ -352,20 +351,36 @@ async function preloadModels() {
             faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl)
         ]);
         modelsLoaded = true;
-        console.log("Models Loaded Successfully");
     } catch(e) { console.error("Model Load Failed", e); }
 }
-preloadModels(); // Call immediately on script load
+preloadModels(); 
 
-// --- AUTH & AUTO LOGOUT ---
+// --- AUTH & PRESENCE & AUTO-LOGOUT LOGIC ---
+let pendingLogKeys = { global: null, specific: null };
+
 onAuthStateChanged(auth, (user) => {
   if (!user) { showLogin(); return; }
   
-  // --- REAL-TIME PRESENCE LOGIC ---
+  // --- REAL-TIME PRESENCE ---
   const userStatusRef = ref(db, `status/${user.uid}`);
-  onDisconnect(userStatusRef).set({ state: 'offline', last_changed: new Date().toLocaleString() });
-  set(userStatusRef, { state: 'online', last_changed: new Date().toLocaleString() });
-  // --------------------------------
+  onDisconnect(userStatusRef).set({ state: 'offline', last_changed: serverTimestamp() });
+  set(userStatusRef, { state: 'online', last_changed: serverTimestamp() });
+
+  // --- AUTO-LOGOUT LOGGING (Connection Loss/Tab Close) ---
+  // Pre-book the logout entry. If connection dies, server writes this.
+  pendingLogKeys.global = push(ref(db, 'logs')).key;
+  pendingLogKeys.specific = push(ref(db, `userLogs/${user.uid}`)).key;
+
+  const autoLogoutData = {
+    user: user.email,
+    type: "LOGOUT [Auto]",
+    desc: "Connection Lost / Tab Closed",
+    time: serverTimestamp() // Server will write ITS time on disconnect
+  };
+
+  onDisconnect(ref(db, `logs/${pendingLogKeys.global}`)).set(autoLogoutData);
+  onDisconnect(ref(db, `userLogs/${user.uid}/${pendingLogKeys.specific}`)).set(autoLogoutData);
+  // ----------------------------------------------------
 
   setupIdleTimer();
   update(ref(db, `users/${user.uid}`), { email: user.email });
@@ -403,19 +418,15 @@ onAuthStateChanged(auth, (user) => {
     faceModal.classList.remove("hidden");
     
     if(!u.faceData) {
-        // ENROLLMENT MODE
         document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup (3 Steps)";
         document.getElementById("modalDesc").innerText = "Security Requirement: We need 3 scans of your face.";
-        
         document.getElementById("regProgress").classList.remove("hidden");
         updateRegDots(regSamples.length);
-        
         document.getElementById("btnCapture").innerText = `📸 Capture Sample ${regSamples.length + 1} of 3`;
         document.getElementById("btnCapture").onclick = registerNewFace; 
         updateStatus("Ready to Register. Look at camera.", "cyan");
         initCamera(false);
     } else {
-        // VERIFICATION MODE
         document.getElementById("modalTitle").innerText = "Biometric Verification";
         document.getElementById("modalDesc").innerText = "System Ready.";
         document.getElementById("regProgress").classList.add("hidden");
@@ -444,7 +455,7 @@ function resetTimer() {
     if(currentUser) {
         idleTimer = setTimeout(() => {
             alert("Session Timeout. Logging out.");
-            logActivity("LOGOUT", "Auto-Timeout").then(()=>signOut(auth));
+            logActivity("LOGOUT", "Auto-Timeout").then(()=>window.logout());
         }, 4 * 60 * 1000); 
     }
 }
@@ -467,11 +478,20 @@ function showLogin() {
 }
 
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert(e.message));
-window.logout = () => { 
+
+window.logout = async () => { 
     if(currentUser) {
-        // Manually set offline status on logout click to ensure immediate update
-        set(ref(db, `status/${currentUser.uid}`), { state: 'offline', last_changed: new Date().toLocaleString() });
-        logActivity("LOGOUT", "User Clicked Logout").then(() => signOut(auth));
+        // Cancel the "Auto Logout" hook because we are doing a manual logout
+        if(pendingLogKeys.global) onDisconnect(ref(db, `logs/${pendingLogKeys.global}`)).cancel();
+        if(pendingLogKeys.specific) onDisconnect(ref(db, `userLogs/${currentUser.uid}/${pendingLogKeys.specific}`)).cancel();
+
+        // Write "Manual Logout" immediately
+        await logActivity("LOGOUT [Manual]", "User Clicked Logout");
+        
+        // Update status immediately
+        await set(ref(db, `status/${currentUser.uid}`), { state: 'offline', last_changed: serverTimestamp() });
+        
+        signOut(auth);
     }
 };
 
@@ -481,8 +501,6 @@ async function initCamera(isVerify) {
     try {
         if(!modelsLoaded) updateStatus("Loading AI Models...", "yellow");
         else updateStatus("Starting Camera...", "white");
-
-        // Wait for models if not ready
         if(!modelsLoaded) await preloadModels();
 
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
@@ -505,19 +523,16 @@ function stopCamera() {
 
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
 
-// --- ENROLLMENT LOGIC (OPTIMIZED: 224px) ---
 window.registerNewFace = async () => {
     const vid = document.getElementById("cameraFeed");
     const btn = document.getElementById("btnCapture");
     updateStatus("Scanning...", "cyan");
     
-    // Tiny options with 224 input size is VERY FAST
     const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
     const detection = await faceapi.detectSingleFace(vid, options).withFaceLandmarks().withFaceDescriptor();
 
     if(detection) {
         regSamples.push(Array.from(detection.descriptor));
-        
         const count = regSamples.length;
         updateRegDots(count);
 
@@ -535,7 +550,6 @@ window.registerNewFace = async () => {
     }
 };
 
-// --- VERIFICATION LOGIC (OPTIMIZED) ---
 window.handleFaceScan = async () => {
     const vid = document.getElementById("cameraFeed");
     const btn = document.getElementById("btnCapture");
@@ -551,7 +565,6 @@ window.handleFaceScan = async () => {
         return; 
     }
     
-    // Retrieve stored data
     const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
     const storedData = snap.val();
     let matchFound = false;
@@ -619,8 +632,6 @@ function enterApp() {
     loadDraft(); loadGallery(); loadInventory(); loadAssignments();
 }
 
-// --- APP FEATURES ---
-
 window.saveStationDetails = () => {
     const name = document.getElementById("inpStationName").value.trim();
     if(!name) return alert("Station Name Required");
@@ -636,7 +647,6 @@ window.saveStationDetails = () => {
 
 window.uploadEvidenceOnly = () => {
     if(!currentFileBase64) return alert("Select a file first.");
-    
     if(confirm("Upload Evidence?")) {
         push(ref(db, "history"), { 
             name: "Evidence Upload", 
@@ -671,6 +681,12 @@ window.submitStationData = () => {
 };
 
 // --- ADMIN LOGIC ---
+// Helper to format Server Timestamp
+function formatTime(ts) {
+    if(!ts) return "N/A";
+    return new Date(ts).toLocaleString();
+}
+
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
@@ -680,7 +696,7 @@ window.loadAdminPanel = async () => {
     userList.innerHTML = "Loading...";
     searchDropdown.innerHTML = `<option value="">-- Select User to Monitor --</option>`;
 
-    // 1. Fetch Users & Build Name Map
+    // 1. Fetch Users
     const userMap = {};
     const userSnap = await get(ref(db, "users"));
     
@@ -693,19 +709,14 @@ window.loadAdminPanel = async () => {
         const displayName = u.name || u.email;
         userMap[uid] = displayName; 
 
-        // Checkbox
         userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
-
-        // Dropdown (Value is UID now for direct log access)
         searchDropdown.innerHTML += `<option value="${uid}">${displayName} (${u.email})</option>`;
 
-        // Access Table
         const bioStatus = u.faceData ? '<span style="color:green; font-weight:bold;">✔ Registered</span>' : '<span style="color:red; font-weight:bold;">❌ Not Set</span>';
         const pinInput = `<input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:50px; text-align:center;"> <button onclick="savePin('${uid}')" style="padding:2px 5px;">Set</button>`;
         const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Re-upload Face</button>`;
         const resetNameBtn = `<button class="warning" style="padding:2px 5px;" onclick="retakeName('${uid}')">Reset Name</button>`;
 
-        // Status Placeholder (Filled by real-time listener below)
         const statusId = `status-${uid}`;
 
         userTable.innerHTML += `<tr>
@@ -716,7 +727,7 @@ window.loadAdminPanel = async () => {
             <td>${pinInput}<br>${reUploadBtn} ${resetNameBtn}</td>
         </tr>`;
 
-        // Listen for Real-Time Status for this user
+        // Real-Time Status Listener
         onValue(ref(db, `status/${uid}`), (sSnap) => {
             const statusData = sSnap.val();
             const cell = document.getElementById(statusId);
@@ -724,7 +735,8 @@ window.loadAdminPanel = async () => {
                 if(statusData.state === 'online') {
                     cell.innerHTML = `<span class="status-indicator status-online"></span> <b style="color:green">Online</b>`;
                 } else {
-                    cell.innerHTML = `<span class="status-indicator status-offline"></span> <span style="color:grey">Offline</span>`;
+                    const lastSeen = formatTime(statusData.last_changed);
+                    cell.innerHTML = `<span class="status-indicator status-offline"></span> <span style="color:grey">Offline<br><small>${lastSeen}</small></span>`;
                 }
             }
         });
@@ -736,7 +748,6 @@ window.loadAdminPanel = async () => {
     taskSnap.forEach(userNode => {
         const uid = userNode.key;
         const recipientName = userMap[uid] || "Unknown User"; 
-
         userNode.forEach(task => {
             const t = task.val();
             const clearBtn = `<button class="danger" style="padding:2px 5px; font-size:10px;" onclick="removeTask('${userNode.key}', '${task.key}')">Clear</button>`;
@@ -749,7 +760,7 @@ window.loadAdminPanel = async () => {
         });
     });
 
-    // 3. Global Logs Listener
+    // 3. Global Logs (With Server Timestamp Formatting)
     const globBody = document.getElementById("globalLogBody");
     onValue(query(ref(db, "logs"), limitToLast(15)), (snap) => {
         globBody.innerHTML = "";
@@ -759,15 +770,13 @@ window.loadAdminPanel = async () => {
         logs.reverse().forEach(x => {
             let color = "#333";
             let bg = "transparent";
-
-            // Color Coding
             if(x.type.includes("LOGIN")) { color = "green"; bg = "#eaffea"; }
             if(x.type.includes("LOGOUT")) { color = "red"; bg = "#ffeaea"; }
             if(x.type.includes("Fail") || x.type.includes("Bypass")) { color = "orange"; }
 
             globBody.innerHTML += `
             <tr style="background:${bg}">
-                <td style="font-size:12px; white-space:nowrap;">${x.time}</td>
+                <td style="font-size:12px; white-space:nowrap;">${formatTime(x.time)}</td>
                 <td style="font-size:12px;">${x.user}</td>
                 <td style="color:${color}; font-weight:bold; font-size:12px;">
                     ${x.type} <br>
@@ -778,33 +787,21 @@ window.loadAdminPanel = async () => {
     });
 }
 
-// --- 2. LOGGING FIXED ---
-// REAL-TIME USER SPECIFIC LOGS (UPDATED to userLogs/{uid})
+// REAL-TIME USER SPECIFIC LOGS (With Server Timestamp Formatting)
 window.viewSpecificUserLogs = () => {
     const targetUid = document.getElementById("searchUserDropdown").value;
     const body = document.getElementById("searchLogBody");
 
-    if(logListenerUnsubscribe) {
-        logListenerUnsubscribe(); 
-        logListenerUnsubscribe = null;
-    }
-
-    if(!targetUid) {
-        body.innerHTML = "<tr><td colspan='3' style='text-align:center;color:gray'>Select a user to monitor.</td></tr>";
-        return;
-    }
+    if(logListenerUnsubscribe) { logListenerUnsubscribe(); logListenerUnsubscribe = null; }
+    if(!targetUid) { body.innerHTML = "<tr><td colspan='3' style='text-align:center;color:gray'>Select a user to monitor.</td></tr>"; return; }
     
     body.innerHTML = "<tr><td colspan='3'>Connecting to live feed...</td></tr>";
 
-    // UPDATED: Reading from specific userLogs node
     const q = query(ref(db, `userLogs/${targetUid}`), limitToLast(20));
     
     logListenerUnsubscribe = onValue(q, (snap) => {
         body.innerHTML = "";
-        if(!snap.exists()) {
-            body.innerHTML = "<tr><td colspan='3'>No logs found for this user yet.</td></tr>";
-            return;
-        }
+        if(!snap.exists()) { body.innerHTML = "<tr><td colspan='3'>No logs found for this user yet.</td></tr>"; return; }
         const logs = [];
         snap.forEach(c => logs.push(c.val()));
         
@@ -815,7 +812,7 @@ window.viewSpecificUserLogs = () => {
             if (x.type.includes("Fail")) color = "orange";
             
             body.innerHTML += `<tr>
-                <td style="font-size:12px;">${x.time}</td>
+                <td style="font-size:12px;">${formatTime(x.time)}</td>
                 <td style="color:${color}; font-weight:bold;">${x.type}</td>
                 <td>${x.desc}</td>
             </tr>`;
@@ -834,7 +831,6 @@ window.assignTaskMulti = () => {
         const task = { desc, by: currentUser.email, date: new Date().toLocaleString(), status: "Pending" };
         push(ref(db, `assignments/${uid}`), task);
     });
-
     alert(`Task assigned to ${checkboxes.length} user(s).`);
     document.getElementById("taskDesc").value = "";
     checkboxes.forEach(cb => cb.checked = false);
@@ -852,15 +848,11 @@ window.forceReUpload = (uid) => {
 window.retakeName = (uid) => update(ref(db, `users/${uid}`), { name: null }).then(() => alert("Name Reset."));
 window.removeTask = (uid, tid) => remove(ref(db, `assignments/${uid}/${tid}`)).then(loadAdminPanel);
 
-// UPDATED LOGGING FUNCTION: Writes to TWO places
+// UPDATED: Use SERVER TIMESTAMP for accuracy
 async function logActivity(type, desc) { 
     if(currentUser) {
-        const logData = { user: currentUser.email, type, desc, time: new Date().toLocaleString() };
-        
-        // 1. Global System Log (Kept for overall admin view)
+        const logData = { user: currentUser.email, type, desc, time: serverTimestamp() };
         await push(ref(db, "logs"), logData);
-
-        // 2. User Specific Log (Fixed path)
         await push(ref(db, `userLogs/${currentUser.uid}`), logData);
     } 
 }
