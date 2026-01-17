@@ -266,7 +266,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
               <option value="">-- Select User --</option>
           </select>
       </div>
-      <div style="border:1px solid #ccc; padding:10px; margin-bottom:20px; max-height:300px; overflow-y:scroll; background:#fafafa;">
+      <div style="border:1px solid #ccc; padding:10px; margin-bottom:20px; max-height:150px; overflow-y:scroll; background:#fafafa;">
           <table style="margin-top:0;">
               <thead><tr><th>Time</th><th>Type</th><th>Details</th></tr></thead>
               <tbody id="searchLogBody"><tr><td colspan="3" style="text-align:center; color:grey;">Select a user to view live activity.</td></tr></tbody>
@@ -275,6 +275,23 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 
       <h4 style="background:#eee; padding:5px;">4. Global Task Status Report</h4>
       <table style="margin-bottom:20px;"><thead><tr><th>To (Name)</th><th>Task</th><th>Status</th><th>Action</th></tr></thead><tbody id="globalTaskBody"></tbody></table>
+
+      <h4 style="background:#eee; padding:5px;">5. Recent System Activity (Global Log)</h4>
+      <div style="height:300px; overflow-y:scroll; border:1px solid #ccc; background:#fff;">
+        <table>
+          <thead>
+            <tr>
+              <th style="position:sticky; top:0; background:#e9ecef;">Time</th>
+              <th style="position:sticky; top:0; background:#e9ecef;">User</th>
+              <th style="position:sticky; top:0; background:#e9ecef;">Action / Method</th>
+            </tr>
+          </thead>
+          <tbody id="globalLogBody">
+             <tr><td colspan="3" style="text-align:center;">Loading logs...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
     </div>
   </div>
 
@@ -304,7 +321,7 @@ let currentFileBase64 = null;
 let currentFileType = null;
 let failCount = 0;
 let idleTimer;
-let logListenerUnsubscribe = null; // Store listener to detach later
+let logListenerUnsubscribe = null; 
 
 // --- AUTH & AUTO LOGOUT ---
 onAuthStateChanged(auth, (user) => {
@@ -430,6 +447,7 @@ window.handleFaceScan = async () => {
         return; 
     }
     
+    // NOTE: Privacy enforced. We do NOT save the image. We only log success.
     logActivity("LOGIN [Face]", "Biometric Success");
     enterApp();
 };
@@ -468,7 +486,7 @@ window.forceAdminEntry = () => {
 }
 
 function enterApp() {
-    stopCamera(); 
+    stopCamera(); // Privacy: Cut camera immediately
     document.getElementById("appScreen").classList.remove("hidden");
     switchTab('newData');
     loadDraft(); loadGallery(); loadInventory(); loadAssignments();
@@ -586,16 +604,44 @@ window.loadAdminPanel = async () => {
             </tr>`;
         });
     });
+
+    // 3. Global Logs Listener (Last 15 ONLY)
+    const globBody = document.getElementById("globalLogBody");
+    onValue(query(ref(db, "logs"), limitToLast(15)), (snap) => {
+        globBody.innerHTML = "";
+        const logs = [];
+        snap.forEach(c => logs.push(c.val()));
+        
+        // Reverse to show Newest First
+        logs.reverse().forEach(x => {
+            let color = "#333";
+            let bg = "transparent";
+
+            // Color Coding
+            if(x.type.includes("LOGIN")) { color = "green"; bg = "#eaffea"; }
+            if(x.type.includes("LOGOUT")) { color = "red"; bg = "#ffeaea"; }
+            if(x.type.includes("Fail") || x.type.includes("Bypass")) { color = "orange"; }
+
+            globBody.innerHTML += `
+            <tr style="background:${bg}">
+                <td style="font-size:12px; white-space:nowrap;">${x.time}</td>
+                <td style="font-size:12px;">${x.user}</td>
+                <td style="color:${color}; font-weight:bold; font-size:12px;">
+                    ${x.type} <br>
+                    <span style="font-weight:normal; color:#666; font-size:10px;">${x.desc}</span>
+                </td>
+            </tr>`;
+        });
+    });
 }
 
-// REAL-TIME USER SPECIFIC LOGS (NO FETCH BUTTON NEEDED)
+// REAL-TIME USER SPECIFIC LOGS
 window.viewSpecificUserLogs = () => {
     const userEmail = document.getElementById("searchUserDropdown").value;
     const body = document.getElementById("searchLogBody");
 
-    // Clean up old listener
     if(logListenerUnsubscribe) {
-        logListenerUnsubscribe(); // Detach previous listener
+        logListenerUnsubscribe(); 
         logListenerUnsubscribe = null;
     }
 
@@ -608,7 +654,6 @@ window.viewSpecificUserLogs = () => {
 
     const q = query(ref(db, "logs"), orderByChild("user"), equalTo(userEmail), limitToLast(20));
     
-    // Attach NEW Listener
     logListenerUnsubscribe = onValue(q, (snap) => {
         body.innerHTML = "";
         if(!snap.exists()) {
