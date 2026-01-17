@@ -312,6 +312,22 @@ tr:nth-child(even) { background-color: #f8f9fa; }
         <textarea id="taskDesc" rows="1" placeholder="Enter Task Details..."></textarea>
         <button onclick="assignTaskMulti()" style="width:100%; margin-top:5px;">Assign to Selected Users</button>
       </div>
+      <h4 style="background:#eee; padding:5px; margin-top:25px;">3. Master Assignment Tracker</h4>
+      <div style="max-height:300px; overflow-y:scroll; border:1px solid #ced4da; background:#fff;">
+          <table style="margin-top:0;">
+              <thead>
+                  <tr>
+                      <th style="position:sticky; top:0; background:#e9ecef;">Assigned To</th>
+                      <th style="position:sticky; top:0; background:#e9ecef;">Task Description</th>
+                      <th style="position:sticky; top:0; background:#e9ecef; text-align:center;">Status</th>
+                      <th style="position:sticky; top:0; background:#e9ecef;">Action</th>
+                  </tr>
+              </thead>
+              <tbody id="adminTaskBody">
+                  <tr><td colspan="4" style="text-align:center">Loading tasks...</td></tr>
+              </tbody>
+          </table>
+      </div>
     </div>
   </div>
 
@@ -812,47 +828,51 @@ function formatTime(ts) {
     return new Date(ts).toLocaleString();
 }
 
+// --- UPDATED ADMIN PANEL LOADER ---
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
+    const taskBody = document.getElementById("adminTaskBody"); // New Target
     
     userList.innerHTML = "Loading...";
     userTable.innerHTML = "<tr><td colspan='4'>Loading Status...</td></tr>";
 
-    // FETCH DATA
-    const [userSnap, statusSnap] = await Promise.all([
+    // FETCH USERS, STATUS, AND ASSIGNMENTS
+    const [userSnap, statusSnap, assignSnap] = await Promise.all([
         get(ref(db, "users")),
-        get(ref(db, "status"))
+        get(ref(db, "status")),
+        get(ref(db, "assignments")) // Now fetching assignments too
     ]);
     
     const statusMap = statusSnap.val() || {};
     userTable.innerHTML = "";
     userList.innerHTML = "";
+    taskBody.innerHTML = ""; // Clear task table
 
+    // 1. RENDER USER LIST & STATUS
     userSnap.forEach(c => {
         const u = c.val();
         const uid = c.key;
         const displayName = u.name || u.email;
 
-        // Checkbox for assignments
+        // Checkbox
         userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
 
-        // STATUS BADGE CALCULATION
+        // Online/Offline Logic
         let isOnline = false;
         const s = statusMap[uid];
         if(s && s.state === 'online') {
             const diff = Date.now() - (s.last_seen || 0);
-            if(diff < 20000) isOnline = true; // 20s grace period
+            if(diff < 20000) isOnline = true; 
         }
         
         const statusBadge = isOnline ? 
             `<span class="badge-online">● ONLINE</span>` : 
             `<span class="badge-offline">○ OFFLINE</span>`;
 
-        // BIOMETRIC STATUS
         const bioBadge = u.faceData ? 
-            `<span style="color:#003366; font-weight:bold; background:#e6f0ff; padding:4px 8px; border:1px solid #003366; border-radius:4px;">✔ Registered</span>` : 
-            `<span style="color:#721c24; font-weight:bold; background:#f8d7da; padding:4px 8px; border:1px solid #f5c6cb; border-radius:4px;">❌ Pending</span>`;
+            `<span style="color:green; font-weight:bold;">✔ Registered</span>` : 
+            `<span style="color:red; font-weight:bold;">❌ Pending</span>`;
 
         const pinInput = `<input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:50px; text-align:center;"> <button onclick="savePin('${uid}')" style="padding:2px 5px;">Set</button>`;
         const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Reset Face</button>`;
@@ -865,7 +885,46 @@ window.loadAdminPanel = async () => {
             <td>${pinInput}<br>${reUploadBtn} ${resetNameBtn}</td>
         </tr>`;
     });
-}
+
+    // 2. RENDER ASSIGNMENT TRACKER (NEW LOGIC)
+    if (!assignSnap.exists()) {
+        taskBody.innerHTML = "<tr><td colspan='4' style='text-align:center'>No active assignments found.</td></tr>";
+    } else {
+        assignSnap.forEach(userNode => {
+            const uid = userNode.key;
+            // Resolve Name from User Snapshot
+            const userName = userSnap.child(uid).val()?.name || "Unknown User";
+
+            userNode.forEach(taskNode => {
+                const t = taskNode.val();
+                const taskId = taskNode.key;
+
+                const statusBadge = t.status === 'Done'
+                    ? `<span style="background:green; color:white; padding:3px 8px; border-radius:10px; font-size:11px;">✔ COMPLETED</span>`
+                    : `<span style="background:#ffc107; color:black; padding:3px 8px; border-radius:10px; font-size:11px;">⏳ PENDING</span>`;
+
+                taskBody.innerHTML += `
+                <tr>
+                    <td><b>${userName}</b></td>
+                    <td>${t.desc}<br><small style="color:#666">${t.date}</small></td>
+                    <td style="text-align:center;">${statusBadge}</td>
+                    <td style="text-align:center;">
+                        <button class="danger" style="padding:2px 6px;" onclick="delTask('${uid}', '${taskId}')">🗑</button>
+                    </td>
+                </tr>`;
+            });
+        });
+    }
+};
+
+// NEW FUNCTION TO DELETE ASSIGNMENT
+window.delTask = (uid, taskId) => {
+    if(confirm("Permanently delete this assignment?")) {
+        remove(ref(db, `assignments/${uid}/${taskId}`))
+            .then(() => loadAdminPanel()) // Refresh to see changes
+            .catch(e => alert(e.message));
+    }
+};
 
 // --- TAB 5: SYSTEM LOGS LOGIC ---
 window.loadSysLogs = () => {
