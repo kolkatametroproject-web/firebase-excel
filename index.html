@@ -373,6 +373,22 @@ let modelsLoaded = false;
 // --- NEW HIGH-PERFORMANCE VARS ---
 let detectionLoop;
 let currentDescriptor = null;
+function addLog(type, method) {
+    if (!currentUser) return;
+
+    push(ref(db, "logs"), {
+        user: currentUser.email,
+        type: type,
+        method: method,
+        clientTime: Date.now()
+    });
+}
+function autoScrollLogs() {
+    const container = document.querySelector("#tab-sysLogs div[style*='overflow-y']");
+    if (container) {
+        container.scrollTop = 0; // newest on top
+    }
+}
 
 // --- 1. LOAD AI MODELS ---
 async function preloadModels() {
@@ -498,7 +514,7 @@ function resetTimer() {
         idleTimer = setTimeout(() => {
             // Auto Logout
             const logData = { user: currentUser.email, type: "LOGOUT", method: "Auto-Timeout", time: serverTimestamp() };
-            push(ref(db, "logs"), logData);
+            addLog("LOGOUT", "Auto Timeout");
             signOut(auth);
             alert("Session Timeout.");
         }, 5 * 60 * 1000); 
@@ -524,20 +540,16 @@ function showLogin() {
 
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert(e.message));
 
-window.logout = async () => { 
-    if(currentUser) {
-        const logData = { user: currentUser.email, type: "LOGOUT", method: "Manual Click", time: serverTimestamp() };
-        await push(ref(db, "logs"), logData);
-        signOut(auth);
-    }
+window.logout = async () => {
+    if (!currentUser) return;
+    addLog("LOGOUT", "Manual Logout");
+    signOut(auth);
 };
 
 async function recordLogin(method) {
-    if(currentUser) {
-        const logData = { user: currentUser.email, type: "LOGIN", method: method, time: serverTimestamp() };
-        await push(ref(db, "logs"), logData);
-    }
+    addLog("LOGIN", method);
 }
+
 
 // --- 3. HIGH PERFORMANCE CAMERA LOGIC ---
 
@@ -702,6 +714,7 @@ window.registerNewFace = async () => {
 };
 
 function handleFail() {
+    addLog("FAIL", "Face Verification");
     failCount++;
     if(failCount >= 3) {
         stopCamera(); 
@@ -769,6 +782,7 @@ window.uploadEvidenceOnly = () => {
             fileData: currentFileBase64, 
             fileType: currentFileType
         }).then(() => {
+            addLog("UPLOAD", "Evidence File");
             document.getElementById("evidenceFile").value = "";
             document.getElementById("fileStatus").innerText = "";
             currentFileBase64 = null;
@@ -799,6 +813,7 @@ window.submitStationData = () => {
             push(ref(db, "history"), { 
                 ...d.details, rows: d.rows, user: currentUser.email, userName: currentUser.name, date: new Date().toLocaleString()
             }).then(() => {
+                addLog("SUBMIT", "Station Data");
                 remove(ref(db, `drafts/${currentUser.uid}`));
                 alert("Submitted"); switchTab('gallery');
             });
@@ -808,10 +823,10 @@ window.submitStationData = () => {
 
 // --- ADMIN LOGIC ---
 function formatTime(ts) {
-    if(!ts) return "N/A";
+    if (!ts) return "Pending...";
+    if (typeof ts === "object") return "Syncing...";
     return new Date(ts).toLocaleString();
 }
-
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
@@ -868,54 +883,76 @@ window.loadAdminPanel = async () => {
 }
 
 // --- TAB 5: SYSTEM LOGS LOGIC ---
-window.loadSysLogs = () => {
+window.loadSysLogs = async () => {
     const tbody = document.getElementById("fullLogBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Loading data...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Loading logs...</td></tr>";
 
-    const q = query(ref(db, "logs"), limitToLast(60));
+    try {
+        const q = query(ref(db, "logs"), limitToLast(60));
+        const snap = await get(q);
 
-    onValue(q, (snap) => {
         tbody.innerHTML = "";
-        const logs = [];
-        
-        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        logs.reverse();
 
-        if(logs.length === 0) {
+        if (!snap.exists()) {
             tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No logs found.</td></tr>";
             return;
         }
 
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // latest first
+
         logs.forEach(x => {
-            let color = "black";
+            setTimeout(autoScrollLogs, 100);
+            let color = "#000";
             let bg = "transparent";
             let icon = "📝";
 
-            if(x.type === "LOGIN") { color = "green"; bg = "#eaffea"; icon = "🟢"; }
-            else if(x.type === "LOGOUT") { color = "red"; bg = "#ffeaea"; icon = "🔴"; }
-            else if(x.type.includes("Fail")) { color = "orange"; icon = "⚠️"; }
+            if (x.type === "LOGIN") {
+                color = "green"; bg = "#eaffea"; icon = "🟢";
+            }
+            else if (x.type === "LOGOUT") {
+                color = "red"; bg = "#ffeaea"; icon = "🔴";
+            }
+            else if (x.type === "UPLOAD") {
+                color = "#003366"; bg = "#eef2ff"; icon = "⬆️";
+            }
+            else if (x.type === "SUBMIT") {
+                color = "#155724"; bg = "#d4edda"; icon = "✔️";
+            }
+            else if (x.type === "FAIL") {
+                color = "orange"; bg = "#fff3cd"; icon = "⚠️";
+            }
 
-            // Delete Button (Admins Only)
-            const delBtn = isAdmin 
-                ? `<button class="danger" style="padding:2px 6px; font-size:11px;" onclick="deleteLogEntry('${x.key}')">🗑️</button>` 
+            const delBtn = isAdmin
+                ? `<button class="danger" style="padding:2px 6px; font-size:11px;" onclick="deleteLogEntry('${x.key}')">🗑️</button>`
                 : `<span style="color:#ccc; font-size:10px;">🔒</span>`;
 
             tbody.innerHTML += `
-            <tr style="background:${bg}">
-                <td style="font-size:12px;">${formatTime(x.time)}</td>
-                <td style="font-size:12px; font-weight:bold;">${x.user}</td>
-                <td style="color:${color}; font-size:12px;">${icon} ${x.type}</td>
-                <td style="font-size:12px;">${x.method}</td>
-                <td style="text-align:center;">${delBtn}</td>
-            </tr>`;
+                <tr style="background:${bg}">
+                    <td style="font-size:12px;">${formatTime(x.time || x.clientTime)}</td>
+                    <td style="font-size:12px; font-weight:bold;">${x.user || "-"}</td>
+                    <td style="color:${color}; font-size:12px;">${icon} ${x.type}</td>
+                    <td style="font-size:12px;">${x.method || "-"}</td>
+                    <td style="text-align:center;">${delBtn}</td>
+                </tr>
+            `;
         });
-    });
-};
 
-window.deleteLogEntry = (key) => {
-    if(!isAdmin) return alert("Access Denied: Admins Only.");
-    if(confirm("Permanently delete this log entry?")) {
-        remove(ref(db, `logs/${key}`)).catch(e => alert("Error: " + e.message));
+    } catch (e) {
+        console.error(e);
+        tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;color:red;'>Failed to load logs.</td></tr>";
+    }
+};
+window.deleteLogEntry = async (key) => {
+    if (!isAdmin) return alert("Admins only.");
+    if (!confirm("Delete this log permanently?")) return;
+
+    try {
+        await remove(ref(db, `logs/${key}`));
+        loadSysLogs();
+    } catch (e) {
+        alert("Delete failed.");
     }
 };
 
