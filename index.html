@@ -350,7 +350,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     </div>
 <div id="inv-checkout" class="panel hidden" style="border: 2px solid #b38600;">
     <h3 style="color:#b38600;">📤 Checkout / Issue Product</h3>
-    <p><strong>Step 1:</strong> Receiver scans face. <strong>Step 2:</strong> Admin authorizes.</p>
+    <p>Select item and request Admin Approval.</p>
     
     <label>Select Product:</label>
     <div style="display:flex; gap:10px; margin-bottom:10px;">
@@ -371,20 +371,14 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
     </div>
 
-    <div id="recv-check-box" style="background:#fff3cd; border:1px solid #ffeeba; padding:15px; text-align:center; border-radius:4px;">
-        <h4 style="margin-top:0; color:#856404;">👤 Receiver Identity</h4>
-        <div id="checkout_status_text" style="font-weight:bold; color:#dc3545; margin-bottom:10px;">❌ NOT VERIFIED</div>
-        <button id="btn_checkout_verify" onclick="startReceiverScan('CHECKOUT')" class="primary" style="width:100%;">📸 Scan Receiver Face</button>
-    </div>
-
     <div style="margin-top:20px; text-align:right;">
-         <button id="btn_checkout_submit" onclick="initTransactionAuth('CHECKOUT')" disabled style="background:#6c757d; padding:12px 20px; font-size:14px; opacity:0.7; cursor:not-allowed;">🛡️ Step 2: Admin Approve</button>
+         <button onclick="initTransactionAuth('CHECKOUT')" style="background:#b38600; padding:12px 20px; font-size:14px; width:100%;">🛡️ Admin Face Approve</button>
     </div>
 </div>
 
 <div id="inv-return" class="panel hidden" style="border: 2px solid #17a2b8;">
     <h3 style="color:#17a2b8;">📥 Return Product</h3>
-    <p><strong>Step 1:</strong> Returner scans face. <strong>Step 2:</strong> Admin authorizes.</p>
+    <p>Select item and request Admin Approval.</p>
     
     <label>Select Product:</label>
     <div style="display:flex; gap:10px; margin-bottom:10px;">
@@ -405,14 +399,8 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
     </div>
 
-    <div id="recv-return-box" style="background:#d1ecf1; border:1px solid #bee5eb; padding:15px; text-align:center; border-radius:4px;">
-        <h4 style="margin-top:0; color:#0c5460;">👤 Returner Identity</h4>
-        <div id="return_status_text" style="font-weight:bold; color:#dc3545; margin-bottom:10px;">❌ NOT VERIFIED</div>
-        <button id="btn_return_verify" onclick="startReceiverScan('RETURN')" class="info" style="width:100%;">📸 Scan Returner Face</button>
-    </div>
-
     <div style="margin-top:20px; text-align:right;">
-         <button id="btn_return_submit" onclick="initTransactionAuth('RETURN')" disabled style="background:#6c757d; padding:12px 20px; font-size:14px; opacity:0.7; cursor:not-allowed;">🛡️ Step 2: Admin Approve</button>
+         <button onclick="initTransactionAuth('RETURN')" style="background:#17a2b8; padding:12px 20px; font-size:14px; width:100%;">🛡️ Admin Face Approve</button>
     </div>
 </div>
     <div id="inv-history" class="panel hidden">
@@ -827,8 +815,7 @@ async function preloadModels() {
 }
 preloadModels(); 
 
-// --- 2. AUTH & WATCHDOG ---
-// --- 2. AUTH & WATCHDOG (UPDATED: DIRECT LOGIN) ---
+// --- 2. AUTH & WATCHDOG (RESTORED: FACE ID REQUIRED) ---
 onAuthStateChanged(auth, (user) => {
   if (!user) { showLogin(); return; }
   
@@ -846,17 +833,14 @@ onAuthStateChanged(auth, (user) => {
     isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
     failCount = 0;
     
-    // 1. Force Name Setup if missing
     if (!u.name) {
         document.getElementById("nameModal").classList.remove("hidden");
         document.getElementById("loginSection").classList.add("hidden");
         return;
     }
 
-    // 2. Default PIN if missing
     if (!u.pin) { update(ref(db, `users/${user.uid}`), { pin: "1234" }); }
 
-    // 3. Show Header Info
     document.getElementById("userInfo").innerText = `${u.name} (${user.email})`;
     document.getElementById("authContainer").classList.remove("hidden");
     document.getElementById("loginSection").classList.add("hidden");
@@ -868,14 +852,33 @@ onAuthStateChanged(auth, (user) => {
       setTimeout(loadAdminPanel, 2000); 
     }
 
-    // 4. DIRECT ENTRY (Verification Removed for Login)
-    // We only trigger Face ID if a transaction specifically requests it
-    if(!isTransactionAuth && scanMode === 'LOGIN') {
-        enterApp(); 
+    // --- RESTORED SECURITY CHECK ---
+    // If not currently authorizing a transaction, force Face ID to enter
+    if(!isTransactionAuth) {
+        const faceModal = document.getElementById("faceModal");
+        faceModal.classList.remove("hidden");
+        
+        if(!u.faceData) {
+            // REGISTRATION FLOW
+            document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup (3 Steps)";
+            document.getElementById("modalDesc").innerText = "Center your face in the box.";
+            document.getElementById("regProgress").classList.remove("hidden");
+            updateRegDots(regSamples.length);
+            document.getElementById("btnCapture").innerText = `📸 Capture Sample ${regSamples.length + 1} of 3`;
+            document.getElementById("btnCapture").onclick = registerNewFace; 
+            initCamera(false);
+        } else {
+            // LOGIN FLOW
+            document.getElementById("modalTitle").innerText = "Biometric Verification";
+            document.getElementById("modalDesc").innerText = "System Ready.";
+            document.getElementById("regProgress").classList.add("hidden");
+            document.getElementById("btnCapture").innerText = "📸 Verify Identity";
+            document.getElementById("btnCapture").onclick = handleFaceScan; 
+            initCamera(true);
+        }
     }
   });
 });
-
 // --- NEW HEARTBEAT SYSTEM ---
 function startPresenceSystem(user) {
     const userStatusRef = ref(db, `status/${user.uid}`);
@@ -1352,10 +1355,12 @@ window.filterInvLogs = () => {
         row.style.display = text.includes(input) ? "" : "none";
     });
 };
-window.initTransactionAuth = (type) => {
-    if(!receiverVerified) return alert("Receiver must verify face first!");
+// --- UPDATED TRANSACTION LOGIC (Admin Scan Only) ---
 
-    scanMode = 'ADMIN'; // Switch to Admin Mode
+window.initTransactionAuth = (type) => {
+    // REMOVED: Receiver verification check
+    
+    scanMode = 'ADMIN'; // Directly switch to Admin Mode
     currentTransactionType = type;
     
     const isCheckout = type === 'CHECKOUT';
@@ -1368,7 +1373,7 @@ window.initTransactionAuth = (type) => {
     // Start Admin Biometric Flow
     document.getElementById("faceModal").classList.remove("hidden");
     document.getElementById("modalTitle").innerText = `🛡️ Admin Authorization`;
-    document.getElementById("modalDesc").innerText = "Admin: Scan face to approve.";
+    document.getElementById("modalDesc").innerText = "Admin: Scan face to approve transaction.";
     document.getElementById("regProgress").classList.add("hidden");
     document.getElementById("btnCapture").innerText = "📸 Scan Admin Face";
     document.getElementById("btnCapture").disabled = false;
@@ -1380,6 +1385,7 @@ window.initTransactionAuth = (type) => {
     
     initCamera(true);
 };
+
 async function processTransaction(adminName) {
     const isCheckout = currentTransactionType === 'CHECKOUT';
     const sel = document.getElementById(isCheckout ? "checkoutSelect" : "returnSelect");
@@ -1396,18 +1402,18 @@ async function processTransaction(adminName) {
     
     await update(invRef, { qty: newStoreQty });
 
-    // 2. Fetch Real User Name
+    // 2. Fetch Real User Name (The logged in user is the Receiver/Returner)
     const uSnap = await get(ref(db, `users/${currentUser.uid}`));
     const realUserName = uSnap.val()?.name || currentUser.email;
 
-    // 3. Log (Signature is now Text)
+    // 3. Log
     const logData = {
         type: currentTransactionType,
         item: itemName,
         qty: transQty,
         takenBy: realUserName,
         approvedBy: adminName,
-        signature: "✅ Biometric Verified (FaceID)", // NEW
+        signature: "Admin Authorized", // No Receiver Face/Sig needed
         time: serverTimestamp()
     };
 
@@ -1416,22 +1422,8 @@ async function processTransaction(adminName) {
     alert(`${currentTransactionType} Successful!`);
     stopCamera();
     
-    // Reset UI
-    receiverVerified = false;
+    // Reset Inputs
     document.getElementById(isCheckout ? "checkoutQty" : "returnQty").value = "";
-    document.getElementById("checkout_status_text").innerText = "❌ NOT VERIFIED";
-    document.getElementById("checkout_status_text").style.color = "red";
-    document.getElementById("btn_checkout_verify").classList.remove("hidden");
-    document.getElementById("btn_checkout_submit").disabled = true;
-    document.getElementById("btn_checkout_submit").style.background = "#6c757d";
-
-    // Same reset for Return...
-    document.getElementById("return_status_text").innerText = "❌ NOT VERIFIED";
-    document.getElementById("return_status_text").style.color = "red";
-    document.getElementById("btn_return_verify").classList.remove("hidden");
-    document.getElementById("btn_return_submit").disabled = true;
-    document.getElementById("btn_return_submit").style.background = "#6c757d";
-
     toggleInvMode('history');
 }
 // --- APP FEATURES ---
