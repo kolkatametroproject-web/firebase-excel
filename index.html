@@ -52,6 +52,7 @@ button.danger { background: #dc3545; border-color: #bd2130; }
 button.success { background: #28a745; border-color: #1e7e34; }
 button.warning { background: #ffc107; color: black; border-color: #d39e00; }
 button.info { background: #17a2b8; border-color: #117a8b; color: white; }
+button.secondary { background: #6c757d; border-color: #545b62; color: white; }
 
 /* INPUTS */
 input, select, textarea {
@@ -272,6 +273,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <button onclick="toggleInvMode('add')" class="success">➕ Add Stock</button>
         <button onclick="toggleInvMode('checkout')" class="warning">📤 Checkout</button>
         <button onclick="toggleInvMode('return')" class="info">📥 Return Item</button>
+        <button onclick="toggleInvMode('history')" class="secondary">📜 History</button>
     </div>
 
     <div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
@@ -346,6 +348,27 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
 
         <div style="margin-top:20px; text-align:right;">
              <button onclick="initTransactionAuth('RETURN')" style="background:#17a2b8; padding:12px 20px; font-size:14px;">🛡️ Admin Biometric Approve & Return</button>
+        </div>
+    </div>
+
+    <div id="inv-history" class="panel hidden">
+        <h3>📜 Inventory Transaction Log (Check-In / Check-Out)</h3>
+        <div style="max-height:400px; overflow-y:scroll;">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="position:sticky; top:0; background:#e9ecef;">Date & Time</th>
+                        <th style="position:sticky; top:0; background:#e9ecef;">Action</th>
+                        <th style="position:sticky; top:0; background:#e9ecef;">Item</th>
+                        <th style="position:sticky; top:0; background:#e9ecef;">Qty</th>
+                        <th style="position:sticky; top:0; background:#e9ecef;">User (Receiver/Giver)</th>
+                        <th style="position:sticky; top:0; background:#e9ecef;">Admin (Biometric Auth)</th>
+                    </tr>
+                </thead>
+                <tbody id="invHistoryBody">
+                    <tr><td colspan="6" style="text-align:center;">Loading records...</td></tr>
+                </tbody>
+            </table>
         </div>
     </div>
 
@@ -480,7 +503,7 @@ let idleTimer;
 let regSamples = []; 
 let modelsLoaded = false; 
 let isTransactionAuth = false; 
-let currentTransactionType = ""; // 'CHECKOUT' or 'RETURN'
+let currentTransactionType = ""; 
 
 // --- NEW HIGH-PERFORMANCE VARS ---
 let detectionLoop;
@@ -538,9 +561,7 @@ onAuthStateChanged(auth, (user) => {
     const u = snap.val();
     if (u && u.terminated) { alert("ACCOUNT TERMINATED."); signOut(auth); return; }
 
-    // --- FIX FOR UNDEFINED NAME ---
     if(u) currentUser.name = u.name; 
-    // -----------------------------
 
     isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
     failCount = 0;
@@ -849,10 +870,13 @@ window.toggleInvMode = (mode) => {
     document.getElementById("inv-add").classList.add("hidden");
     document.getElementById("inv-checkout").classList.add("hidden");
     document.getElementById("inv-return").classList.add("hidden");
+    document.getElementById("inv-history").classList.add("hidden");
     document.getElementById("inv-list").classList.add("hidden");
     document.getElementById(`inv-${mode}`).classList.remove("hidden");
+    
     if(mode === 'checkout') populateSelect('checkoutSelect');
     if(mode === 'return') populateSelect('returnSelect');
+    if(mode === 'history') loadInventoryHistory();
 };
 
 function populateSelect(id) {
@@ -879,6 +903,49 @@ window.updateMaxQty = () => {
         document.getElementById("checkoutAvail").value = opt.dataset.qty;
     }
 };
+
+// --- NEW HISTORY LOADING LOGIC ---
+function loadInventoryHistory() {
+    const tbody = document.getElementById("invHistoryBody");
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center'>Loading logs...</td></tr>";
+
+    // Fetch logs (limit to last 100 for performance)
+    const q = query(ref(db, "logs"), limitToLast(100));
+    
+    onValue(q, (snap) => {
+        const logs = [];
+        snap.forEach(c => logs.push(c.val()));
+        logs.reverse(); // Newest first
+
+        // Filter only CHECKOUT and RETURN
+        const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN');
+
+        if(invLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center'>No inventory history found.</td></tr>";
+            return;
+        }
+
+        tbody.innerHTML = "";
+        invLogs.forEach(l => {
+            let badge = l.type === 'CHECKOUT' 
+                ? `<span style="background:#b38600; color:white; padding:2px 6px; border-radius:3px; font-size:11px;">📤 OUT</span>` 
+                : `<span style="background:#17a2b8; color:white; padding:2px 6px; border-radius:3px; font-size:11px;">📥 IN</span>`;
+
+            tbody.innerHTML += `
+            <tr>
+                <td>${formatTime(l.time)}</td>
+                <td style="text-align:center;">${badge}</td>
+                <td><b>${l.item}</b></td>
+                <td>${l.qty}</td>
+                <td>${l.takenBy}</td>
+                <td>
+                    ${l.approvedBy} <br>
+                    <small style="color:green">✔ Verified</small>
+                </td>
+            </tr>`;
+        });
+    });
+}
 
 window.initTransactionAuth = (type) => {
     currentTransactionType = type;
@@ -948,7 +1015,7 @@ async function processTransaction(adminName) {
     stopCamera();
     clearSignature(canvasId);
     document.getElementById(isCheckout ? "checkoutQty" : "returnQty").value = "";
-    toggleInvMode('list');
+    toggleInvMode('history'); // Automatically go to history after transaction
 }
 
 // --- APP FEATURES ---
