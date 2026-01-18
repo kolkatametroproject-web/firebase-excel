@@ -903,30 +903,34 @@ function watchPresenceLogs(uid) {
 
     onValue(statusRef, (snap) => {
         const s = snap.val();
-        if (!s || s.state === lastState) return;
+        // Prevent duplicate logs if state hasn't changed
+        if (!s || s.state === lastState) return; 
 
         lastState = s.state;
 
+        // Log Login
         if (s.state === 'online') {
             push(ref(db, "logs"), {
                 type: "LOGIN",
-                user: s.email,
-                method: "Presence",
+                user: s.email, // Logs the specific user email
+                uid: uid,      // Separates by Unique ID
+                method: "Biometric/Password",
                 time: serverTimestamp()
             });
         }
 
+        // Log Logout
         if (s.state === 'offline') {
             push(ref(db, "logs"), {
                 type: "LOGOUT",
                 user: s.email,
+                uid: uid,
                 method: "Disconnect",
                 time: serverTimestamp()
             });
         }
     });
 }
-
 // --- NEW HEARTBEAT SYSTEM ---
 function startPresenceSystem(user) {
     const userStatusRef = ref(db, `status/${user.uid}`);
@@ -1410,76 +1414,125 @@ window.filterInvLogs = () => {
         row.style.display = text.includes(input) ? "" : "none";
     });
 };
-window.initTransactionAuth = (type) => {
-    if(!pendingTransactionItem) return alert("Please SCAN an item first.");
+window.initTransactionAuth = async (type) => {
+    // 1. Check if an item was Scanned
+    let itemKey, itemName;
 
+    if (pendingTransactionItem) {
+        itemKey = pendingTransactionItem.key;
+        itemName = pendingTransactionItem.item;
+    } else {
+        // 2. If NOT Scanned, check the Dropdown selection
+        const selectId = type === 'CHECKOUT' ? 'checkoutSelect' : 'returnSelect';
+        const selectElement = document.getElementById(selectId);
+        
+        if (selectElement && selectElement.value) {
+            itemKey = selectElement.value;
+            // Get text but remove the "(Avail: X)" part for display
+            itemName = selectElement.options[selectElement.selectedIndex].dataset.name; 
+            
+            // Manually set the pending item object so processTransaction can use it
+            pendingTransactionItem = {
+                key: itemKey,
+                item: itemName
+            };
+        }
+    }
+
+    if (!pendingTransactionItem) {
+        return alert("Please SCAN a barcode OR SELECT an item from the list first.");
+    }
+
+    // Set Global State for the Admin Scan
     scanMode = 'ADMIN';
     currentTransactionType = type;
-   
-    // Start Admin Biometric Flow
+    
+    // UI: Prepare the Face Modal for Admin
     document.getElementById("faceModal").classList.remove("hidden");
     document.getElementById("modalTitle").innerText = `🛡️ Admin Authorization`;
-    document.getElementById("modalDesc").innerText = "Admin: Scan face to approve 1 Unit.";
+    document.getElementById("modalDesc").innerText = `Admin: Scan face to approve ${type} for: ${pendingTransactionItem.item}`;
     document.getElementById("regProgress").classList.add("hidden");
     document.getElementById("btnCapture").innerText = "📸 Scan Admin Face";
     document.getElementById("btnCapture").disabled = false;
     document.getElementById("btnCapture").onclick = handleFaceScan;
-   
+    
     document.getElementById("videoContainer").classList.remove("hidden");
     document.getElementById("camControls").classList.remove("hidden");
     document.getElementById("otpUI").classList.add("hidden");
-   
+    
+    // Start Camera
     initCamera(true);
 };
-
 async function processTransaction(adminName) {
     const isCheckout = currentTransactionType === 'CHECKOUT';
-   
-    // USE DATA FROM SCAN
-    const itemKey = pendingTransactionItem.key;
-    const itemName = pendingTransactionItem.item;
-    const transQty = 1; // Always 1 unit
-
-    // 1. Update Stock
-    const invRef = ref(db, `inventory/${itemKey}`);
-    const invSnap = await get(invRef);
-    if(!invSnap.exists()) return alert("Item error.");
-   
-    const realStoreQty = parseInt(invSnap.val().qty);
-   
-    if(isCheckout && realStoreQty < 1) {
+    
+    // 1. Validate Data
+    if(!pendingTransactionItem) {
         stopCamera();
-        return alert("❌ Out of Stock!");
+        return alert("Transaction Error: No item selected.");
     }
 
-    const newStoreQty = isCheckout ? (realStoreQty - 1) : (realStoreQty + 1);
-    await update(invRef, { qty: newStoreQty });
+    const itemKey = pendingTransactionItem.key;
+    const itemName = pendingTransactionItem.item;
+    const transQty = 1; // Defaulting to 1 unit per transaction
 
-    // 2. Fetch User Name
+    // 2. Fetch Current Stock Level
+    const invRef = ref(db, `inventory/${itemKey}`);
+    const invSnap = await get(invRef);
+    
+    if(!invSnap.exists()) {
+        stopCamera();
+        return alert("Error: Item no longer exists in database.");
+    }
+    
+    const currentStock = parseInt(invSnap.val().qty) || 0;
+    
+    // 3. Logic Check: Cannot Checkout if Stock is 0
+    if(isCheckout && currentStock < 1) {
+        stopCamera();
+        return alert(`❌ Transaction Failed: "${itemName}" is Out of Stock.`);
+    }
+
+    // 4. Calculate New Quantity
+    const newStock = isCheckout ? (currentStock - 1) : (currentStock + 1);
+
+    // 5. Update Database
+    await update(invRef, { qty: newStock });
+
+    // 6. Get Receiver Name (The logged in user)
     const uSnap = await get(ref(db, `users/${currentUser.uid}`));
-    const realUserName = uSnap.val()?.name || currentUser.email;
+    const receiverName = uSnap.val()?.name || currentUser.email;
 
-    // 3. Log
+    // 7. Create Audit Log
     const logData = {
-        type: currentTransactionType,
+        type: currentTransactionType, // 'CHECKOUT' or 'RETURN'
         item: itemName,
         qty: 1,
-        takenBy: realUserName,
-        approvedBy: adminName,
-        signature: "Admin Authorized (1 Unit)",
+        takenBy: receiverName,      // Who took/returned the item
+        approvedBy: adminName,      // Which Admin scanned their face
+        signature: `Authenticated via Biometric ID`,
+        stockAfter: newStock,       // Helpful for debugging
         time: serverTimestamp()
     };
 
     await push(ref(db, "logs"), logData);
-   
-    alert(`${currentTransactionType} Successful!`);
+    
+    // 8. Success Feedback
+    alert(`✅ Success!\n${isCheckout ? 'Given to' : 'Returned from'}: ${receiverName}\nItem: ${itemName}\nNew Stock: ${newStock}`);
+    
     stopCamera();
-   
-    // Reset UI
+    
+    // 9. Cleanup UI
     document.getElementById("checkout_display").classList.add("hidden");
     document.getElementById("return_display").classList.add("hidden");
+    
+    // Reset selections
+    document.getElementById("checkoutSelect").value = "";
+    document.getElementById("returnSelect").value = "";
+    
     pendingTransactionItem = null;
-   
+    
+    // Go to History tab to show the log
     toggleInvMode('history');
 }
 // --- APP FEATURES ---
