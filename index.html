@@ -756,7 +756,7 @@ window.handleFaceScan = async () => {
             // --- ADMIN TRANSACTION AUTHORIZATION ---
             const allUsersSnap = await get(ref(db, "users"));
             let adminFound = false;
-            let adminName = "";
+            let adminName = "Unknown Admin"; // DEFAULT FALLBACK
 
             allUsersSnap.forEach(userSnap => {
                 const uData = userSnap.val();
@@ -765,12 +765,12 @@ window.handleFaceScan = async () => {
                     if(uData.faceData[0] instanceof Array || Array.isArray(uData.faceData[0])) {
                         for (let sample of uData.faceData) {
                             if(faceapi.euclideanDistance(sample, currentDescriptor) < 0.55) { 
-                                adminFound = true; adminName = uData.name; break; 
+                                adminFound = true; adminName = uData.name || uData.email || "Admin"; break; 
                             }
                         }
                     } else {
                         if(faceapi.euclideanDistance(uData.faceData, currentDescriptor) < 0.55) {
-                             adminFound = true; adminName = uData.name;
+                             adminFound = true; adminName = uData.name || uData.email || "Admin";
                         }
                     }
                 }
@@ -999,16 +999,18 @@ async function processTransaction(adminName) {
     const newQty = isCheckout ? (currentQty - transQty) : (currentQty + transQty);
     await update(ref(db, `inventory/${itemKey}`), { qty: newQty });
 
-    // 2. Log Transaction
-    await push(ref(db, "logs"), {
+    // 2. Log Transaction (ROBUST DATA SAVE)
+    const logData = {
         type: currentTransactionType,
-        item: itemName,
+        item: itemName || "Unknown Item",
         qty: transQty,
-        takenBy: currentUser.name || currentUser.email, // Fallback if name null
-        approvedBy: adminName,
+        takenBy: (currentUser && (currentUser.name || currentUser.displayName || currentUser.email)) || "Unknown User",
+        approvedBy: adminName || "Unknown Admin",
         signature: sigData,
         time: serverTimestamp()
-    });
+    };
+
+    await push(ref(db, "logs"), logData);
     
     // 3. Reset
     alert(`${currentTransactionType} Approved by ${adminName}!`);
