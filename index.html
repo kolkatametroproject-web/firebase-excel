@@ -553,6 +553,7 @@ const db = getDatabase(app);
 
 let currentUser;
 let isAdmin = false;
+let presenceWatcherAttached = false;
 const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project"];
 let stream = null;
 let currentFileBase64 = null;
@@ -833,6 +834,11 @@ onAuthStateChanged(auth, (user) => {
   currentUser = user;
   startPresenceSystem(user);
   setupIdleTimer();
+  if (!presenceWatcherAttached) {
+    watchPresenceLogs(user.uid);
+    presenceWatcherAttached = true;
+}
+
   update(ref(db, `users/${user.uid}`), { email: user.email });
 
   onValue(ref(db, `users/${user.uid}`), (snap) => {
@@ -890,12 +896,55 @@ onAuthStateChanged(auth, (user) => {
     }
   });
 });
+function watchPresenceLogs(uid) {
+    const statusRef = ref(db, `status/${uid}`);
+
+    onValue(statusRef, (snap) => {
+        const s = snap.val();
+        if(!s) return;
+
+        if(s.state === 'online') {
+            push(ref(db, "logs"), {
+                type: "LOGIN",
+                user: s.email,
+                method: "Presence",
+                time: serverTimestamp()
+            });
+        }
+
+        if(s.state === 'offline') {
+            push(ref(db, "logs"), {
+                type: "LOGOUT",
+                user: s.email,
+                method: "Disconnect",
+                time: serverTimestamp()
+            });
+        }
+    });
+}
+
 // --- NEW HEARTBEAT SYSTEM ---
 function startPresenceSystem(user) {
     const userStatusRef = ref(db, `status/${user.uid}`);
-    set(userStatusRef, { state: 'online', last_changed: serverTimestamp(), email: user.email, name: user.displayName || "User" });
-    onDisconnect(userStatusRef).set({ state: 'offline', last_changed: serverTimestamp(), email: user.email });
-    setInterval(() => { if(currentUser) update(userStatusRef, { last_seen: serverTimestamp() }); }, 5000);
+
+    set(userStatusRef, {
+        state: 'online',
+        last_changed: serverTimestamp(),
+        email: user.email,
+        name: user.displayName || "User"
+    });
+
+    onDisconnect(userStatusRef).set({
+        state: 'offline',
+        last_changed: serverTimestamp(),
+        email: user.email
+    });
+
+    setInterval(() => {
+        if(currentUser) {
+            update(userStatusRef, { last_seen: serverTimestamp() });
+        }
+    }, 5000);
 }
 
 function updateRegDots(count) {
@@ -914,11 +963,10 @@ function resetTimer() {
     clearTimeout(idleTimer);
     if(currentUser) {
         idleTimer = setTimeout(() => {
-            const logData = { user: currentUser.email, type: "LOGOUT", method: "Auto-Timeout", time: serverTimestamp() };
-            push(ref(db, "logs"), logData);
-            signOut(auth);
-            alert("Session Timeout.");
-        }, 5 * 60 * 1000);
+    signOut(auth);
+    alert("Session Timeout.");
+}, 5 * 60 * 1000);
+
     }
 }
 
@@ -940,21 +988,12 @@ function showLogin() {
 }
 
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert(e.message));
-
 window.logout = async () => {
     if(currentUser) {
-        const logData = { user: currentUser.email, type: "LOGOUT", method: "Manual Click", time: serverTimestamp() };
-        await push(ref(db, "logs"), logData);
-        signOut(auth);
+        await signOut(auth);
     }
 };
 
-async function recordLogin(method) {
-    if(currentUser) {
-        const logData = { user: currentUser.email, type: "LOGIN", method: method, time: serverTimestamp() };
-        await push(ref(db, "logs"), logData);
-    }
-}
 
 // --- 3. HIGH PERFORMANCE CAMERA LOGIC ---
 
@@ -1118,7 +1157,7 @@ window.handleFaceScan = async () => {
             }
             if(match) {
                 updateStatus("✅ VERIFIED", "#00ff00");
-                await recordLogin("Biometric");
+                
                 enterApp();
             } else {
                 throw new Error("Face Mismatch");
@@ -1167,7 +1206,7 @@ window.verifyOTP = () => {
     get(ref(db, `users/${currentUser.uid}/pin`)).then(async snap => {
         const actualPin = snap.val() || "1234";
         if(input === actualPin) {
-            await recordLogin("PIN Entry");
+            
             enterApp();
         } else {
             alert("Wrong PIN ❌");
