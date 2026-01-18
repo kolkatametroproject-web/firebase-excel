@@ -569,12 +569,13 @@ let currentTransactionType = "";
 // I have removed the duplicate 'let scanMode'.
 // This single variable now handles ALL modes: 'LOGIN', 'RECEIVER', 'ADMIN', 'ADD', 'CHECKOUT', 'RETURN'
 let scanMode = 'LOGIN';
-
+let adminTaskListener = null;
 let receiverVerified = false;
 
 // --- NEW HIGH-PERFORMANCE VARS ---
 let detectionLoop;
 let currentDescriptor = null;
+let adminFaceCache = [];
 let pendingTransactionItem = null; // Stores details of scanned item for Checkout/Return
 // --- NEW BARCODE VARS ---
 let scanner = null;
@@ -998,6 +999,10 @@ function showLogin() {
 
 window.login = () => signInWithEmailAndPassword(auth, email.value, password.value).catch(e => alert(e.message));
 window.logout = async () => {
+    if(presenceInterval) {
+        clearInterval(presenceInterval);
+        presenceInterval = null;
+    }
     if(currentUser) {
         await signOut(auth);
     }
@@ -1071,15 +1076,14 @@ function stopCamera() {
 }
 
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
-  if (!currentDescriptor || !Array.isArray(currentDescriptor)) {
+ window.handleFaceScan = async () => {
+    const btn = document.getElementById("btnCapture");
+    if (!currentDescriptor || !Array.isArray(currentDescriptor)) {
     updateStatus("❌ Face not locked. Hold still.", "orange");
     btn.disabled = false;
     btn.innerText = "📸 Retry Scan";
     return;
 }
-
-window.handleFaceScan = async () => {
-    const btn = document.getElementById("btnCapture");
     if(!currentDescriptor) { updateStatus("❌ No Face Detected.", "red"); return; }
    
     btn.disabled = true;
@@ -1087,77 +1091,25 @@ window.handleFaceScan = async () => {
     updateStatus("Analyzing Biometrics...", "cyan");
 
     try {
-        // --- MODE 1: RECEIVER VERIFICATION ---
-        if(scanMode === 'RECEIVER') {
-            const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
-            const storedData = snap.val();
-           
-            let match = false;
-            // Check match against logged-in user
-            if(storedData) {
-                const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
-                for (let s of samples) {
-                    if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
-                }
-            }
-
-            if(match) {
-                updateStatus("✅ IDENTITY CONFIRMED", "#00ff00");
-                setTimeout(() => {
-                    stopCamera();
-                    receiverVerified = true;
-                    // Update UI based on transaction type
-                    if(currentTransactionType === 'CHECKOUT') {
-                        document.getElementById("checkout_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                        document.getElementById("checkout_status_text").style.color = "green";
-                        document.getElementById("btn_checkout_verify").classList.add("hidden");
-                        // Enable Admin Button
-                        const subBtn = document.getElementById("btn_checkout_submit");
-                        subBtn.disabled = false;
-                        subBtn.style.background = "#b38600";
-                        subBtn.style.cursor = "pointer";
-                        subBtn.style.opacity = "1";
-                    } else {
-                        document.getElementById("return_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                        document.getElementById("return_status_text").style.color = "green";
-                        document.getElementById("btn_return_verify").classList.add("hidden");
-                        // Enable Admin Button
-                        const subBtn = document.getElementById("btn_return_submit");
-                        subBtn.disabled = false;
-                        subBtn.style.background = "#17a2b8";
-                        subBtn.style.cursor = "pointer";
-                        subBtn.style.opacity = "1";
-                    }
-                }, 1000);
-            } else {
-                throw new Error("Face Does Not Match User");
-            }
-        }
-
-        // --- MODE 2: ADMIN AUTHORIZATION ---
         else if(scanMode === 'ADMIN') {
-             const allUsersSnap = await get(ref(db, "users"));
-             let adminFound = false;
-             let adminName = "Unknown";
+            let adminFound = false;
+let adminName = "";
 
-             allUsersSnap.forEach(userSnap => {
-                const uData = userSnap.val();
-                if(uData.faceData && ADMIN_EMAILS.includes(uData.email)) {
-                    const samples = (uData.faceData[0] instanceof Array) ? uData.faceData : [uData.faceData];
-                    for (let s of samples) {
-                        if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
-                            adminFound = true; adminName = uData.name; break;
-                        }
-                    }
-                }
-             });
+for (let admin of adminFaceCache) {
+    for (let s of admin.samples) {
+        if (faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
+            adminFound = true;
+            adminName = admin.name;
+            break;
+        }
+    }
+    if (adminFound) break;
+}
 
-             if(adminFound) {
-                 updateStatus("✅ AUTHORIZED: " + adminName, "#00ff00");
-                 await processTransaction(adminName);
-             } else {
-                 throw new Error("Not an Admin Face");
-             }
+if (!adminFound) throw new Error("Unauthorized Admin Face");
+await processTransaction(adminName);
+
+}
         }
 
         // --- MODE 3: LOGIN ---
@@ -1172,6 +1124,7 @@ window.handleFaceScan = async () => {
                 }
             }
             if(match) {
+                failCount = 0;
                 updateStatus("✅ VERIFIED", "#00ff00");
                 
                 enterApp();
@@ -1181,11 +1134,14 @@ window.handleFaceScan = async () => {
         }
 
     } catch (error) {
-        console.error(error);
-        updateStatus("❌ " + error.message, "red");
-        btn.disabled = false;
-        btn.innerText = "📸 Retry Scan";
-    }
+    console.error(error);
+
+    handleFail();   // 🔥 THIS WAS MISSING
+
+    btn.disabled = false;
+    btn.innerText = "📸 Retry Scan";
+}
+
 };
 
 window.registerNewFace = async () => {
@@ -1202,18 +1158,20 @@ window.registerNewFace = async () => {
         alert("Registration Complete!"); location.reload();
     }
 };
-
 function handleFail() {
     failCount++;
-    if(failCount >= 3) {
-        stopCamera();
+
+    if (failCount >= 3) {
+        if (stream) stopCamera();   // stop camera only
+
         document.getElementById("faceModal").classList.remove("hidden");
         document.getElementById("videoContainer").classList.add("hidden");
         document.getElementById("camControls").classList.add("hidden");
         document.getElementById("otpUI").classList.remove("hidden");
-        updateStatus("⚠️ Camera Disabled. Enter PIN.", "red");
+
+        updateStatus("⚠️ Face verification failed 3 times. Enter PIN.", "red");
     } else {
-        updateStatus(`❌ Failed. Attempts left: ${3 - failCount}`, "orange");
+        updateStatus(`❌ Face mismatch. Attempts left: ${3 - failCount}`, "orange");
     }
 }
 
@@ -1222,7 +1180,7 @@ window.verifyOTP = () => {
     get(ref(db, `users/${currentUser.uid}/pin`)).then(async snap => {
         const actualPin = snap.val() || "1234";
         if(input === actualPin) {
-            
+            failCount = 0;
             enterApp();
         } else {
             alert("Wrong PIN ❌");
@@ -1249,42 +1207,6 @@ window.toggleInvMode = (mode) => {
     document.getElementById(`inv-${mode}`).classList.remove("hidden");
     
     if(mode === 'history') loadInventoryHistory();
-};
-
-// 1. POPULATE CHECKOUT (Show All Items)
-
-// 2. POPULATE RETURN (Show Only Items You Hold)
-function populateReturnSelect() {
-    const sel = document.getElementById("returnSelect");
-    sel.innerHTML = "<option>Loading...</option>";
-    
-    // Fetch inventory directly for Return tab
-    onValue(ref(db, "inventory"), snap => {
-        sel.innerHTML = "<option value=''>Select Item to Return...</option>";
-        snap.forEach(c => {
-            const v = c.val();
-            const opt = document.createElement("option");
-            opt.value = c.key;
-            // Display item name
-            opt.text = `${v.item}`;
-            opt.dataset.name = v.item;
-            sel.appendChild(opt);
-        });
-    }, {onlyOnce:true});
-}
-window.updateMaxQty = () => {
-    const isCheckout = !document.getElementById("inv-checkout").classList.contains("hidden");
-    const selId = isCheckout ? "checkoutSelect" : "returnSelect";
-    const inpId = isCheckout ? "checkoutAvail" : "returnAvail";
-   
-    const sel = document.getElementById(selId);
-    const opt = sel.options[sel.selectedIndex];
-   
-    if(opt && opt.dataset.qty) {
-        document.getElementById(inpId).value = opt.dataset.qty;
-    } else {
-        document.getElementById(inpId).value = "";
-    }
 };
 
 // --- NEW HISTORY LOADING LOGIC (FIXED) ---
@@ -1361,54 +1283,38 @@ window.filterInvLogs = () => {
     });
 };
 window.initTransactionAuth = async (type) => {
-    // 1. Check if an item was Scanned
-    let itemKey, itemName;
 
-    if (pendingTransactionItem) {
-        itemKey = pendingTransactionItem.key;
-        itemName = pendingTransactionItem.item;
-    } else {
-        // 2. If NOT Scanned, check the Dropdown selection
-        const selectId = type === 'CHECKOUT' ? 'checkoutSelect' : 'returnSelect';
-        const selectElement = document.getElementById(selectId);
-        
-        if (selectElement && selectElement.value) {
-            itemKey = selectElement.value;
-            // Get text but remove the "(Avail: X)" part for display
-            itemName = selectElement.options[selectElement.selectedIndex].dataset.name; 
-            
-            // Manually set the pending item object so processTransaction can use it
-            pendingTransactionItem = {
-                key: itemKey,
-                item: itemName
-            };
-        }
-    }
-
+    // STRICT BARCODE-ONLY CHECK
     if (!pendingTransactionItem) {
-        return alert("Please SCAN a barcode OR SELECT an item from the list first.");
+        alert("❌ No item selected.\nPlease scan the barcode first.");
+        return;
     }
 
-    // Set Global State for the Admin Scan
+    // Set global transaction state
     scanMode = 'ADMIN';
     currentTransactionType = type;
-    
-    // UI: Prepare the Face Modal for Admin
+
+    // Prepare Face Modal for Admin Authorization
     document.getElementById("faceModal").classList.remove("hidden");
-    document.getElementById("modalTitle").innerText = `🛡️ Admin Authorization`;
-    document.getElementById("modalDesc").innerText = `Admin: Scan face to approve ${type} for: ${pendingTransactionItem.item}`;
+    document.getElementById("modalTitle").innerText = "🛡️ Admin Authorization";
+    document.getElementById("modalDesc").innerText =
+        `Approve ${type} for item: ${pendingTransactionItem.item}`;
+
     document.getElementById("regProgress").classList.add("hidden");
-    document.getElementById("btnCapture").innerText = "📸 Scan Admin Face";
-    document.getElementById("btnCapture").disabled = false;
-    document.getElementById("btnCapture").onclick = handleFaceScan;
-    
+
+    const btn = document.getElementById("btnCapture");
+    btn.innerText = "📸 Scan Admin Face";
+    btn.disabled = false;
+    btn.onclick = handleFaceScan;
+
     document.getElementById("videoContainer").classList.remove("hidden");
     document.getElementById("camControls").classList.remove("hidden");
     document.getElementById("otpUI").classList.add("hidden");
-    
-    // Start Camera
+
+    // Start camera
     initCamera(true);
 };
+
 async function processTransaction(adminName) {
     const itemKey = pendingTransactionItem.key;
     const isCheckout = currentTransactionType === 'CHECKOUT';
@@ -1598,76 +1504,60 @@ window.loadAdminPanel = async () => {
 
 // 1. SAFE View Function (Handles quotes in names & debugs connection)
 window.viewUserTasks = (uid, rawName) => {
-    console.log("Opening tasks for UID:", uid); // Debug log
-   
-    // safe name decoding
+
+    // Remove old listener if exists
+    if (adminTaskListener) {
+        adminTaskListener();
+        adminTaskListener = null;
+    }
+
     const userName = decodeURIComponent(rawName);
-   
     document.getElementById("modalTaskUserName").innerText = userName;
     document.getElementById("adminTaskModal").classList.remove("hidden");
-   
+
     const tbody = document.getElementById("adminTaskBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Connecting to Database...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='5'>Loading tasks...</td></tr>";
 
-    if(!db) { alert("Database connection lost! Refresh page."); return; }
-
-    // Listen for updates
     const taskRef = ref(db, `assignments/${uid}`);
-    onValue(taskRef, (snap) => {
-        tbody.innerHTML = ""; // Clear loading message
-       
+
+    adminTaskListener = onValue(taskRef, (snap) => {
+        tbody.innerHTML = "";
+
         if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#777; padding:20px;'>📭 No tasks assigned to this user.</td></tr>";
+            tbody.innerHTML =
+                "<tr><td colspan='5' style='text-align:center;'>No tasks assigned.</td></tr>";
             return;
         }
 
         snap.forEach(c => {
             const task = c.val();
-            const key = c.key;
-           
-            // Status styling
-            const isDone = task.status === 'Done';
-            const statusColor = isDone ? '#28a745' : '#ffc107'; // Green or Yellow
-            const statusText = isDone ? '✔ COMPLETED' : '⏳ PENDING';
-            const rowBg = isDone ? '#f0fff4' : '#fff';
-
             tbody.innerHTML += `
-            <tr style="font-size:12px; background:${rowBg};">
-                <td>${task.date || '--'}</td>
-                <td style="font-weight:bold; color:#003366;">${task.desc}</td>
-                <td>${task.by || 'Admin'}</td>
-                <td><span style="color:${statusColor}; font-weight:bold; border:1px solid ${statusColor}; padding:2px 6px; border-radius:4px;">${statusText}</span></td>
-                <td style="text-align:center;">
-                    <button class="danger" onclick="deleteUserTask('${uid}', '${key}')" style="padding:4px 8px; font-size:11px; cursor:pointer;">🗑 Remove</button>
-                </td>
-            </tr>`;
+                <tr>
+                    <td>${task.date || '--'}</td>
+                    <td>${task.desc}</td>
+                    <td>${task.by}</td>
+                    <td>${task.status}</td>
+                    <td>
+                        <button class="danger"
+                            onclick="deleteUserTask('${uid}', '${c.key}')">
+                            Remove
+                        </button>
+                    </td>
+                </tr>`;
         });
-    }, (error) => {
-        console.error(error);
-        tbody.innerHTML = `<tr><td colspan='5' style='color:red; text-align:center;'>Error loading data: ${error.message}</td></tr>`;
     });
 };
 
 // 2. Close Modal
 window.closeTaskModal = () => {
     document.getElementById("adminTaskModal").classList.add("hidden");
-    // Optional: Stop listening to data to save bandwidth (requires off() method if optimized)
-};
 
-// 3. Delete Task
-window.deleteUserTask = (uid, taskKey) => {
-    if(confirm("Permanently delete this task?")) {
-        remove(ref(db, `assignments/${uid}/${taskKey}`))
-            .then(() => console.log("Task deleted"))
-            .catch(err => alert("Error: " + err.message));
+    if (adminTaskListener) {
+        adminTaskListener(); // detach listener
+        adminTaskListener = null;
     }
 };
-// --- NEW: CLOSE MODAL ---
-window.closeTaskModal = () => {
-    document.getElementById("adminTaskModal").classList.add("hidden");
-};
 
-// --- NEW: DELETE TASK (ADMIN OVERRIDE) ---
 window.deleteUserTask = (uid, taskKey) => {
     if(confirm("Are you sure you want to remove this task?")) {
         remove(ref(db, `assignments/${uid}/${taskKey}`))
