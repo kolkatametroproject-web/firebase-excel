@@ -331,15 +331,23 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
 
     <div id="inv-return" class="panel hidden" style="border: 2px solid #17a2b8;">
         <h3 style="color:#17a2b8;">📥 Return Product to Store</h3>
-        <p>User returning the product must sign below. An <b>Admin</b> must authorize via Biometric Scan.</p>
+        <p>You can only return items you have checked out.</p>
         
         <label>Select Product Returning:</label>
-        <select id="returnSelect">
+        <select id="returnSelect" onchange="updateMaxQty()">
             <option>Loading...</option>
         </select>
 
-        <label>Quantity Returning:</label>
-        <input id="returnQty" type="number" placeholder="Enter Qty">
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px;">
+            <div>
+                <label>You hold:</label>
+                <input id="returnAvail" disabled style="background:#e9ecef;">
+            </div>
+            <div>
+                <label>Quantity Returning:</label>
+                <input id="returnQty" type="number" placeholder="Enter Qty">
+            </div>
+        </div>
 
         <label style="margin-top:10px; display:block;">Returner's Signature (Draw Below):</label>
         <canvas id="sigCanvasReturn" class="sig-canvas" width="400" height="150"></canvas>
@@ -874,13 +882,14 @@ window.toggleInvMode = (mode) => {
     document.getElementById("inv-list").classList.add("hidden");
     document.getElementById(`inv-${mode}`).classList.remove("hidden");
     
-    if(mode === 'checkout') populateSelect('checkoutSelect');
-    if(mode === 'return') populateSelect('returnSelect');
+    if(mode === 'checkout') populateCheckoutSelect();
+    if(mode === 'return') populateReturnSelect();
     if(mode === 'history') loadInventoryHistory();
 };
 
-function populateSelect(id) {
-    const sel = document.getElementById(id);
+// 1. POPULATE CHECKOUT (Show All Items)
+function populateCheckoutSelect() {
+    const sel = document.getElementById("checkoutSelect");
     sel.innerHTML = "<option value=''>Loading...</option>";
     onValue(ref(db, "inventory"), snap => {
         sel.innerHTML = "<option value=''>Select Item...</option>";
@@ -896,11 +905,77 @@ function populateSelect(id) {
     }, { onlyOnce: true });
 }
 
+// 2. POPULATE RETURN (Show Only Items You Hold)
+async function populateReturnSelect() {
+    const sel = document.getElementById("returnSelect");
+    sel.innerHTML = "<option value=''>Calculating your holdings...</option>";
+
+    try {
+        // A. Get current Inventory (for keys)
+        const invSnap = await get(ref(db, "inventory"));
+        const inventoryMap = {}; // Maps ItemName -> { key, exists }
+        invSnap.forEach(c => {
+            const val = c.val();
+            inventoryMap[val.item] = { key: c.key, exists: true };
+        });
+
+        // B. Get User Logs
+        const logsSnap = await get(query(ref(db, "logs")));
+        const myHoldings = {}; // ItemName -> NetQuantity
+
+        logsSnap.forEach(c => {
+            const l = c.val();
+            // Check if this log belongs to current user
+            // We check both Name (preferred) and Email (fallback)
+            const isMe = (l.takenBy === currentUser.name) || (l.takenBy === currentUser.email);
+            
+            if (isMe) {
+                if(l.type === 'CHECKOUT') {
+                    myHoldings[l.item] = (myHoldings[l.item] || 0) + parseInt(l.qty);
+                } else if (l.type === 'RETURN') {
+                    myHoldings[l.item] = (myHoldings[l.item] || 0) - parseInt(l.qty);
+                }
+            }
+        });
+
+        // C. Render
+        sel.innerHTML = "<option value=''>Select Item...</option>";
+        let foundAny = false;
+
+        for (const [itemName, netQty] of Object.entries(myHoldings)) {
+            if (netQty > 0 && inventoryMap[itemName]) {
+                foundAny = true;
+                const opt = document.createElement("option");
+                opt.value = inventoryMap[itemName].key; // Use inventory key for update
+                opt.text = `${itemName} (You have: ${netQty})`;
+                opt.dataset.qty = netQty; // Max returnable
+                opt.dataset.name = itemName;
+                sel.appendChild(opt);
+            }
+        }
+
+        if(!foundAny) {
+            sel.innerHTML = "<option value=''>No items to return.</option>";
+        }
+
+    } catch (e) {
+        console.error(e);
+        sel.innerHTML = "<option>Error loading.</option>";
+    }
+}
+
 window.updateMaxQty = () => {
-    const sel = document.getElementById("checkoutSelect");
+    const isCheckout = !document.getElementById("inv-checkout").classList.contains("hidden");
+    const selId = isCheckout ? "checkoutSelect" : "returnSelect";
+    const inpId = isCheckout ? "checkoutAvail" : "returnAvail";
+    
+    const sel = document.getElementById(selId);
     const opt = sel.options[sel.selectedIndex];
+    
     if(opt.dataset.qty) {
-        document.getElementById("checkoutAvail").value = opt.dataset.qty;
+        document.getElementById(inpId).value = opt.dataset.qty;
+    } else {
+        document.getElementById(inpId).value = "";
     }
 };
 
@@ -958,8 +1033,9 @@ window.initTransactionAuth = (type) => {
     if(!sel.value) return alert("Select an item.");
     if(!qtyVal || qtyVal <= 0) return alert("Enter valid quantity.");
     
-    if(isCheckout && parseInt(qtyVal) > parseInt(sel.options[sel.selectedIndex].dataset.qty)) {
-        return alert("Not enough stock.");
+    // Validate Max Quantity
+    if(parseInt(qtyVal) > parseInt(sel.options[sel.selectedIndex].dataset.qty)) {
+        return alert(isCheckout ? "Not enough stock." : "You cannot return more than you have.");
     }
     
     // Check Signature
@@ -990,29 +1066,39 @@ async function processTransaction(adminName) {
     const sel = document.getElementById(isCheckout ? "checkoutSelect" : "returnSelect");
     const itemKey = sel.value;
     const itemName = sel.options[sel.selectedIndex].dataset.name;
-    const currentQty = parseInt(sel.options[sel.selectedIndex].dataset.qty);
+    const currentQty = parseInt(sel.options[sel.selectedIndex].dataset.qty); // This is User Held Qty for Return
     const transQty = parseInt(document.getElementById(isCheckout ? "checkoutQty" : "returnQty").value);
     const canvasId = isCheckout ? "sigCanvas" : "sigCanvasReturn";
     const sigData = document.getElementById(canvasId).toDataURL();
 
-    // 1. Update Inventory
-    const newQty = isCheckout ? (currentQty - transQty) : (currentQty + transQty);
-    await update(ref(db, `inventory/${itemKey}`), { qty: newQty });
+    // 1. Get REAL database stock for update (Critical for Return)
+    // We cannot trust the dataset.qty for returns because that's user holding, not store stock.
+    const invRef = ref(db, `inventory/${itemKey}`);
+    const invSnap = await get(invRef);
+    if(!invSnap.exists()) return alert("Item error. Contact admin.");
+    const realStoreQty = parseInt(invSnap.val().qty);
 
-    // 2. Log Transaction (ROBUST DATA SAVE)
+    const newStoreQty = isCheckout ? (realStoreQty - transQty) : (realStoreQty + transQty);
+    await update(invRef, { qty: newStoreQty });
+
+    // 2. Fetch User Name Robustly
+    const uSnap = await get(ref(db, `users/${currentUser.uid}`));
+    const realUserName = uSnap.val()?.name || currentUser.email;
+
+    // 3. Log Transaction
     const logData = {
         type: currentTransactionType,
         item: itemName || "Unknown Item",
         qty: transQty,
-        takenBy: (currentUser && (currentUser.name || currentUser.displayName || currentUser.email)) || "Unknown User",
-        approvedBy: adminName || "Unknown Admin",
+        takenBy: realUserName,
+        approvedBy: adminName,
         signature: sigData,
         time: serverTimestamp()
     };
 
     await push(ref(db, "logs"), logData);
     
-    // 3. Reset
+    // 4. Reset
     alert(`${currentTransactionType} Approved by ${adminName}!`);
     stopCamera();
     clearSignature(canvasId);
