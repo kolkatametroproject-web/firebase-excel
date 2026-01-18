@@ -7,8 +7,10 @@
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
+<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
 <style>
-/* --- OFFICIAL METRO THEME --- */
+/* --- OFFICIAL METRO THEME (PRESERVED) --- */
 :root {
   --metro-blue: #003366;
   --metro-gold: #b38600;
@@ -87,7 +89,7 @@ section { padding: 20px; max-width: 1100px; margin: 0 auto; }
 .nav-btn { background: #e9ecef; color: #495057; border: 1px solid #dee2e6; white-space: nowrap; }
 .nav-btn.active { background: var(--metro-blue); color: white; border-color: var(--metro-blue); }
 
-/* TABLES */
+/* TABLES (UPDATED FOR GOVT STYLE) */
 table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
 th, td { border: 1px solid #dee2e6; padding: 10px; text-align: left; }
 th { background: #e9ecef; color: #212529; font-weight: bold; text-transform: uppercase; font-size: 12px; }
@@ -154,6 +156,8 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 /* SIGNATURE CANVAS */
 canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crosshair; touch-action: none; border-radius: 4px; display:block; }
 
+/* NEW: BARCODE MODAL STYLES */
+#reader { width: 300px; background:white; padding:10px; border-radius:4px; }
 </style>
 </head>
 
@@ -219,6 +223,23 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
   </div>
 </div>
 
+<div id="barcodeModal" class="modal-overlay hidden">
+    <div class="panel" style="width:340px; text-align:center; background:#000; border:2px solid #b38600;">
+        <h3 style="color:white; margin-bottom:10px;">Scan Barcode</h3>
+        <div id="reader"></div>
+        <button class="danger" onclick="closeBarcodeScanner()" style="margin-top:15px; width:100%;">Cancel / Close</button>
+    </div>
+</div>
+
+<div id="sigModal" class="modal-overlay hidden" onclick="closeSigModal()">
+    <div class="panel" style="text-align:center; min-width:300px;" onclick="event.stopPropagation()">
+        <h3>Digital Signature Verification</h3>
+        <img id="modalSigImage" src="" style="border:1px solid #000; background:white; max-width:100%; margin:10px 0;">
+        <br>
+        <button onclick="closeSigModal()">Close</button>
+    </div>
+</div>
+
 <section id="appScreen" class="hidden">
   
   <div class="nav-bar">
@@ -273,13 +294,20 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <button onclick="toggleInvMode('add')" class="success">➕ Add Stock</button>
         <button onclick="toggleInvMode('checkout')" class="warning">📤 Checkout</button>
         <button onclick="toggleInvMode('return')" class="info">📥 Return Item</button>
-        <button onclick="toggleInvMode('history')" class="secondary">📜 History</button>
+        <button onclick="toggleInvMode('history')" class="secondary">📜 Audit Trail</button>
     </div>
 
     <div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
         <h3 style="color:#003366;">Add Inventory Details</h3>
+        <div style="display:grid; grid-template-columns: 2fr 1fr; gap:10px; margin-bottom:10px;">
+             <div style="display:flex; gap:5px;">
+                 <input id="invBarcode" placeholder="Barcode (Scan or Type)">
+                 <button onclick="openBarcodeScanner('ADD')" class="info" style="width:60px; padding:0;"><i class="fas fa-qrcode"></i></button>
+             </div>
+             <input id="invName" placeholder="Product Name">
+        </div>
+        
         <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; margin-bottom:10px;">
-            <input id="invName" placeholder="Product Name">
             <input id="invQty" type="number" placeholder="Quantity">
             <select id="invCondition">
                 <option value="" disabled selected>Select Condition</option>
@@ -288,25 +316,28 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
                 <option value="Fair">Fair</option>
                 <option value="Damaged">Damaged</option>
             </select>
+             <button onclick="addInventory()" class="success">Save</button>
         </div>
-        <div style="display:grid; grid-template-columns: 1fr 2fr 100px; gap:10px;">
+        <div style="display:grid; grid-template-columns: 1fr 2fr; gap:10px;">
             <select id="invSourceType" onchange="updateSourcePlaceholder()">
                 <option value="Online">Online</option>
                 <option value="Offline">Offline</option>
             </select>
             <input id="invSourceName" placeholder="Name of Site">
-            <button onclick="addInventory()" class="success">Save</button>
         </div>
     </div>
 
     <div id="inv-checkout" class="panel hidden" style="border: 2px solid #b38600;">
         <h3 style="color:#b38600;">📤 Checkout / Issue Product</h3>
-        <p>User taking the product must sign below. An <b>Admin</b> must authorize via Biometric Scan.</p>
+        <p>User taking the product must sign below. Admin authorizes.</p>
         
-        <label>Select Product (Currently in Store):</label>
-        <select id="checkoutSelect" onchange="updateMaxQty()">
-            <option>Loading...</option>
-        </select>
+        <label>Select Product (Scan or Pick):</label>
+        <div style="display:flex; gap:10px; margin-bottom:10px;">
+            <button onclick="openBarcodeScanner('CHECKOUT')" class="warning" style="width:100px;"><i class="fas fa-qrcode"></i> Scan</button>
+            <select id="checkoutSelect" onchange="updateMaxQty()">
+                <option>Loading...</option>
+            </select>
+        </div>
 
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px;">
             <div>
@@ -333,10 +364,13 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <h3 style="color:#17a2b8;">📥 Return Product to Store</h3>
         <p>You can only return items you have checked out.</p>
         
-        <label>Select Product Returning:</label>
-        <select id="returnSelect" onchange="updateMaxQty()">
-            <option>Loading...</option>
-        </select>
+        <label>Select Product (Scan or Pick):</label>
+        <div style="display:flex; gap:10px; margin-bottom:10px;">
+             <button onclick="openBarcodeScanner('RETURN')" class="info" style="width:100px;"><i class="fas fa-qrcode"></i> Scan</button>
+             <select id="returnSelect" onchange="updateMaxQty()">
+                <option>Loading...</option>
+            </select>
+        </div>
 
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px;">
             <div>
@@ -360,21 +394,26 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     </div>
 
     <div id="inv-history" class="panel hidden">
-        <h3>📜 Inventory Transaction Log (Check-In / Check-Out)</h3>
-        <div style="max-height:400px; overflow-y:scroll;">
-            <table>
-                <thead>
-                    <tr>
-                        <th style="position:sticky; top:0; background:#e9ecef;">Date & Time</th>
-                        <th style="position:sticky; top:0; background:#e9ecef;">Action</th>
-                        <th style="position:sticky; top:0; background:#e9ecef;">Item</th>
-                        <th style="position:sticky; top:0; background:#e9ecef;">Qty</th>
-                        <th style="position:sticky; top:0; background:#e9ecef;">User (Receiver/Giver)</th>
-                        <th style="position:sticky; top:0; background:#e9ecef;">Admin (Biometric Auth)</th>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h3>📜 Stock Ledger (Audit Trail)</h3>
+            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search Item, Barcode or User..." style="width:250px; padding:8px; border:1px solid #aaa;">
+        </div>
+        
+        <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
+            <table style="margin-top:0;">
+                <thead style="position:sticky; top:0; z-index:100;">
+                    <tr style="background:#003366; color:white;">
+                        <th>Txn ID</th>
+                        <th>Date & Time</th>
+                        <th>Type</th>
+                        <th>Item Details</th>
+                        <th>User (Receiver)</th>
+                        <th>Authorized By</th>
+                        <th>Signature</th>
                     </tr>
                 </thead>
-                <tbody id="invHistoryBody">
-                    <tr><td colspan="6" style="text-align:center;">Loading records...</td></tr>
+                <tbody id="invHistoryBody" style="background:white;">
+                    <tr><td colspan="7" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -385,11 +424,11 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <table>
             <thead>
                 <tr>
+                    <th>Barcode</th>
                     <th>Product</th>
                     <th>Qty</th>
                     <th>Condition</th>
                     <th>Source</th>
-                    <th>Details</th>
                     <th>User</th>
                     <th>Action</th>
                 </tr>
@@ -437,48 +476,35 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <textarea id="taskDesc" rows="1" placeholder="Enter Task Details..."></textarea>
         <button onclick="assignTaskMulti()" style="width:100%; margin-top:5px;">Assign to Selected Users</button>
       </div>
-      <h4 style="background:#eee; padding:5px; margin-top:25px;">3. Master Assignment Tracker</h4>
-      <div style="max-height:300px; overflow-y:scroll; border:1px solid #ced4da; background:#fff;">
-          <table style="margin-top:0;">
-              <thead>
-                  <tr>
-                      <th style="position:sticky; top:0; background:#e9ecef;">Assigned To</th>
-                      <th style="position:sticky; top:0; background:#e9ecef;">Task Description</th>
-                      <th style="position:sticky; top:0; background:#e9ecef; text-align:center;">Status</th>
-                      <th style="position:sticky; top:0; background:#e9ecef;">Action</th>
-                  </tr>
-              </thead>
-              <tbody id="adminTaskBody">
-                  <tr><td colspan="4" style="text-align:center">Loading tasks...</td></tr>
-              </tbody>
-          </table>
-      </div>
     </div>
   </div>
 
   <div id="tab-sysLogs" class="hidden">
     <div class="panel">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h3>📜 System Activity Log (Last 60 Events)</h3>
-        <button onclick="loadSysLogs()" class="primary">🔄 Refresh Logs</button>
-      </div>
-      
-      <div style="height:400px; overflow-y:scroll; border:1px solid #ccc; background:#fff;">
-        <table style="margin-top:0;">
-          <thead>
-            <tr>
-              <th style="position:sticky; top:0; background:#e9ecef; width:150px;">Time</th>
-              <th style="position:sticky; top:0; background:#e9ecef;">User</th>
-              <th style="position:sticky; top:0; background:#e9ecef;">Event</th>
-              <th style="position:sticky; top:0; background:#e9ecef;">Method</th>
-              <th style="position:sticky; top:0; background:#e9ecef; width:80px;">Action</th>
-            </tr>
-          </thead>
-          <tbody id="fullLogBody">
-             <tr><td colspan="5" style="text-align:center;">Loading...</td></tr>
-          </tbody>
-        </table>
-      </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #ddd; padding-bottom:10px; margin-bottom:15px;">
+            <h3 style="margin:0;">🖥️ System Master Logs</h3>
+            <div style="display:flex; gap:10px;">
+                <input type="text" id="sysLogSearch" onkeyup="filterSysLogs()" placeholder="🔍 Filter Logs..." style="padding:6px;">
+                <button onclick="loadSysLogs()" class="primary">🔄 Live Sync</button>
+            </div>
+        </div>
+        
+        <div style="height:500px; overflow-y:scroll; border:1px solid #ccc; background:#fafafa; font-family:'Consolas', monospace;">
+            <table style="width:100%; border-collapse:collapse;">
+                <thead style="position:sticky; top:0; background:#e9ecef;">
+                    <tr>
+                        <th style="width:140px;">Timestamp</th>
+                        <th style="width:80px;">Level</th>
+                        <th>Event Type</th>
+                        <th>User</th>
+                        <th>Details / Payload</th>
+                    </tr>
+                </thead>
+                <tbody id="fullLogBody">
+                     <tr><td colspan="5" style="text-align:center;">Initializing Log Stream...</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
   </div>
 
@@ -517,6 +543,10 @@ let currentTransactionType = "";
 let detectionLoop;
 let currentDescriptor = null;
 
+// --- NEW BARCODE VARS ---
+let scanner = null;
+let scanMode = ""; // 'ADD', 'CHECKOUT', 'RETURN'
+
 // --- SIGNATURE PAD LOGIC ---
 function setupCanvas(id) {
     const canvas = document.getElementById(id);
@@ -541,6 +571,69 @@ window.clearSignature = (id) => {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height); 
 }
+
+// --- NEW HELPER: Signature Modal ---
+window.viewSignature = (sigData) => {
+    document.getElementById("modalSigImage").src = sigData;
+    document.getElementById("sigModal").classList.remove("hidden");
+};
+window.closeSigModal = () => document.getElementById("sigModal").classList.add("hidden");
+
+// --- NEW BARCODE LOGIC ---
+window.openBarcodeScanner = (mode) => {
+    scanMode = mode;
+    document.getElementById("barcodeModal").classList.remove("hidden");
+    
+    // START SCANNER
+    if(!scanner) {
+        scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
+        scanner.render(onScanSuccess, onScanFailure);
+    }
+}
+
+window.closeBarcodeScanner = () => {
+    document.getElementById("barcodeModal").classList.add("hidden");
+    if(scanner) {
+        scanner.clear();
+        scanner = null;
+    }
+}
+
+function onScanSuccess(decodedText) {
+    // STOP SCANNER
+    closeBarcodeScanner();
+    alert("Scanned: " + decodedText);
+
+    if(scanMode === 'ADD') {
+        document.getElementById("invBarcode").value = decodedText;
+    } 
+    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+        const selId = scanMode === 'CHECKOUT' ? 'checkoutSelect' : 'returnSelect';
+        const sel = document.getElementById(selId);
+        
+        let found = false;
+        // FIND ITEM IN SELECT OPTIONS
+        for (let i = 0; i < sel.options.length; i++) {
+            // Check dataset for barcode
+            if (sel.options[i].dataset.barcode === decodedText) {
+                sel.selectedIndex = i;
+                found = true;
+                break;
+            }
+        }
+        
+        if(found) {
+            window.updateMaxQty(); // Update available qty field
+        } else {
+            alert("❌ Item not found in list (or you don't hold it).");
+        }
+    }
+}
+
+function onScanFailure(error) {
+    // Do nothing, keep scanning
+}
+
 
 // --- 1. LOAD AI MODELS ---
 async function preloadModels() {
@@ -900,6 +993,8 @@ function populateCheckoutSelect() {
             opt.text = `${v.item} (Avail: ${v.qty})`;
             opt.dataset.qty = v.qty;
             opt.dataset.name = v.item;
+            // NEW: STORE BARCODE
+            if(v.barcode) opt.dataset.barcode = v.barcode;
             sel.appendChild(opt);
         });
     }, { onlyOnce: true });
@@ -913,10 +1008,10 @@ async function populateReturnSelect() {
     try {
         // A. Get current Inventory (for keys)
         const invSnap = await get(ref(db, "inventory"));
-        const inventoryMap = {}; // Maps ItemName -> { key, exists }
+        const inventoryMap = {}; // Maps ItemName -> { key, exists, barcode }
         invSnap.forEach(c => {
             const val = c.val();
-            inventoryMap[val.item] = { key: c.key, exists: true };
+            inventoryMap[val.item] = { key: c.key, exists: true, barcode: val.barcode };
         });
 
         // B. Get User Logs
@@ -926,7 +1021,6 @@ async function populateReturnSelect() {
         logsSnap.forEach(c => {
             const l = c.val();
             // Check if this log belongs to current user
-            // We check both Name (preferred) and Email (fallback)
             const isMe = (l.takenBy === currentUser.name) || (l.takenBy === currentUser.email);
             
             if (isMe) {
@@ -950,6 +1044,8 @@ async function populateReturnSelect() {
                 opt.text = `${itemName} (You have: ${netQty})`;
                 opt.dataset.qty = netQty; // Max returnable
                 opt.dataset.name = itemName;
+                // NEW: STORE BARCODE
+                if(inventoryMap[itemName].barcode) opt.dataset.barcode = inventoryMap[itemName].barcode;
                 sel.appendChild(opt);
             }
         }
@@ -972,55 +1068,86 @@ window.updateMaxQty = () => {
     const sel = document.getElementById(selId);
     const opt = sel.options[sel.selectedIndex];
     
-    if(opt.dataset.qty) {
+    if(opt && opt.dataset.qty) {
         document.getElementById(inpId).value = opt.dataset.qty;
     } else {
         document.getElementById(inpId).value = "";
     }
 };
 
-// --- NEW HISTORY LOADING LOGIC ---
-function loadInventoryHistory() {
-    const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center'>Loading logs...</td></tr>";
+// --- NEW HISTORY LOADING LOGIC (FIXED) ---
+function formatTime(ts) {
+    if (!ts) return "N/A";
+    const d = new Date(ts);
+    // Audit Style Date
+    return d.toLocaleDateString('en-GB') + " " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
-    // Fetch logs (limit to last 100 for performance)
-    const q = query(ref(db, "logs"), limitToLast(100));
+window.loadInventoryHistory = () => {
+    const tbody = document.getElementById("invHistoryBody");
+    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
+
+    // FETCH MORE DATA (300) to ensure we find inventory items even if many people logged in
+    const q = query(ref(db, "logs"), limitToLast(300));
     
     onValue(q, (snap) => {
         const logs = [];
-        snap.forEach(c => logs.push(c.val()));
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
         logs.reverse(); // Newest first
 
-        // Filter only CHECKOUT and RETURN
+        // Strict Filter: Only show movement of goods
         const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN');
 
         if(invLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center'>No inventory history found.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded in recent history.</td></tr>";
             return;
         }
 
         tbody.innerHTML = "";
         invLogs.forEach(l => {
-            let badge = l.type === 'CHECKOUT' 
-                ? `<span style="background:#b38600; color:white; padding:2px 6px; border-radius:3px; font-size:11px;">📤 OUT</span>` 
-                : `<span style="background:#17a2b8; color:white; padding:2px 6px; border-radius:3px; font-size:11px;">📥 IN</span>`;
+            const txnId = l.key.substring(l.key.length - 6).toUpperCase(); // Last 6 chars as ID
+            
+            // Badge Styling
+            const isOut = l.type === 'CHECKOUT';
+            const badge = isOut 
+                ? `<span style="background:#b38600; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📤 OUT</span>` 
+                : `<span style="background:#17a2b8; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📥 IN</span>`;
 
-            tbody.innerHTML += `
-            <tr>
+            // Signature Button
+            const sigBtn = l.signature 
+                ? `<button class="info" style="padding:2px 5px; font-size:11px;" onclick="viewSignature('${l.signature}')">View</button>`
+                : `<span style="color:#ccc;">--</span>`;
+
+            const row = `
+            <tr class="inv-log-row">
+                <td style="font-family:monospace; color:#003366; font-weight:bold;">#${txnId}</td>
                 <td>${formatTime(l.time)}</td>
-                <td style="text-align:center;">${badge}</td>
-                <td><b>${l.item}</b></td>
-                <td>${l.qty}</td>
+                <td>${badge}</td>
+                <td>
+                    <span style="font-weight:bold; font-size:13px;">${l.item}</span><br>
+                    <span style="color:#666; font-size:11px;">Qty: ${l.qty}</span>
+                </td>
                 <td>${l.takenBy}</td>
                 <td>
-                    ${l.approvedBy} <br>
-                    <small style="color:green">✔ Verified</small>
+                    <span style="color:green; font-weight:bold;">✔ ${l.approvedBy}</span>
                 </td>
+                <td style="text-align:center;">${sigBtn}</td>
             </tr>`;
+            tbody.innerHTML += row;
         });
+    }, { onlyOnce: true });
+};
+
+// --- NEW SEARCH FUNCTION FOR INVENTORY ---
+window.filterInvLogs = () => {
+    const input = document.getElementById("invSearch").value.toLowerCase();
+    const rows = document.getElementsByClassName("inv-log-row");
+    
+    Array.from(rows).forEach(row => {
+        const text = row.innerText.toLowerCase();
+        row.style.display = text.includes(input) ? "" : "none";
     });
-}
+};
 
 window.initTransactionAuth = (type) => {
     currentTransactionType = type;
@@ -1072,7 +1199,6 @@ async function processTransaction(adminName) {
     const sigData = document.getElementById(canvasId).toDataURL();
 
     // 1. Get REAL database stock for update (Critical for Return)
-    // We cannot trust the dataset.qty for returns because that's user holding, not store stock.
     const invRef = ref(db, `inventory/${itemKey}`);
     const invSnap = await get(invRef);
     if(!invSnap.exists()) return alert("Item error. Contact admin.");
@@ -1171,29 +1297,22 @@ window.submitStationData = () => {
 };
 
 // --- ADMIN LOGIC ---
-function formatTime(ts) {
-    if(!ts) return "N/A";
-    return new Date(ts).toLocaleString();
-}
 
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
-    const taskBody = document.getElementById("adminTaskBody"); 
     
     userList.innerHTML = "Loading...";
     userTable.innerHTML = "<tr><td colspan='4'>Loading Status...</td></tr>";
 
-    const [userSnap, statusSnap, assignSnap] = await Promise.all([
+    const [userSnap, statusSnap] = await Promise.all([
         get(ref(db, "users")),
-        get(ref(db, "status")),
-        get(ref(db, "assignments")) 
+        get(ref(db, "status"))
     ]);
     
     const statusMap = statusSnap.val() || {};
     userTable.innerHTML = "";
     userList.innerHTML = "";
-    taskBody.innerHTML = ""; 
 
     userSnap.forEach(c => {
         const u = c.val();
@@ -1228,49 +1347,14 @@ window.loadAdminPanel = async () => {
             <td>${pinInput}<br>${reUploadBtn} ${resetNameBtn}</td>
         </tr>`;
     });
-
-    if (!assignSnap.exists()) {
-        taskBody.innerHTML = "<tr><td colspan='4' style='text-align:center'>No active assignments found.</td></tr>";
-    } else {
-        assignSnap.forEach(userNode => {
-            const uid = userNode.key;
-            const userName = userSnap.child(uid).val()?.name || "Unknown User";
-
-            userNode.forEach(taskNode => {
-                const t = taskNode.val();
-                const taskId = taskNode.key;
-
-                const statusBadge = t.status === 'Done'
-                    ? `<span style="background:green; color:white; padding:3px 8px; border-radius:10px; font-size:11px;">✔ COMPLETED</span>`
-                    : `<span style="background:#ffc107; color:black; padding:3px 8px; border-radius:10px; font-size:11px;">⏳ PENDING</span>`;
-
-                taskBody.innerHTML += `
-                <tr>
-                    <td><b>${userName}</b></td>
-                    <td>${t.desc}<br><small style="color:#666">${t.date}</small></td>
-                    <td style="text-align:center;">${statusBadge}</td>
-                    <td style="text-align:center;">
-                        <button class="danger" style="padding:2px 6px;" onclick="delTask('${uid}', '${taskId}')">🗑</button>
-                    </td>
-                </tr>`;
-            });
-        });
-    }
 };
 
-window.delTask = (uid, taskId) => {
-    if(confirm("Permanently delete this assignment?")) {
-        remove(ref(db, `assignments/${uid}/${taskId}`))
-            .then(() => loadAdminPanel()) 
-            .catch(e => alert(e.message));
-    }
-};
-
+// --- NEW SYSTEM LOGS LOGIC (AUDIT READY) ---
 window.loadSysLogs = () => {
     const tbody = document.getElementById("fullLogBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Loading data...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'>Syncing System Logs...</td></tr>";
 
-    const q = query(ref(db, "logs"), limitToLast(60));
+    const q = query(ref(db, "logs"), limitToLast(200)); 
 
     onValue(q, (snap) => {
         tbody.innerHTML = "";
@@ -1279,40 +1363,56 @@ window.loadSysLogs = () => {
         logs.reverse();
 
         if(logs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No logs found.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>System Clean. No logs generated.</td></tr>";
             return;
         }
 
         logs.forEach(x => {
-            let color = "black";
-            let bg = "transparent";
-            let icon = "📝";
-
-            if(x.type === "LOGIN") { color = "green"; bg = "#eaffea"; icon = "🟢"; }
-            else if(x.type === "LOGOUT") { color = "red"; bg = "#ffeaea"; icon = "🔴"; }
-            else if(x.type === "CHECKOUT") { color = "#b38600"; bg = "#fff8e1"; icon = "📤"; }
-            else if(x.type === "RETURN") { color = "#17a2b8"; bg = "#e0f7fa"; icon = "📥"; }
-            else if(x.type.includes("Fail")) { color = "orange"; icon = "⚠️"; }
-
-            const delBtn = isAdmin 
-                ? `<button class="danger" style="padding:2px 6px; font-size:11px;" onclick="deleteLogEntry('${x.key}')">🗑️</button>` 
-                : `<span style="color:#ccc; font-size:10px;">🔒</span>`;
-
-            let details = x.method;
+            // Contextual Styling
+            let rowStyle = "border-bottom:1px solid #eee;";
+            let level = `<span style="color:gray; font-weight:bold;">INFO</span>`;
+            
+            if(x.type === "LOGIN") { 
+                level = `<span style="color:green; font-weight:bold;">AUTH</span>`; 
+                rowStyle += "background:#f0fff4;";
+            }
+            if(x.type === "LOGOUT") { 
+                level = `<span style="color:orange; font-weight:bold;">EXIT</span>`; 
+                rowStyle += "background:#fffbf0;";
+            }
+            if(x.type.includes("Fail") || x.type.includes("Error")) { 
+                level = `<span style="color:red; font-weight:bold;">ALERT</span>`; 
+                rowStyle += "background:#fff0f0;";
+            }
             if(x.type === "CHECKOUT" || x.type === "RETURN") {
-                details = `<b>${x.item}</b> (x${x.qty})<br><small>By: ${x.takenBy}<br>Auth: ${x.approvedBy}</small>`;
-                if(x.signature) details += `<br><img src="${x.signature}" style="height:30px; border:1px solid #ccc;">`;
+                level = `<span style="color:#003366; font-weight:bold;">TRANS</span>`;
             }
 
+            // Clean up details
+            let details = x.method || x.item || "System Event";
+            if(x.qty) details += ` (Qty: ${x.qty})`;
+            if(x.approvedBy) details += ` | Auth: ${x.approvedBy}`;
+
             tbody.innerHTML += `
-            <tr style="background:${bg}">
-                <td style="font-size:12px;">${formatTime(x.time)}</td>
-                <td style="font-size:12px; font-weight:bold;">${x.user || x.takenBy}</td>
-                <td style="color:${color}; font-size:12px;">${icon} ${x.type}</td>
-                <td style="font-size:12px;">${details}</td>
-                <td style="text-align:center;">${delBtn}</td>
+            <tr class="sys-log-row" style="${rowStyle}">
+                <td style="font-size:12px; color:#555;">${formatTime(x.time)}</td>
+                <td style="font-size:11px;">${level}</td>
+                <td style="font-weight:bold; font-size:12px;">${x.type}</td>
+                <td style="font-size:12px;">${x.user || x.takenBy}</td>
+                <td style="font-size:12px; font-family:monospace;">${details}</td>
             </tr>`;
         });
+    });
+};
+
+// --- SEARCH FUNCTION FOR SYSTEM LOGS ---
+window.filterSysLogs = () => {
+    const input = document.getElementById("sysLogSearch").value.toLowerCase();
+    const rows = document.getElementsByClassName("sys-log-row");
+    
+    Array.from(rows).forEach(row => {
+        const text = row.innerText.toLowerCase();
+        row.style.display = text.includes(input) ? "" : "none";
     });
 };
 
@@ -1428,12 +1528,13 @@ function loadInventory() {
         b.innerHTML = "";
         snap.forEach(c => {
             const v = c.val();
+            // NEW: SHOW BARCODE COLUMN
             b.innerHTML += `<tr>
+                <td style="font-family:monospace; color:#003366;">${v.barcode || '--'}</td>
                 <td>${v.item}</td>
                 <td>${v.qty}</td>
                 <td>${v.condition || 'N/A'}</td>
                 <td>${v.sourceType || 'N/A'}</td>
-                <td>${v.sourceName || 'N/A'}</td>
                 <td>${v.user}</td>
                 <td>${isAdmin ? `<button class="danger" onclick="delInv('${c.key}')">X</button>`:''}</td>
             </tr>`;
@@ -1447,12 +1548,14 @@ window.updateSourcePlaceholder = () => {
     input.placeholder = type === "Online" ? "Name of Site" : "Name of Store";
 };
 
+// --- UPDATED ADD INVENTORY TO INCLUDE BARCODE ---
 window.addInventory = () => { 
     const item = document.getElementById("invName").value;
     const qty = document.getElementById("invQty").value;
     const cond = document.getElementById("invCondition").value;
     const sType = document.getElementById("invSourceType").value;
     const sName = document.getElementById("invSourceName").value;
+    const barcode = document.getElementById("invBarcode").value; // NEW
 
     if(!item || !qty || !cond || !sName) return alert("Please fill all fields.");
 
@@ -1462,12 +1565,14 @@ window.addInventory = () => {
         condition: cond,
         sourceType: sType,
         sourceName: sName,
-        user: currentUser.email 
+        user: currentUser.email,
+        barcode: barcode // SAVE BARCODE
     }); 
     
     document.getElementById("invName").value = "";
     document.getElementById("invQty").value = "";
     document.getElementById("invSourceName").value = "";
+    document.getElementById("invBarcode").value = "";
     toggleInvMode('list');
 };
 
