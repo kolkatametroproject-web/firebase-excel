@@ -1267,65 +1267,24 @@ function populateCheckoutSelect() {
 }
 
 // 2. POPULATE RETURN (Show Only Items You Hold)
-async function populateReturnSelect() {
+function populateReturnSelect() {
     const sel = document.getElementById("returnSelect");
-    sel.innerHTML = "<option value=''>Calculating your holdings...</option>";
-
-    try {
-        // A. Get current Inventory (for keys)
-        const invSnap = await get(ref(db, "inventory"));
-        const inventoryMap = {}; // Maps ItemName -> { key, exists, barcode }
-        invSnap.forEach(c => {
-            const val = c.val();
-            inventoryMap[val.item] = { key: c.key, exists: true, barcode: val.barcode };
+    sel.innerHTML = "<option>Loading...</option>";
+    
+    // Fetch inventory directly for Return tab
+    onValue(ref(db, "inventory"), snap => {
+        sel.innerHTML = "<option value=''>Select Item to Return...</option>";
+        snap.forEach(c => {
+            const v = c.val();
+            const opt = document.createElement("option");
+            opt.value = c.key;
+            // Display item name
+            opt.text = `${v.item}`;
+            opt.dataset.name = v.item;
+            sel.appendChild(opt);
         });
-
-        // B. Get User Logs
-        const logsSnap = await get(query(ref(db, "logs")));
-        const myHoldings = {}; // ItemName -> NetQuantity
-
-        logsSnap.forEach(c => {
-            const l = c.val();
-            // Check if this log belongs to current user
-            const isMe = (l.takenBy === currentUser.name) || (l.takenBy === currentUser.email);
-           
-            if (isMe) {
-                if(l.type === 'CHECKOUT') {
-                    myHoldings[l.item] = (myHoldings[l.item] || 0) + parseInt(l.qty);
-                } else if (l.type === 'RETURN') {
-                    myHoldings[l.item] = (myHoldings[l.item] || 0) - parseInt(l.qty);
-                }
-            }
-        });
-
-        // C. Render
-        sel.innerHTML = "<option value=''>Select Item...</option>";
-        let foundAny = false;
-
-        for (const [itemName, netQty] of Object.entries(myHoldings)) {
-            if (netQty > 0 && inventoryMap[itemName]) {
-                foundAny = true;
-                const opt = document.createElement("option");
-                opt.value = inventoryMap[itemName].key; // Use inventory key for update
-                opt.text = `${itemName} (You have: ${netQty})`;
-                opt.dataset.qty = netQty; // Max returnable
-                opt.dataset.name = itemName;
-                // NEW: STORE BARCODE
-                if(inventoryMap[itemName].barcode) opt.dataset.barcode = inventoryMap[itemName].barcode;
-                sel.appendChild(opt);
-            }
-        }
-
-        if(!foundAny) {
-            sel.innerHTML = "<option value=''>No items to return.</option>";
-        }
-
-    } catch (e) {
-        console.error(e);
-        sel.innerHTML = "<option>Error loading.</option>";
-    }
+    }, {onlyOnce:true});
 }
-
 window.updateMaxQty = () => {
     const isCheckout = !document.getElementById("inv-checkout").classList.contains("hidden");
     const selId = isCheckout ? "checkoutSelect" : "returnSelect";
@@ -1464,75 +1423,49 @@ window.initTransactionAuth = async (type) => {
     initCamera(true);
 };
 async function processTransaction(adminName) {
+    const itemKey = pendingTransactionItem.key;
     const isCheckout = currentTransactionType === 'CHECKOUT';
     
-    // 1. Validate Data
-    if(!pendingTransactionItem) {
-        stopCamera();
-        return alert("Transaction Error: No item selected.");
-    }
-
-    const itemKey = pendingTransactionItem.key;
-    const itemName = pendingTransactionItem.item;
-    const transQty = 1; // Defaulting to 1 unit per transaction
-
-    // 2. Fetch Current Stock Level
     const invRef = ref(db, `inventory/${itemKey}`);
-    const invSnap = await get(invRef);
+    const snap = await get(invRef);
     
-    if(!invSnap.exists()) {
+    if(!snap.exists()) {
         stopCamera();
-        return alert("Error: Item no longer exists in database.");
+        return alert("Error: Item not found in database.");
     }
     
-    const currentStock = parseInt(invSnap.val().qty) || 0;
+    let currentQty = parseInt(snap.val().qty) || 0;
     
-    // 3. Logic Check: Cannot Checkout if Stock is 0
-    if(isCheckout && currentStock < 1) {
+    // Check if stock is available for Checkout
+    if(isCheckout && currentQty < 1) {
         stopCamera();
-        return alert(`❌ Transaction Failed: "${itemName}" is Out of Stock.`);
+        return alert("❌ Transaction Failed: Out of Stock!");
     }
-
-    // 4. Calculate New Quantity
-    const newStock = isCheckout ? (currentStock - 1) : (currentStock + 1);
-
-    // 5. Update Database
-    await update(invRef, { qty: newStock });
-
-    // 6. Get Receiver Name (The logged in user)
-    const uSnap = await get(ref(db, `users/${currentUser.uid}`));
-    const receiverName = uSnap.val()?.name || currentUser.email;
-
-    // 7. Create Audit Log
-    const logData = {
+    
+    // Calculate new quantity: Checkout (-1), Return (+1)
+    const newQty = isCheckout ? (currentQty - 1) : (currentQty + 1);
+    
+    // Update Database
+    await update(invRef, { qty: newQty });
+    
+    // Log the transaction
+    await push(ref(db, "logs"), {
         type: currentTransactionType, // 'CHECKOUT' or 'RETURN'
-        item: itemName,
+        item: pendingTransactionItem.item,
         qty: 1,
-        takenBy: receiverName,      // Who took/returned the item
-        approvedBy: adminName,      // Which Admin scanned their face
-        signature: `Authenticated via Biometric ID`,
-        stockAfter: newStock,       // Helpful for debugging
+        takenBy: currentUser.email, // The user performing the action
+        approvedBy: adminName,      // The Admin who scanned their face
+        stockAfter: newQty,
         time: serverTimestamp()
-    };
-
-    await push(ref(db, "logs"), logData);
+    });
     
-    // 8. Success Feedback
-    alert(`✅ Success!\n${isCheckout ? 'Given to' : 'Returned from'}: ${receiverName}\nItem: ${itemName}\nNew Stock: ${newStock}`);
+    alert(`✅ Success! \n${isCheckout ? 'Checked Out' : 'Returned'}: ${pendingTransactionItem.item}\nNew Stock: ${newQty}`);
     
+    document.getElementById("faceModal").classList.add("hidden");
     stopCamera();
     
-    // 9. Cleanup UI
-    document.getElementById("checkout_display").classList.add("hidden");
-    document.getElementById("return_display").classList.add("hidden");
-    
-    // Reset selections
-    document.getElementById("checkoutSelect").value = "";
-    document.getElementById("returnSelect").value = "";
-    
+    // Reset selection and go to history
     pendingTransactionItem = null;
-    
-    // Go to History tab to show the log
     toggleInvMode('history');
 }
 // --- APP FEATURES ---
