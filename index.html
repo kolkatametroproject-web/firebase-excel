@@ -313,7 +313,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <button onclick="toggleInvMode('history')" class="secondary">📜 Audit Trail</button>
     </div>
 
-    <<div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
+    <div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
     <h3 style="color:#003366;">Add Inventory (1 Unit)</h3>
     <p style="font-size:12px; color:#666;">Scan barcode. Each addition equals <strong>1 Item</strong>.</p>
    
@@ -579,6 +579,7 @@ let pendingTransactionItem = null; // Stores details of scanned item for Checkou
 // --- NEW BARCODE VARS ---
 let scanner = null;
 let existingItemKey = null; // To track if we are updating existing stock
+let presenceInterval = null;
 
 // --- SIGNATURE PAD LOGIC (UPDATED FOR MOBILE) ---
 // --- ROBUST SIGNATURE LOGIC (PC + MOBILE FIX) ---
@@ -841,7 +842,7 @@ onAuthStateChanged(auth, (user) => {
 
   update(ref(db, `users/${user.uid}`), { email: user.email });
 
-  onValue(ref(db, `users/${user.uid}`), (snap) => {
+  get(ref(db, `users/${user.uid}`)).then((snap) => {
     const u = snap.val();
     if (u && u.terminated) { alert("ACCOUNT TERMINATED."); signOut(auth); return; }
 
@@ -898,12 +899,15 @@ onAuthStateChanged(auth, (user) => {
 });
 function watchPresenceLogs(uid) {
     const statusRef = ref(db, `status/${uid}`);
+    let lastState = null;
 
     onValue(statusRef, (snap) => {
         const s = snap.val();
-        if(!s) return;
+        if (!s || s.state === lastState) return;
 
-        if(s.state === 'online') {
+        lastState = s.state;
+
+        if (s.state === 'online') {
             push(ref(db, "logs"), {
                 type: "LOGIN",
                 user: s.email,
@@ -912,7 +916,7 @@ function watchPresenceLogs(uid) {
             });
         }
 
-        if(s.state === 'offline') {
+        if (s.state === 'offline') {
             push(ref(db, "logs"), {
                 type: "LOGOUT",
                 user: s.email,
@@ -930,8 +934,7 @@ function startPresenceSystem(user) {
     set(userStatusRef, {
         state: 'online',
         last_changed: serverTimestamp(),
-        email: user.email,
-        name: user.displayName || "User"
+        email: user.email
     });
 
     onDisconnect(userStatusRef).set({
@@ -940,11 +943,13 @@ function startPresenceSystem(user) {
         email: user.email
     });
 
-    setInterval(() => {
-        if(currentUser) {
-            update(userStatusRef, { last_seen: serverTimestamp() });
-        }
-    }, 5000);
+    if (!presenceInterval) {
+        presenceInterval = setInterval(() => {
+            if (currentUser) {
+                update(userStatusRef, { last_seen: serverTimestamp() });
+            }
+        }, 5000);
+    }
 }
 
 function updateRegDots(count) {
