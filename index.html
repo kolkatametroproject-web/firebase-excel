@@ -792,26 +792,6 @@ window.checkBarcodeExistence = async (code) => {
         });
     }
 }
-// --- NEW: TRIGGER RECEIVER SCAN ---
-window.startReceiverScan = (type) => {
-    
-    currentTransactionType = type; // 'CHECKOUT' or 'RETURN'
-   
-    document.getElementById("faceModal").classList.remove("hidden");
-    document.getElementById("modalTitle").innerText = "👤 Receiver Verification";
-    document.getElementById("modalDesc").innerText = "Please look at the camera to verify identity.";
-    document.getElementById("regProgress").classList.add("hidden");
-    document.getElementById("btnCapture").innerText = "📸 Verify My Face";
-    document.getElementById("btnCapture").disabled = false;
-    document.getElementById("btnCapture").onclick = handleFaceScan;
-   
-    // UI Cleanup
-    document.getElementById("videoContainer").classList.remove("hidden");
-    document.getElementById("camControls").classList.remove("hidden");
-    document.getElementById("otpUI").classList.add("hidden");
-   
-    initCamera(true);
-};
 // --- 1. LOAD AI MODELS ---
 async function preloadModels() {
     if(modelsLoaded) return;
@@ -1056,10 +1036,21 @@ async function startRealTimeDetection(video, canvas) {
     detectionLoop = setInterval(async () => {
         if (!stream) return;
         const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
-        const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
+        const detection = await faceapi
+  .detectSingleFace(
+      video,
+      new faceapi.TinyFaceDetectorOptions({
+          inputSize: 416,      // 🔧 critical
+          scoreThreshold: 0.4  // 🔧 critical
+      })
+  )
+  .withFaceLandmarks()
+  .withFaceDescriptor();
+
         const ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        if (detection) {
+        if (detection) 
+            console.log("Descriptor length:", detection.descriptor?.length);
             const resizedDetections = faceapi.resizeResults(detection, displaySize);
             const box = resizedDetections.detection.box;
             const drawBox = new faceapi.draw.DrawBox(box, { label: "Face Locked", boxColor: "#00ff00" });
@@ -1092,12 +1083,11 @@ window.handleFaceScan = async () => {
     const btn = document.getElementById("btnCapture");
 
     // Face must be locked
-    if (!currentDescriptor || !Array.isArray(currentDescriptor)) {
-        updateStatus("❌ Face not locked. Hold still.", "orange");
-        btn.disabled = false;
-        btn.innerText = "📸 Retry Scan";
-        return;
-    }
+    if (!currentDescriptor || currentDescriptor.length !== 128) {
+    updateStatus("❌ Face not locked. Hold still.", "orange");
+    return;
+}
+
 
     btn.disabled = true;
     btn.innerText = "Processing...";
@@ -1380,6 +1370,10 @@ async function processTransaction(adminName) {
     // Reset selection and go to history
     pendingTransactionItem = null;
     toggleInvMode('history');
+  scanMode = 'LOGIN';
+currentTransactionType = "";
+isTransactionAuth = false;
+
 }
 // --- APP FEATURES ---
 
