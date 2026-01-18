@@ -51,6 +51,7 @@ button:disabled { background: #6c757d; cursor: not-allowed; border-color: #6c757
 button.danger { background: #dc3545; border-color: #bd2130; }
 button.success { background: #28a745; border-color: #1e7e34; }
 button.warning { background: #ffc107; color: black; border-color: #d39e00; }
+button.info { background: #17a2b8; border-color: #117a8b; color: white; }
 
 /* INPUTS */
 input, select, textarea {
@@ -150,7 +151,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 .badge-offline { background: #6c757d; color: white; padding: 4px 8px; border-radius: 12px; font-size: 10px; font-weight: bold; text-transform: uppercase; }
 
 /* SIGNATURE CANVAS */
-#sigCanvas { border: 2px solid #003366; background: #fff; cursor: crosshair; touch-action: none; border-radius: 4px; }
+canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crosshair; touch-action: none; border-radius: 4px; display:block; }
 
 </style>
 </head>
@@ -215,8 +216,7 @@ tr:nth-child(even) { background-color: #f8f9fa; }
   <div id="camControls" style="display:flex; gap:10px;">
     <button id="btnCapture" onclick="handleFaceScan()" style="background:white; color:black; border:none; padding:10px 20px;">📸 Face Scan</button>
   </div>
-
-  </div>
+</div>
 
 <section id="appScreen" class="hidden">
   
@@ -267,10 +267,11 @@ tr:nth-child(even) { background-color: #f8f9fa; }
 
   <div id="tab-inventory" class="hidden">
     
-    <div style="margin-bottom:15px; display:flex; gap:10px;">
+    <div style="margin-bottom:15px; display:flex; gap:10px; flex-wrap:wrap;">
         <button onclick="toggleInvMode('list')" class="primary">📦 View Stock</button>
         <button onclick="toggleInvMode('add')" class="success">➕ Add Stock</button>
-        <button onclick="toggleInvMode('checkout')" class="warning">📤 Checkout / Issue Item</button>
+        <button onclick="toggleInvMode('checkout')" class="warning">📤 Checkout</button>
+        <button onclick="toggleInvMode('return')" class="info">📥 Return Item</button>
     </div>
 
     <div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
@@ -317,12 +318,34 @@ tr:nth-child(even) { background-color: #f8f9fa; }
         </div>
 
         <label style="margin-top:10px; display:block;">Receiver's Signature (Draw Below):</label>
-        <canvas id="sigCanvas" width="400" height="150"></canvas>
+        <canvas id="sigCanvas" class="sig-canvas" width="400" height="150"></canvas>
         <br>
-        <button onclick="clearSignature()" style="background:#6c757d; font-size:11px; padding:4px 8px;">Clear Signature</button>
+        <button onclick="clearSignature('sigCanvas')" style="background:#6c757d; font-size:11px; padding:4px 8px;">Clear Signature</button>
 
         <div style="margin-top:20px; text-align:right;">
-             <button onclick="initAdminAuth()" style="background:#b38600; padding:12px 20px; font-size:14px;">🛡️ Admin Biometric Approve & Submit</button>
+             <button onclick="initTransactionAuth('CHECKOUT')" style="background:#b38600; padding:12px 20px; font-size:14px;">🛡️ Admin Biometric Approve & Submit</button>
+        </div>
+    </div>
+
+    <div id="inv-return" class="panel hidden" style="border: 2px solid #17a2b8;">
+        <h3 style="color:#17a2b8;">📥 Return Product to Store</h3>
+        <p>User returning the product must sign below. An <b>Admin</b> must authorize via Biometric Scan.</p>
+        
+        <label>Select Product Returning:</label>
+        <select id="returnSelect">
+            <option>Loading...</option>
+        </select>
+
+        <label>Quantity Returning:</label>
+        <input id="returnQty" type="number" placeholder="Enter Qty">
+
+        <label style="margin-top:10px; display:block;">Returner's Signature (Draw Below):</label>
+        <canvas id="sigCanvasReturn" class="sig-canvas" width="400" height="150"></canvas>
+        <br>
+        <button onclick="clearSignature('sigCanvasReturn')" style="background:#6c757d; font-size:11px; padding:4px 8px;">Clear Signature</button>
+
+        <div style="margin-top:20px; text-align:right;">
+             <button onclick="initTransactionAuth('RETURN')" style="background:#17a2b8; padding:12px 20px; font-size:14px;">🛡️ Admin Biometric Approve & Return</button>
         </div>
     </div>
 
@@ -456,28 +479,37 @@ let failCount = 0;
 let idleTimer;
 let regSamples = []; 
 let modelsLoaded = false; 
-let isTransactionAuth = false; // Flag for transaction mode
+let isTransactionAuth = false; 
+let currentTransactionType = ""; // 'CHECKOUT' or 'RETURN'
 
 // --- NEW HIGH-PERFORMANCE VARS ---
 let detectionLoop;
 let currentDescriptor = null;
 
 // --- SIGNATURE PAD LOGIC ---
-const canvas = document.getElementById('sigCanvas');
-const ctx = canvas.getContext('2d');
-let isDrawing = false;
-let lastX = 0; let lastY = 0;
+function setupCanvas(id) {
+    const canvas = document.getElementById(id);
+    const ctx = canvas.getContext('2d');
+    let isDrawing = false;
+    let lastX = 0; let lastY = 0;
 
-canvas.addEventListener('mousedown', (e) => { isDrawing = true; [lastX, lastY] = [e.offsetX, e.offsetY]; });
-canvas.addEventListener('mousemove', (e) => {
-    if (!isDrawing) return;
-    ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(e.offsetX, e.offsetY);
-    ctx.stroke(); [lastX, lastY] = [e.offsetX, e.offsetY];
-});
-canvas.addEventListener('mouseup', () => isDrawing = false);
-canvas.addEventListener('mouseout', () => isDrawing = false);
+    canvas.addEventListener('mousedown', (e) => { isDrawing = true; [lastX, lastY] = [e.offsetX, e.offsetY]; });
+    canvas.addEventListener('mousemove', (e) => {
+        if (!isDrawing) return;
+        ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(e.offsetX, e.offsetY);
+        ctx.stroke(); [lastX, lastY] = [e.offsetX, e.offsetY];
+    });
+    canvas.addEventListener('mouseup', () => isDrawing = false);
+    canvas.addEventListener('mouseout', () => isDrawing = false);
+}
+setupCanvas('sigCanvas');
+setupCanvas('sigCanvasReturn');
 
-window.clearSignature = () => { ctx.clearRect(0, 0, canvas.width, canvas.height); }
+window.clearSignature = (id) => { 
+    const canvas = document.getElementById(id);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height); 
+}
 
 // --- 1. LOAD AI MODELS ---
 async function preloadModels() {
@@ -506,6 +538,10 @@ onAuthStateChanged(auth, (user) => {
     const u = snap.val();
     if (u && u.terminated) { alert("ACCOUNT TERMINATED."); signOut(auth); return; }
 
+    // --- FIX FOR UNDEFINED NAME ---
+    if(u) currentUser.name = u.name; 
+    // -----------------------------
+
     isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
     failCount = 0;
     
@@ -528,7 +564,6 @@ onAuthStateChanged(auth, (user) => {
       setTimeout(loadAdminPanel, 2000); 
     }
 
-    // NORMAL LOGIN BIOMETRICS
     if(!isTransactionAuth) {
         const faceModal = document.getElementById("faceModal");
         faceModal.classList.remove("hidden");
@@ -681,7 +716,8 @@ function stopCamera() {
     if(vid) vid.srcObject = null;
     if(canvas) { const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width, canvas.height); }
     document.getElementById("faceModal").classList.add("hidden"); 
-    isTransactionAuth = false; // Reset transaction flag
+    isTransactionAuth = false; 
+    currentTransactionType = "";
 }
 
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
@@ -697,7 +733,6 @@ window.handleFaceScan = async () => {
     try {
         if(isTransactionAuth) {
             // --- ADMIN TRANSACTION AUTHORIZATION ---
-            // 1. Fetch ALL users to find the admin
             const allUsersSnap = await get(ref(db, "users"));
             let adminFound = false;
             let adminName = "";
@@ -722,7 +757,7 @@ window.handleFaceScan = async () => {
 
             if(adminFound) {
                 updateStatus("✅ ADMIN VERIFIED: " + adminName, "#00ff00");
-                await processCheckout(adminName);
+                await processTransaction(adminName);
             } else {
                 throw new Error("Admin Face Not Recognized");
             }
@@ -754,7 +789,7 @@ window.handleFaceScan = async () => {
         updateStatus("❌ " + error.message, "red");
         btn.disabled = false;
         btn.innerText = "📸 Retry Scan";
-        if(!isTransactionAuth) handleFail(); // Only lockout on login, not transaction
+        if(!isTransactionAuth) handleFail(); 
     }
 };
 
@@ -808,31 +843,31 @@ function enterApp() {
     loadDraft(); loadGallery(); loadInventory(); loadAssignments();
 }
 
-// --- CHECKOUT LOGIC ---
+// --- CHECKOUT & RETURN LOGIC ---
 
 window.toggleInvMode = (mode) => {
     document.getElementById("inv-add").classList.add("hidden");
     document.getElementById("inv-checkout").classList.add("hidden");
+    document.getElementById("inv-return").classList.add("hidden");
     document.getElementById("inv-list").classList.add("hidden");
     document.getElementById(`inv-${mode}`).classList.remove("hidden");
-    if(mode === 'checkout') populateCheckoutList();
+    if(mode === 'checkout') populateSelect('checkoutSelect');
+    if(mode === 'return') populateSelect('returnSelect');
 };
 
-function populateCheckoutList() {
-    const sel = document.getElementById("checkoutSelect");
-    sel.innerHTML = "<option value=''>Select Item...</option>";
+function populateSelect(id) {
+    const sel = document.getElementById(id);
+    sel.innerHTML = "<option value=''>Loading...</option>";
     onValue(ref(db, "inventory"), snap => {
         sel.innerHTML = "<option value=''>Select Item...</option>";
         snap.forEach(c => {
             const v = c.val();
-            if(parseInt(v.qty) > 0) {
-                const opt = document.createElement("option");
-                opt.value = c.key;
-                opt.text = `${v.item} (Avail: ${v.qty})`;
-                opt.dataset.qty = v.qty;
-                opt.dataset.name = v.item;
-                sel.appendChild(opt);
-            }
+            const opt = document.createElement("option");
+            opt.value = c.key;
+            opt.text = `${v.item} (Avail: ${v.qty})`;
+            opt.dataset.qty = v.qty;
+            opt.dataset.name = v.item;
+            sel.appendChild(opt);
         });
     }, { onlyOnce: true });
 }
@@ -845,25 +880,32 @@ window.updateMaxQty = () => {
     }
 };
 
-window.initAdminAuth = () => {
-    const sel = document.getElementById("checkoutSelect");
-    const qty = document.getElementById("checkoutQty").value;
-    const itemKey = sel.value;
+window.initTransactionAuth = (type) => {
+    currentTransactionType = type;
+    const isCheckout = type === 'CHECKOUT';
     
-    if(!itemKey) return alert("Select an item.");
-    if(!qty || qty <= 0) return alert("Enter valid quantity.");
-    if(parseInt(qty) > parseInt(sel.options[sel.selectedIndex].dataset.qty)) return alert("Not enough stock.");
+    const sel = document.getElementById(isCheckout ? "checkoutSelect" : "returnSelect");
+    const qtyVal = document.getElementById(isCheckout ? "checkoutQty" : "returnQty").value;
+    const canvasId = isCheckout ? "sigCanvas" : "sigCanvasReturn";
+    
+    if(!sel.value) return alert("Select an item.");
+    if(!qtyVal || qtyVal <= 0) return alert("Enter valid quantity.");
+    
+    if(isCheckout && parseInt(qtyVal) > parseInt(sel.options[sel.selectedIndex].dataset.qty)) {
+        return alert("Not enough stock.");
+    }
     
     // Check Signature
+    const c = document.getElementById(canvasId);
     const blank = document.createElement('canvas');
-    blank.width = canvas.width; blank.height = canvas.height;
-    if(canvas.toDataURL() === blank.toDataURL()) return alert("Receiver must sign.");
+    blank.width = c.width; blank.height = c.height;
+    if(c.toDataURL() === blank.toDataURL()) return alert("Signature required.");
 
     // Start Biometric Flow
     isTransactionAuth = true;
     document.getElementById("faceModal").classList.remove("hidden");
-    document.getElementById("modalTitle").innerText = "🛡️ Admin Authorization Required";
-    document.getElementById("modalDesc").innerText = "An Admin must scan their face to approve this checkout.";
+    document.getElementById("modalTitle").innerText = `🛡️ Admin Authorization (${type})`;
+    document.getElementById("modalDesc").innerText = "An Admin must scan their face to approve.";
     document.getElementById("regProgress").classList.add("hidden");
     document.getElementById("btnCapture").innerText = "📸 Scan Admin Face";
     document.getElementById("btnCapture").disabled = false;
@@ -876,33 +918,36 @@ window.initAdminAuth = () => {
     initCamera(true);
 };
 
-async function processCheckout(adminName) {
-    const sel = document.getElementById("checkoutSelect");
+async function processTransaction(adminName) {
+    const isCheckout = currentTransactionType === 'CHECKOUT';
+    const sel = document.getElementById(isCheckout ? "checkoutSelect" : "returnSelect");
     const itemKey = sel.value;
     const itemName = sel.options[sel.selectedIndex].dataset.name;
     const currentQty = parseInt(sel.options[sel.selectedIndex].dataset.qty);
-    const takeQty = parseInt(document.getElementById("checkoutQty").value);
-    const sigData = canvas.toDataURL();
+    const transQty = parseInt(document.getElementById(isCheckout ? "checkoutQty" : "returnQty").value);
+    const canvasId = isCheckout ? "sigCanvas" : "sigCanvasReturn";
+    const sigData = document.getElementById(canvasId).toDataURL();
 
-    // 1. Deduct Inventory
-    await update(ref(db, `inventory/${itemKey}`), { qty: currentQty - takeQty });
+    // 1. Update Inventory
+    const newQty = isCheckout ? (currentQty - transQty) : (currentQty + transQty);
+    await update(ref(db, `inventory/${itemKey}`), { qty: newQty });
 
     // 2. Log Transaction
     await push(ref(db, "logs"), {
-        type: "CHECKOUT",
+        type: currentTransactionType,
         item: itemName,
-        qty: takeQty,
-        takenBy: currentUser.name,
+        qty: transQty,
+        takenBy: currentUser.name || currentUser.email, // Fallback if name null
         approvedBy: adminName,
         signature: sigData,
         time: serverTimestamp()
     });
     
-    // 3. Close & Reset
-    alert(`Checkout Approved by ${adminName}!`);
+    // 3. Reset
+    alert(`${currentTransactionType} Approved by ${adminName}!`);
     stopCamera();
-    clearSignature();
-    document.getElementById("checkoutQty").value = "";
+    clearSignature(canvasId);
+    document.getElementById(isCheckout ? "checkoutQty" : "returnQty").value = "";
     toggleInvMode('list');
 }
 
@@ -976,7 +1021,6 @@ function formatTime(ts) {
     return new Date(ts).toLocaleString();
 }
 
-// --- UPDATED ADMIN PANEL LOADER ---
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
@@ -1067,7 +1111,6 @@ window.delTask = (uid, taskId) => {
     }
 };
 
-// --- TAB 5: SYSTEM LOGS LOGIC ---
 window.loadSysLogs = () => {
     const tbody = document.getElementById("fullLogBody");
     tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Loading data...</td></tr>";
@@ -1092,17 +1135,17 @@ window.loadSysLogs = () => {
 
             if(x.type === "LOGIN") { color = "green"; bg = "#eaffea"; icon = "🟢"; }
             else if(x.type === "LOGOUT") { color = "red"; bg = "#ffeaea"; icon = "🔴"; }
-            else if(x.type === "CHECKOUT") { color = "#b38600"; bg = "#fff8e1"; icon = "📤"; } // New Log Type
+            else if(x.type === "CHECKOUT") { color = "#b38600"; bg = "#fff8e1"; icon = "📤"; }
+            else if(x.type === "RETURN") { color = "#17a2b8"; bg = "#e0f7fa"; icon = "📥"; }
             else if(x.type.includes("Fail")) { color = "orange"; icon = "⚠️"; }
 
             const delBtn = isAdmin 
                 ? `<button class="danger" style="padding:2px 6px; font-size:11px;" onclick="deleteLogEntry('${x.key}')">🗑️</button>` 
                 : `<span style="color:#ccc; font-size:10px;">🔒</span>`;
 
-            // CUSTOM DISPLAY FOR CHECKOUT LOGS
             let details = x.method;
-            if(x.type === "CHECKOUT") {
-                details = `<b>${x.item}</b> (x${x.qty})<br><small>Taken by: ${x.takenBy}<br>Auth: ${x.approvedBy}</small>`;
+            if(x.type === "CHECKOUT" || x.type === "RETURN") {
+                details = `<b>${x.item}</b> (x${x.qty})<br><small>By: ${x.takenBy}<br>Auth: ${x.approvedBy}</small>`;
                 if(x.signature) details += `<br><img src="${x.signature}" style="height:30px; border:1px solid #ccc;">`;
             }
 
