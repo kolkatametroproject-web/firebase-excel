@@ -580,43 +580,92 @@ let scanMode = ""; // 'ADD', 'CHECKOUT', 'RETURN'
 let existingItemKey = null; // To track if we are updating existing stock
 
 // --- SIGNATURE PAD LOGIC (UPDATED FOR MOBILE) ---
+// --- ROBUST SIGNATURE LOGIC (PC + MOBILE FIX) ---
 function setupCanvas(id) {
     const canvas = document.getElementById(id);
     const ctx = canvas.getContext('2d');
+    
+    // Set line style for better visibility
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#000';
+
     let isDrawing = false;
-    let lastX = 0; let lastY = 0;
+    let lastX = 0; 
+    let lastY = 0;
 
-    // 1. MOUSE EVENTS (PC)
-    canvas.addEventListener('mousedown', (e) => { isDrawing = true; [lastX, lastY] = [e.offsetX, e.offsetY]; });
-    canvas.addEventListener('mousemove', (e) => {
-        if (!isDrawing) return;
-        ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(e.offsetX, e.offsetY);
-        ctx.stroke(); [lastX, lastY] = [e.offsetX, e.offsetY];
-    });
-    canvas.addEventListener('mouseup', () => isDrawing = false);
-    canvas.addEventListener('mouseout', () => isDrawing = false);
+    // Helper: Calculate exact coordinates considering CSS resizing
+    function getCoords(e) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;   // Adjust for visual shrinking
+        const scaleY = canvas.height / rect.height; // Adjust for visual shrinking
 
-    // 2. TOUCH EVENTS (MOBILE - ADDED FIX)
-    canvas.addEventListener('touchstart', (e) => {
-        e.preventDefault(); // Stop screen scroll
+        let clientX, clientY;
+
+        // Check if it's a touch event or mouse event
+        if (e.touches && e.touches.length > 0) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        }
+
+        return {
+            x: (clientX - rect.left) * scaleX,
+            y: (clientY - rect.top) * scaleY
+        };
+    }
+
+    // --- DRAWING HANDLERS ---
+    
+    function startDraw(e) {
+        // Prevent default browser actions (like scrolling) strictly on the canvas
+        if(e.cancelable) e.preventDefault(); 
+        
         isDrawing = true;
-        const rect = canvas.getBoundingClientRect();
-        lastX = e.touches[0].clientX - rect.left;
-        lastY = e.touches[0].clientY - rect.top;
-    }, { passive: false });
+        const pos = getCoords(e);
+        lastX = pos.x;
+        lastY = pos.y;
+        
+        // Draw a single dot in case it's just a tap
+        ctx.beginPath();
+        ctx.arc(lastX, lastY, 1, 0, Math.PI * 2);
+        ctx.fill();
+    }
 
-    canvas.addEventListener('touchmove', (e) => {
-        e.preventDefault(); // Stop screen scroll
+    function moveDraw(e) {
         if (!isDrawing) return;
-        const rect = canvas.getBoundingClientRect();
-        const x = e.touches[0].clientX - rect.left;
-        const y = e.touches[0].clientY - rect.top;
-        ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(x, y);
-        ctx.stroke();
-        [lastX, lastY] = [x, y];
-    }, { passive: false });
+        if(e.cancelable) e.preventDefault(); // STOP SCROLLING
 
-    canvas.addEventListener('touchend', () => isDrawing = false);
+        const pos = getCoords(e);
+        ctx.beginPath();
+        ctx.moveTo(lastX, lastY);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+        
+        // Update last position
+        lastX = pos.x;
+        lastY = pos.y;
+    }
+
+    function endDraw(e) {
+        if(e.cancelable) e.preventDefault();
+        isDrawing = false;
+    }
+
+    // --- EVENT LISTENERS ---
+
+    // Mouse (PC)
+    canvas.addEventListener('mousedown', startDraw);
+    canvas.addEventListener('mousemove', moveDraw);
+    canvas.addEventListener('mouseup', endDraw);
+    canvas.addEventListener('mouseout', endDraw);
+
+    // Touch (Mobile) - { passive: false } is CRITICAL for preventing scroll
+    canvas.addEventListener('touchstart', startDraw, { passive: false });
+    canvas.addEventListener('touchmove', moveDraw, { passive: false });
+    canvas.addEventListener('touchend', endDraw, { passive: false });
 }
 setupCanvas('sigCanvas');
 setupCanvas('sigCanvasReturn');
