@@ -504,7 +504,34 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
       <div style="margin-top:15px;">
         <textarea id="taskDesc" rows="1" placeholder="Enter Task Details..."></textarea>
         <button onclick="assignTaskMulti()" style="width:100%; margin-top:5px;">Assign to Selected Users</button>
-      </div>
+      </div
+        <div id="adminTaskModal" class="modal-overlay hidden">
+    <div class="panel" style="width:600px; max-width:95%; max-height:80vh; display:flex; flex-direction:column;">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #003366; padding-bottom:10px; margin-bottom:10px;">
+            <h3 style="margin:0; color:#003366;">📋 Task Tracking: <span id="modalTaskUserName">User</span></h3>
+            <button class="danger" onclick="closeTaskModal()" style="padding:5px 10px;">Close X</button>
+        </div>
+        
+        <div style="overflow-y:auto; flex-grow:1;">
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr style="background:#003366; color:white;">
+                            <th>Date</th>
+                            <th>Task Description</th>
+                            <th>Assigned By</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="adminTaskBody">
+                        <tr><td colspan="5" style="text-align:center;">Loading tasks...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
     </div>
   </div>
 
@@ -581,91 +608,66 @@ let existingItemKey = null; // To track if we are updating existing stock
 
 // --- SIGNATURE PAD LOGIC (UPDATED FOR MOBILE) ---
 // --- ROBUST SIGNATURE LOGIC (PC + MOBILE FIX) ---
+// --- FINAL ROBUST SIGNATURE (POINTER EVENTS) ---
 function setupCanvas(id) {
     const canvas = document.getElementById(id);
+    if (!canvas) return; // Safety check
+
     const ctx = canvas.getContext('2d');
-    
-    // Set line style for better visibility
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 3;       // Thicker line for better visibility on mobile
+    ctx.lineCap = 'round';   // Smooth edges
+    ctx.strokeStyle = '#000000';
 
     let isDrawing = false;
-    let lastX = 0; 
-    let lastY = 0;
 
-    // Helper: Calculate exact coordinates considering CSS resizing
-    function getCoords(e) {
+    // 1. FORCE DISABLE SCROLLING ON CANVAS via JS
+    // This effectively tells the browser: "The user cannot scroll when touching this box"
+    canvas.style.touchAction = 'none';
+
+    // Helper to get exact coordinates
+    function getPos(e) {
         const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;   // Adjust for visual shrinking
-        const scaleY = canvas.height / rect.height; // Adjust for visual shrinking
-
-        let clientX, clientY;
-
-        // Check if it's a touch event or mouse event
-        if (e.touches && e.touches.length > 0) {
-            clientX = e.touches[0].clientX;
-            clientY = e.touches[0].clientY;
-        } else {
-            clientX = e.clientX;
-            clientY = e.clientY;
-        }
-
+        // Calculate scaling (vital if CSS shrinks the canvas)
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        
         return {
-            x: (clientX - rect.left) * scaleX,
-            y: (clientY - rect.top) * scaleY
+            x: (e.clientX - rect.left) * scaleX,
+            y: (e.clientY - rect.top) * scaleY
         };
     }
 
-    // --- DRAWING HANDLERS ---
-    
-    function startDraw(e) {
-        // Prevent default browser actions (like scrolling) strictly on the canvas
-        if(e.cancelable) e.preventDefault(); 
-        
+    // --- POINTER EVENTS (Handles Mouse + Touch automatically) ---
+
+    // Start Drawing
+    canvas.addEventListener('pointerdown', (e) => {
         isDrawing = true;
-        const pos = getCoords(e);
-        lastX = pos.x;
-        lastY = pos.y;
-        
-        // Draw a single dot in case it's just a tap
+        canvas.setPointerCapture(e.pointerId); // LOCKS pointer to canvas so you can't scroll away
+        const pos = getPos(e);
         ctx.beginPath();
-        ctx.arc(lastX, lastY, 1, 0, Math.PI * 2);
-        ctx.fill();
-    }
+        ctx.moveTo(pos.x, pos.y);
+        e.preventDefault();
+    });
 
-    function moveDraw(e) {
+    // Draw Line
+    canvas.addEventListener('pointermove', (e) => {
         if (!isDrawing) return;
-        if(e.cancelable) e.preventDefault(); // STOP SCROLLING
-
-        const pos = getCoords(e);
-        ctx.beginPath();
-        ctx.moveTo(lastX, lastY);
+        const pos = getPos(e);
         ctx.lineTo(pos.x, pos.y);
         ctx.stroke();
-        
-        // Update last position
-        lastX = pos.x;
-        lastY = pos.y;
-    }
+        e.preventDefault();
+    });
 
-    function endDraw(e) {
-        if(e.cancelable) e.preventDefault();
+    // Stop Drawing
+    canvas.addEventListener('pointerup', (e) => {
         isDrawing = false;
-    }
+        canvas.releasePointerCapture(e.pointerId);
+    });
 
-    // --- EVENT LISTENERS ---
-
-    // Mouse (PC)
-    canvas.addEventListener('mousedown', startDraw);
-    canvas.addEventListener('mousemove', moveDraw);
-    canvas.addEventListener('mouseup', endDraw);
-    canvas.addEventListener('mouseout', endDraw);
-
-    // Touch (Mobile) - { passive: false } is CRITICAL for preventing scroll
-    canvas.addEventListener('touchstart', startDraw, { passive: false });
-    canvas.addEventListener('touchmove', moveDraw, { passive: false });
-    canvas.addEventListener('touchend', endDraw, { passive: false });
+    // Cancel (e.g. finger slides off screen edge)
+    canvas.addEventListener('pointercancel', () => {
+        isDrawing = false;
+    });
 }
 setupCanvas('sigCanvas');
 setupCanvas('sigCanvasReturn');
@@ -1449,7 +1451,7 @@ window.submitStationData = () => {
 };
 
 // --- ADMIN LOGIC ---
-
+// --- UPDATED ADMIN PANEL (WITH TRACKING BUTTON) ---
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
@@ -1457,7 +1459,7 @@ window.loadAdminPanel = async () => {
     userList.innerHTML = "Loading...";
     userTable.innerHTML = "<tr><td colspan='5'>Loading Status...</td></tr>";
 
-    // FETCH TASKS AND USERS IN PARALLEL
+    // FETCH TASKS AND USERS
     const [userSnap, statusSnap, tasksSnap] = await Promise.all([
         get(ref(db, "users")),
         get(ref(db, "status")),
@@ -1475,8 +1477,10 @@ window.loadAdminPanel = async () => {
         const uid = c.key;
         const displayName = u.name || u.email;
 
+        // 1. Checkbox for assigning new work
         userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
 
+        // 2. Online Status Logic
         let isOnline = false;
         const s = statusMap[uid];
         if(s && s.state === 'online') {
@@ -1484,7 +1488,11 @@ window.loadAdminPanel = async () => {
             if(diff < 20000) isOnline = true; 
         }
         
-        // WORK STATUS CALCULATION
+        const statusBadge = isOnline ? 
+            `<span class="badge-online">● ONLINE</span>` : 
+            `<span class="badge-offline">○ OFFLINE</span>`;
+
+        // 3. WORK PROGRESS LOGIC (UPDATED)
         let pending = 0;
         let done = 0;
         if(allTasks[uid]) {
@@ -1493,13 +1501,10 @@ window.loadAdminPanel = async () => {
             });
         }
         
-        // STATUS UI
-        const statusBadge = isOnline ? 
-            `<span class="badge-online">● ONLINE</span>` : 
-            `<span class="badge-offline">○ OFFLINE</span>`;
-
+        // The "View" Button
         const workBadge = (pending + done > 0) 
-            ? `<span style="font-size:11px; font-weight:bold; color:#003366;">${done} Done / ${pending} Pending</span>`
+            ? `<div style="font-size:11px; font-weight:bold; color:#003366; margin-bottom:5px;">${done} Done / ${pending} Pending</div>
+               <button class="info" onclick="viewUserTasks('${uid}', '${displayName}')" style="padding:2px 8px; font-size:10px;">👁 View Details</button>`
             : `<span style="color:#aaa; font-size:11px;">No Tasks</span>`;
 
         const bioBadge = u.faceData ? 
@@ -1519,7 +1524,55 @@ window.loadAdminPanel = async () => {
         </tr>`;
     });
 };
+// --- NEW: VIEW USER TASKS ---
+window.viewUserTasks = (uid, userName) => {
+    document.getElementById("modalTaskUserName").innerText = userName;
+    document.getElementById("adminTaskModal").classList.remove("hidden");
+    const tbody = document.getElementById("adminTaskBody");
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Fetching data...</td></tr>";
 
+    // Listen for updates specifically for this user
+    onValue(ref(db, `assignments/${uid}`), (snap) => {
+        tbody.innerHTML = "";
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#777;'>No tasks assigned to this user.</td></tr>";
+            return;
+        }
+
+        snap.forEach(c => {
+            const task = c.val();
+            const key = c.key;
+            
+            // Color code status
+            const statusColor = task.status === 'Done' ? 'green' : '#ffc107';
+            const statusText = task.status === 'Done' ? '✔ COMPLETED' : '⏳ PENDING';
+
+            tbody.innerHTML += `
+            <tr style="font-size:12px;">
+                <td>${task.date || 'N/A'}</td>
+                <td style="font-weight:bold;">${task.desc}</td>
+                <td>${task.by || 'Admin'}</td>
+                <td style="color:${statusColor}; font-weight:bold;">${statusText}</td>
+                <td style="text-align:center;">
+                    <button class="danger" onclick="deleteUserTask('${uid}', '${key}')" style="padding:2px 6px; font-size:11px;">🗑 Delete</button>
+                </td>
+            </tr>`;
+        });
+    });
+};
+
+// --- NEW: CLOSE MODAL ---
+window.closeTaskModal = () => {
+    document.getElementById("adminTaskModal").classList.add("hidden");
+};
+
+// --- NEW: DELETE TASK (ADMIN OVERRIDE) ---
+window.deleteUserTask = (uid, taskKey) => {
+    if(confirm("Are you sure you want to remove this task?")) {
+        remove(ref(db, `assignments/${uid}/${taskKey}`))
+            .catch(err => alert("Error: " + err.message));
+    }
+};
 // --- NEW SYSTEM LOGS LOGIC (AUDIT READY) ---
 window.loadSysLogs = () => {
     const tbody = document.getElementById("fullLogBody");
