@@ -850,6 +850,21 @@ onAuthStateChanged(auth, (user) => {
     if(u) currentUser.name = u.name;
 
     isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
+    if (isAdmin) {
+    get(ref(db, "users")).then(snap => {
+        adminFaceCache = [];
+        snap.forEach(c => {
+            const u = c.val();
+            if (u.faceData && ADMIN_EMAILS.includes(u.email)) {
+                adminFaceCache.push({
+                    name: u.name,
+                    samples: (u.faceData[0] instanceof Array) ? u.faceData : [u.faceData]
+                });
+            }
+        });
+    });
+}
+
     failCount = 0;
    
     if (!u.name) {
@@ -1089,30 +1104,62 @@ function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e
     btn.disabled = true;
     btn.innerText = "Processing...";
     updateStatus("Analyzing Biometrics...", "cyan");
+try {
 
-    try {
-        else if(scanMode === 'ADMIN') {
-            let adminFound = false;
-let adminName = "";
+    // ===== ADMIN FACE SCAN =====
+    if (scanMode === 'ADMIN') {
 
-for (let admin of adminFaceCache) {
-    for (let s of admin.samples) {
-        if (faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
-            adminFound = true;
-            adminName = admin.name;
-            break;
+        let adminFound = false;
+        let adminName = "";
+
+        for (let admin of adminFaceCache) {
+            for (let s of admin.samples) {
+                if (faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
+                    adminFound = true;
+                    adminName = admin.name;
+                    break;
+                }
+            }
+            if (adminFound) break;
+        }
+
+        if (!adminFound) throw new Error("Unauthorized Admin Face");
+
+        await processTransaction(adminName);
+        return;
+    }
+
+    // ===== NORMAL LOGIN FACE SCAN =====
+    const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+    const storedData = snap.val();
+    let match = false;
+
+    if (storedData) {
+        const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
+        for (let s of samples) {
+            if (faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
+                match = true;
+                break;
+            }
         }
     }
-    if (adminFound) break;
+
+    if (match) {
+        failCount = 0;
+        updateStatus("✅ VERIFIED", "#00ff00");
+        enterApp();
+    } else {
+        throw new Error("Face Mismatch");
+    }
+
+} catch (error) {
+    console.error(error);
+    handleFail();
+    btn.disabled = false;
+    btn.innerText = "📸 Retry Scan";
 }
 
-if (!adminFound) throw new Error("Unauthorized Admin Face");
-await processTransaction(adminName);
-
-}
-        }
-
-        // --- MODE 3: LOGIN ---
+          // --- MODE 3: LOGIN ---
         else {
             const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
             const storedData = snap.val();
