@@ -1504,7 +1504,8 @@ window.loadAdminPanel = async () => {
         // The "View" Button
         const workBadge = (pending + done > 0) 
             ? `<div style="font-size:11px; font-weight:bold; color:#003366; margin-bottom:5px;">${done} Done / ${pending} Pending</div>
-               <button class="info" onclick="viewUserTasks('${uid}', '${displayName}')" style="padding:2px 8px; font-size:10px;">👁 View Details</button>`
+               // Safe encode ensures names like "O'Connor" don't break the code
+<button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="padding:2px 8px; font-size:10px;">👁 View Details</button>
             : `<span style="color:#aaa; font-size:11px;">No Tasks</span>`;
 
         const bioBadge = u.faceData ? 
@@ -1525,17 +1526,30 @@ window.loadAdminPanel = async () => {
     });
 };
 // --- NEW: VIEW USER TASKS ---
-window.viewUserTasks = (uid, userName) => {
+// --- FIXED TASK VIEWER (Paste inside module script) ---
+
+// 1. SAFE View Function (Handles quotes in names & debugs connection)
+window.viewUserTasks = (uid, rawName) => {
+    console.log("Opening tasks for UID:", uid); // Debug log
+    
+    // safe name decoding
+    const userName = decodeURIComponent(rawName);
+    
     document.getElementById("modalTaskUserName").innerText = userName;
     document.getElementById("adminTaskModal").classList.remove("hidden");
+    
     const tbody = document.getElementById("adminTaskBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Fetching data...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Connecting to Database...</td></tr>";
 
-    // Listen for updates specifically for this user
-    onValue(ref(db, `assignments/${uid}`), (snap) => {
-        tbody.innerHTML = "";
+    if(!db) { alert("Database connection lost! Refresh page."); return; }
+
+    // Listen for updates
+    const taskRef = ref(db, `assignments/${uid}`);
+    onValue(taskRef, (snap) => {
+        tbody.innerHTML = ""; // Clear loading message
+        
         if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#777;'>No tasks assigned to this user.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#777; padding:20px;'>📭 No tasks assigned to this user.</td></tr>";
             return;
         }
 
@@ -1543,24 +1557,43 @@ window.viewUserTasks = (uid, userName) => {
             const task = c.val();
             const key = c.key;
             
-            // Color code status
-            const statusColor = task.status === 'Done' ? 'green' : '#ffc107';
-            const statusText = task.status === 'Done' ? '✔ COMPLETED' : '⏳ PENDING';
+            // Status styling
+            const isDone = task.status === 'Done';
+            const statusColor = isDone ? '#28a745' : '#ffc107'; // Green or Yellow
+            const statusText = isDone ? '✔ COMPLETED' : '⏳ PENDING';
+            const rowBg = isDone ? '#f0fff4' : '#fff';
 
             tbody.innerHTML += `
-            <tr style="font-size:12px;">
-                <td>${task.date || 'N/A'}</td>
-                <td style="font-weight:bold;">${task.desc}</td>
+            <tr style="font-size:12px; background:${rowBg};">
+                <td>${task.date || '--'}</td>
+                <td style="font-weight:bold; color:#003366;">${task.desc}</td>
                 <td>${task.by || 'Admin'}</td>
-                <td style="color:${statusColor}; font-weight:bold;">${statusText}</td>
+                <td><span style="color:${statusColor}; font-weight:bold; border:1px solid ${statusColor}; padding:2px 6px; border-radius:4px;">${statusText}</span></td>
                 <td style="text-align:center;">
-                    <button class="danger" onclick="deleteUserTask('${uid}', '${key}')" style="padding:2px 6px; font-size:11px;">🗑 Delete</button>
+                    <button class="danger" onclick="deleteUserTask('${uid}', '${key}')" style="padding:4px 8px; font-size:11px; cursor:pointer;">🗑 Remove</button>
                 </td>
             </tr>`;
         });
+    }, (error) => {
+        console.error(error);
+        tbody.innerHTML = `<tr><td colspan='5' style='color:red; text-align:center;'>Error loading data: ${error.message}</td></tr>`;
     });
 };
 
+// 2. Close Modal
+window.closeTaskModal = () => {
+    document.getElementById("adminTaskModal").classList.add("hidden");
+    // Optional: Stop listening to data to save bandwidth (requires off() method if optimized)
+};
+
+// 3. Delete Task
+window.deleteUserTask = (uid, taskKey) => {
+    if(confirm("Permanently delete this task?")) {
+        remove(ref(db, `assignments/${uid}/${taskKey}`))
+            .then(() => console.log("Task deleted"))
+            .catch(err => alert("Error: " + err.message));
+    }
+};
 // --- NEW: CLOSE MODAL ---
 window.closeTaskModal = () => {
     document.getElementById("adminTaskModal").classList.add("hidden");
