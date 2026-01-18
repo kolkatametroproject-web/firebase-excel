@@ -536,10 +536,9 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
 </section>
 
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-auth.js";
-import { getDatabase, ref, push, set, onValue, remove, update, query, limitToLast, onDisconnect, serverTimestamp, get, orderByChild, equalTo } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
-
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js";
+import { getDatabase, ref, push, set, onValue, remove, update, query, limitToLast, onDisconnect, serverTimestamp, get, orderByChild, equalTo } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-database.js";
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
   authDomain: "metro-railway-project.firebaseapp.com",
@@ -943,12 +942,20 @@ window.login = () => signInWithEmailAndPassword(auth, email.value, password.valu
 
 window.logout = async () => { 
     if(currentUser) {
-        const logData = { user: currentUser.email, type: "LOGOUT", method: "Manual Click", time: serverTimestamp() };
-        await push(ref(db, "logs"), logData);
-        signOut(auth);
+        try {
+            // Write log and WAIT for it to finish
+            await push(ref(db, "logs"), { 
+                user: currentUser.email, 
+                type: "LOGOUT", 
+                method: "Manual Click", 
+                time: serverTimestamp() 
+            });
+        } catch(e) { console.error(e); }
+        
+        await signOut(auth);
+        location.reload(); 
     }
 };
-
 async function recordLogin(method) {
     if(currentUser) {
         const logData = { user: currentUser.email, type: "LOGIN", method: method, time: serverTimestamp() };
@@ -1034,78 +1041,34 @@ window.handleFaceScan = async () => {
     try {
         // --- MODE 1: RECEIVER VERIFICATION ---
         if(scanMode === 'RECEIVER') {
+            // ... (Your existing receiver logic) ...
             const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
-            const storedData = snap.val();
-            
-            let match = false;
-            // Check match against logged-in user
-            if(storedData) {
-                const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
-                for (let s of samples) {
-                    if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
-                }
-            }
-
+            // ... verification logic ...
             if(match) {
-                updateStatus("✅ IDENTITY CONFIRMED", "#00ff00");
-                setTimeout(() => {
+                 updateStatus("✅ IDENTITY CONFIRMED", "#00ff00");
+                 setTimeout(() => {
                     stopCamera();
                     receiverVerified = true;
-                    // Update UI based on transaction type
+                    // ... enable buttons ...
                     if(currentTransactionType === 'CHECKOUT') {
-                        document.getElementById("checkout_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                        document.getElementById("checkout_status_text").style.color = "green";
-                        document.getElementById("btn_checkout_verify").classList.add("hidden");
-                        // Enable Admin Button
-                        const subBtn = document.getElementById("btn_checkout_submit");
-                        subBtn.disabled = false;
-                        subBtn.style.background = "#b38600";
-                        subBtn.style.cursor = "pointer";
-                        subBtn.style.opacity = "1";
+                        document.getElementById("btn_checkout_submit").disabled = false;
                     } else {
-                        document.getElementById("return_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                        document.getElementById("return_status_text").style.color = "green";
-                        document.getElementById("btn_return_verify").classList.add("hidden");
-                        // Enable Admin Button
-                        const subBtn = document.getElementById("btn_return_submit");
-                        subBtn.disabled = false;
-                        subBtn.style.background = "#17a2b8";
-                        subBtn.style.cursor = "pointer";
-                        subBtn.style.opacity = "1";
+                        document.getElementById("btn_return_submit").disabled = false;
                     }
-                }, 1000);
-            } else {
-                throw new Error("Face Does Not Match User");
+                 }, 1000);
             }
         }
 
         // --- MODE 2: ADMIN AUTHORIZATION ---
         else if(scanMode === 'ADMIN') {
-             const allUsersSnap = await get(ref(db, "users"));
-             let adminFound = false;
-             let adminName = "Unknown";
-
-             allUsersSnap.forEach(userSnap => {
-                const uData = userSnap.val();
-                if(uData.faceData && ADMIN_EMAILS.includes(uData.email)) {
-                    const samples = (uData.faceData[0] instanceof Array) ? uData.faceData : [uData.faceData];
-                    for (let s of samples) {
-                        if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { 
-                            adminFound = true; adminName = uData.name; break; 
-                        }
-                    }
-                }
-             });
-
+             // ... (Your existing admin logic) ...
              if(adminFound) {
                  updateStatus("✅ AUTHORIZED: " + adminName, "#00ff00");
                  await processTransaction(adminName);
-             } else {
-                 throw new Error("Not an Admin Face");
              }
         }
 
-        // --- MODE 3: LOGIN ---
+        // --- MODE 3: LOGIN (THE CRITICAL PART) ---
         else {
             const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
             const storedData = snap.val();
@@ -1116,9 +1079,15 @@ window.handleFaceScan = async () => {
                      if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
                 }
             }
+            
             if(match) {
                 updateStatus("✅ VERIFIED", "#00ff00");
-                await recordLogin("Biometric");
+                
+                // [CRITICAL FIX] 
+                // We Wait here. Logic only proceeds if face matched.
+                // We explicitly await the DB write before entering the app.
+                await recordLogin("Biometric Success"); 
+                
                 enterApp();
             } else {
                 throw new Error("Face Mismatch");
@@ -1132,7 +1101,6 @@ window.handleFaceScan = async () => {
         btn.innerText = "📸 Retry Scan";
     }
 };
-
 window.registerNewFace = async () => {
     if(!currentDescriptor) { updateStatus("❌ Camera cannot see face clearly.", "orange"); return; }
     regSamples.push(Array.from(currentDescriptor));
@@ -1387,22 +1355,17 @@ window.initTransactionAuth = (type) => {
     
     initCamera(true);
 };
-
 async function processTransaction(adminName) {
     const isCheckout = currentTransactionType === 'CHECKOUT';
-    
-    // USE DATA FROM SCAN
     const itemKey = pendingTransactionItem.key;
     const itemName = pendingTransactionItem.item;
-    const transQty = 1; // Always 1 unit
-
+    
     // 1. Update Stock
     const invRef = ref(db, `inventory/${itemKey}`);
     const invSnap = await get(invRef);
     if(!invSnap.exists()) return alert("Item error.");
     
     const realStoreQty = parseInt(invSnap.val().qty);
-    
     if(isCheckout && realStoreQty < 1) {
         stopCamera();
         return alert("❌ Out of Stock!");
@@ -1411,31 +1374,29 @@ async function processTransaction(adminName) {
     const newStoreQty = isCheckout ? (realStoreQty - 1) : (realStoreQty + 1);
     await update(invRef, { qty: newStoreQty });
 
-    // 2. Fetch User Name
-    const uSnap = await get(ref(db, `users/${currentUser.uid}`));
-    const realUserName = uSnap.val()?.name || currentUser.email;
-
-    // 3. Log
+    // 2. [FIX] LOGGING HISTORY
+    // We explicitly define the log object to ensure it matches the history viewer
     const logData = {
-        type: currentTransactionType,
+        type: currentTransactionType, // 'CHECKOUT' or 'RETURN'
         item: itemName,
         qty: 1,
-        takenBy: realUserName,
-        approvedBy: adminName,
-        signature: "Admin Authorized (1 Unit)",
+        takenBy: currentUser.name, // The person who looked at the camera
+        approvedBy: adminName,     // The admin who authorized it
+        signature: "Admin Authorized",
         time: serverTimestamp()
     };
 
+    // Push to DB
     await push(ref(db, "logs"), logData);
     
     alert(`${currentTransactionType} Successful!`);
     stopCamera();
     
-    // Reset UI
     document.getElementById("checkout_display").classList.add("hidden");
     document.getElementById("return_display").classList.add("hidden");
     pendingTransactionItem = null;
     
+    // Force refresh history tab
     toggleInvMode('history');
 }
 // --- APP FEATURES ---
