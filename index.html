@@ -550,7 +550,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getDatabase(app);
-
+let FACE_VECTOR_SIZE = null;
 let currentUser;
 let isAdmin = false;
 let presenceWatcherAttached = false;
@@ -844,10 +844,35 @@ if (Array.isArray(raw[0]) && raw[0].length === 128) {
     samples = raw.flat();
 }
 
-adminFaceCache.push({
-    name: u.name,
-    samples
+const cleanSamples = [];
+
+samples.forEach(s => {
+    if (Array.isArray(s) && s.length === 128) {
+        cleanSamples.push(new Float32Array(s));
+    }
 });
+
+const cleanSamples = [];
+
+samples.forEach(s => {
+    if (
+        Array.isArray(s) &&
+        currentDescriptor &&
+        s.length === currentDescriptor.length
+    ) {
+        cleanSamples.push(new Float32Array(s));
+    }
+});
+
+if (cleanSamples.length > 0) {
+    adminFaceCache.push({
+        name: u.name,
+        samples: cleanSamples,
+        dim: cleanSamples[0].length
+    });
+}
+
+
 
             }
         });
@@ -1075,6 +1100,12 @@ async function startRealTimeDetection(video, canvas) {
 
     currentDescriptor = detection.descriptor;
 
+if (!FACE_VECTOR_SIZE) {
+    FACE_VECTOR_SIZE = currentDescriptor.length;
+    console.log("Face vector size detected:", FACE_VECTOR_SIZE);
+}
+
+
     const btn = document.getElementById("btnCapture");
     if (btn && !btn.disabled) btn.style.border = "2px solid #00ff00";
 
@@ -1127,11 +1158,14 @@ window.handleFaceScan = async () => {
 
             for (let admin of adminFaceCache) {
                 for (let s of admin.samples) {
-                    if (faceapi.euclideanDistance(new Float32Array(s), currentDescriptor) < 0.6) {
-                        adminFound = true;
-                        adminName = admin.name;
-                        break;
-                    }
+                    if (
+    s.length === currentDescriptor.length &&
+    faceapi.euclideanDistance(new Float32Array(s), currentDescriptor) < getThreshold(s.length)
+) {
+    match = true;
+    break;
+}
+
                 }
                 if (adminFound) break;
             }
@@ -1152,10 +1186,15 @@ window.handleFaceScan = async () => {
         if (storedData) {
             const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
             for (let s of samples) {
-                if (faceapi.euclideanDistance(new Float32Array(s), currentDescriptor) < 0.55) {
-                    match = true;
-                    break;
-                }
+                if (
+    s.length === currentDescriptor.length &&
+    faceapi.euclideanDistance(s, currentDescriptor) < getThreshold(s.length)
+) {
+    adminFound = true;
+    adminName = admin.name;
+    break;
+}
+
             }
         }
 
@@ -1175,6 +1214,13 @@ window.handleFaceScan = async () => {
     }
 };
 
+function getThreshold(dim) {
+    // Dynamic & future-proof
+    if (dim <= 64) return 0.45;
+    if (dim <= 128) return 0.55;
+    if (dim <= 256) return 0.65;
+    return 0.75;
+}
 
 window.registerNewFace = async () => {
     if(!currentDescriptor) { updateStatus("❌ Camera cannot see face clearly.", "orange"); return; }
