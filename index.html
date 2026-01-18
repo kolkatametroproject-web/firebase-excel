@@ -833,10 +833,22 @@ onAuthStateChanged(auth, (user) => {
         snap.forEach(c => {
             const u = c.val();
             if (u.faceData && ADMIN_EMAILS.includes(u.email)) {
-                adminFaceCache.push({
-                    name: u.name,
-                    samples: (u.faceData[0] instanceof Array) ? u.faceData : [u.faceData]
-                });
+                const raw = u.faceData;
+let samples = [];
+
+if (Array.isArray(raw[0]) && raw[0].length === 128) {
+    samples = raw;
+} else if (Array.isArray(raw) && raw.length === 128) {
+    samples = [raw];
+} else if (Array.isArray(raw[0]) && Array.isArray(raw[0][0])) {
+    samples = raw.flat();
+}
+
+adminFaceCache.push({
+    name: u.name,
+    samples
+});
+
             }
         });
     });
@@ -1115,7 +1127,7 @@ window.handleFaceScan = async () => {
 
             for (let admin of adminFaceCache) {
                 for (let s of admin.samples) {
-                    if (faceapi.euclideanDistance(new Float32Array(s), currentDescriptor) < 0.55) {
+                    if (faceapi.euclideanDistance(new Float32Array(s), currentDescriptor) < 0.6) {
                         adminFound = true;
                         adminName = admin.name;
                         break;
@@ -1140,7 +1152,7 @@ window.handleFaceScan = async () => {
         if (storedData) {
             const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
             for (let s of samples) {
-                if (faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
+                if (faceapi.euclideanDistance(new Float32Array(s), currentDescriptor) < 0.55) {
                     match = true;
                     break;
                 }
@@ -1182,7 +1194,8 @@ function handleFail() {
     failCount++;
 
     if (failCount >= 3) {
-        if (stream) stopCamera();   // stop camera only
+        if (stream && !isTransactionAuth) stopCamera();
+// stop camera only
 
         document.getElementById("faceModal").classList.remove("hidden");
         document.getElementById("videoContainer").classList.add("hidden");
