@@ -1024,104 +1024,116 @@ function stopCamera() {
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
 window.handleFaceScan = async () => {
     const btn = document.getElementById("btnCapture");
-    if(!currentDescriptor) { updateStatus("❌ No Face Detected.", "red"); return; }
+    
+    if(!currentDescriptor) { 
+        updateStatus("❌ No Face Detected. Move closer.", "red"); 
+        return; 
+    }
    
     btn.disabled = true;
     btn.innerText = "Processing...";
     updateStatus("Analyzing Biometrics...", "cyan");
 
     try {
-        // --- MODE 1: RECEIVER VERIFICATION ---
-        if(scanMode === 'RECEIVER') {
+        // --- MODE 1: RECEIVER VERIFICATION (YOURSELF) ---
+        if(scanMode === 'RECEIVER' || scanMode === 'LOGIN') {
             const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
             const storedData = snap.val();
-           
+            
             let match = false;
-            // Check match against logged-in user
+            
             if(storedData) {
+                // Handle legacy data structure (single array vs array of arrays)
                 const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
+                
                 for (let s of samples) {
-                    if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
+                    const dist = faceapi.euclideanDistance(s, currentDescriptor);
+                    console.log(`Self Check Distance: ${dist}`); // DEBUG
+                    if(dist < 0.55) { match = true; break; }
                 }
             }
 
             if(match) {
                 updateStatus("✅ IDENTITY CONFIRMED", "#00ff00");
-                setTimeout(() => {
-                    stopCamera();
-                    receiverVerified = true;
-                    // Update UI based on transaction type
-                    if(currentTransactionType === 'CHECKOUT') {
-                        document.getElementById("checkout_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                        document.getElementById("checkout_status_text").style.color = "green";
-                        document.getElementById("btn_checkout_verify").classList.add("hidden");
-                        // Enable Admin Button
-                        const subBtn = document.getElementById("btn_checkout_submit");
-                        subBtn.disabled = false;
-                        subBtn.style.background = "#b38600";
-                        subBtn.style.cursor = "pointer";
-                        subBtn.style.opacity = "1";
-                    } else {
-                        document.getElementById("return_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                        document.getElementById("return_status_text").style.color = "green";
-                        document.getElementById("btn_return_verify").classList.add("hidden");
-                        // Enable Admin Button
-                        const subBtn = document.getElementById("btn_return_submit");
-                        subBtn.disabled = false;
-                        subBtn.style.background = "#17a2b8";
-                        subBtn.style.cursor = "pointer";
-                        subBtn.style.opacity = "1";
-                    }
-                }, 1000);
+                
+                if(scanMode === 'LOGIN') {
+                    await recordLogin("Biometric");
+                    enterApp();
+                } else {
+                    // Receiver verified logic
+                    setTimeout(() => {
+                        stopCamera();
+                        receiverVerified = true;
+                        if(currentTransactionType === 'CHECKOUT') {
+                           document.getElementById("checkout_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
+                           document.getElementById("checkout_status_text").style.color = "green";
+                           document.getElementById("btn_checkout_verify").classList.add("hidden");
+                           document.getElementById("btn_checkout_submit").disabled = false;
+                           document.getElementById("btn_checkout_submit").style.opacity = "1";
+                           document.getElementById("btn_checkout_submit").style.cursor = "pointer";
+                        } else {
+                           document.getElementById("return_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
+                           document.getElementById("return_status_text").style.color = "green";
+                           document.getElementById("btn_return_verify").classList.add("hidden");
+                           document.getElementById("btn_return_submit").disabled = false;
+                           document.getElementById("btn_return_submit").style.opacity = "1";
+                           document.getElementById("btn_return_submit").style.cursor = "pointer";
+                        }
+                    }, 500);
+                }
             } else {
                 throw new Error("Face Does Not Match User");
             }
         }
 
-        // --- MODE 2: ADMIN AUTHORIZATION ---
+        // --- MODE 2: ADMIN AUTHORIZATION (ANY ADMIN) ---
         else if(scanMode === 'ADMIN') {
+             console.log("--- STARTING ADMIN SEARCH ---");
              const allUsersSnap = await get(ref(db, "users"));
              let adminFound = false;
              let adminName = "Unknown";
 
+             // 1. Normalize Admin List for comparison
+             const cleanAdminList = ADMIN_EMAILS.map(e => e.toLowerCase().trim());
+
              allUsersSnap.forEach(userSnap => {
                 const uData = userSnap.val();
-                if(uData.faceData && ADMIN_EMAILS.includes(uData.email)) {
-                    const samples = (uData.faceData[0] instanceof Array) ? uData.faceData : [uData.faceData];
-                    for (let s of samples) {
-                        if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
-                            adminFound = true; adminName = uData.name; break;
+                
+                // Safety check: User must have email and face data
+                if(uData.email && uData.faceData) {
+                    
+                    // 2. Check if this user is an ADMIN
+                    const userEmail = uData.email.toLowerCase().trim();
+                    const isAdminEmail = cleanAdminList.includes(userEmail);
+                    
+                    if(isAdminEmail) {
+                        console.log(`Checking Admin: ${userEmail}`);
+                        
+                        // 3. Check Face Match
+                        const samples = (uData.faceData[0] instanceof Array) ? uData.faceData : [uData.faceData];
+                        for (let s of samples) {
+                            const dist = faceapi.euclideanDistance(s, currentDescriptor);
+                            console.log(`-> Distance: ${dist}`);
+                            
+                            // 0.55 is strict, 0.6 is slightly more forgiving
+                            if(dist < 0.6) { 
+                                adminFound = true; 
+                                adminName = uData.name || "Admin"; 
+                                break; 
+                            }
                         }
                     }
                 }
+                if(adminFound) return; // Break loop if found
              });
 
              if(adminFound) {
-                 updateStatus("✅ AUTHORIZED: " + adminName, "#00ff00");
-                 await processTransaction(adminName);
+                updateStatus("✅ AUTHORIZED: " + adminName, "#00ff00");
+                await processTransaction(adminName);
              } else {
+                 console.warn("Scan finished. No matching Admin face found.");
                  throw new Error("Not an Admin Face");
              }
-        }
-
-        // --- MODE 3: LOGIN ---
-        else {
-            const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
-            const storedData = snap.val();
-            let match = false;
-            if(storedData) {
-                const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
-                for (let s of samples) {
-                     if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
-                }
-            }
-            if(match) {
-                updateStatus("✅ VERIFIED", "#00ff00");
-                await recordLogin("Biometric");
-                enterApp();
-            } else {
-                throw new Error("Face Mismatch");
-            }
         }
 
     } catch (error) {
