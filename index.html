@@ -1307,48 +1307,70 @@ function formatTime(ts) {
 }
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Refreshing Data...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Live Data...</td></tr>";
 
-    // Fetch 500 to ensure we find real data
+    // 1. Fetch 500 items to look past any Login spam
     const q = query(ref(db, "logs"), limitToLast(500));
    
+    // REMOVED 'onlyOnce: true' so this updates LIVE
     onValue(q, (snap) => {
         const logs = [];
-        
         if(snap.exists()) {
             snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-            logs.reverse(); 
+            logs.reverse(); // Newest first
         }
 
-        const invLogs = logs.filter(l => 
-            l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type.includes('STOCK')
-        );
+        // 2. DEBUG: Get the very last log of ANY type (even Login)
+        const lastSystemLog = logs.length > 0 ? logs[0] : null;
+
+        // 3. Flexible Filter: Finds 'Checkout', 'Return', 'Add' regardless of capitalization
+        const invLogs = logs.filter(l => {
+            const t = (l.type || "").toUpperCase();
+            return t.includes('CHECKOUT') || t.includes('RETURN') || t.includes('STOCK');
+        });
 
         const displayLogs = invLogs.slice(0, 60);
 
+        // 4. Handle "No History" but show System Status
         if(displayLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'>No history found. <button onclick='addTestTransaction()'>Generate Test Data</button></td></tr>";
+            let debugMsg = "Database is completely empty.";
+            if(lastSystemLog) {
+                debugMsg = `System is connected.<br>Last Event detected: <strong>${lastSystemLog.type}</strong> by ${lastSystemLog.takenBy || 'Unknown'}`;
+            }
+
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan='3' style='text-align:center; padding:20px; color:#666;'>
+                        <strong>No Stock History Found.</strong><br><br>
+                        <div style="background:#f8f9fa; padding:10px; border:1px dashed #ccc; font-size:11px; color:#333;">
+                            🔍 <strong>DEBUG INFO:</strong><br>
+                            ${debugMsg}
+                        </div>
+                    </td>
+                </tr>`;
             return;
         }
 
         tbody.innerHTML = "";
         
         displayLogs.forEach(l => {
-            // Time Logic
+            // Time
             let timeStr = "--:--";
-            let dateStr = "--/--/----";
+            let dateStr = "--/--";
             if(l.time) {
                 const d = new Date(l.time);
                 timeStr = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
                 dateStr = d.toLocaleDateString('en-GB');
             }
 
-            // Badge Logic
+            // Colors & Badge
+            const type = (l.type || "").toUpperCase();
             let color = "#333";
             let badge = l.type;
-            if(l.type === 'CHECKOUT') { color = "#b38600"; badge = "📤 OUT"; }
-            if(l.type === 'RETURN')   { color = "#17a2b8"; badge = "📥 IN"; }
-            if(l.type.includes('STOCK')) { color = "green"; badge = "➕ ADD"; }
+            
+            if(type.includes('CHECKOUT')) { color = "#b38600"; badge = "📤 OUT"; }
+            else if(type.includes('RETURN')) { color = "#17a2b8"; badge = "📥 IN"; }
+            else if(type.includes('STOCK')) { color = "green"; badge = "➕ ADD"; }
 
             tbody.innerHTML += `
             <tr class="inv-log-row">
@@ -1359,7 +1381,7 @@ window.loadInventoryHistory = () => {
                 <td style="color:${color}; font-weight:bold;">${badge} ${l.item}</td>
             </tr>`;
         });
-    }, { onlyOnce: true }); // 'onlyOnce' stops it from blinking constantly, so the Refresh button is useful
+    });
 };
 // --- ADD THIS HELPER FUNCTION BELOW ---
 window.addTestTransaction = () => {
