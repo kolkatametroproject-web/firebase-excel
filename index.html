@@ -1458,7 +1458,7 @@ window.initTransactionAuth = (type) => {
 async function processTransaction(adminName) {
     // 1. Safety Checks
     if (!pendingTransactionItem) {
-        alert("❌ Error: No Item Scanned. Please scan item again.");
+        alert("❌ Error: No Item Scanned.");
         stopCamera();
         return;
     }
@@ -1467,70 +1467,51 @@ async function processTransaction(adminName) {
     const itemKey = pendingTransactionItem.key;
     const itemName = pendingTransactionItem.item;
 
-    // 2. Get Current Stock from Database
+    // 2. Get Data
     const invRef = ref(db, `inventory/${itemKey}`);
     const invSnap = await get(invRef);
 
-    if (!invSnap.exists()) {
-        alert("❌ Item data not found in DB.");
-        stopCamera();
-        return;
-    }
+    if (!invSnap.exists()) return alert("❌ Item not found.");
 
-    // STRICT NUMBER CONVERSION
     const currentQty = parseInt(invSnap.val().qty || 0);
 
-    // 3. Prevent Negative Stock (-1 Bug Fix)
+    // 3. STOP NEGATIVE STOCK
     if (isCheckout && currentQty <= 0) {
         stopCamera();
-        alert(`❌ OUT OF STOCK!\nCurrent Qty: ${currentQty}\nCannot Checkout.`);
-        // Reset UI
-        document.getElementById("checkout_display").classList.add("hidden");
+        alert(`❌ OUT OF STOCK!\nCurrent Qty: 0\nCannot Checkout.`);
         return;
     }
 
-    // 4. Calculate New Quantity
+    // 4. Update Stock
     const newStoreQty = isCheckout ? (currentQty - 1) : (currentQty + 1);
-
-    // 5. Update Database
     await update(invRef, { qty: newStoreQty });
 
-    // 6. Save Log (Fixes "No Movement" bug)
-    // We force the transaction type to be valid for the Audit Trail filter
+    // 5. Create Log
     const logType = isCheckout ? 'CHECKOUT' : 'RETURN';
-    
-    // Get User Name properly
-    let takenByName = "Unknown";
-    if (currentUser) {
-        takenByName = currentUser.name || currentUser.email;
-    }
+    let takenByName = currentUser ? (currentUser.name || currentUser.email) : "Unknown";
 
-    const logData = {
-        type: logType,  // This MUST match the Audit Trail filter
+    await push(ref(db, "logs"), {
+        type: logType,
         item: itemName,
         qty: 1,
         takenBy: takenByName,
-        approvedBy: adminName, // The Admin who scanned their face
+        approvedBy: adminName,
         signature: "Biometric Auth",
         time: serverTimestamp()
-    };
+    });
 
-    await push(ref(db, "logs"), logData);
-
-    // 7. Success Message & Reset
+    // 6. Success & UI Reset
     alert(`✅ Success!\n${logType} Complete.\nNew Stock: ${newStoreQty}`);
-    
     stopCamera();
-    
-    // Hide the yellow/blue transaction boxes
     document.getElementById("checkout_display").classList.add("hidden");
     document.getElementById("return_display").classList.add("hidden");
     pendingTransactionItem = null;
 
-    // 8. Auto-refresh the Audit Trail
-    switchTab('history'); 
-    // Small delay to ensure DB updates before reading
-    setTimeout(loadInventoryHistory, 500); 
+    // --- 🛑 THIS WAS THE CAUSE OF THE WHITE SCREEN 🛑 ---
+    // OLD BROKEN CODE: switchTab('history'); 
+    // FIXED CODE:
+    switchTab('inventory'); // 1. Go to Inventory Tab
+    toggleInvMode('history'); // 2. Then open History Panel
 }
 // --- APP FEATURES ---
 
