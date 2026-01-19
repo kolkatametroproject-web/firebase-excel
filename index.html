@@ -233,7 +233,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
   <div id="faceStatus" style="color:#ffc107; margin-bottom:15px; font-weight:bold; height:20px; text-align:center;"></div>
  
   <div id="camControls" style="display:flex; gap:10px;">
-    <button id="btnCapture" onclick="handleFaceScan()" disabled>📸 Face Scan</button>
+    <button id="btnCapture" onclick="handleFaceScan()" style="background:white; color:black; border:none; padding:10px 20px;">📸 Face Scan</button>
   </div>
 </div>
 
@@ -813,18 +813,17 @@ window.startReceiverScan = (type) => {
     initCamera(true);
 };
 // --- 1. LOAD AI MODELS ---
-const MODEL_URL = "https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights";
-
 async function preloadModels() {
-    if (modelsLoaded) return;
-    await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-    ]);
-    modelsLoaded = true;
+    if(modelsLoaded) return;
+    try {
+        await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
+            faceapi.nets.faceLandmark68Net.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
+            faceapi.nets.faceRecognitionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models')
+        ]);
+        modelsLoaded = true;
+    } catch(e) { console.error("Model Error", e); }
 }
-
 preloadModels();
 
 // --- 2. AUTH & WATCHDOG (RESTORED: FACE ID REQUIRED) ---
@@ -984,56 +983,31 @@ async function initCamera(isVerify) {
         updateStatus("Camera Hardware Error", "red");
     }
 }
+
 async function startRealTimeDetection(video, canvas) {
-    const displaySize = {
-        width: video.videoWidth,
-        height: video.videoHeight
-    };
-
-    // 🔥 CRITICAL FIX
-    canvas.width = displaySize.width;
-    canvas.height = displaySize.height;
+    const displaySize = { width: video.videoWidth || 320, height: video.videoHeight || 240 };
     faceapi.matchDimensions(canvas, displaySize);
-
     if (detectionLoop) clearInterval(detectionLoop);
-
     detectionLoop = setInterval(async () => {
         if (!stream) return;
-
-        const options = new faceapi.TinyFaceDetectorOptions({
-            inputSize: 416,
-            scoreThreshold: 0.3
-        });
-
-        const detection = await faceapi
-            .detectSingleFace(video, options)
-            .withFaceLandmarks()
-            .withFaceDescriptor();
-
-        const ctx = canvas.getContext("2d");
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+        const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
+        const ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
         if (detection) {
-            const resized = faceapi.resizeResults(detection, displaySize);
-            const box = resized.detection.box;
-
-            new faceapi.draw.DrawBox(box, {
-                label: "FACE LOCKED",
-                boxColor: "#00ff00"
-            }).draw(canvas);
-
+            const resizedDetections = faceapi.resizeResults(detection, displaySize);
+            const box = resizedDetections.detection.box;
+            const drawBox = new faceapi.draw.DrawBox(box, { label: "Face Locked", boxColor: "#00ff00" });
+            drawBox.draw(canvas);
             currentDescriptor = detection.descriptor;
-
             const btn = document.getElementById("btnCapture");
-            btn.disabled = false;
-            btn.style.border = "2px solid #00ff00";
+            if(btn && !btn.disabled) btn.style.border = "2px solid #00ff00";
         } else {
             currentDescriptor = null;
             const btn = document.getElementById("btnCapture");
-            btn.disabled = true;
-            btn.style.border = "1px solid #004494";
+            if(btn) btn.style.border = "1px solid #004494";
         }
-    }, 120);
+    }, 100);
 }
 
 function stopCamera() {
@@ -1265,8 +1239,7 @@ async function populateReturnSelect() {
         logsSnap.forEach(c => {
             const l = c.val();
             // Check if this log belongs to current user
-            const isMe = l.takenByEmail === currentUser.email;
-
+            const isMe = (l.takenBy === currentUser.name) || (l.takenBy === currentUser.email);
            
             if (isMe) {
                 if(l.type === 'CHECKOUT') {
@@ -1444,18 +1417,16 @@ async function processTransaction(adminName) {
 
     // 3. Log
     const logData = {
-    type: currentTransactionType,
-    item: itemName,
-    barcode: pendingTransactionItem.barcode,
-    qty: 1,
-    takenBy: realUserName,
-    takenByEmail: currentUser.email,
-    approvedBy: adminName,
-    time: serverTimestamp()
-};
+        type: currentTransactionType,
+        item: itemName,
+        qty: 1,
+        takenBy: realUserName,
+        approvedBy: adminName,
+        signature: "Admin Authorized (1 Unit)",
+        time: serverTimestamp()
+    };
 
-await push(ref(db, "logs"), logData);
-
+    await push(ref(db, "logs"), logData);
    
     alert(`${currentTransactionType} Successful!`);
     stopCamera();
