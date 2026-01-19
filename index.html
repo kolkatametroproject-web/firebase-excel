@@ -384,32 +384,43 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     </div>
 </div>
     <div id="inv-history" class="panel hidden">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-            <h3>📜 Stock Ledger (Audit Trail)</h3>
-            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search Item, Barcode or User..." style="width:250px; max-width:100%; padding:8px; border:1px solid #aaa;">
-        </div>
-       
-        <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
-            <div class="table-wrapper">
-            <table style="margin-top:0;">
-                <thead style="position:sticky; top:0; z-index:100;">
-                    <tr style="background:#003366; color:white;">
-                        <th>Txn ID</th>
-                        <th>Date & Time</th>
-                        <th>Type</th>
-                        <th>Item Details</th>
-                        <th>User (Receiver)</th>
-                        <th>Authorized By</th>
-                        <th>Signature</th>
-                    </tr>
-                </thead>
-                <tbody id="invHistoryBody" style="background:white;">
-                    <tr><td colspan="7" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
-                </tbody>
-            </table>
-            </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+        <h3>📜 Stock Ledger & Custody Check</h3>
+        <div style="display:flex; gap:5px; flex-grow:1; max-width:500px;">
+            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="Scan Barcode or Search..." style="flex-grow:1; padding:8px; border:1px solid #aaa;">
+            <button onclick="checkCustodyChain()" class="warning" style="white-space:nowrap;">
+                <i class="fas fa-users"></i> View Last 4 Users
+            </button>
         </div>
     </div>
+
+    <div id="custodyResultPanel" class="hidden" style="background:#fff3cd; border:1px solid #ffeeba; padding:15px; margin-bottom:15px; border-radius:4px;">
+        <h4 style="margin-top:0; color:#856404;">🕵️‍♂️ Custody Chain Results</h4>
+        <div id="custodyList" style="display:flex; gap:15px; flex-wrap:wrap;"></div>
+        <button onclick="document.getElementById('custodyResultPanel').classList.add('hidden')" style="margin-top:10px; font-size:11px; background:#856404; border:none;">Close</button>
+    </div>
+    
+    <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
+        <div class="table-wrapper">
+        <table style="margin-top:0;">
+            <thead style="position:sticky; top:0; z-index:100;">
+                <tr style="background:#003366; color:white;">
+                    <th>Txn ID</th>
+                    <th>Date & Time</th>
+                    <th>Type</th>
+                    <th>Item Details</th>
+                    <th>User (Receiver)</th>
+                    <th>Authorized By</th>
+                    <th>Signature</th>
+                </tr>
+            </thead>
+            <tbody id="invHistoryBody" style="background:white;">
+                <tr><td colspan="7" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
+            </tbody>
+        </table>
+        </div>
+    </div>
+</div>
 
     <div id="inv-list" class="panel">
         <h3>Current Inventory</h3>
@@ -921,7 +932,103 @@ function resetTimer() {
         }, 5 * 60 * 1000);
     }
 }
+// --- NEW: CUSTODY CHAIN CHECKER ---
+window.checkCustodyChain = async () => {
+    const searchInput = document.getElementById("invSearch").value.trim();
+    if (!searchInput) return alert("Please enter or scan a Barcode in the search box first.");
 
+    const panel = document.getElementById("custodyResultPanel");
+    const list = document.getElementById("custodyList");
+    
+    panel.classList.remove("hidden");
+    list.innerHTML = "🔍 Analyzing Database...";
+
+    try {
+        // STEP 1: Find the Item Name associated with this Barcode
+        // We do this because older logs might save 'Drill' but not the barcode '8888'.
+        let targetItemName = searchInput; // Default to assuming user typed a name
+        
+        const invSnap = await get(ref(db, "inventory"));
+        let found = false;
+        
+        invSnap.forEach(c => {
+            const val = c.val();
+            // If the input matches a barcode, grab the official Item Name
+            if (val.barcode === searchInput) {
+                targetItemName = val.item;
+                found = true;
+            }
+        });
+
+        if (found) {
+            list.innerHTML = `<div><strong>Identified Item:</strong> ${targetItemName}</div><hr style="width:100%; border:0; border-top:1px solid #ddd; margin:10px 0;">`;
+        } else {
+             // If not found in inventory, we assume the user typed the Item Name directly
+             list.innerHTML = `<div><strong>Searching for:</strong> ${targetItemName}</div><hr style="width:100%; border:0; border-top:1px solid #ddd; margin:10px 0;">`;
+        }
+
+        // STEP 2: Fetch Logs and Filter for "CHECKOUT" of this Item
+        // We fetch last 500 logs to ensure we get enough history
+        const logSnap = await get(query(ref(db, "logs"), limitToLast(500)));
+        const relevantLogs = [];
+
+        logSnap.forEach(c => {
+            const l = c.val();
+            // We only care if someone TOOK it (CHECKOUT)
+            if (l.type === 'CHECKOUT' && l.item === targetItemName) {
+                relevantLogs.push(l);
+            }
+        });
+
+        // Sort: Newest First
+        relevantLogs.reverse();
+
+        // STEP 3: Extract Unique Users (Last 4 distinct people)
+        const uniqueUsers = [];
+        const seenNames = new Set();
+
+        for (const log of relevantLogs) {
+            const user = log.takenBy || log.user;
+            if (!seenNames.has(user)) {
+                seenNames.add(user);
+                uniqueUsers.push({
+                    name: user,
+                    time: log.time,
+                    admin: log.approvedBy
+                });
+            }
+            if (uniqueUsers.length >= 4) break; // Stop after finding 4
+        }
+
+        // STEP 4: Render
+        if (uniqueUsers.length === 0) {
+            list.innerHTML += "<div>No checkout history found for this item.</div>";
+            return;
+        }
+
+        let html = "";
+        uniqueUsers.forEach((u, index) => {
+            const color = index === 0 ? "#003366" : "#666"; // Highlight the most recent
+            const label = index === 0 ? "CURRENT / LAST HOLDER" : `History -${index}`;
+            const dateStr = new Date(u.time).toLocaleDateString() + " " + new Date(u.time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+            html += `
+            <div style="background:white; border:1px solid #ccc; padding:10px; border-radius:5px; min-width:140px; flex:1;">
+                <div style="font-size:10px; font-weight:bold; color:${color}; margin-bottom:5px;">${label}</div>
+                <div style="font-size:14px; font-weight:bold; color:#000;">👤 ${u.name}</div>
+                <div style="font-size:11px; color:#555; margin-top:2px;">📅 ${dateStr}</div>
+                <div style="font-size:10px; color:#888; margin-top:5px;">Auth by: ${u.admin}</div>
+            </div>
+            `;
+        });
+        
+        list.innerHTML = html;
+
+    } catch (e) {
+        console.error(e);
+        list.innerHTML = "Error analyzing data: " + e.message;
+    }
+};
 window.saveOfficialName = () => {
     const name = document.getElementById("officialNameInput").value;
     if(name.length < 3) return alert("Enter full valid name.");
@@ -1415,10 +1522,11 @@ async function processTransaction(adminName) {
     const uSnap = await get(ref(db, `users/${currentUser.uid}`));
     const realUserName = uSnap.val()?.name || currentUser.email;
 
-    // 3. Log
     const logData = {
         type: currentTransactionType,
         item: itemName,
+        // ADD THIS LINE BELOW:
+        barcode: pendingTransactionItem.barcode || "N/A", 
         qty: 1,
         takenBy: realUserName,
         approvedBy: adminName,
