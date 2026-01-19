@@ -1298,58 +1298,70 @@ function formatTime(ts) {
 }
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading Live Inventory Records...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading History...</td></tr>";
 
-    // 1. Listen to 'logs' in Real-Time (Last 50 entries)
-    const q = query(ref(db, "logs"), limitToLast(50));
+    // CHANGE 1: Fetch 500 items (not 50) so we don't miss data hidden by 'Logins'
+    const q = query(ref(db, "logs"), limitToLast(500));
    
     onValue(q, (snap) => {
         const logs = [];
         
-        // 2. Get Data
         if(snap.exists()) {
             snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-            logs.reverse(); // Newest time at the top
+            logs.reverse(); // Newest first
         }
 
-        // 3. FILTER: ONLY show Checkout and Return
-        // We throw away 'LOGIN', 'LOGOUT', etc.
-        const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN');
+        // CHANGE 2: Filter strictly for Stock Movement
+        const invLogs = logs.filter(l => 
+            l.type === 'CHECKOUT' || 
+            l.type === 'RETURN' || 
+            l.type === 'STOCK_ADD' || 
+            l.type === 'STOCK_UPDATE'
+        );
 
-        // 4. Handle Empty Case
-        if(invLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px; color:#666;'>No items have been checked out yet.<br><small>Go to 'Inventory' > 'Checkout' to create a record.</small></td></tr>";
+        // CHANGE 3: Keep exactly 60 rows as requested
+        const displayLogs = invLogs.slice(0, 60);
+
+        if(displayLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px; color:#666;'>No stock history found yet.</td></tr>";
             return;
         }
 
-        // 5. Build the List
         tbody.innerHTML = "";
         
-        invLogs.forEach(l => {
-            // TIME Formatting
-            const dateObj = new Date(l.time);
-            const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dateStr = dateObj.toLocaleDateString();
+        displayLogs.forEach(l => {
+            // Fix Date Time
+            let timeStr = "Just now";
+            let dateStr = "Today";
+            
+            if(l.time) {
+                const dateObj = new Date(l.time);
+                // Force 24-hour format like '19:55'
+                timeStr = dateObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+                // Force Date format like '19/01/2026'
+                dateStr = dateObj.toLocaleDateString('en-GB');
+            }
 
-            // COLOR Logic
-            let color = "black";
-            let arrow = "";
-            if(l.type === 'CHECKOUT') { color = "#b38600"; arrow = "📤 OUT"; } // Gold
-            if(l.type === 'RETURN')   { color = "#17a2b8"; arrow = "📥 IN"; }  // Blue
+            // Colors
+            let color = "#333";
+            let badge = l.type;
+            
+            if(l.type === 'CHECKOUT') { color = "#b38600"; badge = "📤 OUT"; }
+            if(l.type === 'RETURN')   { color = "#17a2b8"; badge = "📥 IN"; }
+            if(l.type.includes('STOCK')) { color = "green"; badge = "➕ ADD"; }
 
-            // ROW HTML
+            // Render
             const row = `
             <tr class="inv-log-row">
-                <td style="font-size:12px; color:#555;">
-                    ${timeStr}<br><span style="font-size:10px; color:#999;">${dateStr}</span>
+                <td style="font-size:12px; color:#555; text-align:center;">
+                    <span style="font-size:14px; font-weight:bold; color:#000;">${timeStr}</span><br>
+                    <span style="font-size:11px; color:#888;">${dateStr}</span>
                 </td>
-                
-                <td style="font-weight:bold; color:#003366;">
-                    ${l.takenBy}
+                <td style="font-weight:bold; color:#003366; vertical-align:middle;">
+                    ${l.takenBy || "Unknown"}
                 </td>
-
-                <td style="color:${color}; font-weight:bold;">
-                    ${arrow} ${l.item}
+                <td style="color:${color}; font-weight:bold; vertical-align:middle;">
+                    ${badge} ${l.item}
                 </td>
             </tr>`;
             
