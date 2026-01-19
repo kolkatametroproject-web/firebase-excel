@@ -383,26 +383,19 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
     </div>
 </div>
-    <div id="inv-history" class="panel hidden">
+      <div id="inv-history" class="panel hidden">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-        <h3>📜 Stock Ledger & Custody Check</h3>
+        <h3>📜 Stock Ledger (History)</h3>
+        
         <div style="display:flex; gap:5px; flex-grow:1; max-width:500px;">
-    <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="Scan/Type Barcode..." style="flex-grow:1; padding:8px; border:1px solid #aaa;">
-    
-    <button onclick="openBarcodeScanner('AUDIT')" class="info" style="padding:0 15px;" title="Scan Barcode">
-        <i class="fas fa-qrcode"></i>
-    </button>
-    
-    <button onclick="checkCustodyChain()" class="warning" style="white-space:nowrap;">
-        <i class="fas fa-users"></i> Last 4 Users
-    </button>
-</div>
-    </div>
-
-    <div id="custodyResultPanel" class="hidden" style="background:#fff3cd; border:1px solid #ffeeba; padding:15px; margin-bottom:15px; border-radius:4px;">
-        <h4 style="margin-top:0; color:#856404;">🕵️‍♂️ Custody Chain Results</h4>
-        <div id="custodyList" style="display:flex; gap:15px; flex-wrap:wrap;"></div>
-        <button onclick="document.getElementById('custodyResultPanel').classList.add('hidden')" style="margin-top:10px; font-size:11px; background:#856404; border:none;">Close</button>
+            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="Scan Barcode or Search..." style="flex-grow:1; padding:8px; border:1px solid #aaa;">
+            <button onclick="openBarcodeScanner('AUDIT')" class="info" style="padding:0 15px;" title="Scan Barcode">
+                <i class="fas fa-qrcode"></i>
+            </button>
+            <button onclick="loadInventoryHistory()" class="primary" title="Refresh Table">
+                <i class="fas fa-sync"></i>
+            </button>
+        </div>
     </div>
     
     <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
@@ -415,8 +408,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
                     <th>Type</th>
                     <th>Item Details</th>
                     <th>User (Receiver)</th>
-                    <th>Authorized By</th>
-                    <th>Signature</th>
+                    <th>Authorized By</th> <th>Signature</th>
                 </tr>
             </thead>
             <tbody id="invHistoryBody" style="background:white;">
@@ -426,7 +418,6 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
     </div>
 </div>
-
     <div id="inv-list" class="panel">
         <h3>Current Inventory</h3>
         <div class="table-wrapper">
@@ -694,32 +685,28 @@ window.closeBarcodeScanner = () => {
     }
 }
 function onScanSuccess(decodedText) {
-    // STOP SCANNER
+    // 1. STOP SCANNER (Common for all modes)
     closeBarcodeScanner();
 
+    // --- MODE: ADD INVENTORY ---
     if(scanMode === 'ADD') {
         document.getElementById("invBarcode").value = decodedText;
         checkBarcodeExistence(decodedText);
         alert("Barcode Captured: " + decodedText);
     }
-    // --- NEW AUDIT MODE ---
-    else if (scanMode === 'AUDIT') {
-        // 1. Fill the search box
-        document.getElementById("invSearch").value = decodedText;
-        
-        // 2. Filter the list below (Standard Search)
-        filterInvLogs(); 
-        
-        // 3. Automatically trigger the "Last 4 Users" check
-        checkCustodyChain();
-    }
-    // --- END NEW MODE ---
     
+    // --- MODE: AUDIT / HISTORY (THIS IS THE FIXED PART) ---
+    else if (scanMode === 'AUDIT') {
+        // Just put the barcode in the search box
+        document.getElementById("invSearch").value = decodedText;
+        // And immediately filter the table rows
+        filterInvLogs(); 
+    }
+    
+    // --- MODE: CHECKOUT OR RETURN ---
     else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        // ... (Keep your existing Checkout/Return logic here) ...
-        // ...
         
-        // (Just ensure your existing code for checkout/return is preserved here)
+        // Show the verification display
         if(scanMode === 'CHECKOUT') {
             document.getElementById("checkout_display").classList.remove("hidden");
             document.getElementById("checkout_item_name").innerText = "Verifying...";
@@ -730,7 +717,7 @@ function onScanSuccess(decodedText) {
             document.getElementById("return_item_code").innerText = decodedText;
         }
 
-        // DIRECT LOOKUP
+        // Search Database for this barcode
         const invRef = ref(db, "inventory");
         const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
         
@@ -746,8 +733,10 @@ function onScanSuccess(decodedText) {
             let foundKey = null;
             snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
 
+            // Save item for the next step (Face ID)
             pendingTransactionItem = { key: foundKey, ...foundItem };
 
+            // Show details on screen
             if(scanMode === 'CHECKOUT') {
                 document.getElementById("checkout_item_name").innerText = foundItem.item;
                 document.getElementById("checkout_item_code").innerText = foundItem.barcode;
@@ -1025,7 +1014,7 @@ window.checkCustodyChain = async () => {
                     borderStyle: cardBorder
                 });
             }
-            if (uniqueEntries.length >= 4) break; 
+            if (uniqueEntries.length >= 6) break; 
         }
 
         // STEP 4: Render
@@ -1434,20 +1423,19 @@ function formatTime(ts) {
     // Audit Style Date
     return d.toLocaleDateString('en-GB') + " " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
-
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
     tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
 
-    // FETCH MORE DATA (300) to ensure we find inventory items even if many people logged in
+    // FETCH DATA
     const q = query(ref(db, "logs"), limitToLast(300));
-   
+    
     onValue(q, (snap) => {
         const logs = [];
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
         logs.reverse(); // Newest first
 
-        // Strict Filter: Only show movement of goods
+        // Filter for Inventory Movement Only
         const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE');
 
         if(invLogs.length === 0) {
@@ -1457,8 +1445,8 @@ window.loadInventoryHistory = () => {
 
         tbody.innerHTML = "";
         invLogs.forEach(l => {
-            const txnId = l.key.substring(l.key.length - 6).toUpperCase(); // Last 6 chars as ID
-           
+            const txnId = l.key.substring(l.key.length - 6).toUpperCase();
+            
             // Badge Styling
             let badge = "";
             if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
@@ -1466,9 +1454,12 @@ window.loadInventoryHistory = () => {
             else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
 
             // Signature Button
-            const sigBtn = l.signature
+            const sigBtn = l.signature && l.signature.startsWith('data:image')
                 ? `<button class="info" style="padding:2px 5px; font-size:11px;" onclick="viewSignature('${l.signature}')">View</button>`
                 : `<span style="color:#ccc;">--</span>`;
+
+            // ITEM DETAILS (Now includes Barcode for search to work)
+            const barcodeDisplay = l.barcode ? `<span style="font-family:monospace; background:#eee; padding:1px 4px; border-radius:3px;">${l.barcode}</span>` : "";
 
             const row = `
             <tr class="inv-log-row">
@@ -1477,19 +1468,23 @@ window.loadInventoryHistory = () => {
                 <td>${badge}</td>
                 <td>
                     <span style="font-weight:bold; font-size:13px;">${l.item}</span><br>
-                    <span style="color:#666; font-size:11px;">Qty: ${l.qty}</span>
+                    <span style="color:#666; font-size:11px;">${barcodeDisplay} Qty: ${l.qty}</span>
                 </td>
-                <td>${l.takenBy}</td>
+                <td>${l.takenBy || l.user}</td>
+                
                 <td>
-                    <span style="color:green; font-weight:bold;">✔ ${l.approvedBy || 'System'}</span>
+                    <span style="color:#003366; font-weight:bold;">🛡️ ${l.approvedBy || 'System'}</span>
                 </td>
+                
                 <td style="text-align:center;">${sigBtn}</td>
             </tr>`;
             tbody.innerHTML += row;
         });
+        
+        // Re-run filter in case a search term is already typed
+        filterInvLogs();
     }, { onlyOnce: true });
 };
-
 // --- NEW SEARCH FUNCTION FOR INVENTORY ---
 window.filterInvLogs = () => {
     const input = document.getElementById("invSearch").value.toLowerCase();
