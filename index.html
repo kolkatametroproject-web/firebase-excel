@@ -313,7 +313,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <button onclick="toggleInvMode('history')" class="secondary">📜 Audit Trail</button>
     </div>
 
-    <<div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
+    <div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
     <h3 style="color:#003366;">Add Inventory (1 Unit)</h3>
     <p style="font-size:12px; color:#666;">Scan barcode. Each addition equals <strong>1 Item</strong>.</p>
    
@@ -552,7 +552,7 @@ const db = getDatabase(app);
 
 let currentUser;
 let isAdmin = false;
-const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project"];
+const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project", "YOUR_LOGIN_EMAIL@HERE.COM"];
 let stream = null;
 let currentFileBase64 = null;
 let currentFileType = null;
@@ -1426,65 +1426,111 @@ window.filterInvLogs = () => {
 };
 // --- FORCE CHECKOUT (NO CAMERA) ---
 window.initTransactionAuth = (type) => {
-   // 1. Safety Check: Did you scan a barcode?
-   if(!pendingTransactionItem) {
-       alert("⚠️ Please SCAN a barcode item first!");
-       return;
-   }
+    if(!pendingTransactionItem) {
+        alert("⚠️ Please SCAN a barcode first, then click 'Admin Face Approve'.");
+        return;
+    }
 
-   // 2. Set Global Variables
-   currentTransactionType = type; // 'CHECKOUT' or 'RETURN'
+    // FORCE MODE TO ADMIN
+    scanMode = 'ADMIN'; 
+    currentTransactionType = type; // 'CHECKOUT' or 'RETURN'
    
-   // 3. DIRECT SAVE - NO CAMERA, NO POPUP
-   // We skip the face scan and just tell the system "Admin Approved it"
-   console.log("Forcing transaction for:", pendingTransactionItem.item);
+    // Start Camera UI
+    document.getElementById("faceModal").classList.remove("hidden");
+    document.getElementById("modalTitle").innerText = `🛡️ Admin Authorization`;
+    document.getElementById("modalDesc").innerText = "Admin: Scan face to approve transaction.";
+    
+    // Hide irrelevant parts
+    document.getElementById("regProgress").classList.add("hidden");
+    document.getElementById("otpUI").classList.add("hidden");
+    
+    // Reset Button
+    const btn = document.getElementById("btnCapture");
+    btn.innerText = "📸 Scan Admin Face";
+    btn.disabled = false;
+    btn.onclick = handleFaceScan; // Connect the button
    
-   // Call the save function directly with a fake Admin name
-   processTransaction("Manual Override"); 
+    document.getElementById("videoContainer").classList.remove("hidden");
+    document.getElementById("camControls").classList.remove("hidden");
+   
+    initCamera(true);
 };
 async function processTransaction(adminName) {
-   if(!pendingTransactionItem) return;
+    // 1. Safety Checks
+    if (!pendingTransactionItem) {
+        alert("❌ Error: No Item Scanned. Please scan item again.");
+        stopCamera();
+        return;
+    }
 
-   const isCheckout = currentTransactionType === 'CHECKOUT';
-   const itemKey = pendingTransactionItem.key;
-   const itemName = pendingTransactionItem.item;
-   
-   // 1. Update Inventory Count
-   const invRef = ref(db, `inventory/${itemKey}`);
-   const invSnap = await get(invRef);
-   
-   if(invSnap.exists()) {
-       const currentQty = parseInt(invSnap.val().qty || 0);
-       const newQty = isCheckout ? (currentQty - 1) : (currentQty + 1);
-       
-       // Update the stock number
-       await update(invRef, { qty: newQty });
-   }
+    const isCheckout = (currentTransactionType === 'CHECKOUT');
+    const itemKey = pendingTransactionItem.key;
+    const itemName = pendingTransactionItem.item;
 
-   // 2. CREATE THE LOG ENTRY (This is what appears in Audit Trail)
-   const logData = {
-       type: currentTransactionType, // 'CHECKOUT' or 'RETURN'
-       item: itemName,
-       qty: 1,
-       takenBy: currentUser.email || "Unknown User", // The student
-       approvedBy: adminName,     // "Manual Override"
-       time: serverTimestamp()    // Real Server Time
-   };
+    // 2. Get Current Stock from Database
+    const invRef = ref(db, `inventory/${itemKey}`);
+    const invSnap = await get(invRef);
 
-   // Save to 'logs'
-   await push(ref(db, "logs"), logData);
-   
-   // 3. Success Message
-   alert("✅ SUCCESS!\nDatabase Updated.\nCheck Audit Trail now.");
-   
-   // 4. Cleanup
-   document.getElementById("checkout_display").classList.add("hidden");
-   document.getElementById("return_display").classList.add("hidden");
-   pendingTransactionItem = null;
-   
-   // 5. Go to History to see the result
-   switchTab('inventory');
-   toggleInvMode('history');
+    if (!invSnap.exists()) {
+        alert("❌ Item data not found in DB.");
+        stopCamera();
+        return;
+    }
+
+    // STRICT NUMBER CONVERSION
+    const currentQty = parseInt(invSnap.val().qty || 0);
+
+    // 3. Prevent Negative Stock (-1 Bug Fix)
+    if (isCheckout && currentQty <= 0) {
+        stopCamera();
+        alert(`❌ OUT OF STOCK!\nCurrent Qty: ${currentQty}\nCannot Checkout.`);
+        // Reset UI
+        document.getElementById("checkout_display").classList.add("hidden");
+        return;
+    }
+
+    // 4. Calculate New Quantity
+    const newStoreQty = isCheckout ? (currentQty - 1) : (currentQty + 1);
+
+    // 5. Update Database
+    await update(invRef, { qty: newStoreQty });
+
+    // 6. Save Log (Fixes "No Movement" bug)
+    // We force the transaction type to be valid for the Audit Trail filter
+    const logType = isCheckout ? 'CHECKOUT' : 'RETURN';
+    
+    // Get User Name properly
+    let takenByName = "Unknown";
+    if (currentUser) {
+        takenByName = currentUser.name || currentUser.email;
+    }
+
+    const logData = {
+        type: logType,  // This MUST match the Audit Trail filter
+        item: itemName,
+        qty: 1,
+        takenBy: takenByName,
+        approvedBy: adminName, // The Admin who scanned their face
+        signature: "Biometric Auth",
+        time: serverTimestamp()
+    };
+
+    await push(ref(db, "logs"), logData);
+
+    // 7. Success Message & Reset
+    alert(`✅ Success!\n${logType} Complete.\nNew Stock: ${newStoreQty}`);
+    
+    stopCamera();
+    
+    // Hide the yellow/blue transaction boxes
+    document.getElementById("checkout_display").classList.add("hidden");
+    document.getElementById("return_display").classList.add("hidden");
+    pendingTransactionItem = null;
+
+    // 8. Auto-refresh the Audit Trail
+    switchTab('history'); 
+    // Small delay to ensure DB updates before reading
+    setTimeout(loadInventoryHistory, 500); 
 }
 // --- APP FEATURES ---
 
