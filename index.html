@@ -383,39 +383,33 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
     </div>
 </div>
-    <div id="inv-history" class="panel hidden">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-        <h3 style="margin:0; color:#003366;">📜 Stock Audit Trail</h3>
-        
-        <div style="display:flex; gap:10px;">
-            <button onclick="loadInventoryHistory()" class="info" style="padding:5px 15px; height:35px;">
-                🔄 Refresh List
-            </button>
-            
-            <input type="text" id="invSearch" onkeyup="filterInvLogs()" 
-                   placeholder="🔍 Search User or Item..." 
-                   style="padding:5px; height:35px; border:1px solid #aaa; width:200px;">
-        </div>
-    </div>
-    
-    <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
-        <div class="table-wrapper">
-            <table style="margin-top:0;">
-                <thead style="position:sticky; top:0; z-index:100;">
-                    <tr style="background:#003366; color:white;">
-                        <th style="width:25%;">Date & Time</th>
-                        <th style="width:35%;">Receiver (User)</th>
-                        <th style="width:40%;">Item Status</th>
-                    </tr>
-                </thead>
-                <tbody id="invHistoryBody" style="background:white;">
-                    <tr><td colspan="3" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
+<div id="inv-history" class="panel hidden">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+    <h3 style="color:#003366;">📜 Audit Trail (Stock Ledger)</h3>
+    <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search User or Item..." style="width:250px; padding:8px; border:1px solid #aaa; border-radius:4px;">
+  </div>
 
+  <div style="max-height:500px; overflow-y:scroll; border:1px solid #d1d5db; border-radius:4px;">
+    <div class="table-wrapper">
+      <table style="margin-top:0; width:100%;">
+        <thead style="position:sticky; top:0; z-index:100;">
+          <tr style="background:#003366; color:white; text-transform:uppercase; font-size:12px;">
+            <th style="padding:12px;">Date & Time</th>
+            <th style="padding:12px;">Receiver (User)</th>
+            <th style="padding:12px;">Item Details</th>
+            <th style="padding:12px;">Status</th>
+            <th style="padding:12px;">Admin Auth</th>
+          </tr>
+        </thead>
+        <tbody id="invHistoryBody" style="background:white; font-size:13px;">
+          <tr>
+            <td colspan="5" style="text-align:center; padding:20px;">Loading Audit Records...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
     <div id="inv-list" class="panel">
         <h3>Current Inventory</h3>
         <div class="table-wrapper">
@@ -1307,79 +1301,83 @@ function formatTime(ts) {
 }
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Live Data...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
 
-    // 1. Fetch 500 items to look past any Login spam
-    const q = query(ref(db, "logs"), limitToLast(500));
-   
-    // REMOVED 'onlyOnce: true' so this updates LIVE
+    // Query the last 100 logs
+    const q = query(ref(db, "logs"), limitToLast(100));
+
+    // Changed to standard onValue for live updates
     onValue(q, (snap) => {
-        const logs = [];
-        if(snap.exists()) {
-            snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-            logs.reverse(); // Newest first
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No records found in database.</td></tr>";
+            return;
         }
 
-        // 2. DEBUG: Get the very last log of ANY type (even Login)
-        const lastSystemLog = logs.length > 0 ? logs[0] : null;
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // Show newest first
 
-        // 3. Flexible Filter: Finds 'Checkout', 'Return', 'Add' regardless of capitalization
-        const invLogs = logs.filter(l => {
-            const t = (l.type || "").toUpperCase();
-            return t.includes('CHECKOUT') || t.includes('RETURN') || t.includes('STOCK');
-        });
+        // Filter: Only show Checkout, Return, or Add Stock
+        const invLogs = logs.filter(l => 
+            l.type === 'CHECKOUT' || 
+            l.type === 'RETURN' || 
+            l.type === 'STOCK_ADD' || 
+            l.type === 'STOCK_UPDATE'
+        );
 
-        const displayLogs = invLogs.slice(0, 60);
-
-        // 4. Handle "No History" but show System Status
-        if(displayLogs.length === 0) {
-            let debugMsg = "Database is completely empty.";
-            if(lastSystemLog) {
-                debugMsg = `System is connected.<br>Last Event detected: <strong>${lastSystemLog.type}</strong> by ${lastSystemLog.takenBy || 'Unknown'}`;
-            }
-
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan='3' style='text-align:center; padding:20px; color:#666;'>
-                        <strong>No Stock History Found.</strong><br><br>
-                        <div style="background:#f8f9fa; padding:10px; border:1px dashed #ccc; font-size:11px; color:#333;">
-                            🔍 <strong>DEBUG INFO:</strong><br>
-                            ${debugMsg}
-                        </div>
-                    </td>
-                </tr>`;
+        if (invLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No Stock movement found.</td></tr>";
             return;
         }
 
         tbody.innerHTML = "";
         
-        displayLogs.forEach(l => {
-            // Time
-            let timeStr = "--:--";
-            let dateStr = "--/--";
-            if(l.time) {
-                const d = new Date(l.time);
-                timeStr = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-                dateStr = d.toLocaleDateString('en-GB');
+        invLogs.forEach(l => {
+            // 1. Format Date
+            const dateObj = l.time ? new Date(l.time) : new Date();
+            const dateStr = dateObj.toLocaleDateString('en-GB'); // DD/MM/YYYY
+            const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            // 2. Format Receiver
+            // We use 'takenBy' (Checkout/Return) or 'user' (Stock Add)
+            const receiverName = l.takenBy || l.user || "Unknown User";
+            
+            // 3. Format Status/Type
+            let statusBadge = "";
+            let rowBg = "#fff";
+
+            if (l.type === 'CHECKOUT') {
+                statusBadge = `<span style="background:#b38600; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">📤 CHECKED OUT</span>`;
+                rowBg = "#fff8e1"; // Light Gold
+            } else if (l.type === 'RETURN') {
+                statusBadge = `<span style="background:#17a2b8; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">📥 RETURNED</span>`;
+                rowBg = "#e0f7fa"; // Light Cyan
+            } else if (l.type.includes('STOCK')) {
+                statusBadge = `<span style="background:#28a745; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">➕ STOCK ADDED</span>`;
             }
 
-            // Colors & Badge
-            const type = (l.type || "").toUpperCase();
-            let color = "#333";
-            let badge = l.type;
-            
-            if(type.includes('CHECKOUT')) { color = "#b38600"; badge = "📤 OUT"; }
-            else if(type.includes('RETURN')) { color = "#17a2b8"; badge = "📥 IN"; }
-            else if(type.includes('STOCK')) { color = "green"; badge = "➕ ADD"; }
+            // 4. Admin Info
+            const authInfo = l.approvedBy ? `<span style="color:green; font-weight:bold;">✔ ${l.approvedBy}</span>` : `<span style="color:#999;">System</span>`;
 
-            tbody.innerHTML += `
-            <tr class="inv-log-row">
-                <td style="text-align:center; font-size:12px; color:#555;">
-                    <span style="font-weight:bold; color:#000; font-size:13px;">${timeStr}</span><br>${dateStr}
+            // Build Row
+            const row = `
+            <tr class="inv-log-row" style="background:${rowBg}; border-bottom:1px solid #dee2e6;">
+                <td style="padding:12px;">
+                    <div style="font-weight:bold; color:#003366;">${dateStr}</div>
+                    <div style="font-size:11px; color:#666;">${timeStr}</div>
                 </td>
-                <td style="font-weight:bold; color:#003366;">${l.takenBy || "Unknown"}</td>
-                <td style="color:${color}; font-weight:bold;">${badge} ${l.item}</td>
+                <td style="padding:12px; font-weight:bold; font-size:14px;">
+                    👤 ${receiverName}
+                </td>
+                <td style="padding:12px;">
+                    <div style="font-weight:bold;">${l.item || 'Unknown Item'}</div>
+                    <div style="font-size:11px; color:#555;">Qty: ${l.qty}</div>
+                </td>
+                <td style="padding:12px;">${statusBadge}</td>
+                <td style="padding:12px; font-size:12px;">${authInfo}</td>
             </tr>`;
+            
+            tbody.innerHTML += row;
         });
     });
 };
