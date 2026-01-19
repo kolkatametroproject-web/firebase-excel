@@ -384,28 +384,37 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     </div>
 </div>
     <div id="inv-history" class="panel hidden">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-            <h3>📜 Stock Ledger (Audit Trail)</h3>
-            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search Item, Barcode or User..." style="width:250px; max-width:100%; padding:8px; border:1px solid #aaa;">
-        </div>
-       
-        <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
-            <div class="table-wrapper">
-            <table style="margin-top:0;">
-                <thead style="position:sticky; top:0; z-index:100;">
-    <tr style="background:#003366; color:white;">
-        <th style="width:25%;">Date & Time</th>
-        <th style="width:35%;">Receiver ID (User)</th>
-        <th style="width:40%;">Product Status</th>
-    </tr>
-</thead>
-                <tbody id="invHistoryBody" style="background:white;">
-                    <tr><td colspan="7" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
-                </tbody>
-            </table>
-            </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+        <h3 style="margin:0; color:#003366;">📜 Stock Audit Trail</h3>
+        
+        <div style="display:flex; gap:10px;">
+            <button onclick="loadInventoryHistory()" class="info" style="padding:5px 15px; height:35px;">
+                🔄 Refresh List
+            </button>
+            
+            <input type="text" id="invSearch" onkeyup="filterInvLogs()" 
+                   placeholder="🔍 Search User or Item..." 
+                   style="padding:5px; height:35px; border:1px solid #aaa; width:200px;">
         </div>
     </div>
+    
+    <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
+        <div class="table-wrapper">
+            <table style="margin-top:0;">
+                <thead style="position:sticky; top:0; z-index:100;">
+                    <tr style="background:#003366; color:white;">
+                        <th style="width:25%;">Date & Time</th>
+                        <th style="width:35%;">Receiver (User)</th>
+                        <th style="width:40%;">Item Status</th>
+                    </tr>
+                </thead>
+                <tbody id="invHistoryBody" style="background:white;">
+                    <tr><td colspan="3" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
 
     <div id="inv-list" class="panel">
         <h3>Current Inventory</h3>
@@ -1298,9 +1307,9 @@ function formatTime(ts) {
 }
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading History...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Refreshing Data...</td></tr>";
 
-    // CHANGE 1: Fetch 500 items (not 50) so we don't miss data hidden by 'Logins'
+    // Fetch 500 to ensure we find real data
     const q = query(ref(db, "logs"), limitToLast(500));
    
     onValue(q, (snap) => {
@@ -1308,65 +1317,58 @@ window.loadInventoryHistory = () => {
         
         if(snap.exists()) {
             snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-            logs.reverse(); // Newest first
+            logs.reverse(); 
         }
 
-        // CHANGE 2: Filter strictly for Stock Movement
         const invLogs = logs.filter(l => 
-            l.type === 'CHECKOUT' || 
-            l.type === 'RETURN' || 
-            l.type === 'STOCK_ADD' || 
-            l.type === 'STOCK_UPDATE'
+            l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type.includes('STOCK')
         );
 
-        // CHANGE 3: Keep exactly 60 rows as requested
         const displayLogs = invLogs.slice(0, 60);
 
         if(displayLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px; color:#666;'>No stock history found yet.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'>No history found. <button onclick='addTestTransaction()'>Generate Test Data</button></td></tr>";
             return;
         }
 
         tbody.innerHTML = "";
         
         displayLogs.forEach(l => {
-            // Fix Date Time
-            let timeStr = "Just now";
-            let dateStr = "Today";
-            
+            // Time Logic
+            let timeStr = "--:--";
+            let dateStr = "--/--/----";
             if(l.time) {
-                const dateObj = new Date(l.time);
-                // Force 24-hour format like '19:55'
-                timeStr = dateObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-                // Force Date format like '19/01/2026'
-                dateStr = dateObj.toLocaleDateString('en-GB');
+                const d = new Date(l.time);
+                timeStr = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+                dateStr = d.toLocaleDateString('en-GB');
             }
 
-            // Colors
+            // Badge Logic
             let color = "#333";
             let badge = l.type;
-            
             if(l.type === 'CHECKOUT') { color = "#b38600"; badge = "📤 OUT"; }
             if(l.type === 'RETURN')   { color = "#17a2b8"; badge = "📥 IN"; }
             if(l.type.includes('STOCK')) { color = "green"; badge = "➕ ADD"; }
 
-            // Render
-            const row = `
+            tbody.innerHTML += `
             <tr class="inv-log-row">
-                <td style="font-size:12px; color:#555; text-align:center;">
-                    <span style="font-size:14px; font-weight:bold; color:#000;">${timeStr}</span><br>
-                    <span style="font-size:11px; color:#888;">${dateStr}</span>
+                <td style="text-align:center; font-size:12px; color:#555;">
+                    <span style="font-weight:bold; color:#000; font-size:13px;">${timeStr}</span><br>${dateStr}
                 </td>
-                <td style="font-weight:bold; color:#003366; vertical-align:middle;">
-                    ${l.takenBy || "Unknown"}
-                </td>
-                <td style="color:${color}; font-weight:bold; vertical-align:middle;">
-                    ${badge} ${l.item}
-                </td>
+                <td style="font-weight:bold; color:#003366;">${l.takenBy || "Unknown"}</td>
+                <td style="color:${color}; font-weight:bold;">${badge} ${l.item}</td>
             </tr>`;
-            
-            tbody.innerHTML += row;
         });
+    }, { onlyOnce: true }); // 'onlyOnce' stops it from blinking constantly, so the Refresh button is useful
+};
+// --- ADD THIS HELPER FUNCTION BELOW ---
+window.addTestTransaction = () => {
+    push(ref(db, "logs"), {
+        type: "CHECKOUT",
+        item: "Test Product A",
+        qty: 1,
+        takenBy: "System Test",
+        time: serverTimestamp() // This uses the correct server time
     });
 };
 // --- HELPER TO FORCE DATA IF EMPTY ---
