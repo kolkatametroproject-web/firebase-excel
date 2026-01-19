@@ -375,9 +375,9 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     <h3 style="color:#17a2b8;">📥 Return (1 Unit)</h3>
    
     <div style="text-align:center; padding:20px;">
-        <button onclick="openBarcodeScanner('RETURN')" class="info" style="font-size:16px; padding:15px 30px; width:100%;">
-            <i class="fas fa-qrcode"></i> SCAN ITEM TO RETURN
-        </button>
+        <button type="button" onclick="openBarcodeScanner('RETURN')" class="info" style="font-size:16px; padding:15px 30px; width:100%;">
+    <i class="fas fa-qrcode"></i> SCAN ITEM TO RETURN
+</button>
     </div>
 
     <div id="return_display" class="hidden" style="background:#d1ecf1; padding:15px; border:1px solid #bee5eb; text-align:center;">
@@ -808,18 +808,77 @@ window.fetchAuditHistory = async (barcode) => {
 };
 // FIND existing onScanSuccess and ADD the 'AUDIT_SEARCH' condition
 function onScanSuccess(decodedText) {
+    // 1. Always stop the camera first
     closeBarcodeScanner();
+    console.log("Scanned:", decodedText, "Mode:", scanMode); // Debugging
 
-    // --- EXISTING MODES ---
-    if(scanMode === 'ADD') { /* ... */ }
-    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') { /* ... */ }
-    
-    // --- NEW AUDIT MODE ---
+    // --- MODE: ADD STOCK ---
+    if (scanMode === 'ADD') {
+        document.getElementById("invBarcode").value = decodedText;
+        checkBarcodeExistence(decodedText);
+        // Using confirm instead of alert so it doesn't block UI rendering on some phones
+        if(confirm("Barcode Captured: " + decodedText)) {
+            // Focus on name field
+            document.getElementById("invName").focus();
+        }
+    }
+
+    // --- MODE: CHECKOUT or RETURN ---
+    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+        
+        // 1. Identify which panel to show
+        const displayId = (scanMode === 'CHECKOUT') ? "checkout_display" : "return_display";
+        const nameId = (scanMode === 'CHECKOUT') ? "checkout_item_name" : "return_item_name";
+        const codeId = (scanMode === 'CHECKOUT') ? "checkout_item_code" : "return_item_code";
+
+        // 2. Show "Loading..." status immediately
+        const displayEl = document.getElementById(displayId);
+        if(displayEl) displayEl.classList.remove("hidden");
+        document.getElementById(nameId).innerText = "Searching DB...";
+        document.getElementById(codeId).innerText = decodedText;
+
+        // 3. Query Database
+        const invRef = ref(db, "inventory");
+        const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
+
+        get(q).then(snap => {
+            if (!snap.exists()) {
+                alert("❌ ERROR: Item not found in database!\n\nBarcode: " + decodedText);
+                if(displayEl) displayEl.classList.add("hidden"); // Hide panel if invalid
+                return;
+            }
+
+            // 4. Item Found - Extract Data
+            let foundItem = null;
+            let foundKey = null;
+            snap.forEach(c => { 
+                foundItem = c.val(); 
+                foundKey = c.key; 
+            });
+
+            // 5. Store for the next step (Face Auth)
+            pendingTransactionItem = { key: foundKey, ...foundItem };
+
+            // 6. Update UI with Real Name
+            document.getElementById(nameId).innerText = foundItem.item;
+            
+            // 7. Verify logic specific to RETURN
+            if(scanMode === 'RETURN') {
+                // Optional: visual cue that it's ready
+                document.getElementById(nameId).style.color = "#17a2b8"; 
+            }
+
+        }).catch(err => {
+            console.error(err);
+            alert("Database Error: " + err.message);
+        });
+    }
+
+    // --- MODE: AUDIT (ADMIN) ---
     else if (scanMode === 'AUDIT_SEARCH') {
-        if(!isAdmin) return alert("Security Alert: Admins Only.");
+        if (!isAdmin) return alert("Admins Only.");
         fetchAuditHistory(decodedText);
     }
-    // ...
 }
 function onScanFailure(error) {
     // Do nothing, keep scanning
