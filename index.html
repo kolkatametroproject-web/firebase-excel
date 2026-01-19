@@ -383,41 +383,34 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
     </div>
 </div>
-      <div id="inv-history" class="panel hidden">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-        <h3>📜 Stock Ledger (History)</h3>
-        
-        <div style="display:flex; gap:5px; flex-grow:1; max-width:500px;">
-            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="Scan Barcode or Search..." style="flex-grow:1; padding:8px; border:1px solid #aaa;">
-            <button onclick="openBarcodeScanner('AUDIT')" class="info" style="padding:0 15px;" title="Scan Barcode">
-                <i class="fas fa-qrcode"></i>
-            </button>
-            <button onclick="loadInventoryHistory()" class="primary" title="Refresh Table">
-                <i class="fas fa-sync"></i>
-            </button>
+    <div id="inv-history" class="panel hidden">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+            <h3>📜 Stock Ledger (Audit Trail)</h3>
+            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search Item, Barcode or User..." style="width:250px; max-width:100%; padding:8px; border:1px solid #aaa;">
+        </div>
+       
+        <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
+            <div class="table-wrapper">
+            <table style="margin-top:0;">
+                <thead style="position:sticky; top:0; z-index:100;">
+                    <tr style="background:#003366; color:white;">
+                        <th>Txn ID</th>
+                        <th>Date & Time</th>
+                        <th>Type</th>
+                        <th>Item Details</th>
+                        <th>User (Receiver)</th>
+                        <th>Authorized By</th>
+                        <th>Signature</th>
+                    </tr>
+                </thead>
+                <tbody id="invHistoryBody" style="background:white;">
+                    <tr><td colspan="7" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
+                </tbody>
+            </table>
+            </div>
         </div>
     </div>
-    
-    <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
-        <div class="table-wrapper">
-        <table style="margin-top:0;">
-            <thead style="position:sticky; top:0; z-index:100;">
-                <tr style="background:#003366; color:white;">
-                    <th>Txn ID</th>
-                    <th>Date & Time</th>
-                    <th>Type</th>
-                    <th>Item Details</th>
-                    <th>User (Receiver)</th>
-                    <th>Authorized By</th> <th>Signature</th>
-                </tr>
-            </thead>
-            <tbody id="invHistoryBody" style="background:white;">
-                <tr><td colspan="7" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
-            </tbody>
-        </table>
-        </div>
-    </div>
-</div>
+
     <div id="inv-list" class="panel">
         <h3>Current Inventory</h3>
         <div class="table-wrapper">
@@ -685,28 +678,18 @@ window.closeBarcodeScanner = () => {
     }
 }
 function onScanSuccess(decodedText) {
-    // 1. STOP SCANNER (Common for all modes)
+    // STOP SCANNER
     closeBarcodeScanner();
 
-    // --- MODE: ADD INVENTORY ---
     if(scanMode === 'ADD') {
         document.getElementById("invBarcode").value = decodedText;
         checkBarcodeExistence(decodedText);
         alert("Barcode Captured: " + decodedText);
     }
-    
-    // --- MODE: AUDIT / HISTORY (THIS IS THE FIXED PART) ---
-    else if (scanMode === 'AUDIT') {
-        // Just put the barcode in the search box
-        document.getElementById("invSearch").value = decodedText;
-        // And immediately filter the table rows
-        filterInvLogs(); 
-    }
-    
-    // --- MODE: CHECKOUT OR RETURN ---
     else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        
-        // Show the verification display
+       
+        // --- NEW: SHOW SCANNED NUMBER FIRST ---
+        // 1. Immediately show the code in the display box so user can see it
         if(scanMode === 'CHECKOUT') {
             document.getElementById("checkout_display").classList.remove("hidden");
             document.getElementById("checkout_item_name").innerText = "Verifying...";
@@ -717,30 +700,41 @@ function onScanSuccess(decodedText) {
             document.getElementById("return_item_code").innerText = decodedText;
         }
 
-        // Search Database for this barcode
+        // 2. Ask user to confirm the scanned number
+        if(!confirm("Scanned Barcode: " + decodedText + "\n\nPress OK to search DB and take this item.")) {
+            // If user cancels, hide the display again
+            if(scanMode === 'CHECKOUT') document.getElementById("checkout_display").classList.add("hidden");
+            else document.getElementById("return_display").classList.add("hidden");
+            return;
+        }
+        // --- END NEW LOGIC ---
+
+        // DIRECT LOOKUP (PRESERVED)
         const invRef = ref(db, "inventory");
         const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
-        
+       
         get(q).then(snap => {
             if(!snap.exists()) {
+                // Logic preserved, but alert is now more helpful
                 alert("❌ Item not found in inventory!\n(Scanned Code: " + decodedText + ")");
-                if(scanMode === 'CHECKOUT') document.getElementById("checkout_display").classList.add("hidden");
-                else document.getElementById("return_display").classList.add("hidden");
                 return;
             }
-            
+           
+            // Get the first match
             let foundItem = null;
             let foundKey = null;
             snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
 
-            // Save item for the next step (Face ID)
+            // Store for the Transaction Step
             pendingTransactionItem = { key: foundKey, ...foundItem };
 
-            // Show details on screen
+            // Update UI with actual Item Name from DB
             if(scanMode === 'CHECKOUT') {
+                document.getElementById("checkout_display").classList.remove("hidden");
                 document.getElementById("checkout_item_name").innerText = foundItem.item;
                 document.getElementById("checkout_item_code").innerText = foundItem.barcode;
             } else {
+                document.getElementById("return_display").classList.remove("hidden");
                 document.getElementById("return_item_name").innerText = foundItem.item;
                 document.getElementById("return_item_code").innerText = foundItem.barcode;
             }
@@ -927,124 +921,7 @@ function resetTimer() {
         }, 5 * 60 * 1000);
     }
 }
-// --- NEW: CUSTODY CHAIN CHECKER ---
-window.checkCustodyChain = async () => {
-    const searchInput = document.getElementById("invSearch").value.trim();
-    if (!searchInput) return alert("Please enter or scan a Barcode in the search box first.");
 
-    const panel = document.getElementById("custodyResultPanel");
-    const list = document.getElementById("custodyList");
-    
-    panel.classList.remove("hidden");
-    list.innerHTML = "🔍 Analyzing Database...";
-
-    try {
-        // STEP 1: Identify Item Name from Barcode
-        let targetItemName = searchInput; 
-        const invSnap = await get(ref(db, "inventory"));
-        let found = false;
-        
-        invSnap.forEach(c => {
-            const val = c.val();
-            if (val.barcode === searchInput) {
-                targetItemName = val.item;
-                found = true;
-            }
-        });
-
-        const titleText = found ? `Identified Item: <strong>${targetItemName}</strong>` : `Searching for: <strong>${targetItemName}</strong>`;
-        list.innerHTML = `<div style="width:100%; margin-bottom:10px;">${titleText}</div>`;
-
-        // STEP 2: Fetch Logs (Checkout AND Return)
-        const logSnap = await get(query(ref(db, "logs"), limitToLast(500)));
-        
-        const allItemLogs = [];
-        logSnap.forEach(c => {
-            const l = c.val();
-            // Collect ALL actions for this item
-            if (l.item === targetItemName) {
-                allItemLogs.push(l);
-            }
-        });
-
-        // STEP 3: Find Checkouts and calculate status
-        // Filter only checkouts to build the user list
-        const checkoutLogs = allItemLogs.filter(l => l.type === 'CHECKOUT');
-        
-        // Sort Checkouts: Newest First
-        checkoutLogs.sort((a, b) => b.time - a.time);
-
-        // Get unique users (Last 4)
-        const uniqueEntries = [];
-        const seenNames = new Set();
-
-        for (const log of checkoutLogs) {
-            const user = log.takenBy || log.user;
-            
-            // We want to show the LATEST action for each unique person
-            if (!seenNames.has(user)) {
-                seenNames.add(user);
-
-                // --- KEY LOGIC: DID THEY RETURN IT? ---
-                // Search for a RETURN log by this user happening AFTER this checkout time
-                const returnLog = allItemLogs.find(l => 
-                    l.type === 'RETURN' && 
-                    (l.takenBy === user || l.user === user) && 
-                    l.time > log.time
-                );
-
-                let statusBadge = "";
-                let cardBorder = "";
-
-                if (returnLog) {
-                    const retDate = new Date(returnLog.time).toLocaleDateString();
-                    statusBadge = `<div style="background:#d4edda; color:#155724; padding:3px; font-size:10px; border-radius:3px; margin-top:5px; text-align:center;">✅ RETURNED<br>${retDate}</div>`;
-                    cardBorder = "border:1px solid #c3e6cb;"; 
-                } else {
-                    statusBadge = `<div style="background:#f8d7da; color:#721c24; padding:3px; font-size:10px; border-radius:3px; margin-top:5px; text-align:center; font-weight:bold;">⚠️ STILL HOLDING</div>`;
-                    cardBorder = "border:2px solid #dc3545; box-shadow:0 0 5px rgba(220,53,69,0.2);"; 
-                }
-                // --------------------------------------
-
-                uniqueEntries.push({
-                    name: user,
-                    time: log.time,
-                    admin: log.approvedBy,
-                    statusHtml: statusBadge,
-                    borderStyle: cardBorder
-                });
-            }
-            if (uniqueEntries.length >= 6) break; 
-        }
-
-        // STEP 4: Render
-        if (uniqueEntries.length === 0) {
-            list.innerHTML += "<div>No checkout history found for this item.</div>";
-            return;
-        }
-
-        let html = "";
-        uniqueEntries.forEach((u, index) => {
-            const dateStr = new Date(u.time).toLocaleDateString() + " " + new Date(u.time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            
-            // Layout
-            html += `
-            <div style="background:white; padding:10px; border-radius:5px; min-width:140px; flex:1; ${u.borderStyle}">
-                <div style="font-size:10px; font-weight:bold; color:#666; margin-bottom:5px;">${index === 0 ? "LATEST USER" : "PREVIOUS USER"}</div>
-                <div style="font-size:13px; font-weight:bold; color:#000;">👤 ${u.name}</div>
-                <div style="font-size:10px; color:#555; margin-top:2px;">Taken: ${dateStr}</div>
-                ${u.statusHtml}
-            </div>
-            `;
-        });
-        
-        list.innerHTML += `<div style="display:flex; gap:10px; flex-wrap:wrap; width:100%;">${html}</div>`;
-
-    } catch (e) {
-        console.error(e);
-        list.innerHTML = "Error analyzing data: " + e.message;
-    }
-};
 window.saveOfficialName = () => {
     const name = document.getElementById("officialNameInput").value;
     if(name.length < 3) return alert("Enter full valid name.");
@@ -1423,19 +1300,20 @@ function formatTime(ts) {
     // Audit Style Date
     return d.toLocaleDateString('en-GB') + " " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
+
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
     tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
 
-    // FETCH DATA
+    // FETCH MORE DATA (300) to ensure we find inventory items even if many people logged in
     const q = query(ref(db, "logs"), limitToLast(300));
-    
+   
     onValue(q, (snap) => {
         const logs = [];
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
         logs.reverse(); // Newest first
 
-        // Filter for Inventory Movement Only
+        // Strict Filter: Only show movement of goods
         const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE');
 
         if(invLogs.length === 0) {
@@ -1445,8 +1323,8 @@ window.loadInventoryHistory = () => {
 
         tbody.innerHTML = "";
         invLogs.forEach(l => {
-            const txnId = l.key.substring(l.key.length - 6).toUpperCase();
-            
+            const txnId = l.key.substring(l.key.length - 6).toUpperCase(); // Last 6 chars as ID
+           
             // Badge Styling
             let badge = "";
             if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
@@ -1454,12 +1332,9 @@ window.loadInventoryHistory = () => {
             else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
 
             // Signature Button
-            const sigBtn = l.signature && l.signature.startsWith('data:image')
+            const sigBtn = l.signature
                 ? `<button class="info" style="padding:2px 5px; font-size:11px;" onclick="viewSignature('${l.signature}')">View</button>`
                 : `<span style="color:#ccc;">--</span>`;
-
-            // ITEM DETAILS (Now includes Barcode for search to work)
-            const barcodeDisplay = l.barcode ? `<span style="font-family:monospace; background:#eee; padding:1px 4px; border-radius:3px;">${l.barcode}</span>` : "";
 
             const row = `
             <tr class="inv-log-row">
@@ -1468,23 +1343,19 @@ window.loadInventoryHistory = () => {
                 <td>${badge}</td>
                 <td>
                     <span style="font-weight:bold; font-size:13px;">${l.item}</span><br>
-                    <span style="color:#666; font-size:11px;">${barcodeDisplay} Qty: ${l.qty}</span>
+                    <span style="color:#666; font-size:11px;">Qty: ${l.qty}</span>
                 </td>
-                <td>${l.takenBy || l.user}</td>
-                
+                <td>${l.takenBy}</td>
                 <td>
-                    <span style="color:#003366; font-weight:bold;">🛡️ ${l.approvedBy || 'System'}</span>
+                    <span style="color:green; font-weight:bold;">✔ ${l.approvedBy || 'System'}</span>
                 </td>
-                
                 <td style="text-align:center;">${sigBtn}</td>
             </tr>`;
             tbody.innerHTML += row;
         });
-        
-        // Re-run filter in case a search term is already typed
-        filterInvLogs();
     }, { onlyOnce: true });
 };
+
 // --- NEW SEARCH FUNCTION FOR INVENTORY ---
 window.filterInvLogs = () => {
     const input = document.getElementById("invSearch").value.toLowerCase();
@@ -1544,11 +1415,10 @@ async function processTransaction(adminName) {
     const uSnap = await get(ref(db, `users/${currentUser.uid}`));
     const realUserName = uSnap.val()?.name || currentUser.email;
 
+    // 3. Log
     const logData = {
         type: currentTransactionType,
         item: itemName,
-        // ADD THIS LINE BELOW:
-        barcode: pendingTransactionItem.barcode || "N/A", 
         qty: 1,
         takenBy: realUserName,
         approvedBy: adminName,
@@ -2070,4 +1940,3 @@ window.completeTask = (k) => update(ref(db, `assignments/${currentUser.uid}/${k}
 </script>
 </body>
 </html>
-
