@@ -1298,55 +1298,58 @@ function formatTime(ts) {
 }
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading All Records...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading Live Inventory Records...</td></tr>";
 
-    // 1. Fetch from 'logs' in Database
-    const q = query(ref(db, "logs"), limitToLast(100));
+    // 1. Listen to 'logs' in Real-Time (Last 50 entries)
+    const q = query(ref(db, "logs"), limitToLast(50));
    
     onValue(q, (snap) => {
-        // 2. Check if Database is Empty
-        if(!snap.exists()) {
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan='3' style='text-align:center; padding:20px; color:red;'>
-                        Database is empty!<br>
-                        <button onclick="addTestLog()" style="margin-top:10px; padding:5px 10px; background:#003366; color:white; cursor:pointer;">
-                            Click here to Generate Test Data
-                        </button>
-                    </td>
-                </tr>`;
+        const logs = [];
+        
+        // 2. Get Data
+        if(snap.exists()) {
+            snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+            logs.reverse(); // Newest time at the top
+        }
+
+        // 3. FILTER: ONLY show Checkout and Return
+        // We throw away 'LOGIN', 'LOGOUT', etc.
+        const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN');
+
+        // 4. Handle Empty Case
+        if(invLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px; color:#666;'>No items have been checked out yet.<br><small>Go to 'Inventory' > 'Checkout' to create a record.</small></td></tr>";
             return;
         }
 
-        const logs = [];
-        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        logs.reverse(); // Show newest first
-
+        // 5. Build the List
         tbody.innerHTML = "";
         
-        // 3. Render EVERYTHING (Filter removed for testing)
-        logs.forEach(l => {
-            // Check for missing data and set defaults
-            const timeStr = l.time ? formatTime(l.time) : "No Date";
-            const receiver = l.takenBy || l.user || "Unknown User";
-            const item = l.item || l.method || "Unknown Item";
-            const qty = l.qty || 0;
-            const type = l.type || "SYSTEM";
+        invLogs.forEach(l => {
+            // TIME Formatting
+            const dateObj = new Date(l.time);
+            const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateStr = dateObj.toLocaleDateString();
 
-            // Simple Color Coding
-            let colorStyle = "color:#555;"; 
-            if(type === 'CHECKOUT') colorStyle = "color:#b38600;"; // Gold
-            if(type === 'RETURN') colorStyle = "color:#17a2b8;"; // Cyan
-            if(type.includes('ADD')) colorStyle = "color:green;"; // Green
+            // COLOR Logic
+            let color = "black";
+            let arrow = "";
+            if(l.type === 'CHECKOUT') { color = "#b38600"; arrow = "📤 OUT"; } // Gold
+            if(l.type === 'RETURN')   { color = "#17a2b8"; arrow = "📥 IN"; }  // Blue
 
-            // Render Row
+            // ROW HTML
             const row = `
             <tr class="inv-log-row">
-                <td style="font-size:12px; color:#555;">${timeStr}</td>
-                <td style="font-weight:bold; color:#003366;">${receiver}</td>
-                <td style="${colorStyle} font-weight:bold;">
-                    [${type}] ${item} 
-                    <span style="color:#333; font-weight:normal; font-size:11px;">(Qty: ${qty})</span>
+                <td style="font-size:12px; color:#555;">
+                    ${timeStr}<br><span style="font-size:10px; color:#999;">${dateStr}</span>
+                </td>
+                
+                <td style="font-weight:bold; color:#003366;">
+                    ${l.takenBy}
+                </td>
+
+                <td style="color:${color}; font-weight:bold;">
+                    ${arrow} ${l.item}
                 </td>
             </tr>`;
             
@@ -1354,7 +1357,6 @@ window.loadInventoryHistory = () => {
         });
     });
 };
-
 // --- HELPER TO FORCE DATA IF EMPTY ---
 window.addTestLog = () => {
     push(ref(db, "logs"), {
