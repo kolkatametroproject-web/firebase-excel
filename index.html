@@ -387,11 +387,16 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
         <h3>📜 Stock Ledger & Custody Check</h3>
         <div style="display:flex; gap:5px; flex-grow:1; max-width:500px;">
-            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="Scan Barcode or Search..." style="flex-grow:1; padding:8px; border:1px solid #aaa;">
-            <button onclick="checkCustodyChain()" class="warning" style="white-space:nowrap;">
-                <i class="fas fa-users"></i> View Last 4 Users
-            </button>
-        </div>
+    <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="Scan/Type Barcode..." style="flex-grow:1; padding:8px; border:1px solid #aaa;">
+    
+    <button onclick="openBarcodeScanner('AUDIT')" class="info" style="padding:0 15px;" title="Scan Barcode">
+        <i class="fas fa-qrcode"></i>
+    </button>
+    
+    <button onclick="checkCustodyChain()" class="warning" style="white-space:nowrap;">
+        <i class="fas fa-users"></i> Last 4 Users
+    </button>
+</div>
     </div>
 
     <div id="custodyResultPanel" class="hidden" style="background:#fff3cd; border:1px solid #ffeeba; padding:15px; margin-bottom:15px; border-radius:4px;">
@@ -697,10 +702,24 @@ function onScanSuccess(decodedText) {
         checkBarcodeExistence(decodedText);
         alert("Barcode Captured: " + decodedText);
     }
+    // --- NEW AUDIT MODE ---
+    else if (scanMode === 'AUDIT') {
+        // 1. Fill the search box
+        document.getElementById("invSearch").value = decodedText;
+        
+        // 2. Filter the list below (Standard Search)
+        filterInvLogs(); 
+        
+        // 3. Automatically trigger the "Last 4 Users" check
+        checkCustodyChain();
+    }
+    // --- END NEW MODE ---
+    
     else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-       
-        // --- NEW: SHOW SCANNED NUMBER FIRST ---
-        // 1. Immediately show the code in the display box so user can see it
+        // ... (Keep your existing Checkout/Return logic here) ...
+        // ...
+        
+        // (Just ensure your existing code for checkout/return is preserved here)
         if(scanMode === 'CHECKOUT') {
             document.getElementById("checkout_display").classList.remove("hidden");
             document.getElementById("checkout_item_name").innerText = "Verifying...";
@@ -711,41 +730,28 @@ function onScanSuccess(decodedText) {
             document.getElementById("return_item_code").innerText = decodedText;
         }
 
-        // 2. Ask user to confirm the scanned number
-        if(!confirm("Scanned Barcode: " + decodedText + "\n\nPress OK to search DB and take this item.")) {
-            // If user cancels, hide the display again
-            if(scanMode === 'CHECKOUT') document.getElementById("checkout_display").classList.add("hidden");
-            else document.getElementById("return_display").classList.add("hidden");
-            return;
-        }
-        // --- END NEW LOGIC ---
-
-        // DIRECT LOOKUP (PRESERVED)
+        // DIRECT LOOKUP
         const invRef = ref(db, "inventory");
         const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
-       
+        
         get(q).then(snap => {
             if(!snap.exists()) {
-                // Logic preserved, but alert is now more helpful
                 alert("❌ Item not found in inventory!\n(Scanned Code: " + decodedText + ")");
+                if(scanMode === 'CHECKOUT') document.getElementById("checkout_display").classList.add("hidden");
+                else document.getElementById("return_display").classList.add("hidden");
                 return;
             }
-           
-            // Get the first match
+            
             let foundItem = null;
             let foundKey = null;
             snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
 
-            // Store for the Transaction Step
             pendingTransactionItem = { key: foundKey, ...foundItem };
 
-            // Update UI with actual Item Name from DB
             if(scanMode === 'CHECKOUT') {
-                document.getElementById("checkout_display").classList.remove("hidden");
                 document.getElementById("checkout_item_name").innerText = foundItem.item;
                 document.getElementById("checkout_item_code").innerText = foundItem.barcode;
             } else {
-                document.getElementById("return_display").classList.remove("hidden");
                 document.getElementById("return_item_name").innerText = foundItem.item;
                 document.getElementById("return_item_code").innerText = foundItem.barcode;
             }
@@ -944,85 +950,106 @@ window.checkCustodyChain = async () => {
     list.innerHTML = "🔍 Analyzing Database...";
 
     try {
-        // STEP 1: Find the Item Name associated with this Barcode
-        // We do this because older logs might save 'Drill' but not the barcode '8888'.
-        let targetItemName = searchInput; // Default to assuming user typed a name
-        
+        // STEP 1: Identify Item Name from Barcode
+        let targetItemName = searchInput; 
         const invSnap = await get(ref(db, "inventory"));
         let found = false;
         
         invSnap.forEach(c => {
             const val = c.val();
-            // If the input matches a barcode, grab the official Item Name
             if (val.barcode === searchInput) {
                 targetItemName = val.item;
                 found = true;
             }
         });
 
-        if (found) {
-            list.innerHTML = `<div><strong>Identified Item:</strong> ${targetItemName}</div><hr style="width:100%; border:0; border-top:1px solid #ddd; margin:10px 0;">`;
-        } else {
-             // If not found in inventory, we assume the user typed the Item Name directly
-             list.innerHTML = `<div><strong>Searching for:</strong> ${targetItemName}</div><hr style="width:100%; border:0; border-top:1px solid #ddd; margin:10px 0;">`;
-        }
+        const titleText = found ? `Identified Item: <strong>${targetItemName}</strong>` : `Searching for: <strong>${targetItemName}</strong>`;
+        list.innerHTML = `<div style="width:100%; margin-bottom:10px;">${titleText}</div>`;
 
-        // STEP 2: Fetch Logs and Filter for "CHECKOUT" of this Item
-        // We fetch last 500 logs to ensure we get enough history
+        // STEP 2: Fetch Logs (Checkout AND Return)
         const logSnap = await get(query(ref(db, "logs"), limitToLast(500)));
-        const relevantLogs = [];
-
+        
+        const allItemLogs = [];
         logSnap.forEach(c => {
             const l = c.val();
-            // We only care if someone TOOK it (CHECKOUT)
-            if (l.type === 'CHECKOUT' && l.item === targetItemName) {
-                relevantLogs.push(l);
+            // Collect ALL actions for this item
+            if (l.item === targetItemName) {
+                allItemLogs.push(l);
             }
         });
 
-        // Sort: Newest First
-        relevantLogs.reverse();
+        // STEP 3: Find Checkouts and calculate status
+        // Filter only checkouts to build the user list
+        const checkoutLogs = allItemLogs.filter(l => l.type === 'CHECKOUT');
+        
+        // Sort Checkouts: Newest First
+        checkoutLogs.sort((a, b) => b.time - a.time);
 
-        // STEP 3: Extract Unique Users (Last 4 distinct people)
-        const uniqueUsers = [];
+        // Get unique users (Last 4)
+        const uniqueEntries = [];
         const seenNames = new Set();
 
-        for (const log of relevantLogs) {
+        for (const log of checkoutLogs) {
             const user = log.takenBy || log.user;
+            
+            // We want to show the LATEST action for each unique person
             if (!seenNames.has(user)) {
                 seenNames.add(user);
-                uniqueUsers.push({
+
+                // --- KEY LOGIC: DID THEY RETURN IT? ---
+                // Search for a RETURN log by this user happening AFTER this checkout time
+                const returnLog = allItemLogs.find(l => 
+                    l.type === 'RETURN' && 
+                    (l.takenBy === user || l.user === user) && 
+                    l.time > log.time
+                );
+
+                let statusBadge = "";
+                let cardBorder = "";
+
+                if (returnLog) {
+                    const retDate = new Date(returnLog.time).toLocaleDateString();
+                    statusBadge = `<div style="background:#d4edda; color:#155724; padding:3px; font-size:10px; border-radius:3px; margin-top:5px; text-align:center;">✅ RETURNED<br>${retDate}</div>`;
+                    cardBorder = "border:1px solid #c3e6cb;"; 
+                } else {
+                    statusBadge = `<div style="background:#f8d7da; color:#721c24; padding:3px; font-size:10px; border-radius:3px; margin-top:5px; text-align:center; font-weight:bold;">⚠️ STILL HOLDING</div>`;
+                    cardBorder = "border:2px solid #dc3545; box-shadow:0 0 5px rgba(220,53,69,0.2);"; 
+                }
+                // --------------------------------------
+
+                uniqueEntries.push({
                     name: user,
                     time: log.time,
-                    admin: log.approvedBy
+                    admin: log.approvedBy,
+                    statusHtml: statusBadge,
+                    borderStyle: cardBorder
                 });
             }
-            if (uniqueUsers.length >= 4) break; // Stop after finding 4
+            if (uniqueEntries.length >= 4) break; 
         }
 
         // STEP 4: Render
-        if (uniqueUsers.length === 0) {
+        if (uniqueEntries.length === 0) {
             list.innerHTML += "<div>No checkout history found for this item.</div>";
             return;
         }
 
         let html = "";
-        uniqueUsers.forEach((u, index) => {
-            const color = index === 0 ? "#003366" : "#666"; // Highlight the most recent
-            const label = index === 0 ? "CURRENT / LAST HOLDER" : `History -${index}`;
+        uniqueEntries.forEach((u, index) => {
             const dateStr = new Date(u.time).toLocaleDateString() + " " + new Date(u.time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-
+            
+            // Layout
             html += `
-            <div style="background:white; border:1px solid #ccc; padding:10px; border-radius:5px; min-width:140px; flex:1;">
-                <div style="font-size:10px; font-weight:bold; color:${color}; margin-bottom:5px;">${label}</div>
-                <div style="font-size:14px; font-weight:bold; color:#000;">👤 ${u.name}</div>
-                <div style="font-size:11px; color:#555; margin-top:2px;">📅 ${dateStr}</div>
-                <div style="font-size:10px; color:#888; margin-top:5px;">Auth by: ${u.admin}</div>
+            <div style="background:white; padding:10px; border-radius:5px; min-width:140px; flex:1; ${u.borderStyle}">
+                <div style="font-size:10px; font-weight:bold; color:#666; margin-bottom:5px;">${index === 0 ? "LATEST USER" : "PREVIOUS USER"}</div>
+                <div style="font-size:13px; font-weight:bold; color:#000;">👤 ${u.name}</div>
+                <div style="font-size:10px; color:#555; margin-top:2px;">Taken: ${dateStr}</div>
+                ${u.statusHtml}
             </div>
             `;
         });
         
-        list.innerHTML = html;
+        list.innerHTML += `<div style="display:flex; gap:10px; flex-wrap:wrap; width:100%;">${html}</div>`;
 
     } catch (e) {
         console.error(e);
