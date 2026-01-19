@@ -1414,86 +1414,68 @@ window.filterInvLogs = () => {
         row.style.display = text.includes(input) ? "" : "none";
     });
 };
+// --- FORCE CHECKOUT (NO CAMERA) ---
 window.initTransactionAuth = (type) => {
-   if(!pendingTransactionItem) return alert("Please SCAN an item first.");
-
-   scanMode = 'ADMIN';
-   currentTransactionType = type;
-   
-   // --- NEW DEVELOPER BYPASS ---
-   // This asks you if you want to skip the face scan
-   if(confirm(`⚠️ DEVELOPER MODE:\n\nDo you want to SKIP the Face Scan and force the ${type}?`)) {
-       // If you click OK, it saves immediately
-       processTransaction("Dev Bypass");
+   // 1. Safety Check: Did you scan a barcode?
+   if(!pendingTransactionItem) {
+       alert("⚠️ Please SCAN a barcode item first!");
        return;
    }
-   // -----------------------------
 
-   // Start Admin Biometric Flow (Original Logic)
-   document.getElementById("faceModal").classList.remove("hidden");
-   document.getElementById("modalTitle").innerText = `🛡️ Admin Authorization`;
-   document.getElementById("modalDesc").innerText = "Admin: Scan face to approve 1 Unit.";
-   document.getElementById("regProgress").classList.add("hidden");
-   document.getElementById("btnCapture").innerText = "📸 Scan Admin Face";
-   document.getElementById("btnCapture").disabled = false;
-   document.getElementById("btnCapture").onclick = handleFaceScan;
+   // 2. Set Global Variables
+   currentTransactionType = type; // 'CHECKOUT' or 'RETURN'
    
-   document.getElementById("videoContainer").classList.remove("hidden");
-   document.getElementById("camControls").classList.remove("hidden");
-   document.getElementById("otpUI").classList.add("hidden");
+   // 3. DIRECT SAVE - NO CAMERA, NO POPUP
+   // We skip the face scan and just tell the system "Admin Approved it"
+   console.log("Forcing transaction for:", pendingTransactionItem.item);
    
-   initCamera(true);
+   // Call the save function directly with a fake Admin name
+   processTransaction("Manual Override"); 
 };
 async function processTransaction(adminName) {
-    const isCheckout = currentTransactionType === 'CHECKOUT';
-   
-    // USE DATA FROM SCAN
-    const itemKey = pendingTransactionItem.key;
-    const itemName = pendingTransactionItem.item;
-    const transQty = 1; // Always 1 unit
+   if(!pendingTransactionItem) return;
 
-    // 1. Update Stock
-    const invRef = ref(db, `inventory/${itemKey}`);
-    const invSnap = await get(invRef);
-    if(!invSnap.exists()) return alert("Item error.");
+   const isCheckout = currentTransactionType === 'CHECKOUT';
+   const itemKey = pendingTransactionItem.key;
+   const itemName = pendingTransactionItem.item;
    
-    const realStoreQty = parseInt(invSnap.val().qty);
+   // 1. Update Inventory Count
+   const invRef = ref(db, `inventory/${itemKey}`);
+   const invSnap = await get(invRef);
    
-    if(isCheckout && realStoreQty < 1) {
-        stopCamera();
-        return alert("❌ Out of Stock!");
-    }
+   if(invSnap.exists()) {
+       const currentQty = parseInt(invSnap.val().qty || 0);
+       const newQty = isCheckout ? (currentQty - 1) : (currentQty + 1);
+       
+       // Update the stock number
+       await update(invRef, { qty: newQty });
+   }
 
-    const newStoreQty = isCheckout ? (realStoreQty - 1) : (realStoreQty + 1);
-    await update(invRef, { qty: newStoreQty });
+   // 2. CREATE THE LOG ENTRY (This is what appears in Audit Trail)
+   const logData = {
+       type: currentTransactionType, // 'CHECKOUT' or 'RETURN'
+       item: itemName,
+       qty: 1,
+       takenBy: currentUser.email || "Unknown User", // The student
+       approvedBy: adminName,     // "Manual Override"
+       time: serverTimestamp()    // Real Server Time
+   };
 
-    // 2. Fetch User Name
-    const uSnap = await get(ref(db, `users/${currentUser.uid}`));
-    const realUserName = uSnap.val()?.name || currentUser.email;
-
-    // 3. Log
-    const logData = {
-        type: currentTransactionType,
-        item: itemName,
-        qty: 1,
-        takenBy: realUserName,
-        approvedBy: adminName,
-        signature: "Admin Authorized (1 Unit)",
-        time: serverTimestamp()
-    };
-
-    await push(ref(db, "logs"), logData);
+   // Save to 'logs'
+   await push(ref(db, "logs"), logData);
    
-    alert(`${currentTransactionType} Successful!`);
-    stopCamera();
+   // 3. Success Message
+   alert("✅ SUCCESS!\nDatabase Updated.\nCheck Audit Trail now.");
    
-    // Reset UI
-    document.getElementById("checkout_display").classList.add("hidden");
-    document.getElementById("return_display").classList.add("hidden");
-    pendingTransactionItem = null;
+   // 4. Cleanup
+   document.getElementById("checkout_display").classList.add("hidden");
+   document.getElementById("return_display").classList.add("hidden");
+   pendingTransactionItem = null;
    
-    toggleInvMode('history');
-}
+   // 5. Go to History to see the result
+   switchTab('inventory');
+   toggleInvMode('history');
+}}
 // --- APP FEATURES ---
 
 window.saveStationDetails = () => {
