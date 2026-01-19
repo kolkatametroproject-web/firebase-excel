@@ -1313,15 +1313,14 @@ function formatTime(ts) {
 }
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Scanning Database...</td></tr>";
 
-    // Query the last 100 logs
-    const q = query(ref(db, "logs"), limitToLast(100));
+    // FIX 1: Increase limit to 500 to see past the Login/Logout logs
+    const q = query(ref(db, "logs"), limitToLast(500));
 
-    // Changed to standard onValue for live updates
     onValue(q, (snap) => {
         if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No records found in database.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>Database is empty.</td></tr>";
             return;
         }
 
@@ -1329,49 +1328,51 @@ window.loadInventoryHistory = () => {
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
         logs.reverse(); // Show newest first
 
-        // Filter: Only show Checkout, Return, or Add Stock
-        const invLogs = logs.filter(l => 
-            l.type === 'CHECKOUT' || 
-            l.type === 'RETURN' || 
-            l.type === 'STOCK_ADD' || 
-            l.type === 'STOCK_UPDATE'
-        );
+        // FIX 2: Case-Insensitive Filter (Matches 'Checkout', 'CHECKOUT', 'checkout')
+        const invLogs = logs.filter(l => {
+            const t = (l.type || '').toUpperCase();
+            return t === 'CHECKOUT' || t === 'RETURN' || t.includes('STOCK');
+        });
 
         if (invLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No Stock movement found.</td></tr>";
+            // FIX 3: Better error message
+            tbody.innerHTML = `<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>
+                Found ${logs.length} System Logs (Logins/Errors), but <b>0 Inventory Logs</b>.<br>
+                Try adding/checking out an item to see data here.
+            </td></tr>`;
             return;
         }
 
         tbody.innerHTML = "";
         
         invLogs.forEach(l => {
-            // 1. Format Date
-            const dateObj = l.time ? new Date(l.time) : new Date();
-            const dateStr = dateObj.toLocaleDateString('en-GB'); // DD/MM/YYYY
-            const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            // Robust Date Formatting
+            let dateStr = "Invalid Date";
+            let timeStr = "--:--";
+            try {
+                const dateObj = l.time ? new Date(l.time) : new Date();
+                dateStr = dateObj.toLocaleDateString('en-GB');
+                timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } catch(e) {}
 
-            // 2. Format Receiver
-            // We use 'takenBy' (Checkout/Return) or 'user' (Stock Add)
             const receiverName = l.takenBy || l.user || "Unknown User";
-            
-            // 3. Format Status/Type
+            const upperType = (l.type || '').toUpperCase(); // Use uppercase for checking
+
             let statusBadge = "";
             let rowBg = "#fff";
 
-            if (l.type === 'CHECKOUT') {
+            if (upperType === 'CHECKOUT') {
                 statusBadge = `<span style="background:#b38600; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">📤 CHECKED OUT</span>`;
-                rowBg = "#fff8e1"; // Light Gold
-            } else if (l.type === 'RETURN') {
+                rowBg = "#fff8e1";
+            } else if (upperType === 'RETURN') {
                 statusBadge = `<span style="background:#17a2b8; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">📥 RETURNED</span>`;
-                rowBg = "#e0f7fa"; // Light Cyan
-            } else if (l.type.includes('STOCK')) {
-                statusBadge = `<span style="background:#28a745; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">➕ STOCK ADDED</span>`;
+                rowBg = "#e0f7fa";
+            } else if (upperType.includes('STOCK')) {
+                statusBadge = `<span style="background:#28a745; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">➕ STOCK UPDATE</span>`;
             }
 
-            // 4. Admin Info
             const authInfo = l.approvedBy ? `<span style="color:green; font-weight:bold;">✔ ${l.approvedBy}</span>` : `<span style="color:#999;">System</span>`;
 
-            // Build Row
             const row = `
             <tr class="inv-log-row" style="background:${rowBg}; border-bottom:1px solid #dee2e6;">
                 <td style="padding:12px;">
