@@ -393,16 +393,12 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
             <div class="table-wrapper">
             <table style="margin-top:0;">
                 <thead style="position:sticky; top:0; z-index:100;">
-                    <tr style="background:#003366; color:white;">
-                        <th>Txn ID</th>
-                        <th>Date & Time</th>
-                        <th>Type</th>
-                        <th>Item Details</th>
-                        <th>User (Receiver)</th>
-                        <th>Authorized By</th>
-                        <th>Signature</th>
-                    </tr>
-                </thead>
+    <tr style="background:#003366; color:white;">
+        <th style="width:25%;">Date & Time</th>
+        <th style="width:35%;">Receiver ID (User)</th>
+        <th style="width:40%;">Product Status</th>
+    </tr>
+</thead>
                 <tbody id="invHistoryBody" style="background:white;">
                     <tr><td colspan="7" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
                 </tbody>
@@ -1300,12 +1296,11 @@ function formatTime(ts) {
     // Audit Style Date
     return d.toLocaleDateString('en-GB') + " " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
-
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading Records...</td></tr>";
 
-    // FETCH MORE DATA (300) to ensure we find inventory items even if many people logged in
+    // Fetch last 300 logs
     const q = query(ref(db, "logs"), limitToLast(300));
    
     onValue(q, (snap) => {
@@ -1313,49 +1308,51 @@ window.loadInventoryHistory = () => {
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
         logs.reverse(); // Newest first
 
-        // Strict Filter: Only show movement of goods
+        // Filter: Show only Checkout, Return, or Add
         const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE');
 
         if(invLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded in recent history.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px; color:#666;'>No records found.</td></tr>";
             return;
         }
 
         tbody.innerHTML = "";
+        
         invLogs.forEach(l => {
-            const txnId = l.key.substring(l.key.length - 6).toUpperCase(); // Last 6 chars as ID
-           
-            // Badge Styling
+            // 1. Create a simple Badge (OUT / IN / ADD)
             let badge = "";
-            if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
-            else if(l.type === 'RETURN') badge = `<span style="background:#17a2b8; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📥 IN</span>`;
-            else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
+            let colorStyle = "";
+            
+            if(l.type === 'CHECKOUT') {
+                badge = "📤 OUT";
+                colorStyle = "color:#b38600;"; // Gold/Orange
+            } else if(l.type === 'RETURN') {
+                badge = "📥 IN";
+                colorStyle = "color:#17a2b8;"; // Blue
+            } else {
+                badge = "➕ NEW";
+                colorStyle = "color:green;";
+            }
 
-            // Signature Button
-            const sigBtn = l.signature
-                ? `<button class="info" style="padding:2px 5px; font-size:11px;" onclick="viewSignature('${l.signature}')">View</button>`
-                : `<span style="color:#ccc;">--</span>`;
-
+            // 2. Render only 3 Columns: Time | Receiver | Product
             const row = `
             <tr class="inv-log-row">
-                <td style="font-family:monospace; color:#003366; font-weight:bold;">#${txnId}</td>
-                <td>${formatTime(l.time)}</td>
-                <td>${badge}</td>
-                <td>
-                    <span style="font-weight:bold; font-size:13px;">${l.item}</span><br>
-                    <span style="color:#666; font-size:11px;">Qty: ${l.qty}</span>
+                <td style="font-size:12px; color:#555;">${formatTime(l.time)}</td>
+                
+                <td style="font-weight:bold; color:#003366;">
+                    ${l.takenBy}
                 </td>
-                <td>${l.takenBy}</td>
-                <td>
-                    <span style="color:green; font-weight:bold;">✔ ${l.approvedBy || 'System'}</span>
+
+                <td style="${colorStyle} font-weight:bold;">
+                    ${badge} ${l.item} 
+                    <span style="color:#333; font-weight:normal; font-size:11px;">(Qty: ${l.qty})</span>
                 </td>
-                <td style="text-align:center;">${sigBtn}</td>
             </tr>`;
+            
             tbody.innerHTML += row;
         });
     }, { onlyOnce: true });
 };
-
 // --- NEW SEARCH FUNCTION FOR INVENTORY ---
 window.filterInvLogs = () => {
     const input = document.getElementById("invSearch").value.toLowerCase();
