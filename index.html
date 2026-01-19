@@ -313,7 +313,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <button onclick="toggleInvMode('history')" class="secondary">📜 Audit Trail</button>
     </div>
 
-    <div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
+    <<div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
     <h3 style="color:#003366;">Add Inventory (1 Unit)</h3>
     <p style="font-size:12px; color:#666;">Scan barcode. Each addition equals <strong>1 Item</strong>.</p>
    
@@ -383,33 +383,34 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
     </div>
 </div>
-<div id="inv-history" class="panel hidden">
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-    <h3 style="color:#003366;">📜 Audit Trail (Stock Ledger)</h3>
-    <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search User or Item..." style="width:250px; padding:8px; border:1px solid #aaa; border-radius:4px;">
-  </div>
-
-  <div style="max-height:500px; overflow-y:scroll; border:1px solid #d1d5db; border-radius:4px;">
-    <div class="table-wrapper">
-      <table style="margin-top:0; width:100%;">
-        <thead style="position:sticky; top:0; z-index:100;">
-          <tr style="background:#003366; color:white; text-transform:uppercase; font-size:12px;">
-            <th style="padding:12px;">Date & Time</th>
-            <th style="padding:12px;">Receiver (User)</th>
-            <th style="padding:12px;">Item Details</th>
-            <th style="padding:12px;">Status</th>
-            <th style="padding:12px;">Admin Auth</th>
-          </tr>
-        </thead>
-        <tbody id="invHistoryBody" style="background:white; font-size:13px;">
-          <tr>
-            <td colspan="5" style="text-align:center; padding:20px;">Loading Audit Records...</td>
-          </tr>
-        </tbody>
-      </table>
+    <div id="inv-history" class="panel hidden">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+            <h3>📜 Stock Ledger (Audit Trail)</h3>
+            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search Item, Barcode or User..." style="width:250px; max-width:100%; padding:8px; border:1px solid #aaa;">
+        </div>
+       
+        <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
+            <div class="table-wrapper">
+            <table style="margin-top:0;">
+                <thead style="position:sticky; top:0; z-index:100;">
+                    <tr style="background:#003366; color:white;">
+                        <th>Txn ID</th>
+                        <th>Date & Time</th>
+                        <th>Type</th>
+                        <th>Item Details</th>
+                        <th>User (Receiver)</th>
+                        <th>Authorized By</th>
+                        <th>Signature</th>
+                    </tr>
+                </thead>
+                <tbody id="invHistoryBody" style="background:white;">
+                    <tr><td colspan="7" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
+                </tbody>
+            </table>
+            </div>
+        </div>
     </div>
-  </div>
-</div>
+
     <div id="inv-list" class="panel">
         <h3>Current Inventory</h3>
         <div class="table-wrapper">
@@ -552,7 +553,7 @@ const db = getDatabase(app);
 
 let currentUser;
 let isAdmin = false;
-const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project", "YOUR_LOGIN_EMAIL@HERE.COM"];
+const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project"];
 let stream = null;
 let currentFileBase64 = null;
 let currentFileType = null;
@@ -1024,116 +1025,104 @@ function stopCamera() {
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
 window.handleFaceScan = async () => {
     const btn = document.getElementById("btnCapture");
-    
-    if(!currentDescriptor) { 
-        updateStatus("❌ No Face Detected. Move closer.", "red"); 
-        return; 
-    }
+    if(!currentDescriptor) { updateStatus("❌ No Face Detected.", "red"); return; }
    
     btn.disabled = true;
     btn.innerText = "Processing...";
     updateStatus("Analyzing Biometrics...", "cyan");
 
     try {
-        // --- MODE 1: RECEIVER VERIFICATION (YOURSELF) ---
-        if(scanMode === 'RECEIVER' || scanMode === 'LOGIN') {
+        // --- MODE 1: RECEIVER VERIFICATION ---
+        if(scanMode === 'RECEIVER') {
             const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
             const storedData = snap.val();
-            
+           
             let match = false;
-            
+            // Check match against logged-in user
             if(storedData) {
-                // Handle legacy data structure (single array vs array of arrays)
                 const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
-                
                 for (let s of samples) {
-                    const dist = faceapi.euclideanDistance(s, currentDescriptor);
-                    console.log(`Self Check Distance: ${dist}`); // DEBUG
-                    if(dist < 0.55) { match = true; break; }
+                    if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
                 }
             }
 
             if(match) {
                 updateStatus("✅ IDENTITY CONFIRMED", "#00ff00");
-                
-                if(scanMode === 'LOGIN') {
-                    await recordLogin("Biometric");
-                    enterApp();
-                } else {
-                    // Receiver verified logic
-                    setTimeout(() => {
-                        stopCamera();
-                        receiverVerified = true;
-                        if(currentTransactionType === 'CHECKOUT') {
-                           document.getElementById("checkout_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                           document.getElementById("checkout_status_text").style.color = "green";
-                           document.getElementById("btn_checkout_verify").classList.add("hidden");
-                           document.getElementById("btn_checkout_submit").disabled = false;
-                           document.getElementById("btn_checkout_submit").style.opacity = "1";
-                           document.getElementById("btn_checkout_submit").style.cursor = "pointer";
-                        } else {
-                           document.getElementById("return_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                           document.getElementById("return_status_text").style.color = "green";
-                           document.getElementById("btn_return_verify").classList.add("hidden");
-                           document.getElementById("btn_return_submit").disabled = false;
-                           document.getElementById("btn_return_submit").style.opacity = "1";
-                           document.getElementById("btn_return_submit").style.cursor = "pointer";
-                        }
-                    }, 500);
-                }
+                setTimeout(() => {
+                    stopCamera();
+                    receiverVerified = true;
+                    // Update UI based on transaction type
+                    if(currentTransactionType === 'CHECKOUT') {
+                        document.getElementById("checkout_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
+                        document.getElementById("checkout_status_text").style.color = "green";
+                        document.getElementById("btn_checkout_verify").classList.add("hidden");
+                        // Enable Admin Button
+                        const subBtn = document.getElementById("btn_checkout_submit");
+                        subBtn.disabled = false;
+                        subBtn.style.background = "#b38600";
+                        subBtn.style.cursor = "pointer";
+                        subBtn.style.opacity = "1";
+                    } else {
+                        document.getElementById("return_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
+                        document.getElementById("return_status_text").style.color = "green";
+                        document.getElementById("btn_return_verify").classList.add("hidden");
+                        // Enable Admin Button
+                        const subBtn = document.getElementById("btn_return_submit");
+                        subBtn.disabled = false;
+                        subBtn.style.background = "#17a2b8";
+                        subBtn.style.cursor = "pointer";
+                        subBtn.style.opacity = "1";
+                    }
+                }, 1000);
             } else {
                 throw new Error("Face Does Not Match User");
             }
         }
 
-        // --- MODE 2: ADMIN AUTHORIZATION (ANY ADMIN) ---
+        // --- MODE 2: ADMIN AUTHORIZATION ---
         else if(scanMode === 'ADMIN') {
-             console.log("--- STARTING ADMIN SEARCH ---");
              const allUsersSnap = await get(ref(db, "users"));
              let adminFound = false;
              let adminName = "Unknown";
 
-             // 1. Normalize Admin List for comparison
-             const cleanAdminList = ADMIN_EMAILS.map(e => e.toLowerCase().trim());
-
              allUsersSnap.forEach(userSnap => {
                 const uData = userSnap.val();
-                
-                // Safety check: User must have email and face data
-                if(uData.email && uData.faceData) {
-                    
-                    // 2. Check if this user is an ADMIN
-                    const userEmail = uData.email.toLowerCase().trim();
-                    const isAdminEmail = cleanAdminList.includes(userEmail);
-                    
-                    if(isAdminEmail) {
-                        console.log(`Checking Admin: ${userEmail}`);
-                        
-                        // 3. Check Face Match
-                        const samples = (uData.faceData[0] instanceof Array) ? uData.faceData : [uData.faceData];
-                        for (let s of samples) {
-                            const dist = faceapi.euclideanDistance(s, currentDescriptor);
-                            console.log(`-> Distance: ${dist}`);
-                            
-                            // 0.55 is strict, 0.6 is slightly more forgiving
-                            if(dist < 0.6) { 
-                                adminFound = true; 
-                                adminName = uData.name || "Admin"; 
-                                break; 
-                            }
+                if(uData.faceData && ADMIN_EMAILS.includes(uData.email)) {
+                    const samples = (uData.faceData[0] instanceof Array) ? uData.faceData : [uData.faceData];
+                    for (let s of samples) {
+                        if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
+                            adminFound = true; adminName = uData.name; break;
                         }
                     }
                 }
-                if(adminFound) return; // Break loop if found
              });
 
              if(adminFound) {
-                updateStatus("✅ AUTHORIZED: " + adminName, "#00ff00");
-                await processTransaction(adminName);
+                 updateStatus("✅ AUTHORIZED: " + adminName, "#00ff00");
+                 await processTransaction(adminName);
              } else {
-                 console.warn("Scan finished. No matching Admin face found.");
                  throw new Error("Not an Admin Face");
              }
+        }
+
+        // --- MODE 3: LOGIN ---
+        else {
+            const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+            const storedData = snap.val();
+            let match = false;
+            if(storedData) {
+                const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
+                for (let s of samples) {
+                     if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
+                }
+            }
+            if(match) {
+                updateStatus("✅ VERIFIED", "#00ff00");
+                await recordLogin("Biometric");
+                enterApp();
+            } else {
+                throw new Error("Face Mismatch");
+            }
         }
 
     } catch (error) {
@@ -1311,110 +1300,62 @@ function formatTime(ts) {
     // Audit Style Date
     return d.toLocaleDateString('en-GB') + " " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
+
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Scanning Database...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
 
-    // FIX 1: Increase limit to 500 to see past the Login/Logout logs
-    const q = query(ref(db, "logs"), limitToLast(500));
-
+    // FETCH MORE DATA (300) to ensure we find inventory items even if many people logged in
+    const q = query(ref(db, "logs"), limitToLast(300));
+   
     onValue(q, (snap) => {
-        if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>Database is empty.</td></tr>";
-            return;
-        }
-
         const logs = [];
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        logs.reverse(); // Show newest first
+        logs.reverse(); // Newest first
 
-        // FIX 2: Case-Insensitive Filter (Matches 'Checkout', 'CHECKOUT', 'checkout')
-        const invLogs = logs.filter(l => {
-            const t = (l.type || '').toUpperCase();
-            return t === 'CHECKOUT' || t === 'RETURN' || t.includes('STOCK');
-        });
+        // Strict Filter: Only show movement of goods
+        const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE');
 
-        if (invLogs.length === 0) {
-            // FIX 3: Better error message
-            tbody.innerHTML = `<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>
-                Found ${logs.length} System Logs (Logins/Errors), but <b>0 Inventory Logs</b>.<br>
-                Try adding/checking out an item to see data here.
-            </td></tr>`;
+        if(invLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded in recent history.</td></tr>";
             return;
         }
 
         tbody.innerHTML = "";
-        
         invLogs.forEach(l => {
-            // Robust Date Formatting
-            let dateStr = "Invalid Date";
-            let timeStr = "--:--";
-            try {
-                const dateObj = l.time ? new Date(l.time) : new Date();
-                dateStr = dateObj.toLocaleDateString('en-GB');
-                timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            } catch(e) {}
+            const txnId = l.key.substring(l.key.length - 6).toUpperCase(); // Last 6 chars as ID
+           
+            // Badge Styling
+            let badge = "";
+            if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
+            else if(l.type === 'RETURN') badge = `<span style="background:#17a2b8; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📥 IN</span>`;
+            else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
 
-            const receiverName = l.takenBy || l.user || "Unknown User";
-            const upperType = (l.type || '').toUpperCase(); // Use uppercase for checking
-
-            let statusBadge = "";
-            let rowBg = "#fff";
-
-            if (upperType === 'CHECKOUT') {
-                statusBadge = `<span style="background:#b38600; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">📤 CHECKED OUT</span>`;
-                rowBg = "#fff8e1";
-            } else if (upperType === 'RETURN') {
-                statusBadge = `<span style="background:#17a2b8; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">📥 RETURNED</span>`;
-                rowBg = "#e0f7fa";
-            } else if (upperType.includes('STOCK')) {
-                statusBadge = `<span style="background:#28a745; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;">➕ STOCK UPDATE</span>`;
-            }
-
-            const authInfo = l.approvedBy ? `<span style="color:green; font-weight:bold;">✔ ${l.approvedBy}</span>` : `<span style="color:#999;">System</span>`;
+            // Signature Button
+            const sigBtn = l.signature
+                ? `<button class="info" style="padding:2px 5px; font-size:11px;" onclick="viewSignature('${l.signature}')">View</button>`
+                : `<span style="color:#ccc;">--</span>`;
 
             const row = `
-            <tr class="inv-log-row" style="background:${rowBg}; border-bottom:1px solid #dee2e6;">
-                <td style="padding:12px;">
-                    <div style="font-weight:bold; color:#003366;">${dateStr}</div>
-                    <div style="font-size:11px; color:#666;">${timeStr}</div>
+            <tr class="inv-log-row">
+                <td style="font-family:monospace; color:#003366; font-weight:bold;">#${txnId}</td>
+                <td>${formatTime(l.time)}</td>
+                <td>${badge}</td>
+                <td>
+                    <span style="font-weight:bold; font-size:13px;">${l.item}</span><br>
+                    <span style="color:#666; font-size:11px;">Qty: ${l.qty}</span>
                 </td>
-                <td style="padding:12px; font-weight:bold; font-size:14px;">
-                    👤 ${receiverName}
+                <td>${l.takenBy}</td>
+                <td>
+                    <span style="color:green; font-weight:bold;">✔ ${l.approvedBy || 'System'}</span>
                 </td>
-                <td style="padding:12px;">
-                    <div style="font-weight:bold;">${l.item || 'Unknown Item'}</div>
-                    <div style="font-size:11px; color:#555;">Qty: ${l.qty}</div>
-                </td>
-                <td style="padding:12px;">${statusBadge}</td>
-                <td style="padding:12px; font-size:12px;">${authInfo}</td>
+                <td style="text-align:center;">${sigBtn}</td>
             </tr>`;
-            
             tbody.innerHTML += row;
         });
-    });
+    }, { onlyOnce: true });
 };
-// --- ADD THIS HELPER FUNCTION BELOW ---
-window.addTestTransaction = () => {
-    push(ref(db, "logs"), {
-        type: "CHECKOUT",
-        item: "Test Product A",
-        qty: 1,
-        takenBy: "System Test",
-        time: serverTimestamp() // This uses the correct server time
-    });
-};
-// --- HELPER TO FORCE DATA IF EMPTY ---
-window.addTestLog = () => {
-    push(ref(db, "logs"), {
-        type: "CHECKOUT",
-        item: "Test Drill 5000",
-        qty: 1,
-        takenBy: "Test User",
-        time: serverTimestamp()
-    });
-    alert("Test data added! It should appear instantly.");
-};
+
 // --- NEW SEARCH FUNCTION FOR INVENTORY ---
 window.filterInvLogs = () => {
     const input = document.getElementById("invSearch").value.toLowerCase();
@@ -1425,94 +1366,77 @@ window.filterInvLogs = () => {
         row.style.display = text.includes(input) ? "" : "none";
     });
 };
-// --- FORCE CHECKOUT (NO CAMERA) ---
 window.initTransactionAuth = (type) => {
-    if(!pendingTransactionItem) {
-        alert("⚠️ Please SCAN a barcode first, then click 'Admin Face Approve'.");
-        return;
-    }
+    if(!pendingTransactionItem) return alert("Please SCAN an item first.");
 
-    // FORCE MODE TO ADMIN
-    scanMode = 'ADMIN'; 
-    currentTransactionType = type; // 'CHECKOUT' or 'RETURN'
+    scanMode = 'ADMIN';
+    currentTransactionType = type;
    
-    // Start Camera UI
+    // Start Admin Biometric Flow
     document.getElementById("faceModal").classList.remove("hidden");
     document.getElementById("modalTitle").innerText = `🛡️ Admin Authorization`;
-    document.getElementById("modalDesc").innerText = "Admin: Scan face to approve transaction.";
-    
-    // Hide irrelevant parts
+    document.getElementById("modalDesc").innerText = "Admin: Scan face to approve 1 Unit.";
     document.getElementById("regProgress").classList.add("hidden");
-    document.getElementById("otpUI").classList.add("hidden");
-    
-    // Reset Button
-    const btn = document.getElementById("btnCapture");
-    btn.innerText = "📸 Scan Admin Face";
-    btn.disabled = false;
-    btn.onclick = handleFaceScan; // Connect the button
+    document.getElementById("btnCapture").innerText = "📸 Scan Admin Face";
+    document.getElementById("btnCapture").disabled = false;
+    document.getElementById("btnCapture").onclick = handleFaceScan;
    
     document.getElementById("videoContainer").classList.remove("hidden");
     document.getElementById("camControls").classList.remove("hidden");
+    document.getElementById("otpUI").classList.add("hidden");
    
     initCamera(true);
 };
-async function processTransaction(adminName) {
-    // 1. Safety Checks
-    if (!pendingTransactionItem) {
-        alert("❌ Error: No Item Scanned.");
-        stopCamera();
-        return;
-    }
 
-    const isCheckout = (currentTransactionType === 'CHECKOUT');
+async function processTransaction(adminName) {
+    const isCheckout = currentTransactionType === 'CHECKOUT';
+   
+    // USE DATA FROM SCAN
     const itemKey = pendingTransactionItem.key;
     const itemName = pendingTransactionItem.item;
+    const transQty = 1; // Always 1 unit
 
-    // 2. Get Data
+    // 1. Update Stock
     const invRef = ref(db, `inventory/${itemKey}`);
     const invSnap = await get(invRef);
-
-    if (!invSnap.exists()) return alert("❌ Item not found.");
-
-    const currentQty = parseInt(invSnap.val().qty || 0);
-
-    // 3. STOP NEGATIVE STOCK
-    if (isCheckout && currentQty <= 0) {
+    if(!invSnap.exists()) return alert("Item error.");
+   
+    const realStoreQty = parseInt(invSnap.val().qty);
+   
+    if(isCheckout && realStoreQty < 1) {
         stopCamera();
-        alert(`❌ OUT OF STOCK!\nCurrent Qty: 0\nCannot Checkout.`);
-        return;
+        return alert("❌ Out of Stock!");
     }
 
-    // 4. Update Stock
-    const newStoreQty = isCheckout ? (currentQty - 1) : (currentQty + 1);
+    const newStoreQty = isCheckout ? (realStoreQty - 1) : (realStoreQty + 1);
     await update(invRef, { qty: newStoreQty });
 
-    // 5. Create Log
-    const logType = isCheckout ? 'CHECKOUT' : 'RETURN';
-    let takenByName = currentUser ? (currentUser.name || currentUser.email) : "Unknown";
+    // 2. Fetch User Name
+    const uSnap = await get(ref(db, `users/${currentUser.uid}`));
+    const realUserName = uSnap.val()?.name || currentUser.email;
 
-    await push(ref(db, "logs"), {
-        type: logType,
+    // 3. Log
+    const logData = {
+        type: currentTransactionType,
         item: itemName,
         qty: 1,
-        takenBy: takenByName,
+        takenBy: realUserName,
         approvedBy: adminName,
-        signature: "Biometric Auth",
+        signature: "Admin Authorized (1 Unit)",
         time: serverTimestamp()
-    });
+    };
 
-    // 6. Success & UI Reset
-    alert(`✅ Success!\n${logType} Complete.\nNew Stock: ${newStoreQty}`);
+    await push(ref(db, "logs"), logData);
+   
+    alert(`${currentTransactionType} Successful!`);
     stopCamera();
+   
+    // Reset UI
     document.getElementById("checkout_display").classList.add("hidden");
     document.getElementById("return_display").classList.add("hidden");
     pendingTransactionItem = null;
-
-    // --- 🛑 THIS WAS THE CAUSE OF THE WHITE SCREEN 🛑 ---
-    // OLD BROKEN CODE: switchTab('history'); 
-    // FIXED CODE:
-    switchTab('inventory'); // 1. Go to Inventory Tab
-    toggleInvMode('history'); // 2. Then open History Panel
+   
+    toggleInvMode('history');
 }
 // --- APP FEATURES ---
 
@@ -2016,3 +1940,4 @@ window.completeTask = (k) => update(ref(db, `assignments/${currentUser.uid}/${k}
 </script>
 </body>
 </html>
+
