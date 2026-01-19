@@ -172,6 +172,11 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     .gallery-grid { grid-template-columns: repeat(2, 1fr); }
     #otpUI { width: 90%; }
 }
+@keyframes blink {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
 </style>
 </head>
 
@@ -384,32 +389,49 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     </div>
 </div>
     <div id="inv-history" class="panel hidden">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-            <h3>📜 Stock Ledger (Audit Trail)</h3>
-            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search Item, Barcode or User..." style="width:250px; max-width:100%; padding:8px; border:1px solid #aaa;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+        <h3>📜 Stock Ledger (Audit Trail)</h3>
+        
+        <div style="display:flex; gap:10px;">
+            <button id="btnAuditScan" onclick="openBarcodeScanner('AUDIT_SEARCH')" class="warning" style="display:none; font-size:12px;">
+                <i class="fas fa-search"></i> Admin Audit Scan
+            </button>
+            
+            <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search..." style="width:200px; padding:8px;">
         </div>
-       
-        <div style="max-height:450px; overflow-y:scroll; border:1px solid #d1d5db;">
+    </div>
+    </div>
+
+<div id="auditResultModal" class="modal-overlay hidden">
+    <div class="panel" style="width:500px; max-width:95%; max-height:80vh; display:flex; flex-direction:column;">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #b38600; padding-bottom:10px; margin-bottom:10px;">
+            <h3 style="margin:0; color:#b38600;">🕵️ Admin Audit Report</h3>
+            <button class="danger" onclick="closeAuditModal()" style="padding:5px 10px;">Close</button>
+        </div>
+        
+        <div style="background:#f8f9fa; padding:10px; margin-bottom:10px; border-radius:4px;">
+             <strong>Item:</strong> <span id="auditItemName">Loading...</span><br>
+             <small>Barcode: <span id="auditItemCode">--</span></small>
+        </div>
+
+        <div style="overflow-y:auto; flex-grow:1;">
             <div class="table-wrapper">
-            <table style="margin-top:0;">
-                <thead style="position:sticky; top:0; z-index:100;">
-                    <tr style="background:#003366; color:white;">
-                        <th>Txn ID</th>
-                        <th>Date & Time</th>
-                        <th>Type</th>
-                        <th>Item Details</th>
-                        <th>User (Receiver)</th>
-                        <th>Authorized By</th>
-                        <th>Signature</th>
-                    </tr>
-                </thead>
-                <tbody id="invHistoryBody" style="background:white;">
-                    <tr><td colspan="7" style="text-align:center; padding:20px;">Loading Audit Records...</td></tr>
-                </tbody>
-            </table>
+                <table>
+                    <thead>
+                        <tr style="background:#003366; color:white;">
+                            <th>User</th>
+                            <th>Checkout (Approved By)</th>
+                            <th>Status / Return Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="auditResultBody">
+                        <tr><td colspan="3" style="text-align:center;">Analyzing Logs...</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
+</div>
 
     <div id="inv-list" class="panel">
         <h3>Current Inventory</h3>
@@ -677,69 +699,127 @@ window.closeBarcodeScanner = () => {
         scanner = null;
     }
 }
-function onScanSuccess(decodedText) {
-    // STOP SCANNER
-    closeBarcodeScanner();
+// --- NEW AUDIT LOGIC ---
+window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
 
-    if(scanMode === 'ADD') {
-        document.getElementById("invBarcode").value = decodedText;
-        checkBarcodeExistence(decodedText);
-        alert("Barcode Captured: " + decodedText);
-    }
-    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-       
-        // --- NEW: SHOW SCANNED NUMBER FIRST ---
-        // 1. Immediately show the code in the display box so user can see it
-        if(scanMode === 'CHECKOUT') {
-            document.getElementById("checkout_display").classList.remove("hidden");
-            document.getElementById("checkout_item_name").innerText = "Verifying...";
-            document.getElementById("checkout_item_code").innerText = decodedText;
-        } else {
-            document.getElementById("return_display").classList.remove("hidden");
-            document.getElementById("return_item_name").innerText = "Verifying...";
-            document.getElementById("return_item_code").innerText = decodedText;
-        }
+window.fetchAuditHistory = async (barcode) => {
+    // 1. UI Setup
+    document.getElementById("auditResultModal").classList.remove("hidden");
+    document.getElementById("auditItemCode").innerText = barcode;
+    document.getElementById("auditItemName").innerText = "Searching Database...";
+    const tbody = document.getElementById("auditResultBody");
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;'>🔍 Cross-referencing logs...</td></tr>";
 
-        // 2. Ask user to confirm the scanned number
-        if(!confirm("Scanned Barcode: " + decodedText + "\n\nPress OK to search DB and take this item.")) {
-            // If user cancels, hide the display again
-            if(scanMode === 'CHECKOUT') document.getElementById("checkout_display").classList.add("hidden");
-            else document.getElementById("return_display").classList.add("hidden");
+    try {
+        // 2. Resolve Barcode to Item Name
+        const invRef = ref(db, "inventory");
+        const invQ = query(invRef, orderByChild("barcode"), equalTo(barcode));
+        const invSnap = await get(invQ);
+
+        if (!invSnap.exists()) {
+            document.getElementById("auditItemName").innerText = "Unknown Item";
+            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; color:red;'>❌ Item not found in Inventory. Cannot track history.</td></tr>";
             return;
         }
-        // --- END NEW LOGIC ---
 
-        // DIRECT LOOKUP (PRESERVED)
-        const invRef = ref(db, "inventory");
-        const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
-       
-        get(q).then(snap => {
-            if(!snap.exists()) {
-                // Logic preserved, but alert is now more helpful
-                alert("❌ Item not found in inventory!\n(Scanned Code: " + decodedText + ")");
-                return;
-            }
-           
-            // Get the first match
-            let foundItem = null;
-            let foundKey = null;
-            snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
+        let itemName = "";
+        invSnap.forEach(c => itemName = c.val().item);
+        document.getElementById("auditItemName").innerText = itemName;
 
-            // Store for the Transaction Step
-            pendingTransactionItem = { key: foundKey, ...foundItem };
-
-            // Update UI with actual Item Name from DB
-            if(scanMode === 'CHECKOUT') {
-                document.getElementById("checkout_display").classList.remove("hidden");
-                document.getElementById("checkout_item_name").innerText = foundItem.item;
-                document.getElementById("checkout_item_code").innerText = foundItem.barcode;
-            } else {
-                document.getElementById("return_display").classList.remove("hidden");
-                document.getElementById("return_item_name").innerText = foundItem.item;
-                document.getElementById("return_item_code").innerText = foundItem.barcode;
+        // 3. Fetch All Logs (To ensure we catch older checkouts)
+        // Optimization: In production, you might limit this, but for deep audit we need history
+        const logsRef = ref(db, "logs");
+        const logsSnap = await get(logsRef);
+        
+        let relatedLogs = [];
+        logsSnap.forEach(c => {
+            const l = c.val();
+            // Filter for this specific item name
+            if (l.item === itemName && (l.type === 'CHECKOUT' || l.type === 'RETURN')) {
+                relatedLogs.push({ ...l, timestamp: l.time }); // Flatten timestamp for easy sorting
             }
         });
+
+        // Sort: Newest First
+        relatedLogs.sort((a, b) => b.timestamp - a.timestamp);
+
+        // 4. Algorithm: Find Checkouts and match with Returns
+        const checkouts = relatedLogs.filter(l => l.type === 'CHECKOUT');
+        
+        // Take last 6 checkouts (which are the first 6 in our sorted array)
+        const last6Checkouts = checkouts.slice(0, 6);
+
+        if (last6Checkouts.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;'>No checkout history found for this item.</td></tr>";
+            return;
+        }
+
+        tbody.innerHTML = ""; // Clear loader
+
+        last6Checkouts.forEach(cout => {
+            // Find a return by THIS USER, occurring AFTER this checkout
+            // We search the 'relatedLogs' (which are sorted Newest -> Oldest)
+            // So a return should appear *before* the checkout in the array (smaller index) or simply have a larger timestamp
+            
+            const matchingReturn = relatedLogs.find(r => 
+                r.type === 'RETURN' && 
+                (r.takenBy === cout.takenBy || r.user === cout.user) && 
+                r.timestamp > cout.timestamp
+            );
+
+            let statusHtml = "";
+            let rowColor = "";
+
+            if (matchingReturn) {
+                // IT WAS RETURNED
+                const dateObj = new Date(matchingReturn.timestamp);
+                const dateStr = dateObj.toLocaleDateString() + " " + dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                statusHtml = `<span style="color:green; font-weight:bold;">✔ Returned</span><br><small>${dateStr}</small>`;
+                rowColor = "background:#f0fff4;";
+            } else {
+                // STILL HOLDING
+                const outDate = new Date(cout.timestamp);
+                const diffMs = Date.now() - outDate;
+                const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                
+                statusHtml = `<span style="color:red; font-weight:bold; animation: blink 2s infinite;">⚠️ STILL HOLDING</span><br><small>${diffDays} days overdue</small>`;
+                rowColor = "background:#fff5f5;";
+            }
+
+            const coutDate = new Date(cout.timestamp);
+            const coutStr = coutDate.toLocaleDateString() + " " + coutDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+            tbody.innerHTML += `
+                <tr style="${rowColor} border-bottom:1px solid #ccc;">
+                    <td style="font-weight:bold;">${cout.takenBy}</td>
+                    <td>
+                        ${coutStr}<br>
+                        <small style="color:#003366;">Auth: ${cout.approvedBy || 'System'}</small>
+                    </td>
+                    <td>${statusHtml}</td>
+                </tr>
+            `;
+        });
+
+    } catch (e) {
+        console.error(e);
+        tbody.innerHTML = `<tr><td colspan='3' style='color:red;'>System Error: ${e.message}</td></tr>`;
     }
+};
+// FIND existing onScanSuccess and ADD the 'AUDIT_SEARCH' condition
+function onScanSuccess(decodedText) {
+    closeBarcodeScanner();
+
+    // --- EXISTING MODES ---
+    if(scanMode === 'ADD') { /* ... */ }
+    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') { /* ... */ }
+    
+    // --- NEW AUDIT MODE ---
+    else if (scanMode === 'AUDIT_SEARCH') {
+        if(!isAdmin) return alert("Security Alert: Admins Only.");
+        fetchAuditHistory(decodedText);
+    }
+    // ...
 }
 function onScanFailure(error) {
     // Do nothing, keep scanning
@@ -861,6 +941,8 @@ onAuthStateChanged(auth, (user) => {
       document.getElementById("btnAdmin").classList.remove("hidden");
       document.getElementById("btnLogs").classList.remove("hidden");
       setTimeout(loadAdminPanel, 2000);
+      const auditBtn = document.getElementById("btnAuditScan");
+      if(auditBtn) auditBtn.style.display = "block";
     }
 
     // --- RESTORED SECURITY CHECK ---
