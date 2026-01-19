@@ -1298,60 +1298,73 @@ function formatTime(ts) {
 }
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading Records...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading All Records...</td></tr>";
 
-    // Fetch last 300 logs
-    const q = query(ref(db, "logs"), limitToLast(300));
+    // 1. Fetch from 'logs' in Database
+    const q = query(ref(db, "logs"), limitToLast(100));
    
     onValue(q, (snap) => {
-        const logs = [];
-        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        logs.reverse(); // Newest first
-
-        // Filter: Show only Checkout, Return, or Add
-        const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE');
-
-        if(invLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding:20px; color:#666;'>No records found.</td></tr>";
+        // 2. Check if Database is Empty
+        if(!snap.exists()) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan='3' style='text-align:center; padding:20px; color:red;'>
+                        Database is empty!<br>
+                        <button onclick="addTestLog()" style="margin-top:10px; padding:5px 10px; background:#003366; color:white; cursor:pointer;">
+                            Click here to Generate Test Data
+                        </button>
+                    </td>
+                </tr>`;
             return;
         }
 
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // Show newest first
+
         tbody.innerHTML = "";
         
-        invLogs.forEach(l => {
-            // 1. Create a simple Badge (OUT / IN / ADD)
-            let badge = "";
-            let colorStyle = "";
-            
-            if(l.type === 'CHECKOUT') {
-                badge = "📤 OUT";
-                colorStyle = "color:#b38600;"; // Gold/Orange
-            } else if(l.type === 'RETURN') {
-                badge = "📥 IN";
-                colorStyle = "color:#17a2b8;"; // Blue
-            } else {
-                badge = "➕ NEW";
-                colorStyle = "color:green;";
-            }
+        // 3. Render EVERYTHING (Filter removed for testing)
+        logs.forEach(l => {
+            // Check for missing data and set defaults
+            const timeStr = l.time ? formatTime(l.time) : "No Date";
+            const receiver = l.takenBy || l.user || "Unknown User";
+            const item = l.item || l.method || "Unknown Item";
+            const qty = l.qty || 0;
+            const type = l.type || "SYSTEM";
 
-            // 2. Render only 3 Columns: Time | Receiver | Product
+            // Simple Color Coding
+            let colorStyle = "color:#555;"; 
+            if(type === 'CHECKOUT') colorStyle = "color:#b38600;"; // Gold
+            if(type === 'RETURN') colorStyle = "color:#17a2b8;"; // Cyan
+            if(type.includes('ADD')) colorStyle = "color:green;"; // Green
+
+            // Render Row
             const row = `
             <tr class="inv-log-row">
-                <td style="font-size:12px; color:#555;">${formatTime(l.time)}</td>
-                
-                <td style="font-weight:bold; color:#003366;">
-                    ${l.takenBy}
-                </td>
-
+                <td style="font-size:12px; color:#555;">${timeStr}</td>
+                <td style="font-weight:bold; color:#003366;">${receiver}</td>
                 <td style="${colorStyle} font-weight:bold;">
-                    ${badge} ${l.item} 
-                    <span style="color:#333; font-weight:normal; font-size:11px;">(Qty: ${l.qty})</span>
+                    [${type}] ${item} 
+                    <span style="color:#333; font-weight:normal; font-size:11px;">(Qty: ${qty})</span>
                 </td>
             </tr>`;
             
             tbody.innerHTML += row;
         });
-    }, { onlyOnce: true });
+    });
+};
+
+// --- HELPER TO FORCE DATA IF EMPTY ---
+window.addTestLog = () => {
+    push(ref(db, "logs"), {
+        type: "CHECKOUT",
+        item: "Test Drill 5000",
+        qty: 1,
+        takenBy: "Test User",
+        time: serverTimestamp()
+    });
+    alert("Test data added! It should appear instantly.");
 };
 // --- NEW SEARCH FUNCTION FOR INVENTORY ---
 window.filterInvLogs = () => {
