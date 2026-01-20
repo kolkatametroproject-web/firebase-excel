@@ -416,15 +416,17 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     <table>
         <thead style="position:sticky; top:0; background:#003366; color:white;">
             <tr>
-                <th>Barcode</th>
-                <th>Taken By (User)</th>
-                <th>Checkout Details<br><small>(Date/Time | Appr By)</small></th>
-                <th>Return Details<br><small>(Date/Time | Appr By)</small></th>
-                <th>Duration / Status</th>
+                <th>ID</th>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Item / Barcode</th>
+                <th>User</th>
+                <th>Auth By</th>
+                <th>Sig</th>
             </tr>
         </thead>
         <tbody id="invHistoryBody">
-            <tr><td colspan="5" style="text-align:center;">Analyzing history...</td></tr>
+            <tr><td colspan="7" style="text-align:center;">Loading records...</td></tr>
         </tbody>
     </table>
 </div>
@@ -1451,128 +1453,62 @@ function formatTime(ts) {
     // Audit Style Date
     return d.toLocaleDateString('en-GB') + " " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
-
+// --- LINEAR HISTORY LOGIC (RESTORES PREVIOUS VIEW + BARCODES) ---
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Processing Transaction Cycles...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
 
-    // Fetch all logs to build complete history
-    const q = query(ref(db, "logs"), orderByChild("time"));
+    const q = query(ref(db, "logs"), limitToLast(300));
     
     onValue(q, (snap) => {
         const logs = [];
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // Newest first
 
-        // 1. Group logs by Barcode
-        const map = {}; 
-        logs.forEach(l => {
-            if(!l.barcode) return;
-            if(!map[l.barcode]) map[l.barcode] = [];
-            map[l.barcode].push(l);
-        });
+        // Filter: Show all stock movements
+        const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE');
 
-        const historyRows = [];
-
-        // 2. Process each barcode's timeline
-        Object.keys(map).forEach(barcode => {
-            const events = map[barcode];
-            // Sort by time ascending (Oldest first) to track flow
-            events.sort((a,b) => a.time - b.time);
-
-            let currentCheckout = null;
-
-            events.forEach(ev => {
-                if(ev.type === 'CHECKOUT') {
-                    // Start of a session
-                    currentCheckout = ev;
-                } 
-                else if(ev.type === 'RETURN' && currentCheckout) {
-                    // Found a closing pair!
-                    historyRows.push({
-                        barcode: barcode,
-                        user: currentCheckout.takenBy,
-                        outTime: currentCheckout.time,
-                        outAuth: currentCheckout.approvedBy,
-                        inTime: ev.time,
-                        inAuth: ev.approvedBy,
-                        status: "Returned"
-                    });
-                    currentCheckout = null; // Session closed
-                }
-            });
-
-            // If we finished the loop and still have a currentCheckout, it means it's STILL OUT
-            if(currentCheckout) {
-                historyRows.push({
-                    barcode: barcode,
-                    user: currentCheckout.takenBy,
-                    outTime: currentCheckout.time,
-                    outAuth: currentCheckout.approvedBy,
-                    inTime: null, // Not returned yet
-                    inAuth: null,
-                    status: "Active"
-                });
-            }
-        });
-
-        // 3. Sort Rows: Newest Actions First
-        historyRows.sort((a,b) => b.outTime - a.outTime);
-
-        // 4. Render
-        if(historyRows.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No completed or active sessions found.</td></tr>";
+        if(invLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded in recent history.</td></tr>";
             return;
         }
 
         tbody.innerHTML = "";
         
-        historyRows.forEach(row => {
-            // Format Dates
-            const outDate = new Date(row.outTime);
-            const outStr = `${outDate.toLocaleDateString()} <br> <small>${outDate.toLocaleTimeString()}</small>`;
+        invLogs.forEach(l => {
+            // Generate Short ID
+            const txnId = l.key.substring(l.key.length - 6).toUpperCase();
             
-            let inStr = "--";
-            let durationStr = "";
-            let rowStyle = "";
+            // Badge Styling
+            let badge = "";
+            if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:3px 6px; border-radius:3px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
+            else if(l.type === 'RETURN') badge = `<span style="background:#17a2b8; color:white; padding:3px 6px; border-radius:3px; font-weight:bold; font-size:11px;">📥 IN</span>`;
+            else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:3px 6px; border-radius:3px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
 
-            if(row.status === "Returned") {
-                const inDate = new Date(row.inTime);
-                inStr = `${inDate.toLocaleDateString()} <br> <small>${inDate.toLocaleTimeString()}</small>`;
-                
-                // Calculate Duration
-                const diffTime = Math.abs(inDate - outDate);
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-                durationStr = `<span style="color:green;">Returned</span><br><small>Held: ${diffDays} Day(s)</small>`;
-                rowStyle = "background:#f8f9fa;";
-            } else {
-                // Still Active
-                const now = new Date();
-                const diffTime = Math.abs(now - outDate);
-                const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-                
-                inStr = `<span style="color:#ccc;">Running...</span>`;
-                durationStr = `<span style="color:red; font-weight:bold; animation:blink 2s infinite;">⚠️ STILL HOLDING</span><br><small>${diffDays} Day(s)</small>`;
-                rowStyle = "background:#fff5f5; border-left: 4px solid #dc3545;";
-            }
+            // Signature Button
+            const sigBtn = l.signature && l.signature.includes('data:image')
+                ? `<button class="info" style="padding:2px 5px; font-size:11px;" onclick="viewSignature('${l.signature}')">View</button>`
+                : `<span style="color:#ccc; font-size:11px;">${l.signature || '--'}</span>`;
 
-            const html = `
-            <tr style="${rowStyle} border-bottom:1px solid #dee2e6;">
-                <td style="font-family:monospace; color:#003366; font-weight:bold;">${row.barcode}</td>
-                <td style="font-weight:bold;">${row.user}</td>
+            // Barcode Display
+            const barcodeDisplay = l.barcode ? `<div style="font-family:monospace; color:#003366; font-size:11px;">||| ${l.barcode}</div>` : '';
+
+            const row = `
+            <tr class="inv-log-row">
+                <td style="font-family:monospace; color:#555; font-size:12px;">#${txnId}</td>
+                <td style="font-size:13px;">${formatTime(l.time)}</td>
+                <td>${badge}</td>
                 <td>
-                    ${outStr}
-                    <div style="font-size:10px; color:#003366; margin-top:2px;">Appr: ${row.outAuth || 'Sys'}</div>
+                    <span style="font-weight:bold; font-size:13px; color:#212529;">${l.item}</span>
+                    ${barcodeDisplay}
                 </td>
-                <td>
-                    ${inStr}
-                    <div style="font-size:10px; color:#17a2b8; margin-top:2px;">${row.inAuth ? 'Appr: '+row.inAuth : ''}</div>
-                </td>
-                <td style="text-align:center;">${durationStr}</td>
+                <td style="font-weight:bold;">${l.takenBy || 'Unknown'}</td>
+                <td style="color:#003366; font-size:12px;">${l.approvedBy || 'System'}</td>
+                <td style="text-align:center;">${sigBtn}</td>
             </tr>`;
             
-            tbody.innerHTML += html;
+            tbody.innerHTML += row;
         });
-
     }, { onlyOnce: true });
 };
 // --- NEW SEARCH FUNCTION FOR INVENTORY ---
