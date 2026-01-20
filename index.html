@@ -836,33 +836,37 @@ window.fetchAuditHistory = async (barcode) => {
     }
 };
 // --- UNIFIED SCANNER HANDLER (REPLACE ALL OTHER VERSIONS WITH THIS) ---
+// --- UNIFIED SCAN SUCCESS HANDLER ---
 window.onScanSuccess = function(decodedText) {
+    // 1. Close Scanner
     closeBarcodeScanner();
-    console.log("Scanned:", decodedText, "Mode:", scanMode);
+    console.log("✅ SCANNED:", decodedText, "MODE:", scanMode);
 
-    // 1. ADD STOCK MODE
+    // --- MODE: ADD STOCK ---
     if (scanMode === 'ADD') {
         document.getElementById("invBarcode").value = decodedText;
         checkBarcodeUnique(decodedText);
         setTimeout(() => { 
-            if(confirm("Got it: " + decodedText)) document.getElementById("invName").focus(); 
-        }, 100);
+            if(confirm("Barcode Captured: " + decodedText)) document.getElementById("invName").focus(); 
+        }, 200);
     }
-    
-    // 2. CHECKOUT OR RETURN MODE
+
+    // --- MODE: CHECKOUT or RETURN ---
     else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        // Prepare UI Variables based on mode
         const isCheckout = (scanMode === 'CHECKOUT');
+        
+        // Define IDs based on mode
         const displayId = isCheckout ? "checkout_display" : "return_display";
         const nameId = isCheckout ? "checkout_item_name" : "return_item_name";
         const codeId = isCheckout ? "checkout_item_code" : "return_item_code";
         const authBtnId = isCheckout ? "btn_checkout_verify" : "btn_return_verify";
-        
+
+        // Unhide the panel immediately
         const displayEl = document.getElementById(displayId);
-        
-        // Reset UI
         if(displayEl) displayEl.classList.remove("hidden");
-        document.getElementById(nameId).innerHTML = "<i>Searching Database...</i>";
+
+        // Show "Loading..." text
+        document.getElementById(nameId).innerHTML = "<i>🔍 Searching Database...</i>";
         document.getElementById(codeId).innerText = decodedText;
 
         // Query Database
@@ -871,64 +875,67 @@ window.onScanSuccess = function(decodedText) {
 
         get(q).then(snap => {
             if (!snap.exists()) {
+                console.warn("Item not found in DB");
                 document.getElementById(nameId).innerHTML = `<span style="color:red">❌ Item Not Found</span>`;
-                alert("❌ ERROR: This barcode is not in the system!");
+                alert("This barcode does not exist in the Inventory system.");
                 return;
             }
 
+            // Get the first item found
             let foundItem = null;
             let foundKey = null;
             snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
 
-            // LOGIC GATE: Check if status allows action
+            console.log("📦 Item Found:", foundItem);
+
+            // LOGIC CHECKS
             if (isCheckout && foundItem.status === 'Checked Out') {
                  document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ OUT OF STOCK</span><br><small>Held by: ${foundItem.holder}</small>`;
-                 document.getElementById(authBtnId).style.display = 'none';
-                 alert(`STOP: Item is already checked out by ${foundItem.holder}.`);
+                 const btn = document.getElementById(authBtnId);
+                 if(btn) btn.style.display = 'none';
+                 alert(`Cannot Checkout: Item is held by ${foundItem.holder}`);
                  return;
             }
             if (!isCheckout && foundItem.status === 'In Stock') {
                  document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ ALREADY IN STORE</span>`;
-                 document.getElementById(authBtnId).style.display = 'none';
-                 alert(`STOP: Item is already in the store.`);
+                 const btn = document.getElementById(authBtnId);
+                 if(btn) btn.style.display = 'none';
+                 alert(`Cannot Return: Item is already in stock.`);
                  return;
             }
 
-            // SUCCESS: Prepare for Verification
-            pendingTransactionItem = { key: foundKey, ...foundItem };
+            // SUCCESS: Update the Name
+            const statusColor = isCheckout ? "#b38600" : "#17a2b8";
+            document.getElementById(nameId).innerHTML = `<span style="color:${statusColor}; font-weight:bold;">✔ Ready</span><br>${foundItem.item}`;
             
-            // Show the "Face Approve" button
+            // Set Global Variable for Transaction
+            pendingTransactionItem = { key: foundKey, ...foundItem };
+
+            // Show Admin Button
             const authBtn = document.getElementById(authBtnId);
             if(authBtn) {
                 authBtn.style.display = 'block';
                 authBtn.classList.remove("hidden");
             }
 
-            // Update Text
-            let statusColor = isCheckout ? "#b38600" : "#17a2b8";
-            document.getElementById(nameId).innerHTML = 
-                `<span style="color:${statusColor}; font-weight:bold;">✔ Ready for ${scanMode}</span><br>${foundItem.item}`;
-
         }).catch(err => {
-            console.error(err);
+            console.error("DB Error:", err);
+            document.getElementById(nameId).innerText = "DB Error";
             alert("Database Error: " + err.message);
         });
     }
-    
-    // 3. AUDIT / HISTORY SEARCH MODE
+
+    // --- MODE: AUDIT SEARCH ---
     else if (scanMode === 'AUDIT_SEARCH') {
         if (!isAdmin) return alert("Admins Only.");
-        document.getElementById("auditSearchInput").value = decodedText; 
-        fetchAuditHistory(decodedText); 
+        document.getElementById("auditSearchInput").value = decodedText;
+        fetchAuditHistory(decodedText);
     }
     
-    // 4. MAIN STOCK SEARCH MODE
+    // --- MODE: STOCK SEARCH ---
     else if (scanMode === 'SEARCH_STOCK') {
-        const searchBox = document.getElementById("mainStockSearch");
-        if(searchBox) {
-            searchBox.value = decodedText;
-            filterStockTable(); 
-        }
+        document.getElementById("mainStockSearch").value = decodedText;
+        filterStockTable();
     }
 };
 // --- 3. HELPER TO CLOSE MODAL ---
@@ -947,78 +954,106 @@ window.loadInventoryHistory = () => {
     }, 300);
 };
 // --- 2. SINGLE UNIFIED SCANNER HANDLER (Fixes the Duplicate Error) ---
+// --- UNIFIED SCAN SUCCESS HANDLER ---
 window.onScanSuccess = function(decodedText) {
+    // 1. Close Scanner
     closeBarcodeScanner();
-    console.log("Scanned:", decodedText, "Mode:", scanMode);
+    console.log("✅ SCANNED:", decodedText, "MODE:", scanMode);
 
+    // --- MODE: ADD STOCK ---
     if (scanMode === 'ADD') {
         document.getElementById("invBarcode").value = decodedText;
         checkBarcodeUnique(decodedText);
-        setTimeout(() => { if(confirm("Got it: " + decodedText)) document.getElementById("invName").focus(); }, 100);
+        setTimeout(() => { 
+            if(confirm("Barcode Captured: " + decodedText)) document.getElementById("invName").focus(); 
+        }, 200);
     }
+
+    // --- MODE: CHECKOUT or RETURN ---
     else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        // Reuse existing transaction logic if present
-        const displayId = (scanMode === 'CHECKOUT') ? "checkout_display" : "return_display";
-        const nameId = (scanMode === 'CHECKOUT') ? "checkout_item_name" : "return_item_name";
-        const codeId = (scanMode === 'CHECKOUT') ? "checkout_item_code" : "return_item_code";
+        const isCheckout = (scanMode === 'CHECKOUT');
+        
+        // Define IDs based on mode
+        const displayId = isCheckout ? "checkout_display" : "return_display";
+        const nameId = isCheckout ? "checkout_item_name" : "return_item_name";
+        const codeId = isCheckout ? "checkout_item_code" : "return_item_code";
+        const authBtnId = isCheckout ? "btn_checkout_verify" : "btn_return_verify";
+
+        // Unhide the panel immediately
         const displayEl = document.getElementById(displayId);
-        const authBtnContainer = (scanMode === 'CHECKOUT') ? "btn_checkout_verify" : "btn_return_verify";
-        
         if(displayEl) displayEl.classList.remove("hidden");
-        document.getElementById(nameId).innerText = "Checking Status...";
+
+        // Show "Loading..." text
+        document.getElementById(nameId).innerHTML = "<i>🔍 Searching Database...</i>";
         document.getElementById(codeId).innerText = decodedText;
-        
-        // Database check logic
+
+        // Query Database
         const invRef = ref(db, "inventory");
         const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
 
         get(q).then(snap => {
             if (!snap.exists()) {
-                alert("❌ ERROR: Item not found!");
-                if(displayEl) displayEl.classList.add("hidden");
+                console.warn("Item not found in DB");
+                document.getElementById(nameId).innerHTML = `<span style="color:red">❌ Item Not Found</span>`;
+                alert("This barcode does not exist in the Inventory system.");
                 return;
             }
+
+            // Get the first item found
             let foundItem = null;
             let foundKey = null;
             snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
 
-            // Logic Gates
-            if (scanMode === 'CHECKOUT' && foundItem.status === 'Checked Out') {
+            console.log("📦 Item Found:", foundItem);
+
+            // LOGIC CHECKS
+            if (isCheckout && foundItem.status === 'Checked Out') {
                  document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ OUT OF STOCK</span><br><small>Held by: ${foundItem.holder}</small>`;
-                 if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'none';
-                 alert(`STOP: Currently held by ${foundItem.holder}.`);
+                 const btn = document.getElementById(authBtnId);
+                 if(btn) btn.style.display = 'none';
+                 alert(`Cannot Checkout: Item is held by ${foundItem.holder}`);
                  return;
             }
-            if (scanMode === 'RETURN' && foundItem.status === 'In Stock') {
+            if (!isCheckout && foundItem.status === 'In Stock') {
                  document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ ALREADY IN STORE</span>`;
-                 if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'none';
-                 alert(`STOP: Item is already in the store.`);
+                 const btn = document.getElementById(authBtnId);
+                 if(btn) btn.style.display = 'none';
+                 alert(`Cannot Return: Item is already in stock.`);
                  return;
             }
 
-            // Success
+            // SUCCESS: Update the Name
+            const statusColor = isCheckout ? "#b38600" : "#17a2b8";
+            document.getElementById(nameId).innerHTML = `<span style="color:${statusColor}; font-weight:bold;">✔ Ready</span><br>${foundItem.item}`;
+            
+            // Set Global Variable for Transaction
             pendingTransactionItem = { key: foundKey, ...foundItem };
-            if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'block';
-            let statusColor = (scanMode === 'RETURN') ? "#17a2b8" : "green";
-            document.getElementById(nameId).innerHTML = `<span style="color:${statusColor}">✔ Ready for ${scanMode}</span><br>${foundItem.item}`;
 
-        }).catch(err => alert("DB Error: " + err.message));
+            // Show Admin Button
+            const authBtn = document.getElementById(authBtnId);
+            if(authBtn) {
+                authBtn.style.display = 'block';
+                authBtn.classList.remove("hidden");
+            }
+
+        }).catch(err => {
+            console.error("DB Error:", err);
+            document.getElementById(nameId).innerText = "DB Error";
+            alert("Database Error: " + err.message);
+        });
     }
+
+    // --- MODE: AUDIT SEARCH ---
     else if (scanMode === 'AUDIT_SEARCH') {
-        // DIRECTLY POP UP THE DATA
         if (!isAdmin) return alert("Admins Only.");
-        document.getElementById("auditSearchInput").value = decodedText; 
-        fetchAuditHistory(decodedText); // Trigger Popup
+        document.getElementById("auditSearchInput").value = decodedText;
+        fetchAuditHistory(decodedText);
     }
+    
+    // --- MODE: STOCK SEARCH ---
     else if (scanMode === 'SEARCH_STOCK') {
-        const searchBox = document.getElementById("mainStockSearch");
-        if(searchBox) {
-            searchBox.value = decodedText;
-            filterStockTable(); 
-        }
-    }
-    else if (scanMode === 'SEARCH_LOGS') {
-        // Only used if you kept the old table, safe to leave empty or remove
+        document.getElementById("mainStockSearch").value = decodedText;
+        filterStockTable();
     }
 };
 
