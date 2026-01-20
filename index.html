@@ -772,7 +772,7 @@ window.closeBarcodeScanner = () => {
 }
 // --- NEW AUDIT LOGIC ---
 window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
-// --- 1. OPEN AUDIT MODAL & FETCH DATA (Pop-up Card Style) ---
+// --- FIXED AUDIT POPUP (Forces IST Date & Time) ---
 window.fetchAuditHistory = async (barcode) => {
     if(!barcode) return;
 
@@ -783,8 +783,9 @@ window.fetchAuditHistory = async (barcode) => {
     container.innerHTML = '<div style="text-align:center; padding:20px;"><i class="fas fa-spinner fa-spin"></i> Searching Archives...</div>';
 
     try {
-        // Query Database for Logs with this Barcode
-        const q = query(ref(db, "logs"), orderByChild("barcode"), equalTo(barcode));
+        // Use getDatabase() since you are using modules
+        const dbRef = getDatabase();
+        const q = query(ref(dbRef, "logs"), orderByChild("barcode"), equalTo(barcode));
         const snap = await get(q);
 
         if (!snap.exists()) {
@@ -797,16 +798,16 @@ window.fetchAuditHistory = async (barcode) => {
             return;
         }
 
-        // Convert to Array & Sort (Newest First)
+        // Process Data
         let logs = [];
         snap.forEach(c => logs.push(c.val()));
-        logs.sort((a, b) => b.time - a.time); // Descending Order
+        logs.sort((a, b) => b.time - a.time); // Descending Order (Newest first)
 
-        // Render Timeline
-        container.innerHTML = ""; // Clear loader
+        // Clear Loading Spinner
+        container.innerHTML = "";
         
         logs.forEach(l => {
-            // Determine Styles based on Type
+            // Determine Styles
             let typeIcon = "➕";
             let typeText = "ADDED";
             let cardBorder = "border-left: 5px solid #28a745;"; // Green
@@ -820,11 +821,19 @@ window.fetchAuditHistory = async (barcode) => {
                 cardBorder = "border-left: 5px solid #17a2b8;"; // Blue
             }
 
-            // Date Formatting
+            // --- STRICT DATE FIX FOR POPUP ---
             const dateObj = new Date(l.time);
-            const dateStr = dateObj.toLocaleDateString() + " " + dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            const dateStr = dateObj.toLocaleString('en-IN', { 
+                timeZone: 'Asia/Kolkata',
+                day: '2-digit', 
+                month: '2-digit', 
+                year: 'numeric', 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                hour12: false // 24-hour format like 22:39
+            });
 
-            // HTML Card Construction (Inline CSS for safety)
+            // HTML Card Construction
             const cardHTML = `
                 <div style="background:white; padding:12px; margin-bottom:10px; border-radius:4px; box-shadow:0 2px 4px rgba(0,0,0,0.05); ${cardBorder}">
                     <div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:13px; font-weight:bold;">
@@ -850,7 +859,6 @@ window.fetchAuditHistory = async (barcode) => {
         container.innerHTML = `<div style="color:red; text-align:center;">Error loading history: ${e.message}</div>`;
     }
 };
-
 // --- 3. HELPER TO CLOSE MODAL ---
 window.closeAuditModal = () => {
     document.getElementById("auditResultModal").classList.add("hidden");
