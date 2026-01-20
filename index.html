@@ -757,6 +757,7 @@ window.closeBarcodeScanner = () => {
 // --- NEW AUDIT LOGIC ---
 window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
 // --- ROBUST AUDIT POPUP (Fixes Sorting & Date Issues) ---
+// --- ROBUST AUDIT POPUP (Fixes Sorting Conflict & Date Only) ---
 window.fetchAuditHistory = async (barcode) => {
     if(!barcode) return;
 
@@ -765,7 +766,7 @@ window.fetchAuditHistory = async (barcode) => {
     document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
     
     const container = document.getElementById("auditTimelineContainer");
-    container.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><i class="fas fa-spinner fa-spin"></i> Loading History...</div>';
+    container.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
 
     try {
         const dbRef = getDatabase();
@@ -785,19 +786,31 @@ window.fetchAuditHistory = async (barcode) => {
         let logs = [];
         snap.forEach(c => logs.push(c.val()));
 
-        // --- FIX: ROBUST SORTING ---
-        // Convert everything to milliseconds first to prevent NaN errors
-        logs.sort((a, b) => {
-            const timeA = new Date(a.time).getTime();
-            const timeB = new Date(b.time).getTime();
-            return timeB - timeA; // Newest First
-        });
+        // --- SORTING FIX (Handles Text Dates vs Timestamps) ---
+        const getTimestamp = (t) => {
+            if (!t) return 0;
+            if (typeof t === 'number') return t; // New Data (Perfect)
+            
+            // Old Data Fix: Convert "20/01/2026" to "01/20/2026" for browser
+            if (typeof t === 'string' && t.includes('/')) {
+                const parts = t.split(/[ ,]+/); // Split by space or comma
+                const dateParts = parts[0].split('/'); // Get DD, MM, YYYY
+                if (dateParts.length === 3) {
+                    // Swap to MM/DD/YYYY to allow sorting
+                    return new Date(`${dateParts[1]}/${dateParts[0]}/${dateParts[2]} ${parts[1]||''}`).getTime();
+                }
+            }
+            return 0; // Invalid
+        };
 
-        // Clear and Render
+        // Sort Descending (Newest First)
+        logs.sort((a, b) => getTimestamp(b.time) - getTimestamp(a.time));
+
+
+        // --- RENDER ---
         container.innerHTML = "";
         
         logs.forEach(l => {
-            // Style Logic
             let typeIcon = "➕";
             let typeText = "ADDED";
             let borderStyle = "border-left: 5px solid #28a745;"; // Green
@@ -811,19 +824,26 @@ window.fetchAuditHistory = async (barcode) => {
                 borderStyle = "border-left: 5px solid #17a2b8;"; // Blue
             }
 
-            // Date Formatting (Indian Standard Time)
-            const dateObj = new Date(l.time);
-            const dateStr = dateObj.toLocaleString('en-IN', { 
-                timeZone: 'Asia/Kolkata',
-                day: '2-digit', month: '2-digit', year: 'numeric', 
-                hour: '2-digit', minute: '2-digit', hour12: true 
-            });
+            // DATE ONLY DISPLAY (As Requested)
+            let dateDisplay = "--";
+            try {
+                // If it's a number, use Indian formatting
+                if(typeof l.time === 'number') {
+                    dateDisplay = new Date(l.time).toLocaleDateString('en-IN', {
+                        timeZone: 'Asia/Kolkata',
+                        day: '2-digit', month: '2-digit', year: 'numeric'
+                    });
+                } else {
+                    // If it's old text data, just show the first part (Date)
+                    dateDisplay = l.time.split(',')[0]; 
+                }
+            } catch(e) { dateDisplay = "Invalid Date"; }
 
             const cardHTML = `
                 <div style="background:white; padding:15px; margin-bottom:10px; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); ${borderStyle}">
                     <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
                         <span style="font-weight:bold; color:#003366;">${typeIcon} ${typeText}</span>
-                        <span style="font-size:12px; color:#555;">${dateStr}</span>
+                        <span style="font-size:14px; font-weight:bold; color:#444;">${dateDisplay}</span>
                     </div>
                     
                     <div style="font-size:15px; font-weight:bold; color:#333; margin-bottom:5px;">
