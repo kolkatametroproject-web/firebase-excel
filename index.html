@@ -348,9 +348,85 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
       </div>
     </div>
 
-    <div id="inv-checkout" class="panel hidden"> ... (Keep existing code) ... </div>
-    <div id="inv-return" class="panel hidden"> ... (Keep existing code) ... </div>
-    <div id="inv-history" class="panel hidden"> ... (Keep existing code) ... </div>
+    <div id="inv-checkout" class="panel hidden" style="border: 2px solid #b38600;">
+        <h3 style="color:#b38600;">📤 Checkout Item</h3>
+        <p style="text-align:center; color:#666; font-size:12px;">
+            Scan a unique barcode to check it out to a user.
+        </p>
+        
+        <div style="text-align:center; padding:20px;">
+            <button onclick="openBarcodeScanner('CHECKOUT')" class="warning" style="font-size:16px; padding:15px 30px; width:100%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <i class="fas fa-qrcode"></i> SCAN ITEM BARCODE
+            </button>
+        </div>
+
+        <div id="checkout_display" class="hidden" style="background:#fff3cd; padding:15px; border:1px solid #ffeeba; text-align:center; margin-top:10px; border-radius:4px;">
+            <h2 id="checkout_item_name" style="color:#856404; margin:10px 0 5px 0;">--</h2>
+            <div style="font-family:monospace; font-size:14px; color:#555; margin-bottom:15px;">
+                Barcode: <span id="checkout_item_code" style="font-weight:bold;">--</span>
+            </div>
+            
+            <div id="btn_checkout_verify">
+                 <button onclick="initTransactionAuth('CHECKOUT')" style="background:#b38600; color:white; padding:12px 20px; width:100%; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">
+                    🛡️ Admin Face Approve
+                 </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="inv-return" class="panel hidden" style="border: 2px solid #17a2b8;">
+        <h3 style="color:#17a2b8;">📥 Return Item</h3>
+        <p style="text-align:center; color:#666; font-size:12px;">
+            Scan an item to return it to the store.
+        </p>
+        
+        <div style="text-align:center; padding:20px;">
+            <button onclick="openBarcodeScanner('RETURN')" class="info" style="font-size:16px; padding:15px 30px; width:100%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <i class="fas fa-qrcode"></i> SCAN ITEM TO RETURN
+            </button>
+        </div>
+
+        <div id="return_display" class="hidden" style="background:#d1ecf1; padding:15px; border:1px solid #bee5eb; text-align:center; margin-top:10px; border-radius:4px;">
+            <h2 id="return_item_name" style="color:#0c5460; margin:10px 0 5px 0;">--</h2>
+            <div style="font-family:monospace; font-size:14px; color:#555; margin-bottom:15px;">
+                Barcode: <span id="return_item_code" style="font-weight:bold;">--</span>
+            </div>
+
+            <div id="btn_return_verify">
+                 <button onclick="initTransactionAuth('RETURN')" style="background:#17a2b8; color:white; padding:12px 20px; width:100%; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">
+                    🛡️ Admin Face Approve
+                 </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="inv-history" class="panel hidden">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+            <h3 style="margin:0;">📜 Stock Movement Log</h3>
+            
+            <div style="display:flex; gap:10px;">
+                <input type="text" id="invSearch" onkeyup="filterInvLogs()" placeholder="🔍 Search Logs..." style="padding:8px; border:1px solid #ccc; border-radius:4px;">
+            </div>
+        </div>
+
+        <div class="table-wrapper" style="max-height:500px; overflow-y:auto;">
+            <table>
+                <thead style="position:sticky; top:0; background:#343a40; color:white;">
+                    <tr>
+                        <th>Time</th>
+                        <th>Type</th>
+                        <th>Barcode</th>
+                        <th>Product</th>
+                        <th>Person (Taken By)</th>
+                        <th>Admin Auth</th>
+                    </tr>
+                </thead>
+                <tbody id="invHistoryBody">
+                    <tr><td colspan="6" style="text-align:center;">Load logs to view history...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 
     <div id="inv-list" class="panel">
         <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #003366; padding-bottom:10px; margin-bottom:10px;">
@@ -1378,62 +1454,65 @@ function formatTime(ts) {
     // Audit Style Date
     return d.toLocaleDateString('en-GB') + " " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
-
+// --- NEW LOGIC: AUDIT TRAIL WITH BARCODES ---
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading History...</td></tr>";
 
-    // FETCH MORE DATA (300) to ensure we find inventory items even if many people logged in
+    // Fetch last 300 logs
     const q = query(ref(db, "logs"), limitToLast(300));
-   
+    
     onValue(q, (snap) => {
         const logs = [];
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
         logs.reverse(); // Newest first
 
-        // Strict Filter: Only show movement of goods
-        const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE');
+        // Filter: Only Stock Related Events
+        const invLogs = logs.filter(l => 
+            l.type === 'CHECKOUT' || 
+            l.type === 'RETURN' || 
+            l.type === 'STOCK_ADD' || 
+            l.type === 'STOCK_UPDATE'
+        );
 
         if(invLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded in recent history.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded.</td></tr>";
             return;
         }
 
         tbody.innerHTML = "";
+        
         invLogs.forEach(l => {
-            const txnId = l.key.substring(l.key.length - 6).toUpperCase(); // Last 6 chars as ID
-           
-            // Badge Styling
-            let badge = "";
-            if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
-            else if(l.type === 'RETURN') badge = `<span style="background:#17a2b8; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">📥 IN</span>`;
-            else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:2px 5px; border-radius:3px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
+            // Format Date
+            const d = new Date(l.time);
+            const dateStr = d.toLocaleDateString() + " " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 
-            // Signature Button
-            const sigBtn = l.signature
-                ? `<button class="info" style="padding:2px 5px; font-size:11px;" onclick="viewSignature('${l.signature}')">View</button>`
+            // Badge Styling
+            let typeBadge = `<span style="background:#6c757d; color:white; padding:3px 8px; border-radius:10px; font-size:11px;">${l.type}</span>`;
+            
+            if(l.type === 'CHECKOUT') typeBadge = `<span style="background:#b38600; color:white; padding:3px 8px; border-radius:10px; font-size:11px;">📤 OUT</span>`;
+            else if(l.type === 'RETURN') typeBadge = `<span style="background:#17a2b8; color:white; padding:3px 8px; border-radius:10px; font-size:11px;">📥 IN</span>`;
+            else if(l.type === 'STOCK_ADD') typeBadge = `<span style="background:#28a745; color:white; padding:3px 8px; border-radius:10px; font-size:11px;">➕ NEW</span>`;
+
+            // Barcode Styling
+            const barcodeDisplay = l.barcode 
+                ? `<span style="font-family:monospace; font-weight:bold; color:#003366;">${l.barcode}</span>` 
                 : `<span style="color:#ccc;">--</span>`;
 
             const row = `
             <tr class="inv-log-row">
-                <td style="font-family:monospace; color:#003366; font-weight:bold;">#${txnId}</td>
-                <td>${formatTime(l.time)}</td>
-                <td>${badge}</td>
-                <td>
-                    <span style="font-weight:bold; font-size:13px;">${l.item}</span><br>
-                    <span style="color:#666; font-size:11px;">Qty: ${l.qty}</span>
-                </td>
+                <td style="font-size:12px; color:#555;">${dateStr}</td>
+                <td style="text-align:center;">${typeBadge}</td>
+                <td>${barcodeDisplay}</td>
+                <td style="font-weight:bold;">${l.item}</td>
                 <td>${l.takenBy}</td>
-                <td>
-                    <span style="color:green; font-weight:bold;">✔ ${l.approvedBy || 'System'}</span>
-                </td>
-                <td style="text-align:center;">${sigBtn}</td>
+                <td><span style="color:green; font-size:12px;">✔ ${l.approvedBy || 'System'}</span></td>
             </tr>`;
+            
             tbody.innerHTML += row;
         });
     }, { onlyOnce: true });
 };
-
 // --- NEW SEARCH FUNCTION FOR INVENTORY ---
 window.filterInvLogs = () => {
     const input = document.getElementById("invSearch").value.toLowerCase();
