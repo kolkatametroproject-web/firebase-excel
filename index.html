@@ -2055,7 +2055,8 @@ function loadInventory() {
     const b = document.getElementById("inventoryBody");
     const summaryEl = document.getElementById("stockSummaryText");
     
-    b.innerHTML = "<tr><td colspan='7'>Loading live stock...</td></tr>";
+    // Show loading state
+    b.innerHTML = "<tr><td colspan='7' style='text-align:center;'>Loading live stock...</td></tr>";
 
     onValue(ref(db, "inventory"), snap => {
         b.innerHTML = "";
@@ -2067,28 +2068,39 @@ function loadInventory() {
             const k = c.key;
             
             totalItems++;
-            if(v.status === "In Stock") inStockCount++;
 
-            // --- LOGIC: WHO IS HOLDING IT? ---
-            // If In Stock, show "-". If Checked Out, show the name.
+            // === CRITICAL FIX ===
+            // Instead of checking if status IS "In Stock", we check if it is NOT "Checked Out".
+            // This ensures items with missing/undefined status (from older data) are counted as Available.
+            if(v.status !== "Checked Out") {
+                inStockCount++;
+            }
+            // ====================
+
+            // 1. Logic for Current Holder Display
+            // If available, show "-". If out, show the person's name with an icon.
             let holderDisplay = "-";
             if(v.status === "Checked Out") {
                 holderDisplay = `<span style="color:#b38600; font-weight:bold;">👤 ${v.holder}</span>`;
             }
 
-            // Status Badge
+            // 2. Logic for Status Badge
+            // Default to Green "In Stock". Only switch to Yellow if explicitly "Checked Out".
             let statusBadge = `<span style="color:green; font-weight:bold; background:#d4edda; padding:2px 6px; border-radius:4px;">In Stock</span>`;
+            
             if(v.status === "Checked Out") {
                 statusBadge = `<span style="color:#856404; font-weight:bold; background:#fff3cd; padding:2px 6px; border-radius:4px;">📤 Checked Out</span>`;
             }
 
-            // Added By & Usage
+            // 3. Handle missing data for older items
             const addedBy = v.addedBy || "Unknown";
             const usage = v.usageCount || 0;
+            const barcode = v.barcode || "--";
 
+            // 4. Build the Table Row
             const row = `
             <tr class="stock-row">
-                <td style="font-family:monospace; color:#003366; font-weight:bold;">${v.barcode}</td>
+                <td style="font-family:monospace; color:#003366; font-weight:bold;">${barcode}</td>
                 <td class="search-name">${v.item}</td>
                 <td style="font-size:12px; color:#555;">${addedBy}</td>
                 <td style="text-align:center; font-weight:bold;">${usage}</td>
@@ -2098,10 +2110,15 @@ function loadInventory() {
                     ${isAdmin ? `<button class="danger" onclick="delInv('${k}')" style="padding:2px 5px; font-size:10px;">Remove</button>` : ''}
                 </td>
             </tr>`;
+            
             b.innerHTML += row;
         });
 
-        summaryEl.innerHTML = `Total Items: ${totalItems} | <span style="color:green;">Available: ${inStockCount}</span>`;
+        // 5. Update the Summary Header
+        // This will now correctly show "Available: 11" instead of "Available: 1"
+        if(summaryEl) {
+            summaryEl.innerHTML = `Total Items: ${totalItems} | <span style="color:green;">Available: ${inStockCount}</span>`;
+        }
     });
 }
 // --- NEW SEARCH FUNCTION ---
