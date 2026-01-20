@@ -422,13 +422,13 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
    <div id="inv-history" class="panel hidden">
     <div style="text-align:center; padding:40px 20px;">
         <h2 style="color:#003366; margin-bottom:10px;">🔍 Item Audit Trail</h2>
-        <p style="color:#666; margin-bottom:20px;">Scan a barcode to view its entire lifecycle.</p>
+        <p style="color:#666; margin-bottom:20px;">Scan a barcode to view its entire history popup.</p>
         
         <div style="max-width:400px; margin:0 auto; display:flex; gap:10px;">
             <input 
                 id="auditSearchInput" 
                 placeholder="Scan or Enter Barcode..." 
-                style="padding:12px; font-size:16px; border:2px solid #003366; border-radius:5px;"
+                style="padding:12px; font-size:16px; border:2px solid #003366; border-radius:5px; flex-grow:1;"
                 onchange="fetchAuditHistory(this.value)"
             >
             <button 
@@ -442,6 +442,23 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     </div>
 </div>
 
+<div id="auditResultModal" class="modal-overlay hidden">
+    <div class="panel" style="width:400px; max-width:95%; max-height:85vh; display:flex; flex-direction:column; padding:0; overflow:hidden; background:#f4f6f9;">
+        
+        <div style="background:#003366; color:white; padding:15px; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <h3 style="margin:0; font-size:16px; border:none; color:white;">📦 Item Lifecycle</h3>
+                <small id="auditModalBarcode" style="opacity:0.8; font-family:monospace;">--</small>
+            </div>
+            <button onclick="closeAuditModal()" style="background:transparent; border:none; color:white; font-size:24px; cursor:pointer;">&times;</button>
+        </div>
+
+        <div id="auditTimelineContainer" style="overflow-y:auto; padding:15px; flex-grow:1;">
+            <div style="text-align:center; color:#777;">Loading data...</div>
+        </div>
+
+    </div>
+</div>
 <div id="auditResultModal" class="modal-overlay hidden">
     <div class="panel" style="width:400px; max-width:95%; max-height:85vh; display:flex; flex-direction:column; padding:0; overflow:hidden;">
         
@@ -740,14 +757,13 @@ window.closeBarcodeScanner = () => {
 }
 // --- NEW AUDIT LOGIC ---
 window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
-// --- 1. OPEN AUDIT MODAL & FETCH DATA ---
 // --- 1. OPEN AUDIT MODAL & FETCH DATA (Card Style - No Table) ---
 window.fetchAuditHistory = async (barcode) => {
     if(!barcode) return;
 
     // Open Modal & Reset UI
     document.getElementById("auditResultModal").classList.remove("hidden");
-    document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
+    document.getElementById("auditModalBarcode").innerText = barcode;
     const container = document.getElementById("auditTimelineContainer");
     container.innerHTML = '<div style="text-align:center; padding:20px;"><i class="fas fa-spinner fa-spin"></i> Searching Archives...</div>';
 
@@ -779,30 +795,36 @@ window.fetchAuditHistory = async (barcode) => {
             let typeClass = "add";
             let typeIcon = "➕";
             let typeText = "ADDED";
+            let cardBorder = "border-left: 5px solid #28a745;";
 
-            if(l.type === 'CHECKOUT') { typeClass = "checkout"; typeIcon = "📤"; typeText = "CHECKED OUT"; }
-            else if(l.type === 'RETURN') { typeClass = "return"; typeIcon = "📥"; typeText = "RETURNED"; }
-            else if(l.type.includes('STOCK')) { typeClass = "add"; typeIcon = "📦"; typeText = "STOCK UPDATE"; }
+            if(l.type === 'CHECKOUT') { 
+                typeClass = "checkout"; typeIcon = "📤"; typeText = "CHECKED OUT"; 
+                cardBorder = "border-left: 5px solid #b38600;";
+            }
+            else if(l.type === 'RETURN') { 
+                typeClass = "return"; typeIcon = "📥"; typeText = "RETURNED"; 
+                cardBorder = "border-left: 5px solid #17a2b8;";
+            }
 
             // Date Formatting
             const dateObj = new Date(l.time);
             const dateStr = dateObj.toLocaleDateString() + " " + dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 
-            // HTML Card Construction
+            // HTML Card Construction (Inline CSS for safety)
             const cardHTML = `
-                <div class="history-card ${typeClass}">
-                    <div class="hc-header">
-                        <span style="color:var(--metro-blue);">${typeIcon} ${typeText}</span>
-                        <span style="color:#555;">${dateStr}</span>
+                <div style="background:white; padding:12px; margin-bottom:10px; border-radius:4px; box-shadow:0 2px 4px rgba(0,0,0,0.05); ${cardBorder}">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:13px; font-weight:bold;">
+                        <span style="color:#003366;">${typeIcon} ${typeText}</span>
+                        <span style="color:#666;">${dateStr}</span>
                     </div>
                     
-                    <div class="hc-user">
+                    <div style="font-size:14px; font-weight:bold; color:#333; margin-bottom:5px;">
                         👤 ${l.takenBy || 'Unknown User'}
                     </div>
                     
-                    <div class="hc-meta">
-                        <strong>Approved By:</strong> ${l.approvedBy || 'System'}<br>
-                        <strong>Item Name:</strong> ${l.item}
+                    <div style="font-size:11px; color:#555; line-height:1.4;">
+                        <strong>Auth By:</strong> ${l.approvedBy || 'System'}<br>
+                        <strong>Item:</strong> ${l.item}
                     </div>
                 </div>
             `;
@@ -813,6 +835,95 @@ window.fetchAuditHistory = async (barcode) => {
         console.error(e);
         container.innerHTML = `<div style="color:red; text-align:center;">Error loading history: ${e.message}</div>`;
     }
+};
+
+// --- 2. SINGLE UNIFIED SCANNER HANDLER (Fixes the Duplicate Error) ---
+window.onScanSuccess = function(decodedText) {
+    closeBarcodeScanner();
+    console.log("Scanned:", decodedText, "Mode:", scanMode);
+
+    if (scanMode === 'ADD') {
+        document.getElementById("invBarcode").value = decodedText;
+        checkBarcodeUnique(decodedText);
+        setTimeout(() => { if(confirm("Got it: " + decodedText)) document.getElementById("invName").focus(); }, 100);
+    }
+    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+        // Reuse existing transaction logic if present
+        const displayId = (scanMode === 'CHECKOUT') ? "checkout_display" : "return_display";
+        const nameId = (scanMode === 'CHECKOUT') ? "checkout_item_name" : "return_item_name";
+        const codeId = (scanMode === 'CHECKOUT') ? "checkout_item_code" : "return_item_code";
+        const displayEl = document.getElementById(displayId);
+        const authBtnContainer = (scanMode === 'CHECKOUT') ? "btn_checkout_verify" : "btn_return_verify";
+        
+        if(displayEl) displayEl.classList.remove("hidden");
+        document.getElementById(nameId).innerText = "Checking Status...";
+        document.getElementById(codeId).innerText = decodedText;
+        
+        // Database check logic
+        const invRef = ref(db, "inventory");
+        const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
+
+        get(q).then(snap => {
+            if (!snap.exists()) {
+                alert("❌ ERROR: Item not found!");
+                if(displayEl) displayEl.classList.add("hidden");
+                return;
+            }
+            let foundItem = null;
+            let foundKey = null;
+            snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
+
+            // Logic Gates
+            if (scanMode === 'CHECKOUT' && foundItem.status === 'Checked Out') {
+                 document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ OUT OF STOCK</span><br><small>Held by: ${foundItem.holder}</small>`;
+                 if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'none';
+                 alert(`STOP: Currently held by ${foundItem.holder}.`);
+                 return;
+            }
+            if (scanMode === 'RETURN' && foundItem.status === 'In Stock') {
+                 document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ ALREADY IN STORE</span>`;
+                 if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'none';
+                 alert(`STOP: Item is already in the store.`);
+                 return;
+            }
+
+            // Success
+            pendingTransactionItem = { key: foundKey, ...foundItem };
+            if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'block';
+            let statusColor = (scanMode === 'RETURN') ? "#17a2b8" : "green";
+            document.getElementById(nameId).innerHTML = `<span style="color:${statusColor}">✔ Ready for ${scanMode}</span><br>${foundItem.item}`;
+
+        }).catch(err => alert("DB Error: " + err.message));
+    }
+    else if (scanMode === 'AUDIT_SEARCH') {
+        // DIRECTLY POP UP THE DATA
+        if (!isAdmin) return alert("Admins Only.");
+        document.getElementById("auditSearchInput").value = decodedText; 
+        fetchAuditHistory(decodedText); // Trigger Popup
+    }
+    else if (scanMode === 'SEARCH_STOCK') {
+        const searchBox = document.getElementById("mainStockSearch");
+        if(searchBox) {
+            searchBox.value = decodedText;
+            filterStockTable(); 
+        }
+    }
+    else if (scanMode === 'SEARCH_LOGS') {
+        // Only used if you kept the old table, safe to leave empty or remove
+    }
+};
+
+// --- 3. HELPER TO CLOSE MODAL ---
+window.closeAuditModal = () => {
+    document.getElementById("auditResultModal").classList.add("hidden");
+    document.getElementById("auditSearchInput").value = ""; 
+};
+
+// --- 4. EMPTY/DUMMY LOAD HISTORY (Prevents errors when clicking tab) ---
+window.loadInventoryHistory = () => {
+    // Intentionally empty or just focuses the search box
+    // Because we removed the table
+    setTimeout(() => document.getElementById("auditSearchInput").focus(), 300);
 };
 
 // --- 2. UNIFIED SCANNER HANDLER (This replaces your old one) ---
