@@ -835,71 +835,94 @@ window.fetchAuditHistory = async (barcode) => {
         container.innerHTML = `<div style="color:red; text-align:center;">Error loading history: ${e.message}</div>`;
     }
 };
-
-// --- 2. SINGLE UNIFIED SCANNER HANDLER (Fixes the Duplicate Error) ---
+// --- UNIFIED SCANNER HANDLER (REPLACE ALL OTHER VERSIONS WITH THIS) ---
 window.onScanSuccess = function(decodedText) {
     closeBarcodeScanner();
     console.log("Scanned:", decodedText, "Mode:", scanMode);
 
+    // 1. ADD STOCK MODE
     if (scanMode === 'ADD') {
         document.getElementById("invBarcode").value = decodedText;
         checkBarcodeUnique(decodedText);
-        setTimeout(() => { if(confirm("Got it: " + decodedText)) document.getElementById("invName").focus(); }, 100);
+        setTimeout(() => { 
+            if(confirm("Got it: " + decodedText)) document.getElementById("invName").focus(); 
+        }, 100);
     }
+    
+    // 2. CHECKOUT OR RETURN MODE
     else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        // Prepare UI for transaction
-        const displayId = (scanMode === 'CHECKOUT') ? "checkout_display" : "return_display";
-        const nameId = (scanMode === 'CHECKOUT') ? "checkout_item_name" : "return_item_name";
-        const codeId = (scanMode === 'CHECKOUT') ? "checkout_item_code" : "return_item_code";
+        // Prepare UI Variables based on mode
+        const isCheckout = (scanMode === 'CHECKOUT');
+        const displayId = isCheckout ? "checkout_display" : "return_display";
+        const nameId = isCheckout ? "checkout_item_name" : "return_item_name";
+        const codeId = isCheckout ? "checkout_item_code" : "return_item_code";
+        const authBtnId = isCheckout ? "btn_checkout_verify" : "btn_return_verify";
+        
         const displayEl = document.getElementById(displayId);
-        const authBtnContainer = (scanMode === 'CHECKOUT') ? "btn_checkout_verify" : "btn_return_verify";
         
+        // Reset UI
         if(displayEl) displayEl.classList.remove("hidden");
-        document.getElementById(nameId).innerText = "Checking Status...";
+        document.getElementById(nameId).innerHTML = "<i>Searching Database...</i>";
         document.getElementById(codeId).innerText = decodedText;
-        
-        // Database check logic
+
+        // Query Database
         const invRef = ref(db, "inventory");
         const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
 
         get(q).then(snap => {
             if (!snap.exists()) {
-                alert("❌ ERROR: Item not found!");
-                if(displayEl) displayEl.classList.add("hidden");
+                document.getElementById(nameId).innerHTML = `<span style="color:red">❌ Item Not Found</span>`;
+                alert("❌ ERROR: This barcode is not in the system!");
                 return;
             }
+
             let foundItem = null;
             let foundKey = null;
             snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
 
-            // Logic Gates (Stop if already out/in)
-            if (scanMode === 'CHECKOUT' && foundItem.status === 'Checked Out') {
+            // LOGIC GATE: Check if status allows action
+            if (isCheckout && foundItem.status === 'Checked Out') {
                  document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ OUT OF STOCK</span><br><small>Held by: ${foundItem.holder}</small>`;
-                 if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'none';
-                 alert(`STOP: Currently held by ${foundItem.holder}.`);
+                 document.getElementById(authBtnId).style.display = 'none';
+                 alert(`STOP: Item is already checked out by ${foundItem.holder}.`);
                  return;
             }
-            if (scanMode === 'RETURN' && foundItem.status === 'In Stock') {
+            if (!isCheckout && foundItem.status === 'In Stock') {
                  document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ ALREADY IN STORE</span>`;
-                 if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'none';
+                 document.getElementById(authBtnId).style.display = 'none';
                  alert(`STOP: Item is already in the store.`);
                  return;
             }
 
-            // Success: Ready for Face ID
+            // SUCCESS: Prepare for Verification
             pendingTransactionItem = { key: foundKey, ...foundItem };
-            if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'block';
-            let statusColor = (scanMode === 'RETURN') ? "#17a2b8" : "green";
-            document.getElementById(nameId).innerHTML = `<span style="color:${statusColor}">✔ Ready for ${scanMode}</span><br>${foundItem.item}`;
+            
+            // Show the "Face Approve" button
+            const authBtn = document.getElementById(authBtnId);
+            if(authBtn) {
+                authBtn.style.display = 'block';
+                authBtn.classList.remove("hidden");
+            }
 
-        }).catch(err => alert("DB Error: " + err.message));
+            // Update Text
+            let statusColor = isCheckout ? "#b38600" : "#17a2b8";
+            document.getElementById(nameId).innerHTML = 
+                `<span style="color:${statusColor}; font-weight:bold;">✔ Ready for ${scanMode}</span><br>${foundItem.item}`;
+
+        }).catch(err => {
+            console.error(err);
+            alert("Database Error: " + err.message);
+        });
     }
+    
+    // 3. AUDIT / HISTORY SEARCH MODE
     else if (scanMode === 'AUDIT_SEARCH') {
-        // DIRECTLY POP UP THE DATA (No Table)
         if (!isAdmin) return alert("Admins Only.");
         document.getElementById("auditSearchInput").value = decodedText; 
-        fetchAuditHistory(decodedText); // Trigger Popup
+        fetchAuditHistory(decodedText); 
     }
+    
+    // 4. MAIN STOCK SEARCH MODE
     else if (scanMode === 'SEARCH_STOCK') {
         const searchBox = document.getElementById("mainStockSearch");
         if(searchBox) {
@@ -908,7 +931,6 @@ window.onScanSuccess = function(decodedText) {
         }
     }
 };
-
 // --- 3. HELPER TO CLOSE MODAL ---
 window.closeAuditModal = () => {
     document.getElementById("auditResultModal").classList.add("hidden");
