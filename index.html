@@ -419,25 +419,40 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
     </div>
 
-   <div id="inv-history" class="panel hidden">
-    <div style="text-align:center; padding:40px 20px;">
+  <div id="inv-history" class="panel hidden">
+    <div style="text-align:center; padding:20px;">
         <h2 style="color:#003366; margin-bottom:10px;">🔍 Item Audit Trail</h2>
-        <p style="color:#666; margin-bottom:20px;">Scan a barcode to view its entire history popup.</p>
-        
         <div style="max-width:400px; margin:0 auto; display:flex; gap:10px;">
-            <input 
-                id="auditSearchInput" 
-                placeholder="Scan or Enter Barcode..." 
+            <input id="auditSearchInput" placeholder="Scan or Enter Barcode..." 
                 style="padding:12px; font-size:16px; border:2px solid #003366; border-radius:5px; flex-grow:1;"
-                onchange="fetchAuditHistory(this.value)"
-            >
-            <button 
-                onclick="openBarcodeScanner('AUDIT_SEARCH')" 
-                class="warning" 
-                style="padding:12px 20px; font-size:18px;"
-            >
+                onchange="fetchAuditHistory(this.value)">
+            <button onclick="openBarcodeScanner('AUDIT_SEARCH')" class="warning" style="padding:12px 20px; font-size:18px;">
                 <i class="fas fa-qrcode"></i>
             </button>
+        </div>
+    </div>
+
+    <div class="panel" style="margin-top:20px; border-top: 4px solid #003366;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+             <h3>📜 Recent Live Activity</h3>
+             <input id="invSearch" onkeyup="filterInvLogs()" placeholder="Filter logs..." style="width:150px; font-size:12px;">
+        </div>
+        
+        <div class="table-wrapper" style="max-height:500px; overflow-y:auto;">
+            <table>
+                <thead style="position:sticky; top:0; background:#e9ecef;">
+                    <tr>
+                        <th>Barcode</th>
+                        <th>User</th>
+                        <th>Time</th>
+                        <th style="text-align:center;">Action</th>
+                        <th>Item Details</th>
+                    </tr>
+                </thead>
+                <tbody id="invHistoryBody">
+                    <tr><td colspan="5" style="text-align:center;">Waiting for live updates...</td></tr>
+                </tbody>
+            </table>
         </div>
     </div>
 </div>
@@ -843,13 +858,60 @@ window.closeAuditModal = () => {
 };
 
 // --- 4. DUMMY FUNCTION (To prevent errors if HTML still calls it) ---
+// --- REAL-TIME HISTORY LOGIC ---
 window.loadInventoryHistory = () => {
-    // Intentionally empty or just focuses the search box
-    // Because we removed the table
-    setTimeout(() => {
-        const input = document.getElementById("auditSearchInput");
-        if(input) input.focus();
-    }, 300);
+    const tbody = document.getElementById("invHistoryBody");
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Live Data...</td></tr>";
+
+    // This listener stays open and updates automatically when DB changes
+    const dbRef = getDatabase();
+    const q = query(ref(dbRef, "logs"), limitToLast(100));
+    
+    onValue(q, (snap) => {
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // Show newest events at the top
+
+        // Filter: Show only inventory-related events (Checkout, Return, Add)
+        const invLogs = logs.filter(l => 
+            l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE'
+        );
+
+        if(invLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded recently.</td></tr>";
+            return;
+        }
+
+        tbody.innerHTML = "";
+        
+        invLogs.forEach(l => {
+            // Badge Styling
+            let badge = "";
+            if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
+            else if(l.type === 'RETURN') badge = `<span style="background:#17a2b8; color:white; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:11px;">📥 IN</span>`;
+            else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
+
+            // Barcode formatting
+            const barcodeDisplay = l.barcode ? `<div style="font-family:monospace; color:#003366; font-size:11px; margin-top:2px; letter-spacing:1px;">${l.barcode}</div>` : '';
+
+            // Row HTML
+            const row = `
+            <tr class="inv-log-row" style="border-bottom:1px solid #eee;">
+                <td style="vertical-align:middle;">${barcodeDisplay}</td>
+                <td style="font-weight:bold; vertical-align:middle;">${l.takenBy || 'Unknown'}</td>
+                <td style="vertical-align:middle;">
+                    ${formatTime(l.time)}
+                </td>
+                <td style="text-align:center; vertical-align:middle;">${badge}</td>
+                <td style="vertical-align:middle;">
+                    <span style="font-size:13px; font-weight:bold; color:#333;">${l.item}</span><br>
+                    <small style="color:#777;">Auth: ${l.approvedBy || 'System'}</small>
+                </td>
+            </tr>`;
+            
+            tbody.innerHTML += row;
+        });
+    });
 };
 // --- UNIFIED SCAN SUCCESS HANDLER (FIXED) ---
 window.onScanSuccess = function(decodedText) {
