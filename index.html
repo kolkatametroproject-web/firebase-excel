@@ -926,120 +926,135 @@ window.loadInventoryHistory = () => {
         });
     });
 };
-// --- UNIFIED SCAN SUCCESS HANDLER (FIXED) ---
-window.onScanSuccess = function(decodedText) {
-    // 1. Close Scanner
+window.onScanSuccess = async function(decodedText) {
     closeBarcodeScanner();
-    console.log("✅ SCANNED:", decodedText, "MODE:", scanMode);
+    console.log("SCANNED:", decodedText, "MODE:", scanMode);
 
-    // --- MODE: ADD STOCK ---
+    // ---------------- ADD STOCK ----------------
     if (scanMode === 'ADD') {
         document.getElementById("invBarcode").value = decodedText;
         checkBarcodeUnique(decodedText);
-        setTimeout(() => { 
-            if(confirm("Barcode Captured: " + decodedText)) document.getElementById("invName").focus(); 
-        }, 200);
+        return;
     }
 
-    // --- MODE: CHECKOUT or RETURN ---
-    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        const isCheckout = (scanMode === 'CHECKOUT');
-        
-        // Define IDs based on mode
+    // ---------------- CHECKOUT / RETURN ----------------
+    if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+
+        const isCheckout = scanMode === 'CHECKOUT';
+
         const displayId = isCheckout ? "checkout_display" : "return_display";
-        const nameId = isCheckout ? "checkout_item_name" : "return_item_name";
-        const codeId = isCheckout ? "checkout_item_code" : "return_item_code";
+        const nameId    = isCheckout ? "checkout_item_name" : "return_item_name";
+        const codeId    = isCheckout ? "checkout_item_code" : "return_item_code";
         const authBtnId = isCheckout ? "btn_checkout_verify" : "btn_return_verify";
 
-        // Unhide the panel immediately
-        const displayEl = document.getElementById(displayId);
-        if(displayEl) displayEl.classList.remove("hidden");
-
-        // Show "Loading..." text
-        document.getElementById(nameId).innerHTML = "<i>🔍 Searching Database...</i>";
+        document.getElementById(displayId).classList.remove("hidden");
+        document.getElementById(nameId).innerHTML = "🔍 Checking inventory...";
         document.getElementById(codeId).innerText = decodedText;
 
-        // Query Database
-        // Note: Using 'getDatabase' from your imports logic
-        const dbRef = getDatabase(); 
-        const invRef = ref(dbRef, "inventory");
-        const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
+        try {
+            const q = query(
+                ref(db, "inventory"),
+                orderByChild("barcode"),
+                equalTo(decodedText)
+            );
 
-        get(q).then(snap => {
+            const snap = await get(q);
+
             if (!snap.exists()) {
-                document.getElementById(nameId).innerHTML = `<span style="color:red">❌ Item Not Found</span>`;
-                alert("This barcode does not exist in the Inventory system.");
+                document.getElementById(nameId).innerHTML =
+                    `<span style="color:red;">❌ Item not found</span>`;
+                alert("This barcode does not exist in inventory.");
                 return;
             }
 
-            // Get the item details
-            let foundItem = null;
-            let foundKey = null;
-            snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
+            let item = null;
+            let itemKey = null;
+            snap.forEach(c => {
+                item = c.val();
+                itemKey = c.key;
+            });
 
-            // LOGIC CHECKS & UI UPDATES
-            
-            // Scenario 1: Trying to Checkout, but item is NOT in stock
-            if (isCheckout && foundItem.status !== 'In Stock') {
-                 document.getElementById(nameId).innerHTML = `
-                    <span style="color:red; font-weight:bold;">⛔ OUT OF STOCK</span><br>
-                    ${foundItem.item}<br>
-                    <small style="color:#555">Held by: <b>${foundItem.holder || 'Unknown'}</b></small>
-                 `;
-                 // Hide Admin Button
-                 const btn = document.getElementById(authBtnId);
-                 if(btn) btn.style.display = 'none';
-                 return;
-            }
-            
-            // Scenario 2: Trying to Return, but item is ALREADY in stock
-            if (!isCheckout && foundItem.status === 'In Stock') {
-                 document.getElementById(nameId).innerHTML = `
-                    <span style="color:red; font-weight:bold;">⛔ ALREADY IN STORE</span><br>
-                    ${foundItem.item}
-                 `;
-                 const btn = document.getElementById(authBtnId);
-                 if(btn) btn.style.display = 'none';
-                 return;
+            const currentUserName =
+                currentUser.name || currentUser.email;
+
+            // ---------- CHECKOUT RULE ----------
+            if (isCheckout && item.status !== "In Stock") {
+                document.getElementById(nameId).innerHTML = `
+                    <span style="color:red;font-weight:bold;">⛔ ALREADY CHECKED OUT</span><br>
+                    ${item.item}<br>
+                    <small>Held by: <b>${item.holder}</b></small>
+                `;
+                document.getElementById(authBtnId).style.display = "none";
+                return;
             }
 
-            // Scenario 3: SUCCESS - Ready for Transaction
-            const statusColor = isCheckout ? "#b38600" : "#17a2b8"; // Yellow or Blue
+            // ---------- RETURN RULE ----------
+            if (!isCheckout) {
+
+                if (item.status === "In Stock") {
+                    document.getElementById(nameId).innerHTML = `
+                        <span style="color:red;font-weight:bold;">⛔ ALREADY RETURNED</span><br>
+                        ${item.item}
+                    `;
+                    document.getElementById(authBtnId).style.display = "none";
+                    return;
+                }
+
+                // 🚨 CORE SECURITY RULE
+                if (item.holder !== currentUserName) {
+                    document.getElementById(nameId).innerHTML = `
+                        <span style="color:red;font-weight:bold;">⛔ RETURN DENIED</span><br>
+                        ${item.item}<br>
+                        <small>
+                            Checked out by: <b>${item.holder}</b>
+                        </small>
+                    `;
+                    document.getElementById(authBtnId).style.display = "none";
+
+                    alert(
+                        "Return blocked.\n\n" +
+                        "Item was checked out by:\n" +
+                        item.holder + "\n\n" +
+                        "Only the same user can return it."
+                    );
+                    return;
+                }
+            }
+
+            // ---------- SUCCESS ----------
             document.getElementById(nameId).innerHTML = `
-                <span style="color:${statusColor}; font-weight:bold;">✔ Ready to ${isCheckout ? 'Checkout' : 'Return'}</span><br>
-                <span style="font-size:1.2em">${foundItem.item}</span>
+                <span style="color:${isCheckout ? '#b38600' : '#17a2b8'}; font-weight:bold;">
+                    ✔ Ready to ${isCheckout ? 'Checkout' : 'Return'}
+                </span><br>
+                <span style="font-size:1.2em">${item.item}</span>
             `;
-            
-            // Set Global Variable for the next step (Admin Face Scan)
-            pendingTransactionItem = { key: foundKey, ...foundItem };
 
-            // Show Admin Button
-            const authBtn = document.getElementById(authBtnId);
-            if(authBtn) {
-                authBtn.style.display = 'block';
-                authBtn.classList.remove("hidden");
-            }
+            pendingTransactionItem = {
+                key: itemKey,
+                ...item
+            };
 
-        }).catch(err => {
-            console.error("DB Error:", err);
-            document.getElementById(nameId).innerText = "DB Error";
-            alert("Database Error: " + err.message);
-        });
+            document.getElementById(authBtnId).style.display = "block";
+
+        } catch (err) {
+            console.error(err);
+            alert("Database error.");
+        }
     }
 
-    // --- MODE: AUDIT SEARCH ---
-    else if (scanMode === 'AUDIT_SEARCH') {
-        if (!isAdmin) return alert("Admins Only.");
+    // ---------------- AUDIT SEARCH ----------------
+    if (scanMode === 'AUDIT_SEARCH') {
         document.getElementById("auditSearchInput").value = decodedText;
         fetchAuditHistory(decodedText);
     }
-    
-    // --- MODE: STOCK SEARCH ---
-    else if (scanMode === 'SEARCH_STOCK') {
+
+    // ---------------- STOCK SEARCH ----------------
+    if (scanMode === 'SEARCH_STOCK') {
         document.getElementById("mainStockSearch").value = decodedText;
         filterStockTable();
     }
 };
+
 // --- 3. HELPER TO CLOSE MODAL ---
 window.closeAuditModal = () => {
     document.getElementById("auditResultModal").classList.add("hidden");
