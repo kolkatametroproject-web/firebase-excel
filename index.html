@@ -418,44 +418,28 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
             </div>
         </div>
     </div>
-
-  <div id="inv-history" class="panel hidden">
-    <div style="text-align:center; padding:20px;">
+<div id="inv-history" class="panel hidden">
+    <div style="text-align:center; padding:40px 20px;">
         <h2 style="color:#003366; margin-bottom:10px;">🔍 Item Audit Trail</h2>
+        <p style="color:#666; margin-bottom:20px;">Scan a barcode to open the history window.</p>
+        
         <div style="max-width:400px; margin:0 auto; display:flex; gap:10px;">
-            <input id="auditSearchInput" placeholder="Scan or Enter Barcode..." 
+            <input 
+                id="auditSearchInput" 
+                placeholder="Scan or Enter Barcode..." 
                 style="padding:12px; font-size:16px; border:2px solid #003366; border-radius:5px; flex-grow:1;"
-                onchange="fetchAuditHistory(this.value)">
-            <button onclick="openBarcodeScanner('AUDIT_SEARCH')" class="warning" style="padding:12px 20px; font-size:18px;">
+                onchange="fetchAuditHistory(this.value)"
+            >
+            <button 
+                onclick="openBarcodeScanner('AUDIT_SEARCH')" 
+                class="warning" 
+                style="padding:12px 20px; font-size:18px;"
+            >
                 <i class="fas fa-qrcode"></i>
             </button>
         </div>
     </div>
-
-    <div class="panel" style="margin-top:20px; border-top: 4px solid #003366;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-             <h3>📜 Recent Live Activity</h3>
-             <input id="invSearch" onkeyup="filterInvLogs()" placeholder="Filter logs..." style="width:150px; font-size:12px;">
-        </div>
-        
-        <div class="table-wrapper" style="max-height:500px; overflow-y:auto;">
-            <table>
-                <thead style="position:sticky; top:0; background:#e9ecef;">
-                    <tr>
-                        <th>Barcode</th>
-                        <th>User</th>
-                        <th>Time</th>
-                        <th style="text-align:center;">Action</th>
-                        <th>Item Details</th>
-                    </tr>
-                </thead>
-                <tbody id="invHistoryBody">
-                    <tr><td colspan="5" style="text-align:center;">Waiting for live updates...</td></tr>
-                </tbody>
-            </table>
-        </div>
     </div>
-</div>
 
 <div id="auditResultModal" class="modal-overlay hidden">
     <div class="panel" style="width:400px; max-width:95%; max-height:85vh; display:flex; flex-direction:column; padding:0; overflow:hidden; background:#f4f6f9;">
@@ -776,78 +760,77 @@ window.closeAuditModal = () => document.getElementById("auditResultModal").class
 window.fetchAuditHistory = async (barcode) => {
     if(!barcode) return;
 
-    // Open Modal & Reset UI
+    // 1. Open the Pop-up Window
     document.getElementById("auditResultModal").classList.remove("hidden");
     document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
+    
+    // 2. Show "Loading" inside the window
     const container = document.getElementById("auditTimelineContainer");
-    container.innerHTML = '<div style="text-align:center; padding:20px;"><i class="fas fa-spinner fa-spin"></i> Searching Archives...</div>';
+    container.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><i class="fas fa-spinner fa-spin"></i> Checking History...</div>';
 
     try {
-        // Use getDatabase() since you are using modules
-        const dbRef = getDatabase();
-        const q = query(ref(dbRef, "logs"), orderByChild("barcode"), equalTo(barcode));
+        // 3. Search Database for THIS Barcode only
+        // Note: Using the global 'db' variable from your main script
+        const logsRef = ref(db, "logs");
+        const q = query(logsRef, orderByChild("barcode"), equalTo(barcode));
         const snap = await get(q);
 
         if (!snap.exists()) {
             container.innerHTML = `
                 <div style="text-align:center; padding:20px; color:#dc3545;">
-                    <i class="fas fa-exclamation-circle" style="font-size:30px; margin-bottom:10px;"></i><br>
-                    <strong>No history found.</strong><br>
-                    <small>This barcode has never been logged.</small>
+                    <i class="fas fa-box-open" style="font-size:30px; margin-bottom:10px;"></i><br>
+                    <strong>No History Found</strong><br>
+                    <small>This item has never been scanned.</small>
                 </div>`;
             return;
         }
 
-        // Process Data
+        // 4. Sort Data (Newest on Top)
         let logs = [];
         snap.forEach(c => logs.push(c.val()));
-        logs.sort((a, b) => b.time - a.time); // Descending Order (Newest first)
+        logs.sort((a, b) => b.time - a.time); 
 
-        // Clear Loading Spinner
-        container.innerHTML = "";
+        // 5. Build the Cards
+        container.innerHTML = ""; // Clear loader
         
         logs.forEach(l => {
-            // Determine Styles
+            // Determine Color: Yellow (Out), Blue (In), Green (Add)
             let typeIcon = "➕";
-            let typeText = "ADDED";
-            let cardBorder = "border-left: 5px solid #28a745;"; // Green
+            let typeText = "ADDED TO STOCK";
+            let borderStyle = "border-left: 5px solid #28a745;"; // Green
 
             if(l.type === 'CHECKOUT') { 
                 typeIcon = "📤"; typeText = "CHECKED OUT"; 
-                cardBorder = "border-left: 5px solid #b38600;"; // Yellow
+                borderStyle = "border-left: 5px solid #b38600;"; // Yellow
             }
             else if(l.type === 'RETURN') { 
                 typeIcon = "📥"; typeText = "RETURNED"; 
-                cardBorder = "border-left: 5px solid #17a2b8;"; // Blue
+                borderStyle = "border-left: 5px solid #17a2b8;"; // Blue
             }
 
-            // --- STRICT DATE FIX FOR POPUP ---
+            // --- STRICT INDIA DATE FIX ---
             const dateObj = new Date(l.time);
             const dateStr = dateObj.toLocaleString('en-IN', { 
                 timeZone: 'Asia/Kolkata',
-                day: '2-digit', 
-                month: '2-digit', 
-                year: 'numeric', 
-                hour: '2-digit', 
-                minute: '2-digit', 
-                hour12: false // 24-hour format like 22:39
+                day: '2-digit', month: '2-digit', year: 'numeric', 
+                hour: '2-digit', minute: '2-digit', hour12: true 
             });
 
-            // HTML Card Construction
+            // Card HTML
             const cardHTML = `
-                <div style="background:white; padding:12px; margin-bottom:10px; border-radius:4px; box-shadow:0 2px 4px rgba(0,0,0,0.05); ${cardBorder}">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:13px; font-weight:bold;">
-                        <span style="color:#003366;">${typeIcon} ${typeText}</span>
-                        <span style="color:#666;">${dateStr}</span>
+                <div style="background:white; padding:15px; margin-bottom:10px; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); ${borderStyle}">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                        <span style="font-weight:bold; color:#003366;">${typeIcon} ${typeText}</span>
+                        <span style="font-size:12px; color:#555;">${dateStr}</span>
                     </div>
                     
-                    <div style="font-size:14px; font-weight:bold; color:#333; margin-bottom:5px;">
+                    <div style="font-size:15px; font-weight:bold; color:#333; margin-bottom:5px;">
                         👤 ${l.takenBy || 'Unknown User'}
                     </div>
                     
-                    <div style="font-size:11px; color:#555; line-height:1.4;">
-                        <strong>Approved By:</strong> ${l.approvedBy || 'System'}<br>
-                        <strong>Item Name:</strong> ${l.item}
+                    <div style="font-size:12px; color:#777;">
+                        Approved By: <span style="color:#000;">${l.approvedBy || 'System'}</span><br>
+                        Item: ${l.item}
                     </div>
                 </div>
             `;
@@ -856,7 +839,7 @@ window.fetchAuditHistory = async (barcode) => {
 
     } catch (e) {
         console.error(e);
-        container.innerHTML = `<div style="color:red; text-align:center;">Error loading history: ${e.message}</div>`;
+        container.innerHTML = `<div style="color:red; text-align:center;">Error: ${e.message}</div>`;
     }
 };
 // --- 3. HELPER TO CLOSE MODAL ---
