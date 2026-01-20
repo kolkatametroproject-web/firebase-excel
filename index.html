@@ -757,119 +757,113 @@ window.closeBarcodeScanner = () => {
 // --- NEW AUDIT LOGIC ---
 window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
 window.fetchAuditHistory = async (barcode) => {
-    if(!barcode) return;
+    if (!barcode) return;
 
-    // 1. Open Window
-    document.getElementById("auditResultModal").classList.remove("hidden");
-    document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
-    
+    // Open popup
+    const modal = document.getElementById("auditResultModal");
     const container = document.getElementById("auditTimelineContainer");
-    container.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+    document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
+    modal.classList.remove("hidden");
+
+    container.innerHTML = `<div style="text-align:center; padding:20px;">Loading...</div>`;
 
     try {
-        const dbRef = getDatabase();
-        const logsRef = ref(dbRef, "logs");
-        // Sort by barcode to find relevant items
-        const q = query(logsRef, orderByChild("barcode"), equalTo(barcode));
+        const q = query(
+            ref(db, "logs"),
+            orderByChild("barcode"),
+            equalTo(barcode)
+        );
+
         const snap = await get(q);
 
         if (!snap.exists()) {
-            container.innerHTML = `
-                <div style="text-align:center; padding:20px; color:#dc3545;">
-                    <i class="fas fa-box-open" style="font-size:30px; margin-bottom:10px;"></i><br>
-                    <strong>No History Found</strong>
-                </div>`;
+            container.innerHTML = `<div style="text-align:center;color:#777;">No history found</div>`;
             return;
         }
 
-        let logs = [];
-        snap.forEach(c => logs.push(c.val()));
+        // 1. collect only checkout & return
+        let raw = [];
+        snap.forEach(c => {
+            const v = c.val();
+            if (v.type === "CHECKOUT" || v.type === "RETURN") {
+                raw.push(v);
+            }
+        });
 
-        // --- 1. ROBUST SORTER HELPER ---
-        const getTimestamp = (t) => {
-            if (!t) return 0;
-            if (typeof t === 'number') return t; 
-            // Handle Old Text Data (String format)
-            if (typeof t === 'string') return new Date(t).getTime(); 
-            return 0;
-        };
+        // 2. sort old → new
+        raw.sort((a, b) => a.time - b.time);
 
-        // Sort Newest First (Descending)
-        logs.sort((a, b) => getTimestamp(b.time) - getTimestamp(a.time));
+        // 3. pair checkout + return
+        let records = [];
+        let open = null;
 
-        // --- RENDER ---
+        raw.forEach(l => {
+            if (l.type === "CHECKOUT") {
+                open = {
+                    user: l.takenBy,
+                    checkout: l.time,
+                    return: null
+                };
+                records.push(open);
+            }
+
+            if (l.type === "RETURN" && open) {
+                open.return = l.time;
+                open = null;
+            }
+        });
+
+        // 4. last 4 only (latest first)
+        records = records.slice(-4).reverse();
+
+        // 5. render popup cards
         container.innerHTML = "";
-        
-        logs.forEach(l => {
-            let typeIcon = "➕";
-            let typeText = "ADDED";
-            let borderStyle = "border-left: 5px solid #28a745;"; 
 
-            if(l.type === 'CHECKOUT') { 
-                typeIcon = "📤"; typeText = "CHECKED OUT"; 
-                borderStyle = "border-left: 5px solid #b38600;"; 
-            }
-            else if(l.type === 'RETURN') { 
-                typeIcon = "📥"; typeText = "RETURNED"; 
-                borderStyle = "border-left: 5px solid #17a2b8;"; 
-            }
+        records.forEach(r => {
+            const co = new Date(r.checkout).toLocaleString("en-IN", {
+                timeZone: "Asia/Kolkata",
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: true
+            });
 
-            // --- 2. TIMEZONE CORRECTION (FIXED) ---
-            let dateDisplay = "--";
-            let timeDisplay = "";
-            
-            if(typeof l.time === 'number') {
-                const serverDate = new Date(l.time);
-                
-                // Force Indian Standard Time (IST)
-                dateDisplay = serverDate.toLocaleString('en-IN', {
-                    timeZone: 'Asia/Kolkata',
-                    day: '2-digit', 
-                    month: '2-digit', 
-                    year: 'numeric'
-                });
-
-                // We MUST add time to see why the date might feel "wrong" (e.g. 12:01 AM)
-                timeDisplay = serverDate.toLocaleString('en-IN', {
-                    timeZone: 'Asia/Kolkata',
-                    hour: '2-digit',
-                    minute: '2-digit',
+            const ro = r.return
+                ? new Date(r.return).toLocaleString("en-IN", {
+                    timeZone: "Asia/Kolkata",
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
                     hour12: true
-                });
+                })
+                : "Still Holding";
 
-            } else {
-                // Legacy Text Data
-                dateDisplay = l.time;
-            }
-
-            const cardHTML = `
-                <div style="background:white; padding:15px; margin-bottom:10px; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); ${borderStyle}">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
-                        <span style="font-weight:bold; color:#003366;">${typeIcon} ${typeText}</span>
-                        <div style="text-align:right;">
-                            <span style="font-size:14px; font-weight:bold; color:#222;">${dateDisplay}</span><br>
-                            <span style="font-size:11px; color:#666;">${timeDisplay}</span>
-                        </div>
+            container.innerHTML += `
+                <div class="history-card ${r.return ? 'return' : 'checkout'}">
+                    <div class="hc-header">
+                        <span class="hc-user">👤 ${r.user}</span>
+                        <span style="font-size:11px;color:#666;">
+                            ${r.return ? 'RETURNED' : 'OUT'}
+                        </span>
                     </div>
-                    
-                    <div style="font-size:15px; font-weight:bold; color:#333; margin-bottom:5px;">
-                        👤 ${l.takenBy || 'Unknown User'}
-                    </div>
-                    
-                    <div style="font-size:12px; color:#777;">
-                        Approved By: <span style="color:#000;">${l.approvedBy || 'System'}</span><br>
-                        Item: ${l.item}
+                    <div class="hc-meta">
+                        📤 Checkout: <b>${co}</b><br>
+                        📥 Return: <b>${ro}</b>
                     </div>
                 </div>
             `;
-            container.innerHTML += cardHTML;
         });
 
     } catch (e) {
         console.error(e);
-        container.innerHTML = `<div style="color:red; text-align:center;">Error: ${e.message}</div>`;
+        container.innerHTML = `<div style="color:red;text-align:center;">Error loading data</div>`;
     }
 };
+
 // --- 3. HELPER TO CLOSE MODAL ---
 window.closeAuditModal = () => {
     document.getElementById("auditResultModal").classList.add("hidden");
