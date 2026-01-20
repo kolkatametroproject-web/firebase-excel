@@ -756,22 +756,20 @@ window.closeBarcodeScanner = () => {
 }
 // --- NEW AUDIT LOGIC ---
 window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
-// --- FIXED AUDIT POPUP (Forces IST Date & Time) ---
+// --- ROBUST AUDIT POPUP (Fixes Sorting & Date Issues) ---
 window.fetchAuditHistory = async (barcode) => {
     if(!barcode) return;
 
-    // 1. Open the Pop-up Window
+    // 1. Open Window
     document.getElementById("auditResultModal").classList.remove("hidden");
     document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
     
-    // 2. Show "Loading" inside the window
     const container = document.getElementById("auditTimelineContainer");
-    container.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><i class="fas fa-spinner fa-spin"></i> Checking History...</div>';
+    container.innerHTML = '<div style="text-align:center; padding:20px; color:#666;"><i class="fas fa-spinner fa-spin"></i> Loading History...</div>';
 
     try {
-        // 3. Search Database for THIS Barcode only
-        // Note: Using the global 'db' variable from your main script
-        const logsRef = ref(db, "logs");
+        const dbRef = getDatabase();
+        const logsRef = ref(dbRef, "logs");
         const q = query(logsRef, orderByChild("barcode"), equalTo(barcode));
         const snap = await get(q);
 
@@ -779,24 +777,29 @@ window.fetchAuditHistory = async (barcode) => {
             container.innerHTML = `
                 <div style="text-align:center; padding:20px; color:#dc3545;">
                     <i class="fas fa-box-open" style="font-size:30px; margin-bottom:10px;"></i><br>
-                    <strong>No History Found</strong><br>
-                    <small>This item has never been scanned.</small>
+                    <strong>No History Found</strong>
                 </div>`;
             return;
         }
 
-        // 4. Sort Data (Newest on Top)
         let logs = [];
         snap.forEach(c => logs.push(c.val()));
-        logs.sort((a, b) => b.time - a.time); 
 
-        // 5. Build the Cards
-        container.innerHTML = ""; // Clear loader
+        // --- FIX: ROBUST SORTING ---
+        // Convert everything to milliseconds first to prevent NaN errors
+        logs.sort((a, b) => {
+            const timeA = new Date(a.time).getTime();
+            const timeB = new Date(b.time).getTime();
+            return timeB - timeA; // Newest First
+        });
+
+        // Clear and Render
+        container.innerHTML = "";
         
         logs.forEach(l => {
-            // Determine Color: Yellow (Out), Blue (In), Green (Add)
+            // Style Logic
             let typeIcon = "➕";
-            let typeText = "ADDED TO STOCK";
+            let typeText = "ADDED";
             let borderStyle = "border-left: 5px solid #28a745;"; // Green
 
             if(l.type === 'CHECKOUT') { 
@@ -808,7 +811,7 @@ window.fetchAuditHistory = async (barcode) => {
                 borderStyle = "border-left: 5px solid #17a2b8;"; // Blue
             }
 
-            // --- STRICT INDIA DATE FIX ---
+            // Date Formatting (Indian Standard Time)
             const dateObj = new Date(l.time);
             const dateStr = dateObj.toLocaleString('en-IN', { 
                 timeZone: 'Asia/Kolkata',
@@ -816,7 +819,6 @@ window.fetchAuditHistory = async (barcode) => {
                 hour: '2-digit', minute: '2-digit', hour12: true 
             });
 
-            // Card HTML
             const cardHTML = `
                 <div style="background:white; padding:15px; margin-bottom:10px; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); ${borderStyle}">
                     <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
