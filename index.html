@@ -177,6 +177,25 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
   50% { opacity: 0.6; }
   100% { opacity: 1; }
 }
+/* TIMELINE CARD STYLES */
+.history-card {
+    background: white;
+    border-left: 5px solid #ccc; /* Default color */
+    padding: 12px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    position: relative;
+}
+
+.history-card.checkout { border-left-color: #b38600; } /* Yellow for OUT */
+.history-card.return { border-left-color: #17a2b8; }   /* Blue for IN */
+.history-card.add { border-left-color: #28a745; }      /* Green for ADD */
+
+.hc-header { display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: bold; font-size: 13px; }
+.hc-user { font-size: 14px; font-weight: bold; color: #333; }
+.hc-meta { font-size: 11px; color: #666; margin-top: 4px; }
+.hc-sig { position: absolute; right: 10px; bottom: 10px; }
 </style>
 </head>
 
@@ -401,48 +420,44 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     </div>
 
    <div id="inv-history" class="panel hidden">
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-    <h3 style="margin:0;">📜 Stock Movement Log (Audit Trail)</h3>
-
-    <div style="display:flex; gap:5px;">
-      <input
-        type="text"
-        id="invSearch"
-        onkeyup="filterInvLogs()"
-        placeholder="🔍 Search by Barcode / User / Status"
-        style="padding:8px; border:1px solid #ccc; border-radius:4px;"
-      >
-      <button
-        onclick="openBarcodeScanner('SEARCH_LOGS')"
-        class="info"
-        style="padding:5px 10px;"
-        title="Scan Barcode to Search"
-      >
-        <i class="fas fa-qrcode"></i>
-      </button>
+    <div style="text-align:center; padding:40px 20px;">
+        <h2 style="color:#003366; margin-bottom:10px;">🔍 Item Audit Trail</h2>
+        <p style="color:#666; margin-bottom:20px;">Scan a barcode to view its entire lifecycle.</p>
+        
+        <div style="max-width:400px; margin:0 auto; display:flex; gap:10px;">
+            <input 
+                id="auditSearchInput" 
+                placeholder="Scan or Enter Barcode..." 
+                style="padding:12px; font-size:16px; border:2px solid #003366; border-radius:5px;"
+                onchange="fetchAuditHistory(this.value)"
+            >
+            <button 
+                onclick="openBarcodeScanner('AUDIT_SEARCH')" 
+                class="warning" 
+                style="padding:12px 20px; font-size:18px;"
+            >
+                <i class="fas fa-qrcode"></i>
+            </button>
+        </div>
     </div>
-  </div>
+</div>
 
-  <div class="table-wrapper" style="max-height:500px; overflow-y:auto;">
-    <table>
-      <thead style="position:sticky; top:0; background:#003366; color:white;">
-        <tr>
-          <th>Barcode</th>
-          <th>User</th>
-          <th>Checkout Details<br><small>(Date / Approved By)</small></th>
-          <th>Return Details<br><small>(Date / Approved By)</small></th>
-          <th>Status / Duration</th>
-        </tr>
-      </thead>
-      <tbody id="invHistoryBody">
-        <tr>
-          <td colspan="5" style="text-align:center; padding:20px;">
-            Audit trail not loaded.
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
+<div id="auditResultModal" class="modal-overlay hidden">
+    <div class="panel" style="width:400px; max-width:95%; max-height:85vh; display:flex; flex-direction:column; padding:0; overflow:hidden;">
+        
+        <div style="background:#003366; color:white; padding:15px; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <h3 style="margin:0; font-size:16px; border:none; color:white;">📦 Item History</h3>
+                <small id="auditModalBarcode" style="opacity:0.8;">--</small>
+            </div>
+            <button onclick="closeAuditModal()" style="background:transparent; border:none; color:white; font-size:20px;">✕</button>
+        </div>
+
+        <div id="auditTimelineContainer" style="overflow-y:auto; padding:15px; background:#f4f6f9; flex-grow:1;">
+            <div style="text-align:center; color:#777;">Loading data...</div>
+        </div>
+
+    </div>
 </div>
     <div id="inv-list" class="panel">
     <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #003366; padding-bottom:10px; margin-bottom:10px;">
@@ -725,110 +740,107 @@ window.closeBarcodeScanner = () => {
 }
 // --- NEW AUDIT LOGIC ---
 window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
-
+// --- 1. OPEN AUDIT MODAL & FETCH DATA ---
 window.fetchAuditHistory = async (barcode) => {
-    // 1. UI Setup
+    if(!barcode) return;
+
+    // Open Modal & Reset UI
     document.getElementById("auditResultModal").classList.remove("hidden");
-    document.getElementById("auditItemCode").innerText = barcode;
-    document.getElementById("auditItemName").innerText = "Searching Database...";
-    const tbody = document.getElementById("auditResultBody");
-    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;'>🔍 Cross-referencing logs...</td></tr>";
+    document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
+    const container = document.getElementById("auditTimelineContainer");
+    container.innerHTML = '<div style="text-align:center; padding:20px;"><i class="fas fa-spinner fa-spin"></i> Searching Archives...</div>';
 
     try {
-        // 2. Resolve Barcode to Item Name
-        const invRef = ref(db, "inventory");
-        const invQ = query(invRef, orderByChild("barcode"), equalTo(barcode));
-        const invSnap = await get(invQ);
+        // Query Database for Logs with this Barcode
+        const q = query(ref(db, "logs"), orderByChild("barcode"), equalTo(barcode));
+        const snap = await get(q);
 
-        if (!invSnap.exists()) {
-            document.getElementById("auditItemName").innerText = "Unknown Item";
-            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center; color:red;'>❌ Item not found in Inventory. Cannot track history.</td></tr>";
+        if (!snap.exists()) {
+            container.innerHTML = `
+                <div style="text-align:center; padding:20px; color:#dc3545;">
+                    <i class="fas fa-exclamation-circle" style="font-size:30px; margin-bottom:10px;"></i><br>
+                    <strong>No history found.</strong><br>
+                    <small>This barcode has never been logged.</small>
+                </div>`;
             return;
         }
 
-        let itemName = "";
-        invSnap.forEach(c => itemName = c.val().item);
-        document.getElementById("auditItemName").innerText = itemName;
+        // Convert to Array & Sort (Newest First)
+        let logs = [];
+        snap.forEach(c => logs.push(c.val()));
+        logs.sort((a, b) => b.time - a.time); // Descending Order
 
-        // 3. Fetch All Logs (To ensure we catch older checkouts)
-        // Optimization: In production, you might limit this, but for deep audit we need history
-        const logsRef = ref(db, "logs");
-        const logsSnap = await get(logsRef);
+        // Render Timeline
+        container.innerHTML = ""; // Clear loader
         
-        let relatedLogs = [];
-        logsSnap.forEach(c => {
-            const l = c.val();
-            // Filter for this specific item name
-            if (l.item === itemName && (l.type === 'CHECKOUT' || l.type === 'RETURN')) {
-                relatedLogs.push({ ...l, timestamp: l.time }); // Flatten timestamp for easy sorting
-            }
-        });
+        logs.forEach(l => {
+            // Determine Styles based on Type
+            let typeClass = "add";
+            let typeIcon = "➕";
+            let typeText = "ADDED";
 
-        // Sort: Newest First
-        relatedLogs.sort((a, b) => b.timestamp - a.timestamp);
+            if(l.type === 'CHECKOUT') { typeClass = "checkout"; typeIcon = "📤"; typeText = "CHECKED OUT"; }
+            else if(l.type === 'RETURN') { typeClass = "return"; typeIcon = "📥"; typeText = "RETURNED"; }
+            else if(l.type.includes('STOCK')) { typeClass = "add"; typeIcon = "📦"; typeText = "STOCK UPDATE"; }
 
-        // 4. Algorithm: Find Checkouts and match with Returns
-        const checkouts = relatedLogs.filter(l => l.type === 'CHECKOUT');
-        
-        // Take last 6 checkouts (which are the first 6 in our sorted array)
-        const last6Checkouts = checkouts.slice(0, 6);
+            // Date Formatting
+            const dateObj = new Date(l.time);
+            const dateStr = dateObj.toLocaleDateString() + " " + dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 
-        if (last6Checkouts.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;'>No checkout history found for this item.</td></tr>";
-            return;
-        }
-
-        tbody.innerHTML = ""; // Clear loader
-
-        last6Checkouts.forEach(cout => {
-            // Find a return by THIS USER, occurring AFTER this checkout
-            // We search the 'relatedLogs' (which are sorted Newest -> Oldest)
-            // So a return should appear *before* the checkout in the array (smaller index) or simply have a larger timestamp
-            
-            const matchingReturn = relatedLogs.find(r => 
-                r.type === 'RETURN' && 
-                (r.takenBy === cout.takenBy || r.user === cout.user) && 
-                r.timestamp > cout.timestamp
-            );
-
-            let statusHtml = "";
-            let rowColor = "";
-
-            if (matchingReturn) {
-                // IT WAS RETURNED
-                const dateObj = new Date(matchingReturn.timestamp);
-                const dateStr = dateObj.toLocaleDateString() + " " + dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                statusHtml = `<span style="color:green; font-weight:bold;">✔ Returned</span><br><small>${dateStr}</small>`;
-                rowColor = "background:#f0fff4;";
-            } else {
-                // STILL HOLDING
-                const outDate = new Date(cout.timestamp);
-                const diffMs = Date.now() - outDate;
-                const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-                
-                statusHtml = `<span style="color:red; font-weight:bold; animation: blink 2s infinite;">⚠️ STILL HOLDING</span><br><small>${diffDays} days overdue</small>`;
-                rowColor = "background:#fff5f5;";
-            }
-
-            const coutDate = new Date(cout.timestamp);
-            const coutStr = coutDate.toLocaleDateString() + " " + coutDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-
-            tbody.innerHTML += `
-                <tr style="${rowColor} border-bottom:1px solid #ccc;">
-                    <td style="font-weight:bold;">${cout.takenBy}</td>
-                    <td>
-                        ${coutStr}<br>
-                        <small style="color:#003366;">Auth: ${cout.approvedBy || 'System'}</small>
-                    </td>
-                    <td>${statusHtml}</td>
-                </tr>
+            // HTML Card Construction
+            const cardHTML = `
+                <div class="history-card ${typeClass}">
+                    <div class="hc-header">
+                        <span style="color:var(--metro-blue);">${typeIcon} ${typeText}</span>
+                        <span style="color:#555;">${dateStr}</span>
+                    </div>
+                    
+                    <div class="hc-user">
+                        👤 ${l.takenBy || 'Unknown User'}
+                    </div>
+                    
+                    <div class="hc-meta">
+                        <strong>Approved By:</strong> ${l.approvedBy || 'System'}<br>
+                        <strong>Item Name:</strong> ${l.item}
+                    </div>
+                </div>
             `;
+            container.innerHTML += cardHTML;
         });
 
     } catch (e) {
         console.error(e);
-        tbody.innerHTML = `<tr><td colspan='3' style='color:red;'>System Error: ${e.message}</td></tr>`;
+        container.innerHTML = `<div style="color:red; text-align:center;">Error loading history: ${e.message}</div>`;
     }
+};
+
+// --- 2. UNIFIED SCANNER HANDLER (Updated for Audit) ---
+function onScanSuccess(decodedText) {
+    closeBarcodeScanner();
+    console.log("Scanned:", decodedText);
+
+    if (scanMode === 'ADD') {
+        document.getElementById("invBarcode").value = decodedText;
+        checkBarcodeUnique(decodedText);
+        setTimeout(() => { if(confirm("Got it: " + decodedText)) document.getElementById("invName").focus(); }, 100);
+    }
+    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+        // ... (Your existing checkout/return logic here) ...
+        // Keeping this part brief as requested, assume standard logic
+        handleTransactionScan(decodedText); 
+    }
+    else if (scanMode === 'AUDIT_SEARCH') {
+        // DIRECTLY POP UP THE DATA
+        if (!isAdmin) return alert("Admins Only.");
+        document.getElementById("auditSearchInput").value = decodedText; // Fill input
+        fetchAuditHistory(decodedText); // Trigger Popup
+    }
+}
+
+// --- 3. HELPER TO CLOSE MODAL ---
+window.closeAuditModal = () => {
+    document.getElementById("auditResultModal").classList.add("hidden");
+    document.getElementById("auditSearchInput").value = ""; // Clear input
 };
 // --- UNIFIED SCANNER HANDLER ---
 function onScanSuccess(decodedText) {
@@ -1465,121 +1477,58 @@ function formatTime(ts) {
     // Audit Style Date
     return d.toLocaleDateString('en-GB') + " " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
-// --- LINEAR HISTORY LOGIC (RESTORES PREVIOUS VIEW + BARCODES) ---
+// --- LINEAR HISTORY LOGIC (SIMPLE LIST + BARCODES) ---
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Processing Transaction Cycles...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
 
-    // Fetch all logs to build complete history
-    const q = query(ref(db, "logs"), orderByChild("time"));
-
+    // Fetch last 300 logs
+    const q = query(ref(db, "logs"), limitToLast(300));
+    
     onValue(q, (snap) => {
         const logs = [];
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // Show newest events at the top
 
-        // Group logs by Barcode
-        const map = {};
-        logs.forEach(l => {
-            if (!l.barcode) return;
-            if (!map[l.barcode]) map[l.barcode] = [];
-            map[l.barcode].push(l);
-        });
+        // Filter: Show only inventory-related events
+        const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE');
 
-        const historyRows = [];
-
-        // Process each barcode timeline
-        Object.keys(map).forEach(barcode => {
-            const events = map[barcode];
-            events.sort((a, b) => a.time - b.time);
-
-            let currentCheckout = null;
-
-            events.forEach(ev => {
-                if (ev.type === 'CHECKOUT') {
-                    currentCheckout = ev;
-                }
-                else if (ev.type === 'RETURN' && currentCheckout) {
-                    historyRows.push({
-                        barcode: barcode,
-                        user: currentCheckout.takenBy,
-                        outTime: currentCheckout.time,
-                        outAuth: currentCheckout.approvedBy,
-                        inTime: ev.time,
-                        inAuth: ev.approvedBy,
-                        status: "Returned"
-                    });
-                    currentCheckout = null;
-                }
-            });
-
-            if (currentCheckout) {
-                historyRows.push({
-                    barcode: barcode,
-                    user: currentCheckout.takenBy,
-                    outTime: currentCheckout.time,
-                    outAuth: currentCheckout.approvedBy,
-                    inTime: null,
-                    inAuth: null,
-                    status: "Active"
-                });
-            }
-        });
-
-        historyRows.sort((a, b) => b.outTime - a.outTime);
-
-        if (historyRows.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No completed or active sessions found.</td></tr>";
+        if(invLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded in recent history.</td></tr>";
             return;
         }
 
         tbody.innerHTML = "";
+        
+        invLogs.forEach(l => {
+            // Badge Styling
+            let badge = "";
+            if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:3px 6px; border-radius:3px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
+            else if(l.type === 'RETURN') badge = `<span style="background:#17a2b8; color:white; padding:3px 6px; border-radius:3px; font-weight:bold; font-size:11px;">📥 IN</span>`;
+            else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:3px 6px; border-radius:3px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
 
-        historyRows.forEach(row => {
-            const outDate = new Date(row.outTime);
-            const outStr = `${outDate.toLocaleDateString()} <br><small>${outDate.toLocaleTimeString()}</small>`;
+            // Barcode formatting
+            const barcodeDisplay = l.barcode ? `<div style="font-family:monospace; color:#003366; font-size:11px; margin-top:2px;">||| ${l.barcode}</div>` : '';
 
-            let inStr = "--";
-            let durationStr = "";
-            let rowStyle = "";
-
-            if (row.status === "Returned") {
-                const inDate = new Date(row.inTime);
-                inStr = `${inDate.toLocaleDateString()} <br><small>${inDate.toLocaleTimeString()}</small>`;
-
-                const diffTime = Math.abs(inDate - outDate);
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-                durationStr = `<span style="color:green;">Returned</span><br><small>Held: ${diffDays} Day(s)</small>`;
-                rowStyle = "background:#f8f9fa;";
-            } else {
-                const now = new Date();
-                const diffTime = Math.abs(now - outDate);
-                const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-
-                inStr = `<span style="color:#ccc;">Running...</span>`;
-                durationStr = `<span style="color:red; font-weight:bold; animation:blink 2s infinite;">⚠️ STILL HOLDING</span><br><small>${diffDays} Day(s)</small>`;
-                rowStyle = "background:#fff5f5; border-left: 4px solid #dc3545;";
-            }
-
-            tbody.innerHTML += `
-            <tr style="${rowStyle} border-bottom:1px solid #dee2e6;">
-                <td style="font-family:monospace; color:#003366; font-weight:bold;">${row.barcode}</td>
-                <td style="font-weight:bold;">${row.user}</td>
+            // Row HTML
+            const row = `
+            <tr class="inv-log-row" style="border-bottom:1px solid #eee;">
+                <td style="font-weight:bold; color:#003366;">${l.barcode || '--'}</td>
+                <td style="font-weight:bold;">${l.takenBy || 'Unknown'}</td>
                 <td>
-                    ${outStr}
-                    <div style="font-size:10px; color:#003366; margin-top:2px;">Appr: ${row.outAuth || 'Sys'}</div>
+                    ${formatTime(l.time)}<br>
+                    <small style="color:#555;">Auth: ${l.approvedBy || 'System'}</small>
                 </td>
+                <td style="text-align:center;">${badge}</td>
                 <td>
-                    ${inStr}
-                    <div style="font-size:10px; color:#17a2b8; margin-top:2px;">${row.inAuth ? 'Appr: ' + row.inAuth : ''}</div>
+                    <span style="font-size:13px;">${l.item}</span>
                 </td>
-                <td style="text-align:center;">${durationStr}</td>
             </tr>`;
+            
+            tbody.innerHTML += row;
         });
-
     }, { onlyOnce: true });
 };
-
 // --- NEW SEARCH FUNCTION FOR INVENTORY ---
 window.filterInvLogs = () => {
     const input = document.getElementById("invSearch").value.toLowerCase();
