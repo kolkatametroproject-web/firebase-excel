@@ -364,15 +364,13 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <div class="table-wrapper" style="max-height:600px; overflow-y:auto;">
         <table>
             <thead style="position:sticky; top:0; background:#e9ecef;">
-                <tr>
-                    <th>Barcode</th>
-                    <th>Product</th>
-                    <th>Status</th>
-                    <th>Holder / Loc</th>
-                    <th>Condition</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
+    <tr>
+        <th>Barcode</th>
+        <th>Product</th>
+        <th>Added By</th> <th>Usage (Times Out)</th> <th>Current Holder</th> <th>Status</th>
+        <th>Action</th>
+    </tr>
+</thead>
             <tbody id="inventoryBody"></tbody>
         </table>
         </div>
@@ -735,31 +733,30 @@ window.fetchAuditHistory = async (barcode) => {
 function onScanSuccess(decodedText) {
     // 1. Always stop the camera first
     closeBarcodeScanner();
-    console.log("Scanned:", decodedText, "Mode:", scanMode); // Debugging
+    console.log("Scanned:", decodedText, "Mode:", scanMode);
 
-    // --- MODE: ADD STOCK ---
+    // --- MODE: ADD STOCK (Unchanged) ---
     if (scanMode === 'ADD') {
         document.getElementById("invBarcode").value = decodedText;
-        checkBarcodeExistence(decodedText);
-        // Using confirm instead of alert so it doesn't block UI rendering on some phones
+        checkBarcodeUnique(decodedText);
         if(confirm("Barcode Captured: " + decodedText)) {
-            // Focus on name field
             document.getElementById("invName").focus();
         }
     }
 
-    // --- MODE: CHECKOUT or RETURN ---
+    // --- MODE: CHECKOUT or RETURN (STRICT VALIDATION ADDED) ---
     else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
         
         // 1. Identify which panel to show
         const displayId = (scanMode === 'CHECKOUT') ? "checkout_display" : "return_display";
         const nameId = (scanMode === 'CHECKOUT') ? "checkout_item_name" : "return_item_name";
         const codeId = (scanMode === 'CHECKOUT') ? "checkout_item_code" : "return_item_code";
+        const btnId  = (scanMode === 'CHECKOUT') ? "btn_checkout_verify" : "btn_return_verify"; // Verify button ID if you have one, or the Admin Auth button container
 
-        // 2. Show "Loading..." status immediately
+        // 2. Show "Loading..." status
         const displayEl = document.getElementById(displayId);
         if(displayEl) displayEl.classList.remove("hidden");
-        document.getElementById(nameId).innerText = "Searching DB...";
+        document.getElementById(nameId).innerText = "Checking Status...";
         document.getElementById(codeId).innerText = decodedText;
 
         // 3. Query Database
@@ -768,12 +765,12 @@ function onScanSuccess(decodedText) {
 
         get(q).then(snap => {
             if (!snap.exists()) {
-                alert("❌ ERROR: Item not found in database!\n\nBarcode: " + decodedText);
-                if(displayEl) displayEl.classList.add("hidden"); // Hide panel if invalid
+                alert("❌ ERROR: Item not found in database!");
+                if(displayEl) displayEl.classList.add("hidden");
                 return;
             }
 
-            // 4. Item Found - Extract Data
+            // 4. Extract Data
             let foundItem = null;
             let foundKey = null;
             snap.forEach(c => { 
@@ -781,15 +778,50 @@ function onScanSuccess(decodedText) {
                 foundKey = c.key; 
             });
 
-            // 5. Store for the next step (Face Auth)
-            pendingTransactionItem = { key: foundKey, ...foundItem };
-
-            // 6. Update UI with Real Name
-            document.getElementById(nameId).innerText = foundItem.item;
+            // 5. === STRICT VALIDATION LOGIC ===
             
-            // 7. Verify logic specific to RETURN
+            // RULE 1: Can never Checkout if already Checked Out (Stock < 0 logic)
+            if (scanMode === 'CHECKOUT' && foundItem.status === 'Checked Out') {
+                 document.getElementById(nameId).innerHTML = `
+                    <span style="color:red">⛔ OUT OF STOCK</span><br>
+                    <small>Held by: ${foundItem.holder}</small>
+                 `;
+                 // HIDE the approve button logic
+                 const authBtn = displayEl.querySelector('button'); 
+                 if(authBtn) authBtn.style.display = 'none'; 
+                 
+                 alert(`STOP: You cannot check out this item.\nIt is currently held by ${foundItem.holder}.`);
+                 return;
+            }
+
+            // RULE 2: Can never Return if already In Stock
+            if (scanMode === 'RETURN' && foundItem.status === 'In Stock') {
+                 document.getElementById(nameId).innerHTML = `
+                    <span style="color:red">⛔ ALREADY IN STORE</span><br>
+                    <small>This item is not checked out.</small>
+                 `;
+                 // HIDE the approve button logic
+                 const authBtn = displayEl.querySelector('button'); 
+                 if(authBtn) authBtn.style.display = 'none';
+
+                 alert(`STOP: You cannot return this item.\nIt shows as 'In Stock' in the system.`);
+                 return;
+            }
+
+            // 6. If VALID, Show Data and Enable Button
+            pendingTransactionItem = { key: foundKey, ...foundItem };
+            
+            // Restore Button visibility in case it was hidden previously
+            const authBtn = displayEl.querySelector('button'); 
+            if(authBtn) authBtn.style.display = 'inline-block';
+
+            document.getElementById(nameId).innerHTML = `
+                <span style="color:green">✔ Available for ${scanMode}</span><br>
+                ${foundItem.item}
+            `;
+            
+            // 7. Special Color for Return
             if(scanMode === 'RETURN') {
-                // Optional: visual cue that it's ready
                 document.getElementById(nameId).style.color = "#17a2b8"; 
             }
 
@@ -799,7 +831,7 @@ function onScanSuccess(decodedText) {
         });
     }
 
-    // --- MODE: AUDIT (ADMIN) ---
+    // --- MODE: AUDIT (Unchanged) ---
     else if (scanMode === 'AUDIT_SEARCH') {
         if (!isAdmin) return alert("Admins Only.");
         fetchAuditHistory(decodedText);
@@ -1437,54 +1469,67 @@ window.initTransactionAuth = (type) => {
 async function processTransaction(adminName) {
     const isCheckout = currentTransactionType === 'CHECKOUT';
     
-    // USE DATA FROM SCAN
+    if(!pendingTransactionItem) return alert("System Error: No item scanned.");
+
     const itemKey = pendingTransactionItem.key;
     const itemName = pendingTransactionItem.item;
     const barcode = pendingTransactionItem.barcode;
 
-    // 1. Fetch Fresh Data (Status Check)
+    // 1. Fetch Fresh Data
     const invRef = ref(db, `inventory/${itemKey}`);
     const invSnap = await get(invRef);
     
-    if(!invSnap.exists()) return alert("Item does not exist in DB.");
+    if(!invSnap.exists()) return alert("Item vanished from DB.");
     
-    const currentStatus = invSnap.val().status;
-    const currentHolder = invSnap.val().holder;
+    const val = invSnap.val();
+    const currentStatus = val.status;
+    const currentUsage = val.usageCount || 0; // Get current count (default 0)
 
-    // 2. LOGIC GATES
+    // 2. STRICT LOGIC GATES
     if(isCheckout) {
         if(currentStatus === 'Checked Out') {
             stopCamera();
-            alert(`❌ ERROR: This item is ALREADY checked out by ${currentHolder}!`);
+            alert(`CRITICAL ERROR:\nItem is already taken by: ${val.holder}`);
             return;
         }
     } else {
-        // Return
         if(currentStatus === 'In Stock') {
             stopCamera();
-            alert(`❌ ERROR: This item is ALREADY in the store.`);
+            alert(`CRITICAL ERROR:\nItem is already in the store.`);
             return;
         }
     }
 
-    // 3. User Resolution
+    // 3. Prepare Update Data
     const uSnap = await get(ref(db, `users/${currentUser.uid}`));
     const realUserName = uSnap.val()?.name || currentUser.email;
 
+    let updateData = {};
+
+    if (isCheckout) {
+        // CHECKOUT: Set Holder, Status "Checked Out", INCREMENT COUNT
+        updateData = {
+            status: "Checked Out",
+            holder: realUserName,
+            usageCount: currentUsage + 1 // <--- INCREMENT HERE
+        };
+    } else {
+        // RETURN: Set Holder to Store, Status "In Stock"
+        // Note: We do NOT reset usageCount, we keep the history
+        updateData = {
+            status: "In Stock",
+            holder: "Store"
+        };
+    }
+
     // 4. Update Database
-    const newStatus = isCheckout ? "Checked Out" : "In Stock";
-    const newHolder = isCheckout ? realUserName : "Store";
+    await update(invRef, updateData);
 
-    await update(invRef, { 
-        status: newStatus,
-        holder: newHolder
-    });
-
-    // 5. Log Transaction
+    // 5. Log It
     const logData = {
         type: currentTransactionType,
         item: itemName,
-        barcode: barcode, // Important for tracking specific unit history
+        barcode: barcode,
         qty: 1,
         takenBy: realUserName,
         approvedBy: adminName,
@@ -1494,15 +1539,14 @@ async function processTransaction(adminName) {
 
     await push(ref(db, "logs"), logData);
     
-    alert(`✅ ${currentTransactionType} Successful!\nItem: ${itemName}\nBarcode: ${barcode}`);
+    alert(`✅ ${currentTransactionType} Successful!\nItem: ${itemName}`);
     stopCamera();
     
     // UI Cleanup
     document.getElementById("checkout_display").classList.add("hidden");
     document.getElementById("return_display").classList.add("hidden");
     pendingTransactionItem = null;
-    
-    toggleInvMode('list'); // Go back to list to see updated status
+    toggleInvMode('list');
 }
 // --- APP FEATURES ---
 
@@ -1900,39 +1944,45 @@ function loadInventory() {
     const b = document.getElementById("inventoryBody");
     const summaryEl = document.getElementById("stockSummaryText");
     
-    b.innerHTML = "<tr><td colspan='6'>Loading live stock...</td></tr>";
+    b.innerHTML = "<tr><td colspan='7'>Loading live stock...</td></tr>";
 
     onValue(ref(db, "inventory"), snap => {
         b.innerHTML = "";
         let totalItems = 0;
         let inStockCount = 0;
-        let productCounts = {}; // To track "Drill: 5"
 
         snap.forEach(c => {
             const v = c.val();
             const k = c.key;
             
             totalItems++;
-            if(v.status === "In Stock") {
-                inStockCount++;
-                // Count specific products
-                productCounts[v.item] = (productCounts[v.item] || 0) + 1;
+            if(v.status === "In Stock") inStockCount++;
+
+            // --- LOGIC: WHO IS HOLDING IT? ---
+            // If In Stock, show "-". If Checked Out, show the name.
+            let holderDisplay = "-";
+            if(v.status === "Checked Out") {
+                holderDisplay = `<span style="color:#b38600; font-weight:bold;">👤 ${v.holder}</span>`;
             }
 
-            // Color Coded Status
+            // Status Badge
             let statusBadge = `<span style="color:green; font-weight:bold; background:#d4edda; padding:2px 6px; border-radius:4px;">In Stock</span>`;
-            
             if(v.status === "Checked Out") {
-                statusBadge = `<span style="color:#856404; font-weight:bold; background:#fff3cd; padding:2px 6px; border-radius:4px;">📤 Out</span>`;
+                statusBadge = `<span style="color:#856404; font-weight:bold; background:#fff3cd; padding:2px 6px; border-radius:4px;">📤 Checked Out</span>`;
             }
+
+            // Added By & Usage
+            const addedBy = v.addedBy || "Unknown";
+            const usage = v.usageCount || 0;
 
             const row = `
             <tr class="stock-row">
                 <td style="font-family:monospace; color:#003366; font-weight:bold;">${v.barcode}</td>
                 <td class="search-name">${v.item}</td>
+                <td style="font-size:12px; color:#555;">${addedBy}</td>
+                <td style="text-align:center; font-weight:bold;">${usage}</td>
+                <td>${holderDisplay}</td>
                 <td>${statusBadge}</td>
-                <td>${v.holder || 'Store'}</td>
-                <td>${v.condition}</td>
                 <td>
                     ${isAdmin ? `<button class="danger" onclick="delInv('${k}')" style="padding:2px 5px; font-size:10px;">Remove</button>` : ''}
                 </td>
@@ -1940,15 +1990,9 @@ function loadInventory() {
             b.innerHTML += row;
         });
 
-        // Update Summary Text
-        const uniqueProducts = Object.keys(productCounts).length;
-        summaryEl.innerHTML = `Total Items: ${totalItems} | <span style="color:green;">Available: ${inStockCount}</span> | Unique Products: ${uniqueProducts}`;
-        
-        // Optional: Log summary to console for debugging
-        console.log("Stock Summary:", productCounts);
+        summaryEl.innerHTML = `Total Items: ${totalItems} | <span style="color:green;">Available: ${inStockCount}</span>`;
     });
 }
-
 // --- NEW SEARCH FUNCTION ---
 window.filterStockTable = () => {
     const input = document.getElementById("mainStockSearch").value.toLowerCase();
@@ -1980,42 +2024,39 @@ window.addUniqueItem = async () => {
 
     if(!item || !barcode) return alert("Product Name and Barcode are required.");
 
-    // Double check uniqueness before saving
+    // Check Uniqueness
     const invRef = ref(db, "inventory");
     const q = query(invRef, orderByChild("barcode"), equalTo(barcode));
     const snap = await get(q);
 
-    if(snap.exists()) {
-        return alert("CRITICAL ERROR: Barcode already exists. Cannot add.");
-    }
+    if(snap.exists()) return alert("CRITICAL ERROR: Barcode already exists.");
 
-    // Push NEW entry (Qty is conceptually 1)
+    // Save with Name
     await push(ref(db, "inventory"), {
         barcode: barcode,
         item: item,
         condition: cond,
-        status: "In Stock", // Default Status
-        holder: "Store",    // Default Location
-        addedBy: currentUser.email,
+        status: "In Stock",
+        holder: "Store",
+        usageCount: 0, // Start with 0 usage
+        addedBy: currentUser.name || currentUser.email, // <--- Save Name
         dateAdded: serverTimestamp()
     });
 
-    // Log it
+    // Log
     await push(ref(db, "logs"), {
         type: "STOCK_ADD",
         item: item,
-        barcode: barcode, // Log barcode specifically
+        barcode: barcode,
         qty: 1,
         takenBy: currentUser.name,
         approvedBy: "Self",
         time: serverTimestamp()
     });
 
-    alert("✅ Item Serialized & Added!");
-    
-    // Clear Form
+    alert("✅ Item Added!");
     document.getElementById("invBarcode").value = "";
-    document.getElementById("invName").value = ""; // Optional: Keep name if adding multiple of same type
+    document.getElementById("invName").value = "";
     document.getElementById("invBarcode").focus();
 };
 window.delInv = (k) => remove(ref(db, `inventory/${k}`));
