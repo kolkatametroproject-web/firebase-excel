@@ -835,109 +835,7 @@ window.fetchAuditHistory = async (barcode) => {
         container.innerHTML = `<div style="color:red; text-align:center;">Error loading history: ${e.message}</div>`;
     }
 };
-// --- UNIFIED SCANNER HANDLER (REPLACE ALL OTHER VERSIONS WITH THIS) ---
-// --- UNIFIED SCAN SUCCESS HANDLER ---
-window.onScanSuccess = function(decodedText) {
-    // 1. Close Scanner
-    closeBarcodeScanner();
-    console.log("✅ SCANNED:", decodedText, "MODE:", scanMode);
 
-    // --- MODE: ADD STOCK ---
-    if (scanMode === 'ADD') {
-        document.getElementById("invBarcode").value = decodedText;
-        checkBarcodeUnique(decodedText);
-        setTimeout(() => { 
-            if(confirm("Barcode Captured: " + decodedText)) document.getElementById("invName").focus(); 
-        }, 200);
-    }
-
-    // --- MODE: CHECKOUT or RETURN ---
-    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        const isCheckout = (scanMode === 'CHECKOUT');
-        
-        // Define IDs based on mode
-        const displayId = isCheckout ? "checkout_display" : "return_display";
-        const nameId = isCheckout ? "checkout_item_name" : "return_item_name";
-        const codeId = isCheckout ? "checkout_item_code" : "return_item_code";
-        const authBtnId = isCheckout ? "btn_checkout_verify" : "btn_return_verify";
-
-        // Unhide the panel immediately
-        const displayEl = document.getElementById(displayId);
-        if(displayEl) displayEl.classList.remove("hidden");
-
-        // Show "Loading..." text
-        document.getElementById(nameId).innerHTML = "<i>🔍 Searching Database...</i>";
-        document.getElementById(codeId).innerText = decodedText;
-
-        // Query Database
-        const invRef = ref(db, "inventory");
-        const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
-
-        get(q).then(snap => {
-            if (!snap.exists()) {
-                console.warn("Item not found in DB");
-                document.getElementById(nameId).innerHTML = `<span style="color:red">❌ Item Not Found</span>`;
-                alert("This barcode does not exist in the Inventory system.");
-                return;
-            }
-
-            // Get the first item found
-            let foundItem = null;
-            let foundKey = null;
-            snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
-
-            console.log("📦 Item Found:", foundItem);
-
-            // LOGIC CHECKS
-            if (isCheckout && foundItem.status === 'Checked Out') {
-                 document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ OUT OF STOCK</span><br><small>Held by: ${foundItem.holder}</small>`;
-                 const btn = document.getElementById(authBtnId);
-                 if(btn) btn.style.display = 'none';
-                 alert(`Cannot Checkout: Item is held by ${foundItem.holder}`);
-                 return;
-            }
-            if (!isCheckout && foundItem.status === 'In Stock') {
-                 document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ ALREADY IN STORE</span>`;
-                 const btn = document.getElementById(authBtnId);
-                 if(btn) btn.style.display = 'none';
-                 alert(`Cannot Return: Item is already in stock.`);
-                 return;
-            }
-
-            // SUCCESS: Update the Name
-            const statusColor = isCheckout ? "#b38600" : "#17a2b8";
-            document.getElementById(nameId).innerHTML = `<span style="color:${statusColor}; font-weight:bold;">✔ Ready</span><br>${foundItem.item}`;
-            
-            // Set Global Variable for Transaction
-            pendingTransactionItem = { key: foundKey, ...foundItem };
-
-            // Show Admin Button
-            const authBtn = document.getElementById(authBtnId);
-            if(authBtn) {
-                authBtn.style.display = 'block';
-                authBtn.classList.remove("hidden");
-            }
-
-        }).catch(err => {
-            console.error("DB Error:", err);
-            document.getElementById(nameId).innerText = "DB Error";
-            alert("Database Error: " + err.message);
-        });
-    }
-
-    // --- MODE: AUDIT SEARCH ---
-    else if (scanMode === 'AUDIT_SEARCH') {
-        if (!isAdmin) return alert("Admins Only.");
-        document.getElementById("auditSearchInput").value = decodedText;
-        fetchAuditHistory(decodedText);
-    }
-    
-    // --- MODE: STOCK SEARCH ---
-    else if (scanMode === 'SEARCH_STOCK') {
-        document.getElementById("mainStockSearch").value = decodedText;
-        filterStockTable();
-    }
-};
 // --- 3. HELPER TO CLOSE MODAL ---
 window.closeAuditModal = () => {
     document.getElementById("auditResultModal").classList.add("hidden");
@@ -953,8 +851,7 @@ window.loadInventoryHistory = () => {
         if(input) input.focus();
     }, 300);
 };
-// --- 2. SINGLE UNIFIED SCANNER HANDLER (Fixes the Duplicate Error) ---
-// --- UNIFIED SCAN SUCCESS HANDLER ---
+// --- UNIFIED SCAN SUCCESS HANDLER (FIXED) ---
 window.onScanSuccess = function(decodedText) {
     // 1. Close Scanner
     closeBarcodeScanner();
@@ -988,45 +885,57 @@ window.onScanSuccess = function(decodedText) {
         document.getElementById(codeId).innerText = decodedText;
 
         // Query Database
-        const invRef = ref(db, "inventory");
+        // Note: Using 'getDatabase' from your imports logic
+        const dbRef = getDatabase(); 
+        const invRef = ref(dbRef, "inventory");
         const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
 
         get(q).then(snap => {
             if (!snap.exists()) {
-                console.warn("Item not found in DB");
                 document.getElementById(nameId).innerHTML = `<span style="color:red">❌ Item Not Found</span>`;
                 alert("This barcode does not exist in the Inventory system.");
                 return;
             }
 
-            // Get the first item found
+            // Get the item details
             let foundItem = null;
             let foundKey = null;
             snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
 
-            console.log("📦 Item Found:", foundItem);
-
-            // LOGIC CHECKS
-            if (isCheckout && foundItem.status === 'Checked Out') {
-                 document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ OUT OF STOCK</span><br><small>Held by: ${foundItem.holder}</small>`;
-                 const btn = document.getElementById(authBtnId);
-                 if(btn) btn.style.display = 'none';
-                 alert(`Cannot Checkout: Item is held by ${foundItem.holder}`);
-                 return;
-            }
-            if (!isCheckout && foundItem.status === 'In Stock') {
-                 document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ ALREADY IN STORE</span>`;
-                 const btn = document.getElementById(authBtnId);
-                 if(btn) btn.style.display = 'none';
-                 alert(`Cannot Return: Item is already in stock.`);
-                 return;
-            }
-
-            // SUCCESS: Update the Name
-            const statusColor = isCheckout ? "#b38600" : "#17a2b8";
-            document.getElementById(nameId).innerHTML = `<span style="color:${statusColor}; font-weight:bold;">✔ Ready</span><br>${foundItem.item}`;
+            // LOGIC CHECKS & UI UPDATES
             
-            // Set Global Variable for Transaction
+            // Scenario 1: Trying to Checkout, but item is NOT in stock
+            if (isCheckout && foundItem.status !== 'In Stock') {
+                 document.getElementById(nameId).innerHTML = `
+                    <span style="color:red; font-weight:bold;">⛔ OUT OF STOCK</span><br>
+                    ${foundItem.item}<br>
+                    <small style="color:#555">Held by: <b>${foundItem.holder || 'Unknown'}</b></small>
+                 `;
+                 // Hide Admin Button
+                 const btn = document.getElementById(authBtnId);
+                 if(btn) btn.style.display = 'none';
+                 return;
+            }
+            
+            // Scenario 2: Trying to Return, but item is ALREADY in stock
+            if (!isCheckout && foundItem.status === 'In Stock') {
+                 document.getElementById(nameId).innerHTML = `
+                    <span style="color:red; font-weight:bold;">⛔ ALREADY IN STORE</span><br>
+                    ${foundItem.item}
+                 `;
+                 const btn = document.getElementById(authBtnId);
+                 if(btn) btn.style.display = 'none';
+                 return;
+            }
+
+            // Scenario 3: SUCCESS - Ready for Transaction
+            const statusColor = isCheckout ? "#b38600" : "#17a2b8"; // Yellow or Blue
+            document.getElementById(nameId).innerHTML = `
+                <span style="color:${statusColor}; font-weight:bold;">✔ Ready to ${isCheckout ? 'Checkout' : 'Return'}</span><br>
+                <span style="font-size:1.2em">${foundItem.item}</span>
+            `;
+            
+            // Set Global Variable for the next step (Admin Face Scan)
             pendingTransactionItem = { key: foundKey, ...foundItem };
 
             // Show Admin Button
@@ -1056,7 +965,6 @@ window.onScanSuccess = function(decodedText) {
         filterStockTable();
     }
 };
-
 // --- 3. HELPER TO CLOSE MODAL ---
 window.closeAuditModal = () => {
     document.getElementById("auditResultModal").classList.add("hidden");
@@ -1079,30 +987,7 @@ window.closeAuditModal = () => {
     document.getElementById("auditSearchInput").value = ""; 
 };
 
-// --- 2. UNIFIED SCANNER HANDLER (Updated for Audit) ---
-function onScanSuccess(decodedText) {
-    closeBarcodeScanner();
-    console.log("Scanned:", decodedText);
 
-    if (scanMode === 'ADD') {
-        document.getElementById("invBarcode").value = decodedText;
-        checkBarcodeUnique(decodedText);
-        setTimeout(() => { if(confirm("Got it: " + decodedText)) document.getElementById("invName").focus(); }, 100);
-    }
-    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        // ... (Your existing checkout/return logic here) ...
-        // Keeping this part brief as requested, assume standard logic
-        handleTransactionScan(decodedText); 
-    }
-    else if (scanMode === 'AUDIT_SEARCH') {
-        // DIRECTLY POP UP THE DATA
-        if (!isAdmin) return alert("Admins Only.");
-        document.getElementById("auditSearchInput").value = decodedText; // Fill input
-        fetchAuditHistory(decodedText); // Trigger Popup
-    }
-}
-
-// --- 3. HELPER TO CLOSE MODAL ---
 window.closeAuditModal = () => {
     document.getElementById("auditResultModal").classList.add("hidden");
     document.getElementById("auditSearchInput").value = ""; // Clear input
@@ -1645,11 +1530,21 @@ window.updateMaxQty = () => {
 };
 
 // --- NEW HISTORY LOADING LOGIC (FIXED) ---
+function// --- FIXED TIME FORMATTER (Forces IST Timezone) ---
 function formatTime(ts) {
     if (!ts) return "N/A";
     const d = new Date(ts);
-    // Audit Style Date
-    return d.toLocaleDateString('en-GB') + " " + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    
+    // Convert to Indian Standard Time (Asia/Kolkata)
+    return d.toLocaleString('en-IN', { 
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit', 
+        month: '2-digit', 
+        year: 'numeric', 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: true 
+    });
 }
 // --- LINEAR HISTORY LOGIC (SIMPLE LIST + BARCODES) ---
 window.loadInventoryHistory = () => {
