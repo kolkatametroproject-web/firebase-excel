@@ -757,13 +757,13 @@ window.closeBarcodeScanner = () => {
 }
 // --- NEW AUDIT LOGIC ---
 window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
-// --- 1. OPEN AUDIT MODAL & FETCH DATA (Card Style - No Table) ---
+// --- 1. OPEN AUDIT MODAL & FETCH DATA (Pop-up Card Style) ---
 window.fetchAuditHistory = async (barcode) => {
     if(!barcode) return;
 
     // Open Modal & Reset UI
     document.getElementById("auditResultModal").classList.remove("hidden");
-    document.getElementById("auditModalBarcode").innerText = barcode;
+    document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
     const container = document.getElementById("auditTimelineContainer");
     container.innerHTML = '<div style="text-align:center; padding:20px;"><i class="fas fa-spinner fa-spin"></i> Searching Archives...</div>';
 
@@ -792,18 +792,17 @@ window.fetchAuditHistory = async (barcode) => {
         
         logs.forEach(l => {
             // Determine Styles based on Type
-            let typeClass = "add";
             let typeIcon = "➕";
             let typeText = "ADDED";
-            let cardBorder = "border-left: 5px solid #28a745;";
+            let cardBorder = "border-left: 5px solid #28a745;"; // Green
 
             if(l.type === 'CHECKOUT') { 
-                typeClass = "checkout"; typeIcon = "📤"; typeText = "CHECKED OUT"; 
-                cardBorder = "border-left: 5px solid #b38600;";
+                typeIcon = "📤"; typeText = "CHECKED OUT"; 
+                cardBorder = "border-left: 5px solid #b38600;"; // Yellow
             }
             else if(l.type === 'RETURN') { 
-                typeClass = "return"; typeIcon = "📥"; typeText = "RETURNED"; 
-                cardBorder = "border-left: 5px solid #17a2b8;";
+                typeIcon = "📥"; typeText = "RETURNED"; 
+                cardBorder = "border-left: 5px solid #17a2b8;"; // Blue
             }
 
             // Date Formatting
@@ -823,8 +822,8 @@ window.fetchAuditHistory = async (barcode) => {
                     </div>
                     
                     <div style="font-size:11px; color:#555; line-height:1.4;">
-                        <strong>Auth By:</strong> ${l.approvedBy || 'System'}<br>
-                        <strong>Item:</strong> ${l.item}
+                        <strong>Approved By:</strong> ${l.approvedBy || 'System'}<br>
+                        <strong>Item Name:</strong> ${l.item}
                     </div>
                 </div>
             `;
@@ -837,6 +836,94 @@ window.fetchAuditHistory = async (barcode) => {
     }
 };
 
+// --- 2. SINGLE UNIFIED SCANNER HANDLER (Fixes the Duplicate Error) ---
+window.onScanSuccess = function(decodedText) {
+    closeBarcodeScanner();
+    console.log("Scanned:", decodedText, "Mode:", scanMode);
+
+    if (scanMode === 'ADD') {
+        document.getElementById("invBarcode").value = decodedText;
+        checkBarcodeUnique(decodedText);
+        setTimeout(() => { if(confirm("Got it: " + decodedText)) document.getElementById("invName").focus(); }, 100);
+    }
+    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+        // Prepare UI for transaction
+        const displayId = (scanMode === 'CHECKOUT') ? "checkout_display" : "return_display";
+        const nameId = (scanMode === 'CHECKOUT') ? "checkout_item_name" : "return_item_name";
+        const codeId = (scanMode === 'CHECKOUT') ? "checkout_item_code" : "return_item_code";
+        const displayEl = document.getElementById(displayId);
+        const authBtnContainer = (scanMode === 'CHECKOUT') ? "btn_checkout_verify" : "btn_return_verify";
+        
+        if(displayEl) displayEl.classList.remove("hidden");
+        document.getElementById(nameId).innerText = "Checking Status...";
+        document.getElementById(codeId).innerText = decodedText;
+        
+        // Database check logic
+        const invRef = ref(db, "inventory");
+        const q = query(invRef, orderByChild("barcode"), equalTo(decodedText));
+
+        get(q).then(snap => {
+            if (!snap.exists()) {
+                alert("❌ ERROR: Item not found!");
+                if(displayEl) displayEl.classList.add("hidden");
+                return;
+            }
+            let foundItem = null;
+            let foundKey = null;
+            snap.forEach(c => { foundItem = c.val(); foundKey = c.key; });
+
+            // Logic Gates (Stop if already out/in)
+            if (scanMode === 'CHECKOUT' && foundItem.status === 'Checked Out') {
+                 document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ OUT OF STOCK</span><br><small>Held by: ${foundItem.holder}</small>`;
+                 if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'none';
+                 alert(`STOP: Currently held by ${foundItem.holder}.`);
+                 return;
+            }
+            if (scanMode === 'RETURN' && foundItem.status === 'In Stock') {
+                 document.getElementById(nameId).innerHTML = `<span style="color:red">⛔ ALREADY IN STORE</span>`;
+                 if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'none';
+                 alert(`STOP: Item is already in the store.`);
+                 return;
+            }
+
+            // Success: Ready for Face ID
+            pendingTransactionItem = { key: foundKey, ...foundItem };
+            if(document.getElementById(authBtnContainer)) document.getElementById(authBtnContainer).style.display = 'block';
+            let statusColor = (scanMode === 'RETURN') ? "#17a2b8" : "green";
+            document.getElementById(nameId).innerHTML = `<span style="color:${statusColor}">✔ Ready for ${scanMode}</span><br>${foundItem.item}`;
+
+        }).catch(err => alert("DB Error: " + err.message));
+    }
+    else if (scanMode === 'AUDIT_SEARCH') {
+        // DIRECTLY POP UP THE DATA (No Table)
+        if (!isAdmin) return alert("Admins Only.");
+        document.getElementById("auditSearchInput").value = decodedText; 
+        fetchAuditHistory(decodedText); // Trigger Popup
+    }
+    else if (scanMode === 'SEARCH_STOCK') {
+        const searchBox = document.getElementById("mainStockSearch");
+        if(searchBox) {
+            searchBox.value = decodedText;
+            filterStockTable(); 
+        }
+    }
+};
+
+// --- 3. HELPER TO CLOSE MODAL ---
+window.closeAuditModal = () => {
+    document.getElementById("auditResultModal").classList.add("hidden");
+    document.getElementById("auditSearchInput").value = ""; 
+};
+
+// --- 4. DUMMY FUNCTION (To prevent errors if HTML still calls it) ---
+window.loadInventoryHistory = () => {
+    // Intentionally empty or just focuses the search box
+    // Because we removed the table
+    setTimeout(() => {
+        const input = document.getElementById("auditSearchInput");
+        if(input) input.focus();
+    }, 300);
+};
 // --- 2. SINGLE UNIFIED SCANNER HANDLER (Fixes the Duplicate Error) ---
 window.onScanSuccess = function(decodedText) {
     closeBarcodeScanner();
@@ -927,37 +1014,7 @@ window.loadInventoryHistory = () => {
 };
 
 // --- 2. UNIFIED SCANNER HANDLER (This replaces your old one) ---
-window.onScanSuccess = function(decodedText) {
-    closeBarcodeScanner();
-    console.log("Scanned:", decodedText);
 
-    if (scanMode === 'ADD') {
-        document.getElementById("invBarcode").value = decodedText;
-        checkBarcodeUnique(decodedText);
-        setTimeout(() => { if(confirm("Got it: " + decodedText)) document.getElementById("invName").focus(); }, 100);
-    }
-    else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        // Reuse existing transaction logic if present, or alert logic
-        const displayId = (scanMode === 'CHECKOUT') ? "checkout_display" : "return_display";
-        const nameId = (scanMode === 'CHECKOUT') ? "checkout_item_name" : "return_item_name";
-        const codeId = (scanMode === 'CHECKOUT') ? "checkout_item_code" : "return_item_code";
-        const displayEl = document.getElementById(displayId);
-        
-        if(displayEl) displayEl.classList.remove("hidden");
-        document.getElementById(nameId).innerText = "Checking Status...";
-        document.getElementById(codeId).innerText = decodedText;
-        
-        // Trigger the database check
-        // Note: Ensure your check logic (from previous steps) calls this
-        processScannedTransactionItem(decodedText); 
-    }
-    else if (scanMode === 'AUDIT_SEARCH') {
-        // DIRECTLY POP UP THE DATA
-        if (!isAdmin) return alert("Admins Only.");
-        document.getElementById("auditSearchInput").value = decodedText; // Fill input
-        fetchAuditHistory(decodedText); // Trigger Popup
-    }
-};
 
 // --- 3. HELPER TO CLOSE MODAL ---
 window.closeAuditModal = () => {
