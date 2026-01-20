@@ -757,7 +757,7 @@ window.closeBarcodeScanner = () => {
 // --- NEW AUDIT LOGIC ---
 window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
 // --- ROBUST AUDIT POPUP (Fixes Sorting & Date Issues) ---
-// --- ROBUST AUDIT POPUP (Fixes Sorting Conflict & Date Only) ---
+// --- FINAL AUDIT POPUP (Date Fix + Timezone Correction) ---
 window.fetchAuditHistory = async (barcode) => {
     if(!barcode) return;
 
@@ -786,26 +786,25 @@ window.fetchAuditHistory = async (barcode) => {
         let logs = [];
         snap.forEach(c => logs.push(c.val()));
 
-        // --- SORTING FIX (Handles Text Dates vs Timestamps) ---
+        // --- 1. SORTER HELPER ---
         const getTimestamp = (t) => {
             if (!t) return 0;
-            if (typeof t === 'number') return t; // New Data (Perfect)
-            
-            // Old Data Fix: Convert "20/01/2026" to "01/20/2026" for browser
+            if (typeof t === 'number') return t; 
+            // Handle Old Text Data
             if (typeof t === 'string' && t.includes('/')) {
-                const parts = t.split(/[ ,]+/); // Split by space or comma
-                const dateParts = parts[0].split('/'); // Get DD, MM, YYYY
-                if (dateParts.length === 3) {
-                    // Swap to MM/DD/YYYY to allow sorting
-                    return new Date(`${dateParts[1]}/${dateParts[0]}/${dateParts[2]} ${parts[1]||''}`).getTime();
-                }
+                try {
+                    const parts = t.split(/[ ,]+/); 
+                    const dParts = parts[0].split('/'); 
+                    if (dParts.length === 3) {
+                        return new Date(`${dParts[1]}/${dParts[0]}/${dParts[2]} ${parts[1]||''}`).getTime();
+                    }
+                } catch(e) { return 0; }
             }
-            return 0; // Invalid
+            return 0;
         };
 
-        // Sort Descending (Newest First)
+        // Sort Newest First
         logs.sort((a, b) => getTimestamp(b.time) - getTimestamp(a.time));
-
 
         // --- RENDER ---
         container.innerHTML = "";
@@ -813,31 +812,36 @@ window.fetchAuditHistory = async (barcode) => {
         logs.forEach(l => {
             let typeIcon = "➕";
             let typeText = "ADDED";
-            let borderStyle = "border-left: 5px solid #28a745;"; // Green
+            let borderStyle = "border-left: 5px solid #28a745;"; 
 
             if(l.type === 'CHECKOUT') { 
                 typeIcon = "📤"; typeText = "CHECKED OUT"; 
-                borderStyle = "border-left: 5px solid #b38600;"; // Yellow
+                borderStyle = "border-left: 5px solid #b38600;"; 
             }
             else if(l.type === 'RETURN') { 
                 typeIcon = "📥"; typeText = "RETURNED"; 
-                borderStyle = "border-left: 5px solid #17a2b8;"; // Blue
+                borderStyle = "border-left: 5px solid #17a2b8;"; 
             }
 
-            // DATE ONLY DISPLAY (As Requested)
+            // --- 2. TIMEZONE CORRECTION ---
             let dateDisplay = "--";
-            try {
-                // If it's a number, use Indian formatting
-                if(typeof l.time === 'number') {
-                    dateDisplay = new Date(l.time).toLocaleDateString('en-IN', {
-                        timeZone: 'Asia/Kolkata',
-                        day: '2-digit', month: '2-digit', year: 'numeric'
-                    });
-                } else {
-                    // If it's old text data, just show the first part (Date)
-                    dateDisplay = l.time.split(',')[0]; 
-                }
-            } catch(e) { dateDisplay = "Invalid Date"; }
+            
+            if(typeof l.time === 'number') {
+                // Manually shift time to IST (UTC + 5.5 hours)
+                // This prevents "10 PM today" appearing as "Yesterday"
+                const serverDate = new Date(l.time);
+                // No manual offset needed if we strictly use 'Asia/Kolkata'
+                // This string generator is the most reliable method for browsers:
+                dateDisplay = serverDate.toLocaleString('en-IN', {
+                    timeZone: 'Asia/Kolkata',
+                    day: '2-digit', 
+                    month: '2-digit', 
+                    year: 'numeric'
+                }); 
+            } else {
+                // If it is old text data, show it as is
+                dateDisplay = l.time.split(',')[0];
+            }
 
             const cardHTML = `
                 <div style="background:white; padding:15px; margin-bottom:10px; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); ${borderStyle}">
