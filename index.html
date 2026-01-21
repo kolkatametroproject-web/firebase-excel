@@ -1414,30 +1414,33 @@ window.handleFaceScan = async () => {
 
         // --- MODE 2: ADMIN AUTHORIZATION ---
         else if(scanMode === 'ADMIN') {
-             const allUsersSnap = await get(ref(db, "users"));
-             let adminFound = false;
-             let adminName = "Unknown";
+    // Step 1: must be logged in admin
+    if (!isAdmin) {
+        throw new Error("You are not an admin account");
+    }
 
-             allUsersSnap.forEach(userSnap => {
-                const uData = userSnap.val();
-                if(uData.faceData && ADMIN_EMAILS.includes(uData.email)) {
-                    const samples = (uData.faceData[0] instanceof Array) ? uData.faceData : [uData.faceData];
-                    for (let s of samples) {
-                        if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
-                            adminFound = true; adminName = uData.name; break;
-                        }
-                    }
-                }
-             });
+    // Step 2: match only against his own face
+    const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+    const storedData = snap.val();
 
-             if(adminFound) {
-                 updateStatus("✅ AUTHORIZED: " + adminName, "#00ff00");
-                 await processTransaction(adminName);
-             } else {
-                 throw new Error("Not an Admin Face");
-             }
+    let match = false;
+    if (storedData) {
+        const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
+        for (let s of samples) {
+            if (faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
+                match = true;
+                break;
+            }
         }
+    }
 
+    if (match) {
+        updateStatus("✅ ADMIN AUTHORIZED", "#00ff00");
+        await processTransaction(currentUser.name);
+    } else {
+        throw new Error("Admin face does not match");
+    }
+}
         // --- MODE 3: LOGIN ---
         else {
             const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
