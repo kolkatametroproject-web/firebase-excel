@@ -395,7 +395,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
 
 <div id="inv-return" class="panel hidden" style="border: 2px solid #17a2b8;">
     <h3 style="color:#17a2b8;">📥 Return Item</h3>
-    <p style="text-align:center; color:#666; font-size:12px;">Scan an item to return it.</p>
+    <p style="text-align:center; color:#666; font-size:12px;">Scan an item to return it to the store.</p>
     
     <div style="text-align:center; padding:20px;">
         <button onclick="openBarcodeScanner('RETURN')" class="info" style="font-size:16px; padding:15px 30px; width:100%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
@@ -404,20 +404,35 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     </div>
 
     <div id="return_display" class="hidden" style="background:#d1ecf1; padding:15px; border:1px solid #bee5eb; text-align:center; margin-top:10px; border-radius:4px;">
+        
         <h2 id="return_item_name" style="color:#0c5460; margin:10px 0 5px 0;">--</h2>
         <div style="font-family:monospace; font-size:14px; color:#555; margin-bottom:15px;">
             Barcode: <span id="return_item_code" style="font-weight:bold;">--</span>
         </div>
 
-        <input id="returnLocation" placeholder="Enter Location (e.g. D2 Heerok Sir Lab, Upper Cabinet)" style="border: 2px solid #17a2b8;">
+        <div style="text-align:left; background:rgba(255,255,255,0.6); padding:10px; border-radius:5px;">
+            
+            <label style="font-size:12px; font-weight:bold; color:#0c5460;">📍 Where are you returning it?</label>
+            <select id="returnLocSelect" onchange="toggleOtherInput()" style="margin-bottom:10px; border:1px solid #17a2b8;">
+                <option value="D2 Building - Heerok Sir Lab">D2 Building - Heerok Sir Lab</option>
+                <option value="Other">Other (Specify...)</option>
+            </select>
 
-        <div id="btn_return_verify">
+            <div id="divOtherLoc" class="hidden">
+                <input id="returnLocOther" placeholder="✍ Specify Place (e.g. Main Office, Store Room)" style="border:1px dashed #17a2b8; background:#fff;">
+            </div>
+
+            <label style="font-size:12px; font-weight:bold; color:#0c5460;">🗄️ Exact Spot (Cabinet/Almirah):</label>
+            <input id="returnLocSpot" placeholder="e.g. Upper Cabinet, Blue Almirah, Rack 3" style="border:1px solid #17a2b8;">
+        </div>
+
+        <div id="btn_return_verify" style="margin-top:15px;">
              <button onclick="submitTransactionNoFace('RETURN')" style="background:#17a2b8; color:white; padding:12px 20px; width:100%; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">
                 ✔ Confirm Return
              </button>
         </div>
     </div>
-</div>>
+</div>
 <div id="inv-history" class="panel hidden">
     <div style="text-align:center; padding:40px 20px;">
         <h2 style="color:#003366; margin-bottom:10px;">🔍 Item Audit Trail</h2>
@@ -1123,6 +1138,18 @@ window.checkBarcodeUnique = async (code) => {
         alert(`STOP: Barcode '${code}' is already registered as:\n"${existingItem.item}"\nStatus: ${existingItem.status}`);
     }
 }
+// --- HELPER: TOGGLE 'OTHER' INPUT ---
+window.toggleOtherInput = () => {
+    const val = document.getElementById("returnLocSelect").value;
+    const otherDiv = document.getElementById("divOtherLoc");
+    
+    if(val === "Other") {
+        otherDiv.classList.remove("hidden");
+        document.getElementById("returnLocOther").focus();
+    } else {
+        otherDiv.classList.add("hidden");
+    }
+};
 // --- NEW: TRIGGER RECEIVER SCAN ---
 window.startReceiverScan = (type) => {
     scanMode = 'RECEIVER';
@@ -1719,29 +1746,48 @@ window.filterInvLogs = () => {
         row.style.display = text.includes(input) ? "" : "none";
     });
 };
-// --- NEW FUNCTION: DIRECT SUBMIT (NO ADMIN FACE) ---
+// --- UPDATED SUBMIT FUNCTION (COMBINED LOCATION LOGIC) ---
 window.submitTransactionNoFace = (type) => {
     if(!pendingTransactionItem) return alert("Please SCAN an item first.");
     
-    // Validation
+    // --- CHECKOUT VALIDATION ---
     if(type === 'CHECKOUT') {
         const purpose = document.getElementById("checkoutPurpose").value;
         if(!purpose || purpose.trim() === "") return alert("Please enter the PURPOSE for this checkout.");
     }
     
+    // --- RETURN VALIDATION & FORMATTING ---
+    let finalLocation = "";
+    
     if(type === 'RETURN') {
-        const loc = document.getElementById("returnLocation").value;
-        if(!loc || loc.trim() === "") return alert("Please enter the LOCATION where you placed the item.");
+        // 1. Get Main Place
+        const selection = document.getElementById("returnLocSelect").value;
+        let mainPlace = selection;
+        
+        if(selection === "Other") {
+            const otherText = document.getElementById("returnLocOther").value.trim();
+            if(!otherText) return alert("Please specify the 'Other' location name.");
+            mainPlace = otherText;
+        }
+
+        // 2. Get Specific Spot (Cabinet/Almirah)
+        const spot = document.getElementById("returnLocSpot").value.trim();
+        if(!spot) return alert("Please specify the Exact Spot (e.g., Cabinet, Almirah).");
+
+        // 3. Combine them
+        // Format: "D2 Building - Heerok Sir Lab [Upper Cabinet]"
+        finalLocation = `${mainPlace} [${spot}]`;
     }
 
     scanMode = 'DIRECT'; 
     currentTransactionType = type;
     
-    // Bypass Admin Face, pass "Self" or "System" as the approver
-    processTransaction("Self/System");
+    // Pass the calculated location to the processor
+    processTransaction("Self/System", finalLocation);
 };
 // --- UPDATED TRANSACTION LOGIC ---
-async function processTransaction(adminName) {
+// --- UPDATED PROCESSOR TO ACCEPT LOCATION ARGUMENT ---
+async function processTransaction(adminName, customReturnLocation = null) {
     const isCheckout = currentTransactionType === 'CHECKOUT';
     
     if(!pendingTransactionItem) return alert("System Error: No item scanned.");
@@ -1750,9 +1796,8 @@ async function processTransaction(adminName) {
     const itemName = pendingTransactionItem.item;
     const barcode = pendingTransactionItem.barcode;
 
-    // Get Inputs
-    const purposeInput = document.getElementById("checkoutPurpose").value;
-    const locationInput = document.getElementById("returnLocation").value;
+    // Get Checkout Purpose (if applicable)
+    const purposeInput = isCheckout ? document.getElementById("checkoutPurpose").value : null;
 
     // 1. Fetch Fresh Data
     const invRef = ref(db, `inventory/${itemKey}`);
@@ -1775,21 +1820,21 @@ async function processTransaction(adminName) {
     let updateData = {};
 
     if (isCheckout) {
-        // CHECKOUT: Save Purpose, Clear Location (since it's out)
+        // CHECKOUT
         updateData = {
             status: "Checked Out",
             holder: realUserName,
-            purpose: purposeInput, // Save Purpose
-            location: "Out with User", // Update Location
+            purpose: purposeInput,
+            location: "Out with User", 
             usageCount: currentUsage + 1 
         };
     } else {
-        // RETURN: Save New Location, Clear Purpose
+        // RETURN - USE THE CUSTOM LOCATION WE BUILT
         updateData = {
             status: "In Stock",
             holder: "Store",
             purpose: null,
-            location: locationInput // Save User Entered Location
+            location: customReturnLocation // Saves "D2 Lab [Cabinet]"
         };
     }
 
@@ -1804,8 +1849,8 @@ async function processTransaction(adminName) {
         qty: 1,
         takenBy: realUserName,
         approvedBy: "Direct (No Admin)",
-        location: isCheckout ? "Out" : locationInput, // Log the location
-        purpose: isCheckout ? purposeInput : "Return", // Log the purpose
+        location: isCheckout ? "Out" : customReturnLocation, 
+        purpose: isCheckout ? purposeInput : "Return",
         time: serverTimestamp()
     };
 
@@ -1814,8 +1859,9 @@ async function processTransaction(adminName) {
     alert(`✅ ${currentTransactionType} Successful!\nItem: ${itemName}`);
     
     // Clear Inputs
-    document.getElementById("checkoutPurpose").value = "";
-    document.getElementById("returnLocation").value = "";
+    if(document.getElementById("checkoutPurpose")) document.getElementById("checkoutPurpose").value = "";
+    if(document.getElementById("returnLocOther")) document.getElementById("returnLocOther").value = "";
+    if(document.getElementById("returnLocSpot")) document.getElementById("returnLocSpot").value = "";
 
     // UI Cleanup
     document.getElementById("checkout_display").classList.add("hidden");
