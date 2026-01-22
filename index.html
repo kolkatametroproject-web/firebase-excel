@@ -730,35 +730,16 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
   </div>
 <div id="bannedScreen" class="banned-overlay hidden">
     <div class="banned-card">
-        <div style="text-align:center; margin-bottom:15px;">
-            <div style="font-size: 50px;">⛔</div>
-            <h1 style="color:#bd2130; margin:0; line-height:1;">ACCESS DENIED</h1>
-            <p style="color:#666; margin-top:5px;">Your account has been suspended.</p>
-        </div>
-
-        <hr style="border:0; border-top:1px solid #ddd; margin:15px 0;">
-
-        <div style="margin-bottom:15px;">
-            <label style="font-size:11px; font-weight:bold; color:#777; text-transform:uppercase;">Reason:</label>
-            <div id="displayBanReason" style="font-size:16px; font-weight:bold; color:#333;">--</div>
-        </div>
-
-        <div style="margin-bottom:15px; background:#fff3cd; padding:10px; border-left:4px solid #ffc107; color:#856404;">
-            <label style="font-size:10px; font-weight:bold; text-transform:uppercase;">👉 Action Required:</label>
-            <div id="displayBanAction" style="font-weight:bold; font-size:13px; margin-top:2px;">--</div>
-        </div>
-
-        <div style="text-align:center; margin-top:10px;">
-            <div id="bannedTimeDisplay" class="banned-timer" style="font-size:16px; padding:5px;">--</div>
-            <p id="bannedInstruction" style="font-size:11px; font-weight:bold; color:#bd2130; margin:0;">--</p>
-        </div>
-
+        <h1 style="color:#bd2130; margin:0;">ACCESS DENIED</h1>
+        <p style="color:#666;">Your account has been suspended.</p>
+        <hr>
+        <div id="displayBanReason" style="font-weight:bold; margin:10px 0;">--</div>
+        <div id="bannedTimeDisplay" class="banned-timer" style="background:#000; color:white; padding:5px;">--</div>
         <div style="display:flex; gap:10px; margin-top:20px;">
-            <button onclick="window.location.reload()" style="flex:1; background:#0056b3; color:white; padding:12px; border:none; cursor:pointer;">🔄 Check Status</button>
-            <button onclick="logout()" style="flex:1; background:#dc3545; color:white; padding:12px; border:none; cursor:pointer;">🚪 Log Out</button>
+            <button onclick="logout()" style="flex:1; background:#dc3545; color:white; padding:12px; border:none; cursor:pointer;">🚪 Force Log Out</button>
         </div>
     </div>
-</div>
+</div>>
 <div id="adminBanModal" class="modal-overlay hidden">
     <div class="panel" style="width:500px; max-width:95%; border-top: 5px solid #dc3545;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
@@ -1363,11 +1344,9 @@ async function preloadModels() {
     } catch(e) { console.error("Model Error", e); }
 }
 preloadModels();
-// ============================================================
-// PASTE THIS INSIDE <script type="module"> (REPLACE OLD VERSIONS)
-// ============================================================
-
+// ==========================================
 // 1. UPDATED LOGIN FUNCTION
+// ==========================================
 window.login = () => {
     const emailField = document.getElementById("email");
     const passField = document.getElementById("password");
@@ -1376,119 +1355,89 @@ window.login = () => {
     if(!emailField.value || !passField.value) return alert("Please enter email and password.");
 
     // Visual Feedback
-    const originalText = btn.innerText;
-    btn.innerText = "🔄 Authenticating...";
+    btn.innerText = "🔄 Verifying Credentials...";
     btn.disabled = true;
-    btn.style.opacity = "0.7";
 
     signInWithEmailAndPassword(auth, emailField.value, passField.value)
     .then(() => {
-        console.log("Auth success, waiting for database check...");
-        // Do not reset button here, onAuthStateChanged will switch the screen
+        // Success: onAuthStateChanged will handle the rest
+        console.log("Credentials accepted.");
     })
     .catch(e => {
-        // Error: Reset button
-        btn.innerText = originalText;
+        btn.innerText = "SECURE LOGIN";
         btn.disabled = false;
-        btn.style.opacity = "1";
         alert("Login Failed: " + e.message);
     });
 };
+
+// ==========================================
+// 2. CRASH-PROOF AUTH LISTENER
+// ==========================================
 onAuthStateChanged(auth, (user) => {
-    if (!user) { showLogin(); return; }
+    // A. NO USER -> SHOW LOGIN SCREEN
+    if (!user) { 
+        showLoginScreen(); 
+        return; 
+    }
 
     currentUser = user;
-    startPresenceSystem(user);
-    setupIdleTimer();
-    update(ref(db, `users/${user.uid}`), { email: user.email });
-
-    // === LIVE USER MONITORING ===
-    onValue(ref(db, `users/${user.uid}`), (snap) => {
+    
+    // B. USER FOUND -> TRY TO LOAD DATA
+    const userRef = ref(db, `users/${user.uid}`);
+    
+    onValue(userRef, (snap) => {
         const u = snap.val();
 
-        if (!u) return; // Wait for data to load
+        // 1. DATA MISSING? FORCE LOGOUT (Fixes the blank screen glitch)
+        if (!u) {
+            console.log("User data missing. Force logout.");
+            alert("Account data not found. Please contact admin.");
+            signOut(auth);
+            return;
+        }
 
-        // A. TERMINATED CHECK
+        // 2. TERMINATED?
         if (u.terminated) { 
             alert("ACCOUNT TERMINATED."); 
             signOut(auth); 
             return; 
         }
 
-        // B. BAN CHECK
+        // 3. BANNED? -> SHOW RED SCREEN
         if (u.banned) {
-            console.log("⛔ User is BANNED. Initiating Lockout...");
+            // Hide everything else
+            document.querySelector("header").style.display = "none";
+            document.getElementById("loginSection").classList.add("hidden");
+            document.getElementById("appScreen").classList.add("hidden");
+            document.getElementById("faceModal").classList.add("hidden");
             
-            const now = Date.now();
-            const deadline = u.banExpires || 0;
-            const isDeadlineMissed = (deadline > 0) && (deadline < now);
-
-            // 1. HIDE EVERYTHING (With Safety Checks)
-            const header = document.querySelector("header");
-            if(header) header.style.display = "none";
-            
-            const idsToHide = ["loginSection", "appScreen", "authContainer", "faceModal"];
-            idsToHide.forEach(id => {
-                const el = document.getElementById(id);
-                if(el) el.classList.add("hidden");
-            });
-
-            // 2. SHOW RED SCREEN
-            const banScreen = document.getElementById("bannedScreen");
-            if (banScreen) {
-                banScreen.classList.remove("hidden");
-                // Force display in case CSS is missing
-                banScreen.style.display = "flex"; 
-            } else {
-                // FALLBACK IF HTML IS MISSING
-                document.body.innerHTML = `<div style="background:red; color:white; padding:50px; text-align:center;"><h1>🚫 ACCESS DENIED</h1><p>HTML Overlay Missing. You are banned.</p><button onclick="location.reload()">Reload</button></div>`;
-                return;
-            }
-
-            // 3. FILL DATA
-            const elReason = document.getElementById("displayBanReason");
-            if(elReason) elReason.innerText = (u.banReason || "Admin Action") + (u.banRemarks ? ` (${u.banRemarks})` : "");
-            
-            const elAction = document.getElementById("displayBanAction");
-            if(elAction) elAction.innerText = u.banAction || "Contact Administrator";
-
-            // 4. TIMER
-            const timerDisplay = document.getElementById("bannedTimeDisplay");
-            const instrDisplay = document.getElementById("bannedInstruction");
-
-            if(timerDisplay && instrDisplay) {
-                if (isDeadlineMissed) {
-                    timerDisplay.innerText = "⛔ DEADLINE MISSED";
-                    timerDisplay.style.background = "black";
-                    timerDisplay.style.color = "red";
-                    instrDisplay.innerText = "Account Permanently Closed.";
-                } else if (deadline > 0) {
-                     try {
-                        const dateStr = new Date(deadline).toLocaleString('en-IN', {
-                            day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
-                        });
-                        timerDisplay.innerText = "Deadline: " + dateStr;
-                    } catch(e) { timerDisplay.innerText = "Check with Admin"; }
-                    instrDisplay.innerText = "Resolve before this date.";
-                } else {
-                    timerDisplay.innerText = "⛔ PERMANENT BAN";
-                    instrDisplay.innerText = "Access Revoked.";
-                }
-            }
-            return; // STOP EXECUTION HERE
-        } else {
-            // IF NOT BANNED: Restore View
+            // Show Ban Screen
             const banScreen = document.getElementById("bannedScreen");
             if(banScreen) {
-                banScreen.classList.add("hidden");
-                banScreen.style.display = ""; // Clear forced style
+                banScreen.classList.remove("hidden");
+                // Fill details
+                document.getElementById("displayBanReason").innerText = u.banReason || "Admin Action";
+                const deadline = u.banExpires || 0;
+                if(deadline > 0) {
+                     const dateStr = new Date(deadline).toLocaleString();
+                     document.getElementById("bannedTimeDisplay").innerText = "Deadline: " + dateStr;
+                } else {
+                     document.getElementById("bannedTimeDisplay").innerText = "PERMANENT BAN";
+                }
+            } else {
+                // Fallback if HTML is missing
+                document.body.innerHTML = "<h1 style='color:red; text-align:center; margin-top:50px;'>⛔ BANNED (Overlay Missing)</h1><button onclick='logout()'>Log Out</button>";
             }
-            const header = document.querySelector("header");
-            if(header) header.style.display = "flex";
+            return; 
         }
 
-        // C. NORMAL APP LOAD
-        if(u) currentUser.name = u.name;
+        // 4. ACTIVE & CLEAN -> SHOW DASHBOARD
+        // Hide Ban Screen / Login Screen
+        document.getElementById("bannedScreen")?.classList.add("hidden");
+        document.querySelector("header").style.display = "flex";
+        
+        // Setup User Session
+        currentUser.name = u.name;
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
 
         if (!u.name) {
@@ -1496,13 +1445,13 @@ onAuthStateChanged(auth, (user) => {
             document.getElementById("loginSection").classList.add("hidden");
             return;
         }
-
-        if (!u.pin) { update(ref(db, `users/${user.uid}`), { pin: "1234" }); }
-
-        document.getElementById("userInfo").innerText = `${u.name} (${user.email})`;
+        
+        // UPDATE UI
+        document.getElementById("userInfo").innerText = `${u.name}`;
         document.getElementById("authContainer").classList.remove("hidden");
         document.getElementById("loginSection").classList.add("hidden");
 
+        // LOAD ADMIN TOOLS
         if (isAdmin) {
             document.getElementById("adminBadge").classList.remove("hidden");
             document.getElementById("btnAdmin").classList.remove("hidden");
@@ -1510,25 +1459,49 @@ onAuthStateChanged(auth, (user) => {
             setTimeout(loadAdminPanel, 2000);
         }
 
-        if(!isTransactionAuth && !u.banned) {
+        // BIOMETRIC CHECK
+        if(!isTransactionAuth) {
             const faceModal = document.getElementById("faceModal");
-            if(faceModal) {
-                faceModal.classList.remove("hidden");
-                if(!u.faceData) {
-                    document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
-                    document.getElementById("regProgress").classList.remove("hidden");
-                    document.getElementById("btnCapture").onclick = registerNewFace;
-                    initCamera(false);
-                } else {
-                    document.getElementById("modalTitle").innerText = "Biometric Verification";
-                    document.getElementById("regProgress").classList.add("hidden");
-                    document.getElementById("btnCapture").onclick = handleFaceScan;
-                    initCamera(true);
-                }
+            faceModal.classList.remove("hidden");
+            
+            if(!u.faceData) {
+                document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
+                document.getElementById("regProgress").classList.remove("hidden");
+                document.getElementById("btnCapture").onclick = registerNewFace;
+                initCamera(false);
+            } else {
+                document.getElementById("modalTitle").innerText = "Biometric Verification";
+                document.getElementById("regProgress").classList.add("hidden");
+                document.getElementById("btnCapture").onclick = handleFaceScan;
+                initCamera(true);
             }
         }
+    }, (error) => {
+        // IF DATABASE FAILS -> LOGOUT
+        console.error(error);
+        alert("Connection Error. Logging out...");
+        signOut(auth);
     });
 });
+
+// Helper to reliably show login
+function showLoginScreen() {
+    document.querySelector("header").style.display = "flex";
+    document.getElementById("loginSection").classList.remove("hidden");
+    document.getElementById("appScreen").classList.add("hidden");
+    document.getElementById("authContainer").classList.add("hidden");
+    document.getElementById("bannedScreen")?.classList.add("hidden");
+    document.getElementById("faceModal").classList.add("hidden");
+    stopCamera();
+    
+    // Reset Button State
+    const btn = document.querySelector("#loginSection button");
+    if(btn) {
+        btn.innerText = "SECURE LOGIN";
+        btn.disabled = false;
+    }
+}
+
 // --- HELPER: TOGGLE 'OTHER' INPUT FOR ADD STOCK ---
 window.toggleAddOtherInput = () => {
     const val = document.getElementById("addLocSelect").value;
