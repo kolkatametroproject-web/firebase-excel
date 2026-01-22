@@ -526,10 +526,9 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
                     <th>Barcode</th>
                     <th>Product</th>
                     <th>Added By</th>
-                    <th>Usage (Times Out)</th>
+                    <th>Usage</th>
                     <th>Current Holder</th>
-                    <th>Location / Place</th> 
-                    <th>Status</th>
+                    <th>Location / Place</th> <th>Status</th>
                     <th>Action</th>
                 </tr>
             </thead>
@@ -2286,17 +2285,24 @@ function renderRow(k,v,i) {
 }
 window.upRow = (k,f,v) => update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), {[f]:v});
 window.delRow = (k) => remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
-// --- UPDATED INVENTORY DISPLAY ---
+// --- UPDATED VIEW STOCK SCRIPT ---
 function loadInventory() {
     const b = document.getElementById("inventoryBody");
     const summaryEl = document.getElementById("stockSummaryText");
     
-    b.innerHTML = "<tr><td colspan='8' style='text-align:center;'>Loading live stock...</td></tr>"; // Changed colspan to 8
+    // Set colspan to 8 to match the new header count
+    b.innerHTML = "<tr><td colspan='8' style='text-align:center;'>Loading live stock...</td></tr>";
 
     onValue(ref(db, "inventory"), snap => {
         b.innerHTML = "";
         let totalItems = 0;
         let inStockCount = 0;
+
+        if(!snap.exists()) {
+             b.innerHTML = "<tr><td colspan='8' style='text-align:center;'>No inventory found. Add items first.</td></tr>";
+             if(summaryEl) summaryEl.innerText = "Total Items: 0";
+             return;
+        }
 
         snap.forEach(c => {
             const v = c.val();
@@ -2305,22 +2311,27 @@ function loadInventory() {
             totalItems++;
             if(v.status !== "Checked Out") inStockCount++;
 
+            // Handle "Holder" display
             let holderDisplay = "-";
             if(v.status === "Checked Out") {
                 holderDisplay = `<span style="color:#b38600; font-weight:bold;">👤 ${v.holder}</span>`;
             }
 
+            // Handle "Status" Badge
             let statusBadge = `<span style="color:green; font-weight:bold; background:#d4edda; padding:2px 6px; border-radius:4px;">In Stock</span>`;
             if(v.status === "Checked Out") {
                 statusBadge = `<span style="color:#856404; font-weight:bold; background:#fff3cd; padding:2px 6px; border-radius:4px;">📤 Out</span>`;
             }
 
+            // Handle Defaults
             const addedBy = v.addedBy || "Unknown";
             const usage = v.usageCount || 0;
             const barcode = v.barcode || "--";
             
-            // NEW: Get Location
-            const location = v.location || "Not Set";
+            // NEW: Handle Location
+            // If it's Checked Out, show "With User", otherwise show the saved location
+            let locDisplay = v.location || "Not Set";
+            if(v.status === "Checked Out") locDisplay = "❌ (Checked Out)";
 
             const row = `
             <tr class="stock-row">
@@ -2329,7 +2340,7 @@ function loadInventory() {
                 <td style="font-size:12px; color:#555;">${addedBy}</td>
                 <td style="text-align:center; font-weight:bold;">${usage}</td>
                 <td>${holderDisplay}</td>
-                <td style="font-weight:bold; color:#003366;">${location}</td> <td>${statusBadge}</td>
+                <td style="font-size:12px; font-weight:bold; color:#003366;">${locDisplay}</td> <td>${statusBadge}</td>
                 <td>
                     ${isAdmin ? `<button class="danger" onclick="delInv('${k}')" style="padding:2px 5px; font-size:10px;">Remove</button>` : ''}
                 </td>
@@ -2343,7 +2354,6 @@ function loadInventory() {
         }
     });
 }
-
 // --- DUPLICATE CHECK ---
 window.checkBarcodeUnique = async (code) => {
     if(!code) return;
