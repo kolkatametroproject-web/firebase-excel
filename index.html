@@ -729,7 +729,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     </div>
   </div>
 <div id="bannedScreen" class="banned-overlay hidden">
-    <div class="banned-card" style="text-align:left;">
+    <div class="banned-card">
         <div style="text-align:center; margin-bottom:15px;">
             <div style="font-size: 50px;">⛔</div>
             <h1 style="color:#bd2130; margin:0; line-height:1;">ACCESS DENIED</h1>
@@ -754,8 +754,8 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
 
         <div style="display:flex; gap:10px; margin-top:20px;">
-            <button onclick="window.location.reload()" style="flex:1; background:#0056b3; padding:12px;">🔄 Try Again</button>
-            <button onclick="logout()" style="flex:1; background:#dc3545; padding:12px;">🚪 Log Out</button>
+            <button onclick="window.location.reload()" style="flex:1; background:#0056b3; color:white; padding:12px; border:none; cursor:pointer;">🔄 Check Status</button>
+            <button onclick="logout()" style="flex:1; background:#dc3545; color:white; padding:12px; border:none; cursor:pointer;">🚪 Log Out</button>
         </div>
     </div>
 </div>
@@ -1394,7 +1394,6 @@ window.login = () => {
         alert("Login Failed: " + e.message);
     });
 };
-// 2. UPDATED AUTH LISTENER (Glitch Fix Version)
 onAuthStateChanged(auth, (user) => {
     if (!user) { showLogin(); return; }
 
@@ -1407,40 +1406,53 @@ onAuthStateChanged(auth, (user) => {
     onValue(ref(db, `users/${user.uid}`), (snap) => {
         const u = snap.val();
 
+        if (!u) return; // Wait for data to load
+
         // A. TERMINATED CHECK
-        if (u && u.terminated) { 
+        if (u.terminated) { 
             alert("ACCOUNT TERMINATED."); 
             signOut(auth); 
             return; 
         }
 
         // B. BAN CHECK
-        if (u && u.banned) {
+        if (u.banned) {
+            console.log("⛔ User is BANNED. Initiating Lockout...");
+            
             const now = Date.now();
-            const deadline = u.banExpires || 0; // Fix: Default to 0 if undefined to prevent crash
+            const deadline = u.banExpires || 0;
             const isDeadlineMissed = (deadline > 0) && (deadline < now);
 
-            // 1. HIDE EVERYTHING (Including Header)
-            document.querySelector("header").style.display = "none"; // Fix: Hide Top Bar
-            document.getElementById("loginSection").classList.add("hidden"); 
-            document.getElementById("appScreen").classList.add("hidden");
-            document.getElementById("authContainer").classList.add("hidden");
-            document.getElementById("faceModal").classList.add("hidden");
+            // 1. HIDE EVERYTHING (With Safety Checks)
+            const header = document.querySelector("header");
+            if(header) header.style.display = "none";
             
-            // 2. SHOW RED SCREEN
-            document.getElementById("bannedScreen").classList.remove("hidden");
+            const idsToHide = ["loginSection", "appScreen", "authContainer", "faceModal"];
+            idsToHide.forEach(id => {
+                const el = document.getElementById(id);
+                if(el) el.classList.add("hidden");
+            });
 
-            // 3. FILL DATA (With Safety Checks)
-            const reasonText = u.banReason || "Administrative Action";
-            const remarksText = u.banRemarks ? ` (${u.banRemarks})` : "";
-            
+            // 2. SHOW RED SCREEN
+            const banScreen = document.getElementById("bannedScreen");
+            if (banScreen) {
+                banScreen.classList.remove("hidden");
+                // Force display in case CSS is missing
+                banScreen.style.display = "flex"; 
+            } else {
+                // FALLBACK IF HTML IS MISSING
+                document.body.innerHTML = `<div style="background:red; color:white; padding:50px; text-align:center;"><h1>🚫 ACCESS DENIED</h1><p>HTML Overlay Missing. You are banned.</p><button onclick="location.reload()">Reload</button></div>`;
+                return;
+            }
+
+            // 3. FILL DATA
             const elReason = document.getElementById("displayBanReason");
-            if(elReason) elReason.innerText = reasonText + remarksText;
+            if(elReason) elReason.innerText = (u.banReason || "Admin Action") + (u.banRemarks ? ` (${u.banRemarks})` : "");
             
             const elAction = document.getElementById("displayBanAction");
             if(elAction) elAction.innerText = u.banAction || "Contact Administrator";
 
-            // 4. DEADLINE LOGIC (Crash Proof)
+            // 4. TIMER
             const timerDisplay = document.getElementById("bannedTimeDisplay");
             const instrDisplay = document.getElementById("bannedInstruction");
 
@@ -1451,38 +1463,34 @@ onAuthStateChanged(auth, (user) => {
                     timerDisplay.style.color = "red";
                     instrDisplay.innerText = "Account Permanently Closed.";
                 } else if (deadline > 0) {
-                    // Safe Date Formatting
-                    try {
+                     try {
                         const dateStr = new Date(deadline).toLocaleString('en-IN', {
                             day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
                         });
                         timerDisplay.innerText = "Deadline: " + dateStr;
-                        timerDisplay.style.background = "#fff";
-                        timerDisplay.style.color = "#dc3545";
-                        instrDisplay.innerText = "Resolve before this date.";
-                    } catch(e) {
-                        timerDisplay.innerText = "Indefinite Suspension";
-                    }
+                    } catch(e) { timerDisplay.innerText = "Check with Admin"; }
+                    instrDisplay.innerText = "Resolve before this date.";
                 } else {
-                    // Handle Permanent/Undefined Bans gracefully
                     timerDisplay.innerText = "⛔ PERMANENT BAN";
-                    timerDisplay.style.background = "black";
-                    timerDisplay.style.color = "white";
-                    instrDisplay.innerText = "Access Revoked Indefinitely.";
+                    instrDisplay.innerText = "Access Revoked.";
                 }
             }
-            return; // STOP HERE.
+            return; // STOP EXECUTION HERE
         } else {
-            // IF NOT BANNED
-            document.getElementById("bannedScreen").classList.add("hidden");
-            document.querySelector("header").style.display = "flex"; // Restore Header
+            // IF NOT BANNED: Restore View
+            const banScreen = document.getElementById("bannedScreen");
+            if(banScreen) {
+                banScreen.classList.add("hidden");
+                banScreen.style.display = ""; // Clear forced style
+            }
+            const header = document.querySelector("header");
+            if(header) header.style.display = "flex";
         }
 
         // C. NORMAL APP LOAD
         if(u) currentUser.name = u.name;
-
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
-        
+
         if (!u.name) {
             document.getElementById("nameModal").classList.remove("hidden");
             document.getElementById("loginSection").classList.add("hidden");
@@ -1491,7 +1499,6 @@ onAuthStateChanged(auth, (user) => {
 
         if (!u.pin) { update(ref(db, `users/${user.uid}`), { pin: "1234" }); }
 
-        // SUCCESSFUL LOGIN UI
         document.getElementById("userInfo").innerText = `${u.name} (${user.email})`;
         document.getElementById("authContainer").classList.remove("hidden");
         document.getElementById("loginSection").classList.add("hidden");
@@ -1503,21 +1510,21 @@ onAuthStateChanged(auth, (user) => {
             setTimeout(loadAdminPanel, 2000);
         }
 
-        // Face ID Logic (Only if not banned)
         if(!isTransactionAuth && !u.banned) {
             const faceModal = document.getElementById("faceModal");
-            faceModal.classList.remove("hidden");
-            
-            if(!u.faceData) {
-                document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
-                document.getElementById("regProgress").classList.remove("hidden");
-                document.getElementById("btnCapture").onclick = registerNewFace;
-                initCamera(false);
-            } else {
-                document.getElementById("modalTitle").innerText = "Biometric Verification";
-                document.getElementById("regProgress").classList.add("hidden");
-                document.getElementById("btnCapture").onclick = handleFaceScan;
-                initCamera(true);
+            if(faceModal) {
+                faceModal.classList.remove("hidden");
+                if(!u.faceData) {
+                    document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
+                    document.getElementById("regProgress").classList.remove("hidden");
+                    document.getElementById("btnCapture").onclick = registerNewFace;
+                    initCamera(false);
+                } else {
+                    document.getElementById("modalTitle").innerText = "Biometric Verification";
+                    document.getElementById("regProgress").classList.add("hidden");
+                    document.getElementById("btnCapture").onclick = handleFaceScan;
+                    initCamera(true);
+                }
             }
         }
     });
