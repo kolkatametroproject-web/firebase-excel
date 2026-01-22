@@ -336,37 +336,51 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         <button onclick="toggleInvMode('return')" class="info">📥 Return Item</button>
         <button onclick="toggleInvMode('history')" class="secondary">📜 Audit Trail</button>
     </div>
-
-    <div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
-      <h3 style="color:#003366;">Add Unique Item (Serialize)</h3>
-      <p style="font-size:12px; color:#666;">
+<div id="inv-add" class="panel hidden" style="background:#f8f9fa;">
+    <h3 style="color:#003366;">Add Unique Item (Serialize)</h3>
+    <p style="font-size:12px; color:#666;">
         <strong>Strict Rule:</strong> Every physical item must have a unique barcode.<br>
         If you have 5 drills, scan each one separately.
-      </p>
+    </p>
       
-      <div style="display:grid; grid-template-columns: 2fr 1fr; gap:10px; margin-bottom:10px;">
-           <div style="display:flex; gap:5px;">
-               <input id="invBarcode" placeholder="Scan Unique Barcode" onchange="checkBarcodeUnique(this.value)">
-               <button onclick="openBarcodeScanner('ADD')" class="info" style="width:60px; padding:0;"><i class="fas fa-qrcode"></i></button>
-           </div>
-           <input id="invName" placeholder="Product Name (e.g. Drill Machine)">
-      </div>
+    <div style="display:grid; grid-template-columns: 2fr 1fr; gap:10px; margin-bottom:10px;">
+        <div style="display:flex; gap:5px;">
+            <input id="invBarcode" placeholder="Scan Unique Barcode" onchange="checkBarcodeUnique(this.value)">
+            <button onclick="openBarcodeScanner('ADD')" class="info" style="width:60px; padding:0;"><i class="fas fa-qrcode"></i></button>
+        </div>
+        <input id="invName" placeholder="Product Name (e.g. Drill Machine)">
+    </div>
       
-      <div id="barcodeError" class="hidden" style="background:#f8d7da; color:#721c24; padding:10px; border-radius:4px; margin-bottom:10px;">
-          ❌ <strong>Error:</strong> This barcode already exists! You cannot add duplicates.
-      </div>
-
-      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
-          <select id="invCondition">
-              <option value="New">New</option>
-              <option value="Good" selected>Good</option>
-              <option value="Fair">Fair</option>
-              <option value="Damaged">Damaged</option>
-          </select>
-          <button id="btnAddStock" onclick="addUniqueItem()" class="success">Save Item to Stock</button>
-      </div>
+    <div id="barcodeError" class="hidden" style="background:#f8d7da; color:#721c24; padding:10px; border-radius:4px; margin-bottom:10px;">
+        ❌ <strong>Error:</strong> This barcode already exists! You cannot add duplicates.
     </div>
 
+    <div style="text-align:left; background:white; padding:10px; border:1px solid #ced4da; border-radius:5px; margin-bottom:15px;">
+        
+        <label style="font-size:12px; font-weight:bold; color:#003366;">📍 Storage Location:</label>
+        <select id="addLocSelect" onchange="toggleAddOtherInput()" style="margin-bottom:10px; border:1px solid #003366;">
+            <option value="D2 Building - Heerok Sir Lab">D2 Building - Heerok Sir Lab</option>
+            <option value="Other">Other (Specify...)</option>
+        </select>
+
+        <div id="divAddOtherLoc" class="hidden">
+            <input id="addLocOther" placeholder="✍ Specify Place (e.g. Main Office, Store Room)" style="border:1px dashed #003366; background:#f0f8ff;">
+        </div>
+
+        <label style="font-size:12px; font-weight:bold; color:#003366;">🗄️ Exact Spot (Cabinet/Almirah):</label>
+        <input id="addLocSpot" placeholder="e.g. Upper Cabinet, Blue Almirah, Rack 3" style="border:1px solid #003366;">
+    </div>
+
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
+        <select id="invCondition">
+            <option value="New">New</option>
+            <option value="Good" selected>Good</option>
+            <option value="Fair">Fair</option>
+            <option value="Damaged">Damaged</option>
+        </select>
+        <button id="btnAddStock" onclick="addUniqueItem()" class="success">Save Item to Stock</button>
+    </div>
+</div>
     <div id="inv-checkout" class="panel hidden" style="border: 2px solid #b38600;">
     <h3 style="color:#b38600;">📤 Checkout Item</h3>
     <p style="text-align:center; color:#666; font-size:12px;">Scan a unique barcode to check it out.</p>
@@ -1250,6 +1264,18 @@ onAuthStateChanged(auth, (user) => {
     }
   });
 });
+// --- HELPER: TOGGLE 'OTHER' INPUT FOR ADD STOCK ---
+window.toggleAddOtherInput = () => {
+    const val = document.getElementById("addLocSelect").value;
+    const otherDiv = document.getElementById("divAddOtherLoc");
+    
+    if(val === "Other") {
+        otherDiv.classList.remove("hidden");
+        document.getElementById("addLocOther").focus();
+    } else {
+        otherDiv.classList.add("hidden");
+    }
+};
 // --- NEW HEARTBEAT SYSTEM ---
 function startPresenceSystem(user) {
     const userStatusRef = ref(db, `status/${user.uid}`);
@@ -2342,43 +2368,73 @@ window.checkBarcodeUnique = async (code) => {
 }
 
 // --- ADD ITEM ---
+// --- UPDATED ADD ITEM FUNCTION (WITH LOCATION) ---
 window.addUniqueItem = async () => {
+    // 1. Get Basic Data
     const item = document.getElementById("invName").value;
     const cond = document.getElementById("invCondition").value;
     const barcode = document.getElementById("invBarcode").value;
 
     if(!item || !barcode) return alert("Product Name and Barcode are required.");
 
+    // 2. Get Location Data
+    const selection = document.getElementById("addLocSelect").value;
+    let mainPlace = selection;
+    
+    if(selection === "Other") {
+        const otherText = document.getElementById("addLocOther").value.trim();
+        if(!otherText) return alert("Please specify the 'Other' location name.");
+        mainPlace = otherText;
+    }
+
+    const spot = document.getElementById("addLocSpot").value.trim();
+    if(!spot) return alert("Please specify the Exact Spot (e.g., Cabinet, Almirah).");
+
+    // 3. Format Location String
+    const finalLocation = `${mainPlace} [${spot}]`;
+
+    // 4. Check Uniqueness (Database Check)
     const invRef = ref(db, "inventory");
     const q = query(invRef, orderByChild("barcode"), equalTo(barcode));
     const snap = await get(q);
 
     if(snap.exists()) return alert("CRITICAL ERROR: Barcode already exists.");
 
+    // 5. Save to Inventory (Include Location)
     await push(ref(db, "inventory"), {
         barcode: barcode,
         item: item,
         condition: cond,
         status: "In Stock",
         holder: "Store",
+        location: finalLocation, // <--- SAVED HERE
         usageCount: 0, 
-        addedBy: currentUser.name || currentUser.email,
+        addedBy: currentUser.name || currentUser.email, 
         dateAdded: serverTimestamp()
     });
 
+    // 6. Log the Action
     await push(ref(db, "logs"), {
         type: "STOCK_ADD",
         item: item,
         barcode: barcode,
         qty: 1,
+        location: finalLocation, // <--- LOGGED HERE
         takenBy: currentUser.name,
         approvedBy: "Self",
         time: serverTimestamp()
     });
 
-    alert("✅ Item Added!");
+    alert("✅ Item Added Successfully!");
+    
+    // 7. Reset Form
     document.getElementById("invBarcode").value = "";
     document.getElementById("invName").value = "";
+    document.getElementById("addLocOther").value = "";
+    document.getElementById("addLocSpot").value = "";
+    document.getElementById("addLocSelect").value = "D2 Building - Heerok Sir Lab"; // Reset to default
+    document.getElementById("divAddOtherLoc").classList.add("hidden");
+    
     document.getElementById("invBarcode").focus();
 };
 // --- NEW SEARCH FUNCTION ---
