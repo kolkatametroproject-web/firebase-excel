@@ -2376,10 +2376,10 @@ window.checkBarcodeUnique = async (code) => {
         alert(`STOP: Barcode '${code}' is already registered as:\n"${existingItem.item}"\nStatus: ${existingItem.status}`);
     }
 }
-
-// --- ADD ITEM ---
-// --- UPDATED ADD ITEM FUNCTION (WITH LOCATION) ---
+// --- UPDATED ADD ITEM FUNCTION (FIXED) ---
 window.addUniqueItem = async () => {
+    console.log("Starting Add Item Process..."); // Debug to ensure new code is running
+
     // 1. Get Basic Data
     const item = document.getElementById("invName").value;
     const cond = document.getElementById("invCondition").value;
@@ -2387,37 +2387,47 @@ window.addUniqueItem = async () => {
 
     if(!item || !barcode) return alert("Product Name and Barcode are required.");
 
-    // 2. Get Location Data
-    const selection = document.getElementById("addLocSelect").value;
-    let mainPlace = selection;
+    // 2. Get Location Data (CRITICAL STEP)
+    // Make sure these IDs match your HTML
+    const locSelect = document.getElementById("addLocSelect");
+    const locOther = document.getElementById("addLocOther");
+    const locSpot = document.getElementById("addLocSpot");
+
+    if(!locSelect || !locSpot) {
+        return alert("Error: Location inputs not found in HTML. Please check code.");
+    }
+
+    let mainPlace = locSelect.value;
     
-    if(selection === "Other") {
-        const otherText = document.getElementById("addLocOther").value.trim();
+    // Check if 'Other' is selected
+    if(mainPlace === "Other") {
+        const otherText = locOther.value.trim();
         if(!otherText) return alert("Please specify the 'Other' location name.");
         mainPlace = otherText;
     }
 
-    const spot = document.getElementById("addLocSpot").value.trim();
-    if(!spot) return alert("Please specify the Exact Spot (e.g., Cabinet, Almirah).");
+    const spotText = locSpot.value.trim();
+    if(!spotText) return alert("Please specify the Exact Spot (e.g., Cabinet, Almirah).");
 
-    // 3. Format Location String
-    const finalLocation = `${mainPlace} [${spot}]`;
+    // 3. Create the Location String
+    const finalLocation = `${mainPlace} [${spotText}]`;
+    console.log("Saving Location:", finalLocation);
 
-    // 4. Check Uniqueness (Database Check)
+    // 4. Check Uniqueness
     const invRef = ref(db, "inventory");
     const q = query(invRef, orderByChild("barcode"), equalTo(barcode));
     const snap = await get(q);
 
     if(snap.exists()) return alert("CRITICAL ERROR: Barcode already exists.");
 
-    // 5. Save to Inventory (Include Location)
+    // 5. Save to Inventory
     await push(ref(db, "inventory"), {
         barcode: barcode,
         item: item,
         condition: cond,
         status: "In Stock",
         holder: "Store",
-        location: finalLocation, // <--- SAVED HERE
+        location: finalLocation, // <--- THIS SAVES THE LOCATION
         usageCount: 0, 
         addedBy: currentUser.name || currentUser.email, 
         dateAdded: serverTimestamp()
@@ -2429,20 +2439,20 @@ window.addUniqueItem = async () => {
         item: item,
         barcode: barcode,
         qty: 1,
-        location: finalLocation, // <--- LOGGED HERE
+        location: finalLocation,
         takenBy: currentUser.name,
         approvedBy: "Self",
         time: serverTimestamp()
     });
 
-    alert("✅ Item Added Successfully!");
+    alert("✅ Item Added to: " + finalLocation);
     
     // 7. Reset Form
     document.getElementById("invBarcode").value = "";
     document.getElementById("invName").value = "";
     document.getElementById("addLocOther").value = "";
     document.getElementById("addLocSpot").value = "";
-    document.getElementById("addLocSelect").value = "D2 Building - Heerok Sir Lab"; // Reset to default
+    document.getElementById("addLocSelect").value = "D2 Building - Heerok Sir Lab"; 
     document.getElementById("divAddOtherLoc").classList.add("hidden");
     
     document.getElementById("invBarcode").focus();
@@ -2470,49 +2480,7 @@ window.updateSourcePlaceholder = () => {
     const input = document.getElementById("invSourceName");
     input.placeholder = type === "Online" ? "Name of Site" : "Name of Store";
 };
-// --- NEW LOGIC: ADD UNIQUE ITEM ---
-window.addUniqueItem = async () => {
-    const item = document.getElementById("invName").value;
-    const cond = document.getElementById("invCondition").value;
-    const barcode = document.getElementById("invBarcode").value;
 
-    if(!item || !barcode) return alert("Product Name and Barcode are required.");
-
-    // Check Uniqueness
-    const invRef = ref(db, "inventory");
-    const q = query(invRef, orderByChild("barcode"), equalTo(barcode));
-    const snap = await get(q);
-
-    if(snap.exists()) return alert("CRITICAL ERROR: Barcode already exists.");
-
-    // Save with Name
-    await push(ref(db, "inventory"), {
-        barcode: barcode,
-        item: item,
-        condition: cond,
-        status: "In Stock",
-        holder: "Store",
-        usageCount: 0, // Start with 0 usage
-        addedBy: currentUser.name || currentUser.email, // <--- Save Name
-        dateAdded: serverTimestamp()
-    });
-
-    // Log
-    await push(ref(db, "logs"), {
-        type: "STOCK_ADD",
-        item: item,
-        barcode: barcode,
-        qty: 1,
-        takenBy: currentUser.name,
-        approvedBy: "Self",
-        time: serverTimestamp()
-    });
-
-    alert("✅ Item Added!");
-    document.getElementById("invBarcode").value = "";
-    document.getElementById("invName").value = "";
-    document.getElementById("invBarcode").focus();
-};
 window.delInv = (k) => remove(ref(db, `inventory/${k}`));
 
 function loadAssignments() {
