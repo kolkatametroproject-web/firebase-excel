@@ -222,14 +222,7 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
 }
 
 /* ADMIN BAN MODAL */
-.ban-option-grid {
-    display: grid; 
-    grid-template-columns: 1fr 1fr; 
-    gap: 10px; 
-    margin-bottom: 15px;
-}
-/* --- FIX: Make Tenure Buttons Visible --- */
-.ban-btn-select {
+..ban-btn-select {
     flex: 1;
     padding: 12px;
     background: #f8f9fa; /* Light Grey */
@@ -242,11 +235,10 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
 }
 .ban-btn-select:hover { background: #e2e6ea; }
 .ban-btn-select.selected {
-    background: #dc3545; 
-    color: white !important; 
+    background: #dc3545; /* Red background when selected */
+    color: white !important; /* White text when selected */
     border-color: #bd2130;
 }
-
 /* New Inputs Styling */
 .ban-input {
     width: 100%;
@@ -1374,6 +1366,8 @@ preloadModels();
 // ============================================================
 // PASTE THIS INSIDE <script type="module"> (REPLACE OLD VERSIONS)
 // ============================================================
+
+// 1. UPDATED LOGIN FUNCTION
 window.login = () => {
     const emailField = document.getElementById("email");
     const passField = document.getElementById("password");
@@ -1390,7 +1384,7 @@ window.login = () => {
     signInWithEmailAndPassword(auth, emailField.value, passField.value)
     .then(() => {
         console.log("Auth success, waiting for database check...");
-        // Do not reset button here, onAuthStateChanged will handle the screen switch
+        // Do not reset button here, onAuthStateChanged will switch the screen
     })
     .catch(e => {
         // Error: Reset button
@@ -1400,7 +1394,8 @@ window.login = () => {
         alert("Login Failed: " + e.message);
     });
 };
-// 2. UPDATED AUTH LISTENER (The Logic Fix)
+
+// 2. UPDATED AUTH LISTENER (Safe Version)
 onAuthStateChanged(auth, (user) => {
     if (!user) { showLogin(); return; }
 
@@ -1420,57 +1415,59 @@ onAuthStateChanged(auth, (user) => {
             return; 
         }
 
-        // B. BAN CHECK (CRITICAL FIX HERE)
+        // B. BAN CHECK
         if (u && u.banned) {
             const now = Date.now();
             const deadline = u.banExpires;
             const isDeadlineMissed = deadline && (deadline < now);
 
-            // 1. HIDE ALL OTHER SCREENS (Crucial!)
-            document.getElementById("loginSection").classList.add("hidden"); // <--- THIS HIDES THE LOGIN BOX
+            // 1. HIDE EVERYTHING ELSE (Prevents blank screen)
+            document.getElementById("loginSection").classList.add("hidden"); 
             document.getElementById("appScreen").classList.add("hidden");
             document.getElementById("authContainer").classList.add("hidden");
             document.getElementById("faceModal").classList.add("hidden");
             
-            // 2. SHOW BANNED SCREEN
+            // 2. SHOW RED SCREEN
             document.getElementById("bannedScreen").classList.remove("hidden");
 
-            // 3. FILL DATA
+            // 3. FILL DATA (With safety checks)
             const reasonText = u.banReason || "Administrative Action";
             const remarksText = u.banRemarks ? ` (${u.banRemarks})` : "";
             
-            // Safe Check for IDs before setting text
-            if(document.getElementById("displayBanReason")) 
-                document.getElementById("displayBanReason").innerText = reasonText + remarksText;
+            // Safety check: Only set text if element exists
+            const elReason = document.getElementById("displayBanReason");
+            if(elReason) elReason.innerText = reasonText + remarksText;
             
-            if(document.getElementById("displayBanAction")) 
-                document.getElementById("displayBanAction").innerText = u.banAction || "Contact Administrator";
+            const elAction = document.getElementById("displayBanAction");
+            if(elAction) elAction.innerText = u.banAction || "Contact Administrator";
 
             // 4. DEADLINE LOGIC
             const timerDisplay = document.getElementById("bannedTimeDisplay");
             const instrDisplay = document.getElementById("bannedInstruction");
 
-            if (isDeadlineMissed) {
-                timerDisplay.innerText = "⛔ DEADLINE MISSED";
-                timerDisplay.style.background = "black";
-                timerDisplay.style.color = "red";
-                instrDisplay.innerText = "Account Permanently Closed.";
-            } else {
-                const dateStr = new Date(deadline).toLocaleString('en-IN', {
-                    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
-                });
-                timerDisplay.innerText = "Deadline: " + dateStr;
-                timerDisplay.style.background = "#fff";
-                timerDisplay.style.color = "#dc3545";
-                instrDisplay.innerText = "Resolve before this date.";
+            if(timerDisplay && instrDisplay) {
+                if (isDeadlineMissed) {
+                    timerDisplay.innerText = "⛔ DEADLINE MISSED";
+                    timerDisplay.style.background = "black";
+                    timerDisplay.style.color = "red";
+                    instrDisplay.innerText = "Account Permanently Closed.";
+                } else {
+                    const dateStr = new Date(deadline).toLocaleString('en-IN', {
+                        day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                    });
+                    timerDisplay.innerText = "Deadline: " + dateStr;
+                    timerDisplay.style.background = "#fff";
+                    timerDisplay.style.color = "#dc3545";
+                    instrDisplay.innerText = "Resolve before this date.";
+                }
             }
-            return; // STOP HERE. Do not execute the rest of the function.
+            return; // STOP HERE.
         } else {
             // IF NOT BANNED
             document.getElementById("bannedScreen").classList.add("hidden");
         }
 
-        // C. NORMAL APP LOAD (Only runs if not banned)
+        // C. NORMAL APP LOAD (Only runs if NOT banned)
         if(u) currentUser.name = u.name;
 
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
@@ -1481,10 +1478,12 @@ onAuthStateChanged(auth, (user) => {
             return;
         }
 
+        if (!u.pin) { update(ref(db, `users/${user.uid}`), { pin: "1234" }); }
+
         // SUCCESSFUL LOGIN UI
         document.getElementById("userInfo").innerText = `${u.name} (${user.email})`;
         document.getElementById("authContainer").classList.remove("hidden");
-        document.getElementById("loginSection").classList.add("hidden"); // Hide login box
+        document.getElementById("loginSection").classList.add("hidden"); // Ensure login is hidden
 
         if (isAdmin) {
             document.getElementById("adminBadge").classList.remove("hidden");
