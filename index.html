@@ -629,13 +629,14 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
       <div style="margin-top:15px;">
         <textarea id="taskDesc" rows="1" placeholder="Enter Task Details..."></textarea>
         <button onclick="assignTaskMulti()" style="width:100%; margin-top:5px;">Assign to Selected Users</button>
-</div> <div id="adminTaskModal" class="modal-overlay hidden">
+</div> 
+ <div id="adminTaskModal" class="modal-overlay hidden">
     <div class="panel" style="width:600px; max-width:95%; max-height:80vh; display:flex; flex-direction:column;">
         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #003366; padding-bottom:10px; margin-bottom:10px;">
             <h3 style="margin:0; color:#003366;">📋 Task Tracking: <span id="modalTaskUserName">User</span></h3>
             <button class="danger" onclick="closeTaskModal()" style="padding:5px 10px;">Close X</button>
         </div>
-       
+        
         <div style="overflow-y:auto; flex-grow:1;">
             <div class="table-wrapper">
                 <table>
@@ -2104,8 +2105,6 @@ window.submitStationData = () => {
         }
     });
 };
-
-// --- REPLACES EXISTING loadAdminPanel ---
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
@@ -2130,10 +2129,10 @@ window.loadAdminPanel = async () => {
         const uid = c.key;
         const displayName = u.name || u.email;
 
-        // Checkbox for Task Assignment
+        // Checkbox for Assigning Work
         userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
 
-        // Online Status
+        // Online Status Logic
         let isOnline = false;
         const s = statusMap[uid];
         if(s && s.state === 'online') {
@@ -2143,36 +2142,28 @@ window.loadAdminPanel = async () => {
             `<span class="badge-online">● ONLINE</span>` :
             `<span class="badge-offline">○ OFFLINE</span>`;
 
-        // Tasks Badge
-        let pending = 0, done = 0;
+        // === RESTORED: WORK BADGE WITH VIEW BUTTON ===
+        let pending = 0;
+        let done = 0;
         if(allTasks[uid]) {
             Object.values(allTasks[uid]).forEach(t => { t.status === 'Done' ? done++ : pending++; });
         }
+        
         const workBadge = (pending + done > 0)
-            ? `<div style="font-size:11px; margin-bottom:5px;">${done} Done / ${pending} Pending</div>`
+            ? `<div style="font-size:11px; font-weight:bold; color:#003366; margin-bottom:5px;">${done} Done / ${pending} Pending</div>
+               <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="padding:2px 8px; font-size:10px;">👁 View Details</button>`
             : `<span style="color:#aaa; font-size:11px;">No Tasks</span>`;
 
-        // Biometric Badge
-        const bioBadge = u.faceData ? `<span style="color:green;">✔ Reg</span>` : `<span style="color:red;">❌ No Face</span>`;
-
-        // === BAN BUTTON LOGIC ===
-        let banBtnHTML = "";
-        if (u.banned) {
-             // User IS banned -> Show "Unban"
-             banBtnHTML = `<button class="success" style="width:100%; margin-top:5px; font-size:11px;" onclick="unbanUser('${uid}')">♻ Unban / Restore</button>`;
-        } else {
-             // User NOT banned -> Show "Ban"
-             banBtnHTML = `<button class="danger" style="width:100%; margin-top:5px; font-size:11px;" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')">🚫 BAN USER</button>`;
-        }
+        // Ban Logic
+        let banBtnHTML = u.banned 
+            ? `<button class="success" style="width:100%; margin-top:5px; font-size:11px;" onclick="unbanUser('${uid}')">♻ Unban</button>`
+            : `<button class="danger" style="width:100%; margin-top:5px; font-size:11px;" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')">🚫 Ban</button>`;
 
         // Render Row
         userTable.innerHTML += `<tr>
-            <td>
-                <strong>${u.name}</strong><br><small>${u.email}</small>
-                ${banBtnHTML} </td>
+            <td><strong>${u.name}</strong><br><small>${u.email}</small><br>${banBtnHTML}</td>
             <td style="text-align:center;">${statusBadge}</td>
-            <td style="text-align:center;">${workBadge}</td>
-            <td style="text-align:center;">${bioBadge}</td>
+            <td style="text-align:center;">${workBadge}</td> <td style="text-align:center;">${u.faceData ? '<span style="color:green;">✔ Reg</span>' : '<span style="color:red;">❌ No</span>'}</td>
             <td>
                 <input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:40px;"> 
                 <button onclick="savePin('${uid}')">Set</button><br>
@@ -2181,42 +2172,34 @@ window.loadAdminPanel = async () => {
         </tr>`;
     });
 };
-// --- NEW: VIEW USER TASKS ---
-// --- FIXED TASK VIEWER (Paste inside module script) ---
+// --- TASK VIEW FUNCTIONS ---
 
-// 1. SAFE View Function (Handles quotes in names & debugs connection)
+// 1. Open the Modal and Load Tasks
 window.viewUserTasks = (uid, rawName) => {
-    console.log("Opening tasks for UID:", uid); // Debug log
-   
-    // safe name decoding
     const userName = decodeURIComponent(rawName);
-   
     document.getElementById("modalTaskUserName").innerText = userName;
     document.getElementById("adminTaskModal").classList.remove("hidden");
-   
+    
     const tbody = document.getElementById("adminTaskBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Connecting to Database...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Fetching Data...</td></tr>";
 
-    if(!db) { alert("Database connection lost! Refresh page."); return; }
-
-    // Listen for updates
+    // Listen for tasks
     const taskRef = ref(db, `assignments/${uid}`);
     onValue(taskRef, (snap) => {
-        tbody.innerHTML = ""; // Clear loading message
-       
+        tbody.innerHTML = "";
+        
         if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#777; padding:20px;'>📭 No tasks assigned to this user.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#777; padding:20px;'>📭 No tasks found.</td></tr>";
             return;
         }
 
         snap.forEach(c => {
             const task = c.val();
             const key = c.key;
-           
-            // Status styling
+            
             const isDone = task.status === 'Done';
-            const statusColor = isDone ? '#28a745' : '#ffc107'; // Green or Yellow
-            const statusText = isDone ? '✔ COMPLETED' : '⏳ PENDING';
+            const statusColor = isDone ? '#28a745' : '#ffc107'; 
+            const statusText = isDone ? '✔ DONE' : '⏳ PENDING';
             const rowBg = isDone ? '#f0fff4' : '#fff';
 
             tbody.innerHTML += `
@@ -2226,14 +2209,31 @@ window.viewUserTasks = (uid, rawName) => {
                 <td>${task.by || 'Admin'}</td>
                 <td><span style="color:${statusColor}; font-weight:bold; border:1px solid ${statusColor}; padding:2px 6px; border-radius:4px;">${statusText}</span></td>
                 <td style="text-align:center;">
-                    <button class="danger" onclick="deleteUserTask('${uid}', '${key}')" style="padding:4px 8px; font-size:11px; cursor:pointer;">🗑 Remove</button>
+                    <button class="danger" onclick="deleteUserTask('${uid}', '${key}')" style="padding:4px 8px; font-size:11px;">🗑</button>
                 </td>
             </tr>`;
         });
-    }, (error) => {
-        console.error(error);
-        tbody.innerHTML = `<tr><td colspan='5' style='color:red; text-align:center;'>Error loading data: ${error.message}</td></tr>`;
-    });
+    }, { onlyOnce: true }); // Use once to prevent live flicker, or remove {onlyOnce:true} for live updates
+};
+
+// 2. Close the Modal
+window.closeTaskModal = () => {
+    document.getElementById("adminTaskModal").classList.add("hidden");
+};
+
+// 3. Delete a specific task
+window.deleteUserTask = (uid, taskKey) => {
+    if(confirm("Permanently delete this task?")) {
+        remove(ref(db, `assignments/${uid}/${taskKey}`))
+            .then(() => {
+                // Refresh view by calling viewUserTasks again or letting live listener handle it
+                // If using onValue live, it updates automatically.
+                // If using {onlyOnce:true}, we need to reload:
+                // viewUserTasks(uid, document.getElementById("modalTaskUserName").innerText);
+                alert("Task Deleted");
+            })
+            .catch(err => alert("Error: " + err.message));
+    }
 };
 
 // 2. Close Modal
