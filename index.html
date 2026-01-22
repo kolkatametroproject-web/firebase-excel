@@ -187,7 +187,58 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     position: relative;
 }
+/* --- BANNED SCREEN OVERLAY --- */
+.banned-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: #721c24; /* Dark Red */
+    color: white;
+    z-index: 9999; /* On top of everything */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 20px;
+    box-sizing: border-box;
+}
 
+.banned-card {
+    background: white;
+    color: #333;
+    padding: 30px;
+    border-radius: 8px;
+    max-width: 500px;
+    box-shadow: 0 0 50px rgba(0,0,0,0.5);
+    border: 5px solid #bd2130;
+}
+
+.banned-timer {
+    font-size: 24px;
+    font-weight: bold;
+    color: #dc3545;
+    margin: 15px 0;
+    font-family: monospace;
+}
+
+/* ADMIN BAN MODAL */
+.ban-option-grid {
+    display: grid; 
+    grid-template-columns: 1fr 1fr; 
+    gap: 10px; 
+    margin-bottom: 15px;
+}
+.ban-btn-select {
+    padding: 10px;
+    border: 1px solid #ccc;
+    background: #f8f9fa;
+    cursor: pointer;
+}
+.ban-btn-select.selected {
+    background: #dc3545;
+    color: white;
+    border-color: #bd2130;
+}
 .history-card.checkout { border-left-color: #b38600; } /* Yellow for OUT */
 .history-card.return { border-left-color: #17a2b8; }   /* Blue for IN */
 .history-card.add { border-left-color: #28a745; }      /* Green for ADD */
@@ -638,7 +689,63 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
         </div>
     </div>
   </div>
+<div id="bannedScreen" class="banned-overlay hidden">
+    <div class="banned-card">
+        <h1 style="color:#bd2130; margin-top:0;">⛔ ACCOUNT SUSPENDED</h1>
+        <p>Your access to the Metro Safety Portal has been restricted by the Administrator.</p>
+        
+        <div style="background:#f8d7da; padding:15px; border-radius:5px; text-align:left; margin-bottom:15px;">
+            <strong>👮 Reason for Action:</strong><br>
+            <span id="bannedReasonDisplay" style="font-size:16px;">--</span>
+        </div>
 
+        <div style="border-top:1px solid #ddd; padding-top:15px;">
+            <p style="margin:0; font-size:12px; color:#666;">DEADLINE TO RESOLVE / BAN EXPIRY:</p>
+            <div id="bannedTimeDisplay" class="banned-timer">--</div>
+            <p id="bannedInstruction" style="font-size:13px; font-weight:bold;">
+                You must dispose of this matter within the time limit. <br>
+                Failure to do so will result in a PERMANENT SHUTDOWN.
+            </p>
+        </div>
+
+        <button onclick="logout()" class="danger" style="width:100%; padding:15px; font-size:16px; margin-top:20px;">
+            LOGOUT & EXIT
+        </button>
+    </div>
+</div>
+
+<div id="adminBanModal" class="modal-overlay hidden">
+    <div class="panel" style="width:400px; border-top: 5px solid #dc3545;">
+        <h3 style="color:#dc3545;">🚫 Ban User Action</h3>
+        <p>Target: <strong id="banTargetName">User</strong></p>
+
+        <label style="font-weight:bold;">1. Select Reason:</label>
+        <select id="banReasonInput" style="margin-bottom:15px;">
+            <option value="Misconduct">Misconduct / Behavior</option>
+            <option value="Security Violation">Security Violation</option>
+            <option value="Asset Damage">Asset Damage / Theft</option>
+            <option value="Pending Investigation">Pending Investigation (Dispose Matter)</option>
+            <option value="Other">Other</option>
+        </select>
+
+        <label style="font-weight:bold;">2. Tenure (Time Limit):</label>
+        <div class="ban-option-grid">
+            <button class="ban-btn-select" onclick="selectBanDuration(1, this)">24 Hours</button>
+            <button class="ban-btn-select" onclick="selectBanDuration(3, this)">3 Days</button>
+            <button class="ban-btn-select" onclick="selectBanDuration(7, this)">1 Week</button>
+            <button class="ban-btn-select danger" onclick="selectBanDuration(-1, this)">PERMANENT</button>
+        </div>
+        <input id="banDurationValue" type="hidden">
+
+        <label style="font-weight:bold;">3. Additional Remarks:</label>
+        <textarea id="banRemarks" rows="2" placeholder="Specific details..."></textarea>
+
+        <div style="display:flex; justify-content:space-between; margin-top:15px;">
+            <button onclick="closeBanModal()" class="secondary">Cancel</button>
+            <button onclick="submitBan()" class="danger">⚠ CONFIRM BAN</button>
+        </div>
+    </div>
+</div>
 </section>
 
 <script type="module">
@@ -1197,32 +1304,80 @@ async function preloadModels() {
 }
 preloadModels();
 
-// --- 2. AUTH & WATCHDOG (RESTORED: FACE ID REQUIRED) ---
+// --- REPLACES EXISTING onAuthStateChanged ---
 onAuthStateChanged(auth, (user) => {
   if (!user) { showLogin(); return; }
  
   currentUser = user;
-  startPresenceSystem(user);
-  setupIdleTimer();
+  startPresenceSystem(user); // Keep your heartbeat system
+  setupIdleTimer();          // Keep your idle timer
+  
+  // Ensure email is saved
   update(ref(db, `users/${user.uid}`), { email: user.email });
 
+  // === LIVE USER MONITORING (Watch for Ban/Termination) ===
   onValue(ref(db, `users/${user.uid}`), (snap) => {
     const u = snap.val();
-    if (u && u.terminated) { alert("ACCOUNT TERMINATED."); signOut(auth); return; }
 
+    // 1. TERMINATED CHECK
+    if (u && u.terminated) { 
+        alert("ACCOUNT TERMINATED."); 
+        signOut(auth); 
+        return; 
+    }
+
+    // 2. BAN CHECK (The New Logic)
+    if (u && u.banned) {
+        const now = Date.now();
+        // Check expiry (unless Permanent)
+        if (u.banExpires !== 'PERMANENT' && u.banExpires < now) {
+            // Auto Unban if time is up
+            update(ref(db, `users/${user.uid}`), { 
+                banned: null, banReason: null, banRemarks: null, banExpires: null 
+            });
+            return; // Continue to login flow next update
+        }
+
+        // --- SHOW BANNED SCREEN ---
+        document.getElementById("bannedScreen").classList.remove("hidden");
+        document.getElementById("appScreen").classList.add("hidden");
+        document.getElementById("authContainer").classList.add("hidden");
+        document.getElementById("faceModal").classList.add("hidden"); // Hide camera
+        
+        // Populate Ban Details
+        const reasonText = (u.banReason || "Administrative Action") + (u.banRemarks ? `\nNote: ${u.banRemarks}` : "");
+        document.getElementById("bannedReasonDisplay").innerText = reasonText;
+        
+        if (u.banExpires === 'PERMANENT') {
+            document.getElementById("bannedTimeDisplay").innerText = "⛔ PERMANENT SHUTDOWN";
+            document.getElementById("bannedInstruction").innerText = "This account has been permanently closed by Admin.";
+        } else {
+            const expDate = new Date(u.banExpires).toLocaleString();
+            document.getElementById("bannedTimeDisplay").innerText = "Dispose by: " + expDate;
+            document.getElementById("bannedInstruction").innerText = "You must resolve this matter before the deadline.";
+        }
+        return; // STOP HERE (Do not load app)
+    } else {
+         // Not banned (or unbanned), hide screen
+         document.getElementById("bannedScreen").classList.add("hidden");
+    }
+
+    // 3. NORMAL LOGIN FLOW
     if(u) currentUser.name = u.name;
 
     isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
-    failCount = 0;
-   
+    
+    // Name Setup
     if (!u.name) {
         document.getElementById("nameModal").classList.remove("hidden");
         document.getElementById("loginSection").classList.add("hidden");
         return;
     }
 
+    // PIN Setup
     if (!u.pin) { update(ref(db, `users/${user.uid}`), { pin: "1234" }); }
 
+    // UI Updates
     document.getElementById("userInfo").innerText = `${u.name} (${user.email})`;
     document.getElementById("authContainer").classList.remove("hidden");
     document.getElementById("loginSection").classList.add("hidden");
@@ -1232,31 +1387,23 @@ onAuthStateChanged(auth, (user) => {
       document.getElementById("btnAdmin").classList.remove("hidden");
       document.getElementById("btnLogs").classList.remove("hidden");
       setTimeout(loadAdminPanel, 2000);
-      const auditBtn = document.getElementById("btnAuditScan");
-      if(auditBtn) auditBtn.style.display = "block";
     }
 
-    // --- RESTORED SECURITY CHECK ---
-    // If not currently authorizing a transaction, force Face ID to enter
-    if(!isTransactionAuth) {
+    // Face ID Prompt (if not already verified or banned)
+    if(!isTransactionAuth && !u.banned) {
         const faceModal = document.getElementById("faceModal");
         faceModal.classList.remove("hidden");
-       
+        
         if(!u.faceData) {
-            // REGISTRATION FLOW
-            document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup (3 Steps)";
-            document.getElementById("modalDesc").innerText = "Center your face in the box.";
+            // REGISTRATION
+            document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
             document.getElementById("regProgress").classList.remove("hidden");
-            updateRegDots(regSamples.length);
-            document.getElementById("btnCapture").innerText = `📸 Capture Sample ${regSamples.length + 1} of 3`;
             document.getElementById("btnCapture").onclick = registerNewFace;
             initCamera(false);
         } else {
-            // LOGIN FLOW
+            // VERIFICATION
             document.getElementById("modalTitle").innerText = "Biometric Verification";
-            document.getElementById("modalDesc").innerText = "System Ready.";
             document.getElementById("regProgress").classList.add("hidden");
-            document.getElementById("btnCapture").innerText = "📸 Verify Identity";
             document.getElementById("btnCapture").onclick = handleFaceScan;
             initCamera(true);
         }
@@ -1958,25 +2105,23 @@ window.submitStationData = () => {
     });
 };
 
-// --- ADMIN LOGIC ---
-// --- UPDATED ADMIN PANEL (WITH TRACKING BUTTON) ---
+// --- REPLACES EXISTING loadAdminPanel ---
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
-   
+    
     userList.innerHTML = "Loading...";
     userTable.innerHTML = "<tr><td colspan='5'>Loading Status...</td></tr>";
 
-    // FETCH TASKS AND USERS
     const [userSnap, statusSnap, tasksSnap] = await Promise.all([
         get(ref(db, "users")),
         get(ref(db, "status")),
         get(ref(db, "assignments"))
     ]);
-   
+    
     const statusMap = statusSnap.val() || {};
     const allTasks = tasksSnap.val() || {};
-   
+    
     userTable.innerHTML = "";
     userList.innerHTML = "";
 
@@ -1985,50 +2130,54 @@ window.loadAdminPanel = async () => {
         const uid = c.key;
         const displayName = u.name || u.email;
 
-        // 1. Checkbox for assigning new work
+        // Checkbox for Task Assignment
         userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
 
-        // 2. Online Status Logic
+        // Online Status
         let isOnline = false;
         const s = statusMap[uid];
         if(s && s.state === 'online') {
-            const diff = Date.now() - (s.last_seen || 0);
-            if(diff < 20000) isOnline = true;
+            if((Date.now() - (s.last_seen || 0)) < 20000) isOnline = true;
         }
-       
         const statusBadge = isOnline ?
             `<span class="badge-online">● ONLINE</span>` :
             `<span class="badge-offline">○ OFFLINE</span>`;
 
-        // 3. WORK PROGRESS LOGIC (UPDATED)
-        let pending = 0;
-        let done = 0;
+        // Tasks Badge
+        let pending = 0, done = 0;
         if(allTasks[uid]) {
-            Object.values(allTasks[uid]).forEach(t => {
-                if(t.status === 'Done') done++; else pending++;
-            });
+            Object.values(allTasks[uid]).forEach(t => { t.status === 'Done' ? done++ : pending++; });
         }
-       
-        // The "View" Button
         const workBadge = (pending + done > 0)
-    ? `<div style="font-size:11px; font-weight:bold; color:#003366; margin-bottom:5px;">${done} Done / ${pending} Pending</div>
-       <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="padding:2px 8px; font-size:10px;">👁 View Details</button>`
-    : `<span style="color:#aaa; font-size:11px;">No Tasks</span>`;
+            ? `<div style="font-size:11px; margin-bottom:5px;">${done} Done / ${pending} Pending</div>`
+            : `<span style="color:#aaa; font-size:11px;">No Tasks</span>`;
 
-        const bioBadge = u.faceData ?
-            `<span style="color:green; font-weight:bold;">✔ Registered</span>` :
-            `<span style="color:red; font-weight:bold;">❌ Pending</span>`;
+        // Biometric Badge
+        const bioBadge = u.faceData ? `<span style="color:green;">✔ Reg</span>` : `<span style="color:red;">❌ No Face</span>`;
 
-        const pinInput = `<input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:50px; text-align:center;"> <button onclick="savePin('${uid}')" style="padding:2px 5px;">Set</button>`;
-        const reUploadBtn = `<button class="danger" style="padding:2px 5px;" onclick="forceReUpload('${uid}')">Reset Face</button>`;
-        const resetNameBtn = `<button class="warning" style="padding:2px 5px;" onclick="retakeName('${uid}')">Reset Name</button>`;
+        // === BAN BUTTON LOGIC ===
+        let banBtnHTML = "";
+        if (u.banned) {
+             // User IS banned -> Show "Unban"
+             banBtnHTML = `<button class="success" style="width:100%; margin-top:5px; font-size:11px;" onclick="unbanUser('${uid}')">♻ Unban / Restore</button>`;
+        } else {
+             // User NOT banned -> Show "Ban"
+             banBtnHTML = `<button class="danger" style="width:100%; margin-top:5px; font-size:11px;" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')">🚫 BAN USER</button>`;
+        }
 
+        // Render Row
         userTable.innerHTML += `<tr>
-            <td>${u.name}<br><small>${u.email}</small></td>
+            <td>
+                <strong>${u.name}</strong><br><small>${u.email}</small>
+                ${banBtnHTML} </td>
             <td style="text-align:center;">${statusBadge}</td>
             <td style="text-align:center;">${workBadge}</td>
             <td style="text-align:center;">${bioBadge}</td>
-            <td>${pinInput}<br>${reUploadBtn} ${resetNameBtn}</td>
+            <td>
+                <input id="pin_${uid}" placeholder="${u.pin||'1234'}" style="width:40px;"> 
+                <button onclick="savePin('${uid}')">Set</button><br>
+                <button class="danger" onclick="forceReUpload('${uid}')" style="font-size:10px;">Reset Face</button>
+            </td>
         </tr>`;
     });
 };
@@ -2168,7 +2317,134 @@ window.loadSysLogs = () => {
         });
     });
 };
+// ==============================================
+//           FULL BAN SYSTEM FUNCTIONS
+// ==============================================
 
+// Global variables for the ban modal
+let currentBanTargetUid = null;
+let currentBanDays = 0; // 0=None, -1=Permanent, Number=Days
+
+// 1. OPEN BAN MODAL
+window.openBanModal = (uid, encodedName) => {
+    if(!isAdmin) return alert("Security Alert: Admins Only.");
+    if(uid === currentUser.uid) return alert("Operation Failed: You cannot ban your own account.");
+    
+    currentBanTargetUid = uid;
+    document.getElementById("banTargetName").innerText = decodeURIComponent(encodedName);
+    document.getElementById("adminBanModal").classList.remove("hidden");
+    
+    // Reset Form
+    document.getElementById("banRemarks").value = "";
+    document.getElementById("banReasonInput").selectedIndex = 0;
+    currentBanDays = 0;
+    
+    // Clear selection visuals
+    document.querySelectorAll(".ban-btn-select").forEach(b => b.classList.remove("selected"));
+};
+
+// 2. CLOSE BAN MODAL
+window.closeBanModal = () => {
+    document.getElementById("adminBanModal").classList.add("hidden");
+    currentBanTargetUid = null;
+};
+
+// 3. SELECT DURATION (Button Click Handler)
+window.selectBanDuration = (days, btnElement) => {
+    currentBanDays = days;
+    
+    // Update visuals
+    document.querySelectorAll(".ban-btn-select").forEach(b => b.classList.remove("selected"));
+    btnElement.classList.add("selected");
+};
+
+// 4. SUBMIT BAN (The Main Logic)
+window.submitBan = async () => {
+    if(!currentBanTargetUid) return;
+    if(currentBanDays === 0) return alert("Please select a Tenure (Duration) for the ban.");
+    
+    const reason = document.getElementById("banReasonInput").value;
+    const remarks = document.getElementById("banRemarks").value;
+    
+    // Calculate Expiry Timestamp
+    let expiryTimestamp = 0;
+    if(currentBanDays === -1) {
+        expiryTimestamp = 'PERMANENT';
+    } else {
+        // Current Time + (Days * 24 hours * 60 min * 60 sec * 1000 ms)
+        expiryTimestamp = Date.now() + (currentBanDays * 24 * 60 * 60 * 1000);
+    }
+
+    const confirmMsg = currentBanDays === -1 
+        ? "⚠ CRITICAL: Are you sure you want to PERMANENTLY BAN this user? They will be locked out immediately."
+        : `⚠ Confirm Ban: ${currentBanDays} Day(s).\nUser must resolve this by the deadline.`;
+
+    if(confirm(confirmMsg)) {
+        try {
+            // Update User Profile
+            await update(ref(db, `users/${currentBanTargetUid}`), {
+                banned: true,
+                banReason: reason,
+                banRemarks: remarks,
+                banExpires: expiryTimestamp,
+                banDate: serverTimestamp(),
+                bannedBy: currentUser.email
+            });
+            
+            // Create Audit Log
+            const logDetails = currentBanDays === -1 ? "Permanent Shutdown" : `${currentBanDays} Day(s) Tenure`;
+            await push(ref(db, "logs"), {
+                type: "USER_BAN",
+                user: "System", // Logged as System event
+                details: `Banned UID: ${currentBanTargetUid} | ${logDetails}`,
+                reason: reason,
+                approvedBy: currentUser.email,
+                time: serverTimestamp()
+            });
+
+            alert("✅ User Banned Successfully.");
+            closeBanModal();
+            loadAdminPanel(); // Refresh list to show 'Unban' button
+            
+        } catch(e) {
+            console.error(e);
+            alert("Database Error: " + e.message);
+        }
+    }
+};
+
+// 5. UNBAN USER
+window.unbanUser = async (uid) => {
+    if(!isAdmin) return alert("Admins Only.");
+    
+    if(confirm("♻ Restore this user's access immediately?")) {
+         try {
+             // Remove all ban flags
+             await update(ref(db, `users/${uid}`), {
+                banned: null,
+                banReason: null,
+                banRemarks: null,
+                banExpires: null,
+                banDate: null,
+                bannedBy: null
+             });
+             
+             // Log the Unban
+             await push(ref(db, "logs"), {
+                type: "USER_UNBAN",
+                user: "System",
+                details: `Restored access for UID: ${uid}`,
+                approvedBy: currentUser.email,
+                time: serverTimestamp()
+            });
+            
+            alert("✅ User Restored.");
+            loadAdminPanel(); // Refresh list to show 'Ban' button again
+         } catch(e) {
+             alert("Error: " + e.message);
+         }
+    }
+};
 // --- SEARCH FUNCTION FOR SYSTEM LOGS ---
 window.filterSysLogs = () => {
     const input = document.getElementById("sysLogSearch").value.toLowerCase();
