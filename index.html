@@ -1394,8 +1394,7 @@ window.login = () => {
         alert("Login Failed: " + e.message);
     });
 };
-
-// 2. UPDATED AUTH LISTENER (Safe Version)
+// 2. UPDATED AUTH LISTENER (Glitch Fix Version)
 onAuthStateChanged(auth, (user) => {
     if (!user) { showLogin(); return; }
 
@@ -1418,10 +1417,11 @@ onAuthStateChanged(auth, (user) => {
         // B. BAN CHECK
         if (u && u.banned) {
             const now = Date.now();
-            const deadline = u.banExpires;
-            const isDeadlineMissed = deadline && (deadline < now);
+            const deadline = u.banExpires || 0; // Fix: Default to 0 if undefined to prevent crash
+            const isDeadlineMissed = (deadline > 0) && (deadline < now);
 
-            // 1. HIDE EVERYTHING ELSE (Prevents blank screen)
+            // 1. HIDE EVERYTHING (Including Header)
+            document.querySelector("header").style.display = "none"; // Fix: Hide Top Bar
             document.getElementById("loginSection").classList.add("hidden"); 
             document.getElementById("appScreen").classList.add("hidden");
             document.getElementById("authContainer").classList.add("hidden");
@@ -1430,18 +1430,17 @@ onAuthStateChanged(auth, (user) => {
             // 2. SHOW RED SCREEN
             document.getElementById("bannedScreen").classList.remove("hidden");
 
-            // 3. FILL DATA (With safety checks)
+            // 3. FILL DATA (With Safety Checks)
             const reasonText = u.banReason || "Administrative Action";
             const remarksText = u.banRemarks ? ` (${u.banRemarks})` : "";
             
-            // Safety check: Only set text if element exists
             const elReason = document.getElementById("displayBanReason");
             if(elReason) elReason.innerText = reasonText + remarksText;
             
             const elAction = document.getElementById("displayBanAction");
             if(elAction) elAction.innerText = u.banAction || "Contact Administrator";
 
-            // 4. DEADLINE LOGIC
+            // 4. DEADLINE LOGIC (Crash Proof)
             const timerDisplay = document.getElementById("bannedTimeDisplay");
             const instrDisplay = document.getElementById("bannedInstruction");
 
@@ -1451,23 +1450,35 @@ onAuthStateChanged(auth, (user) => {
                     timerDisplay.style.background = "black";
                     timerDisplay.style.color = "red";
                     instrDisplay.innerText = "Account Permanently Closed.";
+                } else if (deadline > 0) {
+                    // Safe Date Formatting
+                    try {
+                        const dateStr = new Date(deadline).toLocaleString('en-IN', {
+                            day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                        });
+                        timerDisplay.innerText = "Deadline: " + dateStr;
+                        timerDisplay.style.background = "#fff";
+                        timerDisplay.style.color = "#dc3545";
+                        instrDisplay.innerText = "Resolve before this date.";
+                    } catch(e) {
+                        timerDisplay.innerText = "Indefinite Suspension";
+                    }
                 } else {
-                    const dateStr = new Date(deadline).toLocaleString('en-IN', {
-                        day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
-                    });
-                    timerDisplay.innerText = "Deadline: " + dateStr;
-                    timerDisplay.style.background = "#fff";
-                    timerDisplay.style.color = "#dc3545";
-                    instrDisplay.innerText = "Resolve before this date.";
+                    // Handle Permanent/Undefined Bans gracefully
+                    timerDisplay.innerText = "⛔ PERMANENT BAN";
+                    timerDisplay.style.background = "black";
+                    timerDisplay.style.color = "white";
+                    instrDisplay.innerText = "Access Revoked Indefinitely.";
                 }
             }
             return; // STOP HERE.
         } else {
             // IF NOT BANNED
             document.getElementById("bannedScreen").classList.add("hidden");
+            document.querySelector("header").style.display = "flex"; // Restore Header
         }
 
-        // C. NORMAL APP LOAD (Only runs if NOT banned)
+        // C. NORMAL APP LOAD
         if(u) currentUser.name = u.name;
 
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
@@ -1483,7 +1494,7 @@ onAuthStateChanged(auth, (user) => {
         // SUCCESSFUL LOGIN UI
         document.getElementById("userInfo").innerText = `${u.name} (${user.email})`;
         document.getElementById("authContainer").classList.remove("hidden");
-        document.getElementById("loginSection").classList.add("hidden"); // Ensure login is hidden
+        document.getElementById("loginSection").classList.add("hidden");
 
         if (isAdmin) {
             document.getElementById("adminBadge").classList.remove("hidden");
@@ -1492,7 +1503,7 @@ onAuthStateChanged(auth, (user) => {
             setTimeout(loadAdminPanel, 2000);
         }
 
-        // Face ID Logic
+        // Face ID Logic (Only if not banned)
         if(!isTransactionAuth && !u.banned) {
             const faceModal = document.getElementById("faceModal");
             faceModal.classList.remove("hidden");
