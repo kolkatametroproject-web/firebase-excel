@@ -825,36 +825,56 @@ select:disabled {
     </div>
 </div>
   <div id="tab-dataView" class="hidden">
+  
   <div class="panel">
-    <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #003366; padding-bottom:10px; margin-bottom:15px;">
-      <div>
-        <h3 style="margin:0;">📋 Station Data Logs</h3>
-        <small style="color:#666;">Chronological History of Submitted Data</small>
-      </div>
-      <div style="display:flex; gap:5px;">
-        <input type="text" id="stationLogSearch" onkeyup="filterStationData()" placeholder="🔍 Search Station..." style="width:200px; margin:0;">
-        <button onclick="loadStationData()" class="primary">🔄 Refresh List</button>
-      </div>
-    </div>
+    <h3>📋 View Data Logs</h3>
+    
+    <label style="font-weight:bold; color:#003366;">Step 1: Select Metro Line</label>
+    <select id="logLineSelect" onchange="handleLogLineChange()" style="background:#eef2f7; font-weight:bold; border:2px solid #003366;">
+      <option value="">-- Select Line --</option>
+      <option value="Blue Line">Blue Line (North-South: Dakshineswar ↔ New Garia)</option>
+      <option value="Green Line">Green Line (East-West: Sector V ↔ Howrah)</option>
+      <option value="Purple Line">Purple Line (Joka ↔ Majerhat)</option>
+      <option value="Yellow Line">Yellow Line (Noapara ↔ Airport)</option>
+      <option value="Orange Line">Orange Line (New Garia ↔ Airport)</option>
+      <option value="Pink Line">Pink Line (Baranagar ↔ Barrackpore)</option>
+    </select>
 
-    <div class="table-wrapper" style="max-height:600px; overflow-y:auto;">
-      <table>
-        <thead style="position:sticky; top:0; background:#e9ecef;">
-          <tr>
-            <th>Date & Time</th>
-            <th>Station Name</th>
-            <th>Submitted By</th>
-            <th>Details (L / Y-Dist / Y-Thick)</th>
-            <th>Remarks</th>
-            <th>Distance Data</th>
-          </tr>
-        </thead>
-        <tbody id="stationDataViewBody">
-          <tr><td colspan="6" style="text-align:center;">Click Refresh to load data...</td></tr>
-        </tbody>
-      </table>
+    <label style="font-weight:bold; color:#003366; margin-top:10px; display:block;">Step 2: Select Station</label>
+    <select id="logStationSelect" onchange="loadSpecificStationData()" disabled style="background:#e9ecef;">
+      <option value="">-- First Select a Line --</option>
+    </select>
+  </div>
+
+  <div id="logResultsPanel" class="hidden">
+    <div class="panel">
+      <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #003366; padding-bottom:10px; margin-bottom:15px;">
+        <div>
+          <h3 style="margin:0;" id="logTableTitle">Logs</h3>
+        </div>
+        <button onclick="loadSpecificStationData()" class="primary">🔄 Refresh</button>
+      </div>
+
+      <div class="table-wrapper" style="max-height:600px; overflow-y:auto;">
+        <table>
+          <thead style="position:sticky; top:0; background:#e9ecef;">
+            <tr>
+              <th>Date & Time</th>
+              <th>Station Name</th>
+              <th>Submitted By</th>
+              <th>Details (L / Y-Dist / Y-Thick)</th>
+              <th>Remarks</th>
+              <th>Distance Data</th>
+            </tr>
+          </thead>
+          <tbody id="stationDataViewBody">
+            <tr><td colspan="6" style="text-align:center;">Select a station to view logs...</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
+
 </div>
 </section>
 
@@ -2434,7 +2454,98 @@ window.saveStationDetails = () => {
     });
     alert("Draft Saved");
 };
+// --- 1. HANDLE LOG LINE CHANGE (Populate Station Dropdown) ---
+window.handleLogLineChange = () => {
+    const lineSel = document.getElementById("logLineSelect");
+    const stnSel = document.getElementById("logStationSelect");
+    const resultsDiv = document.getElementById("logResultsPanel");
+    
+    // Reset
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    stnSel.disabled = true;
+    resultsDiv.classList.add("hidden");
 
+    const selectedLine = lineSel.value;
+    
+    if (selectedLine && METRO_STATIONS[selectedLine]) {
+        // Populate Stations using the existing METRO_STATIONS data
+        METRO_STATIONS[selectedLine].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = stn;
+            opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
+        
+        stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+    }
+};
+
+// --- 2. LOAD SPECIFIC STATION DATA (The Filter Logic) ---
+window.loadSpecificStationData = () => {
+    const stnSel = document.getElementById("logStationSelect");
+    const lineSel = document.getElementById("logLineSelect");
+    const resultsDiv = document.getElementById("logResultsPanel");
+    const tbody = document.getElementById("stationDataViewBody");
+
+    if (!stnSel.value) return;
+
+    // Show Table
+    resultsDiv.classList.remove("hidden");
+    document.getElementById("logTableTitle").innerText = `Logs for: ${stnSel.value}`;
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'><i class='fas fa-spinner fa-spin'></i> Loading Records...</td></tr>";
+
+    // FETCH ALL LOGS (limit to last 100 for performance)
+    const q = query(ref(db, "station_logs"), limitToLast(100));
+
+    onValue(q, (snap) => {
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No records found in database.</td></tr>";
+            return;
+        }
+
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // Newest first
+
+        // FILTER: Match exactly the selected station name
+        // We look for the station name inside the stored name string
+        const searchName = stnSel.value; 
+        const filteredLogs = logs.filter(log => log.name.includes(searchName));
+
+        if (filteredLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No logs found for this specific station.</td></tr>";
+            return;
+        }
+
+        tbody.innerHTML = "";
+
+        filteredLogs.forEach(d => {
+            // Existing View Button
+            const rowButton = `<button class="info" onclick="fetchAndShowRakes('${d.key}', '${d.name}')" style="padding:4px 8px; font-size:11px;">👁 Fetch Rows</button>`;
+            
+            // Delete Button (Admin Only)
+            let deleteBtn = "";
+            if (isAdmin) {
+                deleteBtn = `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:4px 8px; font-size:11px; margin-left:5px;" title="Delete Log">🗑</button>`;
+            }
+
+            const html = `
+            <tr class="station-row-item">
+                <td style="font-size:12px;">${d.date}</td>
+                <td style="font-weight:bold; color:#003366;">${d.name}</td>
+                <td>${d.userName}</td>
+                <td style="font-size:11px;">L: ${d.len || '-'} | YL: ${d.yl || '-'}</td>
+                <td style="font-style:italic; color:#555;">${d.remarks || '--'}</td>
+                <td style="text-align:center;">
+                    ${rowButton}
+                    ${deleteBtn}
+                </td>
+            </tr>`;
+            tbody.innerHTML += html;
+        });
+    }, { onlyOnce: true });
+};
 window.uploadEvidenceOnly = () => {
     if(!currentFileBase64) return alert("Select a file first.");
    
