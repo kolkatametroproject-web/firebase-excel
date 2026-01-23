@@ -2708,15 +2708,11 @@ window.loadSpecificStationData = async () => {
         body1.innerHTML = `<tr><td colspan='7' style='color:red;'>Error: ${error.message}</td></tr>`;
     }
 };
-// --- LOAD RAKE TABLE (Fix for "Distance Data Not Showing") ---
 window.loadRakeTable = async (key) => {
     const body2 = document.getElementById("viewTable2Body");
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>⏳ Loading details...</td></tr>";
 
-    console.log("Fetching Rake Data for Key:", key);
-
     try {
-        // Fetch from 'rake_logs' container
         const snap2 = await get(ref(db, `rake_logs/${key}`));
         
         if(!snap2.exists()) {
@@ -2726,8 +2722,15 @@ window.loadRakeTable = async (key) => {
             const rows = snap2.val();
             let count = 1;
             
-            // Loop through rows
-            Object.values(rows).forEach(r => {
+            // --- FIX: Use entries to get the Row Key (rKey) for deletion ---
+            Object.entries(rows).forEach(([rKey, r]) => {
+                
+                // Only show delete button if Admin (Matches Table 1 logic)
+                // If you want everyone to delete, remove the 'isAdmin' check
+                const actionHtml = isAdmin 
+                    ? `<button class="danger" onclick="deleteRakeRow('${key}', '${rKey}')" style="padding:2px 6px; font-size:11px;">🗑</button>`
+                    : `<span style="color:green; font-size:10px;">✔ Saved</span>`;
+
                 const rRow = `
                 <tr>
                     <td>${count++}</td>
@@ -2735,7 +2738,7 @@ window.loadRakeTable = async (key) => {
                     <td>${r.type || '-'}</td>
                     <td>${r.f || '-'}</td>
                     <td>${r.r || '-'}</td>
-                    <td style="color:green; font-size:10px;">✔ Saved</td>
+                    <td style="text-align:center;">${actionHtml}</td>
                 </tr>`;
                 body2.innerHTML += rRow;
             });
@@ -2790,6 +2793,20 @@ window.fetchAndShowRakes = async (key) => {
 // --- 3. CLOSE MODAL ---
 window.closeRakeModal = () => {
     document.getElementById("rakeDataModal").classList.add("hidden");
+};
+window.deleteRakeRow = async (stationLogKey, rowKey) => {
+    if(confirm("⚠ Are you sure you want to delete this specific row?")) {
+        try {
+            // Path: rake_logs -> StationID -> RowID
+            await remove(ref(db, `rake_logs/${stationLogKey}/${rowKey}`));
+            
+            // Refresh the table immediately to show it's gone
+            loadRakeTable(stationLogKey);
+            
+        } catch (e) {
+            alert("Error deleting row: " + e.message);
+        }
+    }
 };
 window.uploadEvidenceOnly = () => {
     if(!currentFileBase64) return alert("Select a file first.");
