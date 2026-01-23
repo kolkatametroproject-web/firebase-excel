@@ -887,7 +887,10 @@ select:disabled {
     </div>
 
     <div class="panel" style="border-left: 5px solid #28a745;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
       <h4 style="margin:0; color:#28a745;">🚆 Table 2: Distance Data (Rakes)</h4>
+      <button id="btnDeleteAllRakes" class="danger" style="padding:4px 10px; font-size:11px; display:none;" onclick="triggerDeleteAll()">🗑 Delete All Rakes</button>
+  </div>
       <div class="table-wrapper" style="margin-top:10px;">
         <table>
           <thead style="background:#e9ecef;">
@@ -2158,23 +2161,25 @@ window.loadStationData = () => {
     }, { onlyOnce: true });
 };
 window.deleteStationLog = async (key) => {
-    if (!isAdmin) return alert("Access Denied: Only Administrators can delete data logs.");
+    if (!isAdmin) return alert("Access Denied: Admins Only.");
 
-    if (confirm("⚠ PERMANENT DELETE WARNING\n\nAre you sure you want to delete this Station Log?")) {
+    // Warning message updated to reflect that Rake Data is preserved
+    if (confirm("⚠ Delete this Station Log Entry?\n\nNote: The linked Distance/Rake data will NOT be deleted, but it will be hidden until linked again.")) {
         try {
             const updates = {};
+            
+            // ✅ ONLY delete the Station Log (Table 1)
             updates[`station_logs/${key}`] = null;
-            updates[`rake_logs/${key}`] = null;
+            
+            // ❌ REMOVED: updates[`rake_logs/${key}`] = null; 
+            // We removed the line above so Distance Data stays safe.
 
             await update(ref(db), updates);
 
-            alert("✅ Data log deleted successfully.");
+            alert("✅ Station Log deleted. (Distance Data preserved).");
             
-            // --- FIX IS HERE ---
-            // OLD: loadStationData(); 
-            // NEW: Refresh the specific station view
+            // Refresh
             loadSpecificStationData(); 
-            // -------------------
 
         } catch (e) {
             console.error(e);
@@ -2710,23 +2715,28 @@ window.loadSpecificStationData = async () => {
 };
 window.loadRakeTable = async (key) => {
     const body2 = document.getElementById("viewTable2Body");
+    const delAllBtn = document.getElementById("btnDeleteAllRakes"); // Get the button
+    
+    // Define the trigger function globally so the HTML button can use the current 'key'
+    window.triggerDeleteAll = () => deleteAllRakeData(key);
+
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>⏳ Loading details...</td></tr>";
+    if(delAllBtn) delAllBtn.style.display = "none"; // Hide button while loading
 
     try {
         const snap2 = await get(ref(db, `rake_logs/${key}`));
         
         if(!snap2.exists()) {
-            body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#777;'>❌ No distance data found for this entry.</td></tr>";
+            body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#777;'>❌ No distance data found.</td></tr>";
         } else {
-            body2.innerHTML = ""; // Clear loader
+            body2.innerHTML = ""; 
+            if(isAdmin && delAllBtn) delAllBtn.style.display = "block"; // Show button if data exists and is Admin
+
             const rows = snap2.val();
             let count = 1;
             
-            // --- FIX: Use entries to get the Row Key (rKey) for deletion ---
             Object.entries(rows).forEach(([rKey, r]) => {
-                
-                // Only show delete button if Admin (Matches Table 1 logic)
-                // If you want everyone to delete, remove the 'isAdmin' check
+                // ... (Existing row rendering code) ...
                 const actionHtml = isAdmin 
                     ? `<button class="danger" onclick="deleteRakeRow('${key}', '${rKey}')" style="padding:2px 6px; font-size:11px;">🗑</button>`
                     : `<span style="color:green; font-size:10px;">✔ Saved</span>`;
@@ -2745,7 +2755,7 @@ window.loadRakeTable = async (key) => {
         }
     } catch(e) {
         console.error(e);
-        body2.innerHTML = `<tr><td colspan='6' style='color:red'>Error loading table: ${e.message}</td></tr>`;
+        body2.innerHTML = `<tr><td colspan='6' style='color:red'>Error: ${e.message}</td></tr>`;
     }
 };
 // --- 2. FETCH RAKES (Populate Table 2 in Modal) ---
