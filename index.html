@@ -2653,11 +2653,10 @@ window.loadSpecificStationData = async () => {
     const searchName = stnSel.value.trim(); 
     
     resultsDiv.classList.remove("hidden");
-    body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Searching Database...</td></tr>";
+    body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Searching...</td></tr>";
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
 
     try {
-        // 1. Fetch ALL logs (No limit) so we don't miss anything
         const q1 = query(ref(db, "station_logs"));
         const snap1 = await get(q1);
 
@@ -2665,44 +2664,38 @@ window.loadSpecificStationData = async () => {
         body2.innerHTML = ""; 
 
         if (!snap1.exists()) {
-            body1.innerHTML = "<tr><td colspan='7' style='text-align:center; color:red;'><strong>DATABASE IS EMPTY</strong></td></tr>";
+            body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No records found.</td></tr>";
             return;
         }
 
         const logs = [];
         snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
 
-        // 2. Filter matches and REVERSE so the NEWEST is at Index 0
         const matches = logs.filter(log => {
             if (!log.name) return false;
             return log.name.includes(searchName);
         }).reverse();
 
         if (matches.length === 0) {
-            body1.innerHTML = `<tr><td colspan='7' style='text-align:center; color:red;'>❌ No data found for: "${searchName}"</td></tr>`;
-            body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#ccc;'>No rake data.</td></tr>";
+            body1.innerHTML = `<tr><td colspan='7' style='text-align:center; color:red;'>No data found for: "${searchName}"</td></tr>`;
             return;
         }
 
-        // --- STEP 3 LOGIC: GRAB NEWEST KEY ---
         const newestKey = matches[0].key; 
 
-        // 3. Render Table 1 (Station Details)
         matches.forEach(d => {
-            // Highlight the row if it matches the one currently showing below
             const isActive = (d.key === newestKey);
             const bgStyle = isActive ? "background:#e8f4ff; font-weight:bold;" : "";
-            
-            // Choose button style: Blue if active, Grey if inactive
             const btnStyle = isActive 
                 ? "background:#0056b3; color:white; border:1px solid #004494;" 
                 : "background:#6c757d; color:white; border:1px solid #545b62;";
 
-            let deleteBtn = isAdmin 
-                ? `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:4px 8px; font-size:11px;">🗑</button>`
+            // --- CHANGED: Edit Button instead of Delete ---
+            // We use 'warning' class (Yellow/Orange) for Edit
+            let actionBtn = isAdmin 
+                ? `<button class="warning" onclick="editStationLog('${d.key}')" style="padding:4px 8px; font-size:11px;">✏️ Edit</button>`
                 : `<span style="color:#ccc; font-size:10px;">Locked</span>`;
 
-            // 'Show Data' button triggers the loadRakeTable function manually
             const showBtn = `<button onclick="loadRakeTable('${d.key}')" style="${btnStyle} padding:4px 8px; font-size:11px; margin-right:5px; border-radius:3px; cursor:pointer;">
                 ${isActive ? '👁️ Viewing' : 'Show Data'}
             </button>`;
@@ -2717,18 +2710,86 @@ window.loadSpecificStationData = async () => {
                 <td style="font-style:italic; font-size:12px;">${d.remarks || '--'}</td>
                 <td style="text-align:center; white-space:nowrap;">
                     ${showBtn}
-                    ${deleteBtn}
+                    ${actionBtn}
                 </td>
             </tr>`;
             body1.innerHTML += row;
         });
 
-        // 4. AUTOMATICALLY LOAD THE NEWEST DATA INTO BOTTOM TABLE
         loadRakeTable(newestKey);
 
     } catch (error) {
-        console.error("LOAD ERROR:", error);
+        console.error(error);
         body1.innerHTML = `<tr><td colspan='7' style='color:red;'>Error: ${error.message}</td></tr>`;
+    }
+};
+window.editStationLog = async (key) => {
+    if (!confirm("✏️ Edit this record?\n\nThis will take you to the form where you can modify Station Details AND Rake Data.")) return;
+
+    try {
+        // 1. Fetch Station Data
+        const stationSnap = await get(ref(db, `station_logs/${key}`));
+        if (!stationSnap.exists()) return alert("Record not found.");
+        const sData = stationSnap.val();
+
+        // 2. Set Global Editing Keys
+        currentStationKey = key;
+        currentRakeKey = sData.linkedRakeKey || key;
+
+        // 3. Switch to Form Tab
+        switchTab('newData');
+        document.getElementById("mainDataForm").classList.remove("hidden");
+        
+        // 4. Set Dropdowns (Optional visual sync) and Title
+        const lineSel = document.getElementById("lineSelect");
+        const stnSel = document.getElementById("stationSelect");
+        
+        // Try to parse the name "Station (Line)"
+        // If exact match isn't found in dropdown, we just set the hidden value
+        document.getElementById("inpStationName").value = sData.name; 
+        document.getElementById("formTitle").innerText = `✏️ EDITING: ${sData.name}`;
+
+        // 5. Fill & UNLOCK Station Inputs
+        document.getElementById("inpStationLength").value = sData.len || "";
+        document.getElementById("inpYellowDist").value = sData.yl || "";
+        document.getElementById("inpYellowThick").value = sData.th || "";
+        document.getElementById("inpRemarks").value = sData.remarks || "";
+
+        // ENABLE inputs so you can fix mistakes
+        document.getElementById("inpStationLength").disabled = false;
+        document.getElementById("inpYellowDist").disabled = false;
+        document.getElementById("inpYellowThick").disabled = false;
+        document.getElementById("inpRemarks").disabled = false;
+        document.getElementById("btnSaveDraft").disabled = false;
+
+        // 6. Update Button State
+        const submitBtn = document.getElementById("btnFinalSubmit");
+        submitBtn.innerText = "💾 Save Changes";
+        submitBtn.style.background = "#ffc107"; // Orange/Yellow for Edit
+        submitBtn.style.color = "#000";
+
+        // 7. Load Linked Rake Data into Drafts (so it appears in the table)
+        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
+        if (rakeSnap.exists()) {
+            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
+        } else {
+            await remove(ref(db, `drafts/${currentUser.uid}/rows`));
+        }
+
+        // 8. Render Table
+        loadDraft();
+        
+        // 9. Show Notification
+        document.getElementById("dataExistsWarning").classList.remove("hidden");
+        document.getElementById("dataExistsWarning").innerHTML = `
+            <strong>✏️ EDIT MODE ACTIVE</strong><br>
+            You are modifying an existing record from <b>${sData.date}</b>.<br>
+            Change details above or add/remove rows below, then click <b>Save Changes</b>.
+        `;
+
+    } catch (e) {
+        console.error(e);
+        alert("Error loading for edit: " + e.message);
     }
 };
 window.loadRakeTable = async (key) => {
@@ -2981,25 +3042,26 @@ window.submitStationData = async () => {
     const lineSel = document.getElementById("lineSelect");
     const stnSel = document.getElementById("stationSelect");
     
-    if(!lineSel.value || !stnSel.value) return alert("❌ Error: Please select a Line and Station first.");
+    // Allow submit if we are in Edit Mode (even if dropdowns aren't perfectly matched)
+    if((!lineSel.value || !stnSel.value) && !currentStationKey) return alert("❌ Select Line/Station.");
     
-    const name = `${stnSel.value} (${lineSel.value})`;
+    // If editing, use the saved name. If new, build it.
+    const name = currentStationKey 
+        ? document.getElementById("inpStationName").value 
+        : `${stnSel.value} (${lineSel.value})`;
 
-    // 1. Get Form Data (Table 1)
+    // 1. Get Form Data
     const valLen = document.getElementById("inpStationLength").value.trim();
     const valYl = document.getElementById("inpYellowDist").value.trim();
     const valTh = document.getElementById("inpYellowThick").value.trim();
     const valRem = document.getElementById("inpRemarks").value.trim();
 
-    // --- STRICT VALIDATION: TABLE 1 (Yellow Line) ---
-    // User cannot leave these blank. Must type "_" if no data.
+    // Strict Validation Table 1
     if (valLen === "" || valYl === "" || valTh === "" || valRem === "") {
-        alert(`⚠️ VALIDATION ERROR (Table 1):\n\nYou left a field empty in the Yellow Line section.\n\n👉 Rule: If you have no data, you MUST type "_" (underscore).\nEmpty fields are not allowed.`);
-        return; // STOP. Do not save.
+        return alert(`⚠️ Error: Yellow Line details cannot be empty. Type "_" if needed.`);
     }
-    // ------------------------------------------------
 
-    // 2. Get Distance Data (Table 2)
+    // 2. Get Rake Rows
     let rowsData = null;
     let rowCount = 0;
     try {
@@ -3010,52 +3072,50 @@ window.submitStationData = async () => {
         }
     } catch (e) { console.error(e); }
 
-    // --- STRICT VALIDATION: TABLE 2 (Distance Data) ---
-    // User cannot leave any cell blank. Must type "_" if no data.
+    // Strict Validation Table 2
     if (rowCount > 0 && rowsData) {
         let i = 1;
         for (const key in rowsData) {
             const row = rowsData[key];
-            
-            const isRakeEmpty = !row.rake || row.rake.trim() === "";
-            const isTypeEmpty = !row.type || row.type.trim() === "";
-            const isFrontEmpty = !row.f || row.f.trim() === "";
-            const isRearEmpty = !row.r || row.r.trim() === "";
-
-            if (isRakeEmpty || isTypeEmpty || isFrontEmpty || isRearEmpty) {
-                alert(`⚠️ VALIDATION ERROR (Table 2) at Row ${i}:\n\nYou left a column empty.\n\n👉 Rule: If you have no data, you MUST type "_" (underscore).\nEmpty boxes are not allowed.`);
-                return; // STOP. Do not save.
+            if ((!row.rake || row.rake==="") || (!row.type || row.type==="") || (!row.f || row.f==="") || (!row.r || row.r==="")) {
+                return alert(`⚠️ Error at Row ${i}: Empty columns are not allowed.`);
             }
             i++;
         }
     }
-    // --------------------------------------------------
 
     // 3. Confirm & Save
-    if(confirm(`Confirm ${currentStationKey ? 'UPDATE' : 'SUBMISSION'}?\nStation: ${name}\nTotal Rows: ${rowCount}`)) {
+    const actionType = currentStationKey ? "UPDATE" : "SUBMISSION";
+    
+    if(confirm(`Confirm ${actionType}?\nStation: ${name}\nRows: ${rowCount}`)) {
         
         const updates = {};
 
         if (currentStationKey) {
-            // --- UPDATE EXISTING RECORD ---
+            // --- EDIT MODE: UPDATE EVERYTHING ---
+            // Update Station Details (User might have fixed a mistake)
+            updates[`station_logs/${currentStationKey}/len`] = valLen;
+            updates[`station_logs/${currentStationKey}/yl`] = valYl;
+            updates[`station_logs/${currentStationKey}/th`] = valTh;
+            updates[`station_logs/${currentStationKey}/remarks`] = valRem;
             updates[`station_logs/${currentStationKey}/lastModifiedBy`] = currentUser.name;
             updates[`station_logs/${currentStationKey}/lastModifiedDate`] = new Date().toLocaleString();
 
-            // Update Rake List
-            if(rowCount > 0) updates[`rake_logs/${currentRakeKey}`] = rowsData;
+            // Update Rake Data (Replace old list with new list)
+            if(rowCount > 0) {
+                updates[`rake_logs/${currentRakeKey}`] = rowsData;
+            } else {
+                updates[`rake_logs/${currentRakeKey}`] = null; // Clear if user deleted all rows
+            }
 
         } else {
-            // --- CREATE NEW RECORD ---
+            // --- NEW MODE ---
             const newKey = push(ref(db, "station_logs")).key;
             
             updates[`station_logs/${newKey}`] = {
                 name: name, 
-                len: valLen,
-                yl: valYl,
-                th: valTh,
-                remarks: valRem,
-                user: currentUser.email,
-                userName: currentUser.name,
+                len: valLen, yl: valYl, th: valTh, remarks: valRem,
+                user: currentUser.email, userName: currentUser.name,
                 date: new Date().toLocaleString(),
                 linkedRakeKey: newKey
             };
@@ -3063,7 +3123,6 @@ window.submitStationData = async () => {
             if(rowCount > 0) updates[`rake_logs/${newKey}`] = rowsData;
         }
 
-        // Execute Database Update
         try {
             await update(ref(db), updates);
             await remove(ref(db, `drafts/${currentUser.uid}`));
@@ -3075,9 +3134,19 @@ window.submitStationData = async () => {
             document.getElementById("inpRemarks").value = "";
             document.getElementById("distanceBody").innerHTML = "";
             document.getElementById("mainDataForm").classList.add("hidden");
-            document.getElementById("stationSelect").value = ""; 
+            document.getElementById("dataExistsWarning").classList.add("hidden");
+            
+            // Reset State Variables
+            currentStationKey = null;
+            currentRakeKey = null;
+            
+            // Restore Button Style
+            const submitBtn = document.getElementById("btnFinalSubmit");
+            submitBtn.innerText = "✔ Submit Final Data";
+            submitBtn.style.background = "#003366";
+            submitBtn.style.color = "white";
 
-            alert("✅ Data Saved Successfully!");
+            alert(`✅ ${actionType} Successful!`);
             switchTab('dataView');
 
         } catch (error) {
