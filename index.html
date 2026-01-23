@@ -1808,51 +1808,41 @@ window.registerNewFace = async () => {
 // --- LOAD STATION DATA FUNCTION ---
 window.loadStationData = () => {
     const tbody = document.getElementById("stationDataViewBody");
-    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Data...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Loading Station Logs...</td></tr>";
 
-    // Fetch from 'history' where you saved the data
-    const q = query(ref(db, "history"), limitToLast(50));
+    // FETCH FROM "station_logs" (The new separate location)
+    const q = query(ref(db, "station_logs"), limitToLast(50));
 
     onValue(q, (snap) => {
-        const logs = [];
-        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        logs.reverse(); // Newest entries at the top
-
-        // Filter out "Evidence Uploads" (images) so we only see Station Data
-        const stationLogs = logs.filter(l => l.name && l.name !== "Evidence Upload" && !l.fileData);
-
-        if (stationLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px; color:#666;'>No station data found.</td></tr>";
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No data found.</td></tr>";
             return;
         }
 
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); 
+
         tbody.innerHTML = "";
 
-        stationLogs.forEach(d => {
-            // Check if there are Rake Rows
-            let rowButton = `<span style="color:#aaa; font-size:11px;">No Data</span>`;
-            if (d.rows) {
-                // Encode data to pass it safely to the button function
-                const rowsData = encodeURIComponent(JSON.stringify(d.rows));
-                rowButton = `<button class="info" onclick="viewRakeRows('${rowsData}', '${d.name}')" style="padding:4px 8px; font-size:11px;">👁 View Rows</button>`;
-            }
+        logs.forEach(d => {
+            // New Button: Calls 'fetchAndShowRakes' with the ID (key)
+            // It doesn't need to hold the data anymore, making the page faster.
+            const rowButton = `<button class="info" onclick="fetchAndShowRakes('${d.key}', '${d.name}')" style="padding:4px 8px; font-size:11px;">👁 Fetch Rows</button>`;
 
             const html = `
             <tr class="station-row-item">
-                <td style="font-size:12px; white-space:nowrap;">${d.date}</td>
+                <td style="font-size:12px;">${d.date}</td>
                 <td style="font-weight:bold; color:#003366;">${d.name}</td>
-                <td>${d.userName}<br><small style="color:#777;">${d.user}</small></td>
-                <td style="font-size:11px;">
-                   L: <b>${d.len || '-'}</b> | YL: <b>${d.yl || '-'}</b> | TH: <b>${d.th || '-'}</b>
-                </td>
+                <td>${d.userName}</td>
+                <td style="font-size:11px;">L: ${d.len || '-'} | YL: ${d.yl || '-'}</td>
                 <td style="font-style:italic; color:#555;">${d.remarks || '--'}</td>
                 <td style="text-align:center;">${rowButton}</td>
             </tr>`;
             tbody.innerHTML += html;
         });
-    }, { onlyOnce: true }); // We use onlyOnce to prevent constant flickering
+    }, { onlyOnce: true });
 };
-
 // --- VIEW RAKE ROWS (POPUP) ---
 window.viewRakeRows = (rowsEncoded, stationName) => {
     try {
@@ -2307,49 +2297,53 @@ window.handleFileUpload = () => {
     }
 }
 window.submitStationData = async () => {
-    // 1. Capture values directly from the screen (No need to click "Save Draft" first)
+    // 1. Get Form Data
     const name = document.getElementById("inpStationName").value.trim();
-    const len = document.getElementById("inpStationLength").value;
-    const yl = document.getElementById("inpYellowDist").value;
-    const th = document.getElementById("inpYellowThick").value;
-    const remarks = document.getElementById("inpRemarks").value;
+    if(!name) return alert("Station Name Required");
 
-    // 2. Validation
-    if(!name) return alert("Please enter a Station Name.");
+    // 2. Get Draft Rows (The Table Data)
+    const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+    const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
-    if(confirm("Are you sure you want to Submit Final Data?\nThis cannot be edited later.")) {
+    if(confirm("Confirm Final Submission?\nData will be stored separately.")) {
         
-        // 3. Get the Rows (Distance Data) from the DB draft
-        // (Rows are auto-saved when you click "Add Row", so we fetch them from DB)
-        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-        const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
+        // 3. Generate a Unique Key for this Entry
+        // We use this SAME key for both locations so we can link them later
+        const newEntryKey = push(ref(db, "station_logs")).key;
 
-        // 4. Push everything to History (The Data Logs)
-        await push(ref(db, "history"), {
-            name: name,
-            len: len,
-            yl: yl,
-            th: th,
-            remarks: remarks,
-            rows: rowsData, // Attach the rows
+        // 4. Save Station Details (Lightweight)
+        const stationUpdate = {
+            name: document.getElementById("inpStationName").value,
+            len: document.getElementById("inpStationLength").value,
+            yl: document.getElementById("inpYellowDist").value,
+            th: document.getElementById("inpYellowThick").value,
+            remarks: document.getElementById("inpRemarks").value,
             user: currentUser.email,
             userName: currentUser.name,
-            date: new Date().toLocaleString()
-        });
+            date: new Date().toLocaleString(),
+            linkedRakeKey: newEntryKey // This tells us where the rows are
+        };
 
-        // 5. Cleanup: Remove the draft and clear inputs
+        // 5. Save Rake/Table Data Separately (Heavy)
+        // We save this to "rake_logs" using the same ID
+        const updates = {};
+        updates[`station_logs/${newEntryKey}`] = stationUpdate;
+        if(rowsData) {
+            updates[`rake_logs/${newEntryKey}`] = rowsData;
+        }
+
+        // 6. Perform the split save
+        await update(ref(db), updates);
+
+        // 7. Cleanup & Reset
         await remove(ref(db, `drafts/${currentUser.uid}`));
-        
         document.getElementById("inpStationName").value = "";
         document.getElementById("inpStationLength").value = "";
-        document.getElementById("inpYellowDist").value = "";
-        document.getElementById("inpYellowThick").value = "";
         document.getElementById("inpRemarks").value = "";
         document.getElementById("distanceBody").innerHTML = "";
 
-        // 6. Success & Redirect
-        alert("✔ Data Submitted Successfully!");
-        switchTab('dataView'); // Automatically take user to the Data View tab
+        alert("✅ Saved! Station info and Rake tables stored in separate logs.");
+        switchTab('dataView');
     }
 };
 window.loadAdminPanel = async () => {
@@ -3076,7 +3070,43 @@ window.updateSourcePlaceholder = () => {
 };
 
 window.delInv = (k) => remove(ref(db, `inventory/${k}`));
+window.fetchAndShowRakes = async (key, stationName) => {
+    if(!key) return alert("Error: No Record ID found.");
 
+    // Show loading state
+    alert(`⏳ Fetching separate rake data for: ${stationName}...`);
+
+    try {
+        // Go to the separate "rake_logs" container
+        const snap = await get(ref(db, `rake_logs/${key}`));
+
+        if(!snap.exists()) {
+            alert(`ℹ No rake data was saved for ${stationName}.`);
+            return;
+        }
+
+        const rows = snap.val();
+        
+        // Format the data for display
+        let msg = `=== RAKE DATA FOR: ${stationName} ===\n\n`;
+        msg += `SL | RAKE NO | TYPE | FRONT | REAR\n`;
+        msg += `--------------------------------------\n`;
+
+        let count = 1;
+        for (let rKey in rows) {
+            let r = rows[rKey];
+            msg += `${count}.  ${r.rake || '-'}  |  ${r.type || '-'}  |  ${r.f || '-'}  |  ${r.r || '-'}\n`;
+            count++;
+        }
+
+        // Show the data
+        alert(msg);
+
+    } catch(e) {
+        console.error(e);
+        alert("Error fetching data: " + e.message);
+    }
+};
 function loadAssignments() {
     onValue(ref(db, `assignments/${currentUser.uid}`), snap => {
         const list = document.getElementById("taskList"); list.innerHTML = "";
