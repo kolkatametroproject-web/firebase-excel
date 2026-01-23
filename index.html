@@ -423,18 +423,6 @@ select:disabled {
           <button class="success" onclick="saveStationDetails()">💾 Save Station Draft</button>
       </div>
     </div>
-
-    <div class="panel upload-panel">
-      <h3 style="color:#003366; margin-top:0;">📎 Evidence Upload Section</h3>
-      <p style="font-size:12px; color:#666;">Upload site photos, videos, or PDFs separately here.</p>
-      
-      <input type="file" id="evidenceFile" accept="image/*,application/pdf,video/*" onchange="handleFileUpload()">
-      <div id="fileStatus" style="font-size:13px; color:green; font-weight:bold; margin:10px 0;"></div>
-      
-      <button class="warning" onclick="uploadEvidenceOnly()">⬆ Upload Evidence to Database</button>
-      <div style="margin-top:5px;"><small style="color:red;">* Max 1.5 MB per file (Strict Limit)</small></div>
-    </div>
-
     <div class="panel">
       <h4>Distance Data</h4>
       <div class="table-wrapper">
@@ -671,13 +659,48 @@ select:disabled {
     </div>
 </div>
   </div>
+<div id="tab-gallery" class="hidden">
+  
+  <div class="panel">
+    <h3>📂 Evidence Management</h3>
+    
+    <label style="font-weight:bold; color:#003366;">Step 1: Select Metro Line</label>
+    <select id="galleryLineSelect" onchange="handleGalleryLineChange()" style="background:#eef2f7; font-weight:bold; border:2px solid #003366;">
+      <option value="">-- Select Line --</option>
+      <option value="Blue Line">Blue Line (North-South: Dakshineswar ↔ New Garia)</option>
+      <option value="Green Line">Green Line (East-West: Sector V ↔ Howrah)</option>
+      <option value="Purple Line">Purple Line (Joka ↔ Majerhat)</option>
+      <option value="Yellow Line">Yellow Line (Noapara ↔ Airport)</option>
+      <option value="Orange Line">Orange Line (New Garia ↔ Airport)</option>
+      <option value="Pink Line">Pink Line (Baranagar ↔ Barrackpore)</option>
+    </select>
 
-  <div id="tab-gallery" class="hidden">
-    <div class="panel">
-      <h3>📁 Site Evidence Gallery</h3>
-      <div id="galleryContainer" class="gallery-grid"></div>
-    </div>
+    <label style="font-weight:bold; color:#003366; margin-top:10px; display:block;">Step 2: Select Station</label>
+    <select id="galleryStationSelect" onchange="handleGalleryStationChange()" disabled style="background:#e9ecef;">
+      <option value="">-- First Select a Line --</option>
+    </select>
   </div>
+
+  <div id="galleryUploadSection" class="hidden">
+      <div class="panel upload-panel" style="border: 2px dashed #003366; background: #eef2f7;">
+        <h3 style="color:#003366; margin-top:0;">📎 Upload Evidence</h3>
+        <p id="uploadTargetText" style="font-weight:bold; color:#28a745;">Target: None</p>
+        <p style="font-size:12px; color:#666;">Select file (Image/PDF/Video)</p>
+        
+        <input type="file" id="evidenceFile" accept="image/*,application/pdf,video/*" onchange="handleFileUpload()">
+        <div id="fileStatus" style="font-size:13px; color:green; font-weight:bold; margin:10px 0;"></div>
+        
+        <button class="warning" onclick="uploadEvidenceOnly()">⬆ Upload to Selected Station</button>
+        <div style="margin-top:5px;"><small style="color:red;">* Max 1.5 MB per file</small></div>
+      </div>
+
+      <div class="panel">
+        <h3>📁 Evidence Repository</h3>
+        <div id="galleryContainer" class="gallery-grid"></div>
+      </div>
+  </div>
+
+</div>
 
   <div id="tab-assigned" class="hidden">
     <div class="panel"><h3>📋 My Assigned Tasks</h3><div id="taskList"></div></div>
@@ -2633,51 +2656,145 @@ window.handleFileUpload = () => {
         document.getElementById("fileStatus").innerText = "Error: File too large";
     }
 }
-window.submitStationData = async () => {
-    // 1. Get Basic Details
-    const name = document.getElementById("inpStationName").value.trim();
-    if(!name) return alert("❌ Error: Station Name is missing. Please select a Line and Station first.");
-
-    // 2. Get Table Data (Draft Rows)
-    const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-    const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
-
-    // --- RULE CHECK: AT LEAST ONE TABLE ROW REQUIRED ---
-    const hasTableData = rowsData && Object.keys(rowsData).length > 0;
+// --- 1. HANDLE GALLERY LINE CHANGE ---
+window.handleGalleryLineChange = () => {
+    const lineSel = document.getElementById("galleryLineSelect");
+    const stnSel = document.getElementById("galleryStationSelect");
+    const uploadDiv = document.getElementById("galleryUploadSection");
     
-    if (!hasTableData) {
-        alert("⚠️ Submission Failed\n\nRule: You must complete at least one row in the Distance Data table before submitting.");
-        return; // STOP HERE
+    // Reset
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    stnSel.disabled = true;
+    uploadDiv.classList.add("hidden");
+
+    const selectedLine = lineSel.value;
+    
+    if (selectedLine && METRO_STATIONS[selectedLine]) {
+        METRO_STATIONS[selectedLine].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = stn;
+            opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
+        stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+    }
+};
+
+// --- 2. HANDLE GALLERY STATION CHANGE ---
+window.handleGalleryStationChange = () => {
+    const stnSel = document.getElementById("galleryStationSelect");
+    const lineSel = document.getElementById("galleryLineSelect");
+    const uploadDiv = document.getElementById("galleryUploadSection");
+    
+    if (stnSel.value) {
+        uploadDiv.classList.remove("hidden");
+        // Update visual feedback
+        const targetName = `${stnSel.value} (${lineSel.value})`;
+        document.getElementById("uploadTargetText").innerText = `Target: ${targetName}`;
+        
+        // Optional: You could call loadGallery() here if you want to filter the grid
+        loadGallery(); 
+    } else {
+        uploadDiv.classList.add("hidden");
+    }
+};
+
+// --- 3. UPDATED UPLOAD FUNCTION (Validates Location) ---
+window.uploadEvidenceOnly = () => {
+    // Check File
+    if(!currentFileBase64) return alert("Please select a file first.");
+
+    // Check Location (From Gallery Dropdowns)
+    const stnSel = document.getElementById("galleryStationSelect");
+    const lineSel = document.getElementById("galleryLineSelect");
+    
+    if (!stnSel || !stnSel.value || !lineSel.value) {
+        return alert("❌ Error: Please select a Line and Station before uploading.");
     }
 
-    // 3. Confirmation (Note: Evidence is NOT required)
-    if(confirm("Confirm Final Submission?\n(Evidence is optional, but Table Data is required.)")) {
+    // Format Exact Location String
+    const exactLocation = `${stnSel.value} (${lineSel.value})`;
+
+    if(confirm(`Upload evidence for:\n${exactLocation}?`)) {
+        push(ref(db, "history"), {
+            name: "Evidence Upload",
+            location: exactLocation, // <-- KEY: Stored Station-Wise
+            user: currentUser.email,
+            userName: currentUser.name,
+            date: new Date().toLocaleString(),
+            fileData: currentFileBase64,
+            fileType: currentFileType
+        }).then(() => {
+            // Reset
+            document.getElementById("evidenceFile").value = "";
+            document.getElementById("fileStatus").innerText = "";
+            currentFileBase64 = null;
+            
+            alert("✅ Evidence Uploaded Successfully!");
+            
+            // Refresh Gallery to show new image
+            loadGallery();
+        });
+    }
+};
+window.submitStationData = async () => {
+    // 1. Mandatory: Station Name (from Dropdown)
+    const name = document.getElementById("inpStationName").value.trim();
+    if(!name) return alert("❌ Error: Please select a Line and Station first.");
+
+    // 2. Check Section A: Station Details (Yellow Line, Length, etc.)
+    const valLen = document.getElementById("inpStationLength").value.trim();
+    const valYl = document.getElementById("inpYellowDist").value.trim();
+    const valTh = document.getElementById("inpYellowThick").value.trim();
+    const valRem = document.getElementById("inpRemarks").value.trim();
+
+    // Is Section A touched? (Length, YL Dist, or YL Thick is filled)
+    const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
+
+    // 3. Check Section B: Distance Table
+    const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+    const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
+    
+    // Is Section B touched? (At least one row exists)
+    const hasTableData = rowsData && Object.keys(rowsData).length > 0;
+
+    // --- LOGIC GATE: EITHER A OR B IS REQUIRED ---
+    if (!hasStationDetails && !hasTableData) {
+        alert("⚠️ Submission Failed\n\nYou must complete at least ONE section:\n• Enter Station Details (Length/Yellow Line)\n  -- OR --\n• Add rows to the Distance Table");
+        return; 
+    }
+
+    // 4. Proceed to Submit
+    if(confirm("Confirm Final Submission?")) {
         
-        // Generate Key
         const newEntryKey = push(ref(db, "station_logs")).key;
 
-        // Prepare Station Log (Lightweight)
+        // Prepare Station Log (Even if empty, we send placeholders)
         const stationUpdate = {
-            name: name, // Stores format: "Station Name (Line Name)"
-            len: document.getElementById("inpStationLength").value,
-            yl: document.getElementById("inpYellowDist").value,
-            th: document.getElementById("inpYellowThick").value,
-            remarks: document.getElementById("inpRemarks").value,
+            name: name, 
+            len: valLen,
+            yl: valYl,
+            th: valTh,
+            remarks: valRem,
             user: currentUser.email,
             userName: currentUser.name,
             date: new Date().toLocaleString(),
             linkedRakeKey: newEntryKey
         };
 
-        // Prepare Database Update
         const updates = {};
         updates[`station_logs/${newEntryKey}`] = stationUpdate;
-        updates[`rake_logs/${newEntryKey}`] = rowsData; 
+        
+        // Only save table data if it exists
+        if(hasTableData) {
+            updates[`rake_logs/${newEntryKey}`] = rowsData;
+        } else {
+            // Ensure no garbage data is created
+            updates[`rake_logs/${newEntryKey}`] = null;
+        }
 
-        // 4. Save to Database
         await update(ref(db), updates);
-
-        // 5. Cleanup
         await remove(ref(db, `drafts/${currentUser.uid}`));
         
         // Clear Inputs
@@ -2689,7 +2806,7 @@ window.submitStationData = async () => {
 
         alert("✅ Data Submitted Successfully!");
         
-        // IMPORTANT: Hide the form until new station selection to prevent double submission
+        // Hide form to reset state
         document.getElementById("mainDataForm").classList.add("hidden");
         document.getElementById("stationSelect").value = ""; 
         
