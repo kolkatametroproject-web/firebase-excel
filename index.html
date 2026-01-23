@@ -805,7 +805,6 @@ select:disabled {
   
   <div class="panel">
     <h3>📋 View Data Logs</h3>
-    
     <label style="font-weight:bold; color:#003366;">Step 1: Select Metro Line</label>
     <select id="logLineSelect" onchange="handleLogLineChange()" style="background:#eef2f7; font-weight:bold; border:2px solid #003366;">
       <option value="">-- Select Line --</option>
@@ -826,9 +825,7 @@ select:disabled {
   <div id="logResultsPanel" class="hidden">
     <div class="panel">
       <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #003366; padding-bottom:10px; margin-bottom:15px;">
-        <div>
-          <h3 style="margin:0;" id="logTableTitle">Logs</h3>
-        </div>
+        <h3 style="margin:0;" id="logTableTitle">Station Logs</h3>
         <button onclick="loadSpecificStationData()" class="primary">🔄 Refresh</button>
       </div>
 
@@ -836,22 +833,47 @@ select:disabled {
         <table>
           <thead style="position:sticky; top:0; background:#e9ecef;">
             <tr>
-              <th>Date & Time</th>
-              <th>Station Name</th>
+              <th>Date</th>
               <th>Submitted By</th>
-              <th>Details (L / Y-Dist / Y-Thick)</th>
+              <th>Stn Length (m)</th>
+              <th>YL Dist (cm)</th>
+              <th>YL Thick (cm)</th>
               <th>Remarks</th>
-              <th>Distance Data</th>
-            </tr>
+              <th>Rake Table</th> </tr>
           </thead>
           <tbody id="stationDataViewBody">
-            <tr><td colspan="6" style="text-align:center;">Select a station to view logs...</td></tr>
+            <tr><td colspan="7" style="text-align:center;">Select a station to view logs...</td></tr>
           </tbody>
         </table>
       </div>
     </div>
   </div>
 
+</div>
+  <div id="rakeDataModal" class="modal-overlay hidden">
+    <div class="panel" style="width:700px; max-width:95%; max-height:85vh; display:flex; flex-direction:column;">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #003366; padding-bottom:10px; margin-bottom:10px;">
+            <h3 style="margin:0; color:#003366;">🚆 Rake Distance Table</h3>
+            <button class="danger" onclick="closeRakeModal()" style="padding:5px 15px;">Close X</button>
+        </div>
+        
+        <div class="table-wrapper" style="overflow-y:auto; flex-grow:1;">
+            <table style="width:100%;">
+                <thead>
+                    <tr style="background:#003366; color:white;">
+                        <th>SL</th>
+                        <th>RAKE NO</th>
+                        <th>TYPE</th>
+                        <th>FRONT</th>
+                        <th>REAR</th>
+                        <th>ACT</th>
+                    </tr>
+                </thead>
+                <tbody id="modalRakeBody">
+                    </tbody>
+            </table>
+        </div>
+    </div>
 </div>
 </section>
 
@@ -2457,62 +2479,60 @@ window.handleLogLineChange = () => {
         stnSel.style.background = "#fff";
     }
 };
-
-// --- 2. LOAD SPECIFIC STATION DATA (The Filter Logic) ---
+// --- 1. LOAD STATION DATA (Populate Table 1) ---
 window.loadSpecificStationData = () => {
     const stnSel = document.getElementById("logStationSelect");
     const lineSel = document.getElementById("logLineSelect");
     const resultsDiv = document.getElementById("logResultsPanel");
     const tbody = document.getElementById("stationDataViewBody");
 
-    if (!stnSel.value) return;
+    if (!stnSel.value || !lineSel.value) return;
 
-    // Show Table
+    // Strict Match Name
+    const targetStationName = `${stnSel.value} (${lineSel.value})`;
+
     resultsDiv.classList.remove("hidden");
-    document.getElementById("logTableTitle").innerText = `Logs for: ${stnSel.value}`;
-    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'><i class='fas fa-spinner fa-spin'></i> Loading Records...</td></tr>";
+    document.getElementById("logTableTitle").innerText = `Station Logs: ${stnSel.value}`;
+    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'><i class='fas fa-spinner fa-spin'></i> Loading Records...</td></tr>";
 
-    // FETCH ALL LOGS (limit to last 100 for performance)
     const q = query(ref(db, "station_logs"), limitToLast(100));
 
     onValue(q, (snap) => {
         if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No records found in database.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No records found.</td></tr>";
             return;
         }
 
         const logs = [];
         snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        logs.reverse(); // Newest first
+        logs.reverse(); 
 
-        // FILTER: Match exactly the selected station name
-        // We look for the station name inside the stored name string
-        const searchName = stnSel.value; 
-        const filteredLogs = logs.filter(log => log.name.includes(searchName));
+        const filteredLogs = logs.filter(log => log.name === targetStationName);
 
         if (filteredLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No logs found for this specific station.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No data found for <b>" + targetStationName + "</b>.</td></tr>";
             return;
         }
 
         tbody.innerHTML = "";
 
         filteredLogs.forEach(d => {
-            // Existing View Button
-            const rowButton = `<button class="info" onclick="fetchAndShowRakes('${d.key}', '${d.name}')" style="padding:4px 8px; font-size:11px;">👁 Fetch Rows</button>`;
+            // "View Rakes" opens the SEPARATE modal now
+            const rowButton = `<button class="info" onclick="fetchAndShowRakes('${d.key}')" style="padding:4px 8px; font-size:11px;">📄 View Rake Table</button>`;
             
-            // Delete Button (Admin Only)
             let deleteBtn = "";
             if (isAdmin) {
                 deleteBtn = `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:4px 8px; font-size:11px; margin-left:5px;" title="Delete Log">🗑</button>`;
             }
 
+            // Render Fixed Station Data
             const html = `
             <tr class="station-row-item">
                 <td style="font-size:12px;">${d.date}</td>
-                <td style="font-weight:bold; color:#003366;">${d.name}</td>
                 <td>${d.userName}</td>
-                <td style="font-size:11px;">L: ${d.len || '-'} | YL: ${d.yl || '-'}</td>
+                <td style="font-weight:bold;">${d.len || '-'}</td>
+                <td style="font-weight:bold; color:#e31e24;">${d.yl || '-'}</td>
+                <td style="font-weight:bold;">${d.th || '-'}</td>
                 <td style="font-style:italic; color:#555;">${d.remarks || '--'}</td>
                 <td style="text-align:center;">
                     ${rowButton}
@@ -2522,6 +2542,53 @@ window.loadSpecificStationData = () => {
             tbody.innerHTML += html;
         });
     }, { onlyOnce: true });
+};
+
+// --- 2. FETCH RAKES (Populate Table 2 in Modal) ---
+window.fetchAndShowRakes = async (key) => {
+    if(!key) return alert("Error: No Record ID found.");
+
+    // Open Modal and Show Loading
+    document.getElementById("rakeDataModal").classList.remove("hidden");
+    const tbody = document.getElementById("modalRakeBody");
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>⏳ Fetching Rake Data...</td></tr>";
+
+    try {
+        const snap = await get(ref(db, `rake_logs/${key}`));
+
+        if(!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:red;'>No rake data found for this entry.</td></tr>";
+            return;
+        }
+
+        const rows = snap.val();
+        tbody.innerHTML = ""; // Clear loading message
+
+        let count = 1;
+        for (let rKey in rows) {
+            let r = rows[rKey];
+            // Render the Separate Rake Table
+            tbody.innerHTML += `
+            <tr>
+                <td>${count}</td>
+                <td style="font-weight:bold;">${r.rake || '-'}</td>
+                <td>${r.type || '-'}</td>
+                <td>${r.f || '-'}</td>
+                <td>${r.r || '-'}</td>
+                <td>${r.act || '-'}</td> 
+            </tr>`;
+            count++;
+        }
+
+    } catch(e) {
+        console.error(e);
+        tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:red;'>Error loading data.</td></tr>";
+    }
+};
+
+// --- 3. CLOSE MODAL ---
+window.closeRakeModal = () => {
+    document.getElementById("rakeDataModal").classList.add("hidden");
 };
 window.uploadEvidenceOnly = () => {
     if(!currentFileBase64) return alert("Select a file first.");
@@ -2567,23 +2634,31 @@ window.handleFileUpload = () => {
     }
 }
 window.submitStationData = async () => {
-    // 1. Get Form Data
+    // 1. Get Basic Details
     const name = document.getElementById("inpStationName").value.trim();
-    if(!name) return alert("Station Name Required");
+    if(!name) return alert("❌ Error: Station Name is missing. Please select a Line and Station first.");
 
-    // 2. Get Draft Rows (The Table Data)
+    // 2. Get Table Data (Draft Rows)
     const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
     const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
-    if(confirm("Confirm Final Submission?\nData will be stored separately.")) {
+    // --- RULE CHECK: AT LEAST ONE TABLE ROW REQUIRED ---
+    const hasTableData = rowsData && Object.keys(rowsData).length > 0;
+    
+    if (!hasTableData) {
+        alert("⚠️ Submission Failed\n\nRule: You must complete at least one row in the Distance Data table before submitting.");
+        return; // STOP HERE
+    }
+
+    // 3. Confirmation (Note: Evidence is NOT required)
+    if(confirm("Confirm Final Submission?\n(Evidence is optional, but Table Data is required.)")) {
         
-        // 3. Generate a Unique Key for this Entry
-        // We use this SAME key for both locations so we can link them later
+        // Generate Key
         const newEntryKey = push(ref(db, "station_logs")).key;
 
-        // 4. Save Station Details (Lightweight)
+        // Prepare Station Log (Lightweight)
         const stationUpdate = {
-            name: document.getElementById("inpStationName").value,
+            name: name, // Stores format: "Station Name (Line Name)"
             len: document.getElementById("inpStationLength").value,
             yl: document.getElementById("inpYellowDist").value,
             th: document.getElementById("inpYellowThick").value,
@@ -2591,28 +2666,33 @@ window.submitStationData = async () => {
             user: currentUser.email,
             userName: currentUser.name,
             date: new Date().toLocaleString(),
-            linkedRakeKey: newEntryKey // This tells us where the rows are
+            linkedRakeKey: newEntryKey
         };
 
-        // 5. Save Rake/Table Data Separately (Heavy)
-        // We save this to "rake_logs" using the same ID
+        // Prepare Database Update
         const updates = {};
         updates[`station_logs/${newEntryKey}`] = stationUpdate;
-        if(rowsData) {
-            updates[`rake_logs/${newEntryKey}`] = rowsData;
-        }
+        updates[`rake_logs/${newEntryKey}`] = rowsData; 
 
-        // 6. Perform the split save
+        // 4. Save to Database
         await update(ref(db), updates);
 
-        // 7. Cleanup & Reset
+        // 5. Cleanup
         await remove(ref(db, `drafts/${currentUser.uid}`));
-        document.getElementById("inpStationName").value = "";
+        
+        // Clear Inputs
         document.getElementById("inpStationLength").value = "";
+        document.getElementById("inpYellowDist").value = "";
+        document.getElementById("inpYellowThick").value = "";
         document.getElementById("inpRemarks").value = "";
         document.getElementById("distanceBody").innerHTML = "";
 
-        alert("✅ Saved! Station info and Rake tables stored in separate logs.");
+        alert("✅ Data Submitted Successfully!");
+        
+        // IMPORTANT: Hide the form until new station selection to prevent double submission
+        document.getElementById("mainDataForm").classList.add("hidden");
+        document.getElementById("stationSelect").value = ""; 
+        
         switchTab('dataView');
     }
 };
