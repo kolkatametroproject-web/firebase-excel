@@ -2596,15 +2596,15 @@ window.loadSpecificStationData = async () => {
 
     if (!stnSel.value || !lineSel.value) return;
 
-    // This matches how we saved it: "Station Name (Line Name)"
-    const targetStationName = `${stnSel.value} (${lineSel.value})`;
+    // 1. Get just the Station Name (e.g., "Mahanayak Uttam Kumar")
+    const searchName = stnSel.value.trim(); 
     
     resultsDiv.classList.remove("hidden");
-    body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Scanning Full Database...</td></tr>";
+    body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Searching Database...</td></tr>";
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
 
     try {
-        // --- FIX: SEARCH ENTIRE DATABASE (Removed limitToLast) ---
+        // Fetch ALL logs (No limit)
         const q1 = query(ref(db, "station_logs"));
         const snap1 = await get(q1);
 
@@ -2612,40 +2612,48 @@ window.loadSpecificStationData = async () => {
         body2.innerHTML = ""; 
 
         if (!snap1.exists()) {
-            body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>Database is empty.</td></tr>";
+            body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>Database is completely empty.</td></tr>";
             return;
         }
 
-        let foundMatch = false;
-        let stationKey = null;
-
-        // Convert Firebase object to Array
         const logs = [];
         snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        
-        // --- MATCHING LOGIC ---
-        // We trim spaces to ensure "Station" matches "Station "
-        const matches = logs.filter(log => 
-            log.name && log.name.trim() === targetStationName.trim()
-        ).reverse();
+
+        // --- DEBUGGING: Open Console (F12) to see this ---
+        console.log(`🔎 Looking for station containing: "${searchName}"`);
+        console.log(`📊 Total records in DB: ${logs.length}`);
+
+        // --- ROBUST FILTERING ---
+        // We check if the saved name INCLUDES the station name. 
+        // This finds "Mahanayak Uttam Kumar (Blue Line)" AND "Mahanayak Uttam Kumar"
+        const matches = logs.filter(log => {
+            if (!log.name) return false;
+            return log.name.includes(searchName);
+        }).reverse();
+
+        console.log(`✅ Found ${matches.length} matches.`);
 
         if (matches.length === 0) {
-            body1.innerHTML = `<tr><td colspan='7' style='text-align:center; color:red;'>No data found for <b>${targetStationName}</b></td></tr>`;
+            // Debug: Show first 3 names in DB to see what's wrong
+            const examples = logs.slice(0, 3).map(l => l.name).join(", ");
+            console.log("First 3 DB entries:", examples);
+
+            body1.innerHTML = `<tr><td colspan='7' style='text-align:center; color:red;'>
+                No match for "<b>${searchName}</b>"<br>
+                <small style="color:black;">(Check Console F12 for details)</small>
+            </td></tr>`;
             body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#ccc;'>No rake data.</td></tr>";
             return;
         }
 
-        // Render the matches we found
-        matches.forEach(d => {
-            foundMatch = true;
-            stationKey = d.key; // Store key of most recent match for rake data
+        let stationKey = null;
 
-            let deleteBtn = "";
-            if (isAdmin) {
-                deleteBtn = `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:4px 8px; font-size:11px;">🗑 Delete</button>`;
-            } else {
-                deleteBtn = `<span style="color:#ccc; font-size:10px;">Locked</span>`;
-            }
+        matches.forEach(d => {
+            stationKey = d.key; // Keep latest key
+
+            let deleteBtn = isAdmin 
+                ? `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:4px 8px; font-size:11px;">🗑</button>`
+                : `<span style="color:#ccc; font-size:10px;">Locked</span>`;
 
             const row = `
             <tr>
@@ -2660,12 +2668,11 @@ window.loadSpecificStationData = async () => {
             body1.innerHTML += row;
         });
 
-        // Fetch the rake data for the most recent match
+        // Load Rake Data for the TOP match
         if(stationKey) {
             const snap2 = await get(ref(db, `rake_logs/${stationKey}`));
-            
             if(!snap2.exists()) {
-                body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#777;'>No distance/rake data entered.</td></tr>";
+                body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#777;'>No rake data linked.</td></tr>";
             } else {
                 const rows = snap2.val();
                 let count = 1;
@@ -2685,8 +2692,8 @@ window.loadSpecificStationData = async () => {
         }
 
     } catch (error) {
-        console.error(error);
-        body1.innerHTML = `<tr><td colspan='7' style='color:red;'>System Error: ${error.message}</td></tr>`;
+        console.error("LOAD ERROR:", error);
+        body1.innerHTML = `<tr><td colspan='7' style='color:red;'>Error: ${error.message}</td></tr>`;
     }
 };
 // --- 2. FETCH RAKES (Populate Table 2 in Modal) ---
