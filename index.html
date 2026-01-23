@@ -2596,15 +2596,17 @@ window.loadSpecificStationData = async () => {
 
     if (!stnSel.value || !lineSel.value) return;
 
-    // The name we are looking for
+    // This matches how we saved it: "Station Name (Line Name)"
     const targetStationName = `${stnSel.value} (${lineSel.value})`;
     
     resultsDiv.classList.remove("hidden");
-    body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Searching Database...</td></tr>";
+    body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Scanning Database...</td></tr>";
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
 
     try {
-        // 1. FETCH LAST 100 RECORDS (No "orderByChild", just raw data)
+        // --- THE FIX IS HERE ---
+        // OLD WAY: query(..., orderByChild("name"), equalTo(targetStationName)); <- Fails without index
+        // NEW WAY: Just get the last 100 items and filter them ourselves.
         const q1 = query(ref(db, "station_logs"), limitToLast(100));
         const snap1 = await get(q1);
 
@@ -2619,11 +2621,11 @@ window.loadSpecificStationData = async () => {
         let foundMatch = false;
         let stationKey = null;
 
-        // 2. FILTER MANUALLY IN JAVASCRIPT
+        // Convert Firebase object to Array
         const logs = [];
         snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
         
-        // Find matches (Newest first) that equal our target name
+        // --- MANUALLY FIND THE STATION IN JAVASCRIPT ---
         const matches = logs.filter(log => log.name === targetStationName).reverse();
 
         if (matches.length === 0) {
@@ -2632,10 +2634,10 @@ window.loadSpecificStationData = async () => {
             return;
         }
 
-        // Render the matches
+        // Render the matches we found
         matches.forEach(d => {
             foundMatch = true;
-            stationKey = d.key; // We take the key of the most recent one for Table 2
+            stationKey = d.key; 
 
             let deleteBtn = "";
             if (isAdmin) {
@@ -2657,7 +2659,7 @@ window.loadSpecificStationData = async () => {
             body1.innerHTML += row;
         });
 
-        // 3. FETCH RAKE DATA (Using the key of the most recent match)
+        // Fetch the rake data for the most recent match
         if(stationKey) {
             const snap2 = await get(ref(db, `rake_logs/${stationKey}`));
             
@@ -2858,16 +2860,14 @@ window.uploadEvidenceOnly = () => {
     }
 };
 window.submitStationData = async () => {
-    // 1. Get Values Directly from Dropdowns (Safer than hidden input)
     const lineSel = document.getElementById("lineSelect");
     const stnSel = document.getElementById("stationSelect");
     
     if(!lineSel.value || !stnSel.value) return alert("❌ Error: Please select a Line and Station first.");
     
-    // Construct Name exactly how we read it later: "Station (Line)"
+    // FORCE the name format: "Station (Line)"
     const name = `${stnSel.value} (${lineSel.value})`;
 
-    // 2. Check Section A: Station Details
     const valLen = document.getElementById("inpStationLength").value.trim();
     const valYl = document.getElementById("inpYellowDist").value.trim();
     const valTh = document.getElementById("inpYellowThick").value.trim();
@@ -2875,13 +2875,11 @@ window.submitStationData = async () => {
 
     const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
 
-    // 3. Check Section B: Distance Table
-    // Use try-catch to safely get draft data
     let rowsData = null;
     try {
         const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
         if (rowsSnap.exists()) rowsData = rowsSnap.val();
-    } catch (e) { console.log("No draft rows"); }
+    } catch (e) { }
 
     const hasTableData = rowsData && Object.keys(rowsData).length > 0;
 
@@ -2891,12 +2889,10 @@ window.submitStationData = async () => {
     }
 
     if(confirm("Confirm Final Submission?")) {
-        
-        // Create a new unique key
         const newEntryKey = push(ref(db, "station_logs")).key;
 
         const stationUpdate = {
-            name: name, // Uses the constructed name
+            name: name, 
             len: valLen,
             yl: valYl,
             th: valTh,
@@ -2919,7 +2915,6 @@ window.submitStationData = async () => {
         await update(ref(db), updates);
         await remove(ref(db, `drafts/${currentUser.uid}`));
         
-        // Clear Inputs
         document.getElementById("inpStationLength").value = "";
         document.getElementById("inpYellowDist").value = "";
         document.getElementById("inpYellowThick").value = "";
@@ -2931,6 +2926,7 @@ window.submitStationData = async () => {
         document.getElementById("mainDataForm").classList.add("hidden");
         document.getElementById("stationSelect").value = ""; 
         
+        // Switch tab but DO NOT auto-load (User must select station manually)
         switchTab('dataView');
     }
 };
