@@ -2306,20 +2306,51 @@ window.handleFileUpload = () => {
         document.getElementById("fileStatus").innerText = "Error: File too large";
     }
 }
+window.submitStationData = async () => {
+    // 1. Capture values directly from the screen (No need to click "Save Draft" first)
+    const name = document.getElementById("inpStationName").value.trim();
+    const len = document.getElementById("inpStationLength").value;
+    const yl = document.getElementById("inpYellowDist").value;
+    const th = document.getElementById("inpYellowThick").value;
+    const remarks = document.getElementById("inpRemarks").value;
 
-window.submitStationData = () => {
-    get(ref(db, `drafts/${currentUser.uid}`)).then(s => {
-        const d = s.val();
-        if(!d || !d.details) return alert("No Data.");
-        if(confirm("Submit Final?")) {
-            push(ref(db, "history"), {
-                ...d.details, rows: d.rows, user: currentUser.email, userName: currentUser.name, date: new Date().toLocaleString()
-            }).then(() => {
-                remove(ref(db, `drafts/${currentUser.uid}`));
-                alert("Submitted"); switchTab('gallery');
-            });
-        }
-    });
+    // 2. Validation
+    if(!name) return alert("Please enter a Station Name.");
+
+    if(confirm("Are you sure you want to Submit Final Data?\nThis cannot be edited later.")) {
+        
+        // 3. Get the Rows (Distance Data) from the DB draft
+        // (Rows are auto-saved when you click "Add Row", so we fetch them from DB)
+        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+        const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
+
+        // 4. Push everything to History (The Data Logs)
+        await push(ref(db, "history"), {
+            name: name,
+            len: len,
+            yl: yl,
+            th: th,
+            remarks: remarks,
+            rows: rowsData, // Attach the rows
+            user: currentUser.email,
+            userName: currentUser.name,
+            date: new Date().toLocaleString()
+        });
+
+        // 5. Cleanup: Remove the draft and clear inputs
+        await remove(ref(db, `drafts/${currentUser.uid}`));
+        
+        document.getElementById("inpStationName").value = "";
+        document.getElementById("inpStationLength").value = "";
+        document.getElementById("inpYellowDist").value = "";
+        document.getElementById("inpYellowThick").value = "";
+        document.getElementById("inpRemarks").value = "";
+        document.getElementById("distanceBody").innerHTML = "";
+
+        // 6. Success & Redirect
+        alert("✔ Data Submitted Successfully!");
+        switchTab('dataView'); // Automatically take user to the Data View tab
+    }
 };
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
