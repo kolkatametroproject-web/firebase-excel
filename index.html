@@ -2604,7 +2604,7 @@ window.loadSpecificStationData = async () => {
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
 
     try {
-        // 1. FETCH LAST 100 RECORDS (No Filtering yet)
+        // 1. FETCH LAST 100 RECORDS (No "orderByChild", just raw data)
         const q1 = query(ref(db, "station_logs"), limitToLast(100));
         const snap1 = await get(q1);
 
@@ -2620,15 +2620,14 @@ window.loadSpecificStationData = async () => {
         let stationKey = null;
 
         // 2. FILTER MANUALLY IN JAVASCRIPT
-        // We loop through all records and find the one that matches our Station Name
         const logs = [];
         snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
         
-        // Find matches (Newest first)
+        // Find matches (Newest first) that equal our target name
         const matches = logs.filter(log => log.name === targetStationName).reverse();
 
         if (matches.length === 0) {
-            body1.innerHTML = "<tr><td colspan='7' style='text-align:center; color:red;'>No data found for <b>" + targetStationName + "</b></td></tr>";
+            body1.innerHTML = `<tr><td colspan='7' style='text-align:center; color:red;'>No data found for <b>${targetStationName}</b></td></tr>`;
             body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#ccc;'>No rake data.</td></tr>";
             return;
         }
@@ -2684,7 +2683,7 @@ window.loadSpecificStationData = async () => {
 
     } catch (error) {
         console.error(error);
-        body1.innerHTML = "<tr><td colspan='7' style='color:red;'>System Error: " + error.message + "</td></tr>";
+        body1.innerHTML = `<tr><td colspan='7' style='color:red;'>System Error: ${error.message}</td></tr>`;
     }
 };
 // --- 2. FETCH RAKES (Populate Table 2 in Modal) ---
@@ -2865,7 +2864,7 @@ window.submitStationData = async () => {
     
     if(!lineSel.value || !stnSel.value) return alert("❌ Error: Please select a Line and Station first.");
     
-    // Construct Name exactly how we read it later
+    // Construct Name exactly how we read it later: "Station (Line)"
     const name = `${stnSel.value} (${lineSel.value})`;
 
     // 2. Check Section A: Station Details
@@ -2877,8 +2876,13 @@ window.submitStationData = async () => {
     const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
 
     // 3. Check Section B: Distance Table
-    const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-    const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
+    // Use try-catch to safely get draft data
+    let rowsData = null;
+    try {
+        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+        if (rowsSnap.exists()) rowsData = rowsSnap.val();
+    } catch (e) { console.log("No draft rows"); }
+
     const hasTableData = rowsData && Object.keys(rowsData).length > 0;
 
     if (!hasStationDetails && !hasTableData) {
