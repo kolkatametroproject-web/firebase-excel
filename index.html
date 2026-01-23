@@ -444,7 +444,7 @@ select:disabled {
                 <tr>
                     <th style="width:50px;">SL</th>
                     <th>RAKE NO</th>
-                    <th>TYPE</th>
+                    <th>RAKE TYPE</th>
                     <th>FRONT</th>
                     <th>REAR</th>
                     <th style="width:50px;">ACT</th>
@@ -894,7 +894,7 @@ select:disabled {
             <tr>
               <th>SL</th>
               <th>Rake No</th>
-              <th>Type</th>
+              <th> Rake Type</th>
               <th>Front</th>
               <th>Rear</th>
               <th>Action</th>
@@ -2924,13 +2924,21 @@ window.submitStationData = async () => {
     
     const name = `${stnSel.value} (${lineSel.value})`;
 
-    // 1. Get Form Data
+    // 1. Get Form Data (Table 1)
     const valLen = document.getElementById("inpStationLength").value.trim();
     const valYl = document.getElementById("inpYellowDist").value.trim();
     const valTh = document.getElementById("inpYellowThick").value.trim();
     const valRem = document.getElementById("inpRemarks").value.trim();
 
-    // 2. Get Distance Data (Rows)
+    // --- STRICT VALIDATION: TABLE 1 (Yellow Line) ---
+    // User cannot leave these blank. Must type "_" if no data.
+    if (valLen === "" || valYl === "" || valTh === "" || valRem === "") {
+        alert(`⚠️ VALIDATION ERROR (Table 1):\n\nYou left a field empty in the Yellow Line section.\n\n👉 Rule: If you have no data, you MUST type "_" (underscore).\nEmpty fields are not allowed.`);
+        return; // STOP. Do not save.
+    }
+    // ------------------------------------------------
+
+    // 2. Get Distance Data (Table 2)
     let rowsData = null;
     let rowCount = 0;
     try {
@@ -2941,33 +2949,28 @@ window.submitStationData = async () => {
         }
     } catch (e) { console.error(e); }
 
-    // --- NEW: STRICT VALIDATION (User MUST type something) ---
+    // --- STRICT VALIDATION: TABLE 2 (Distance Data) ---
+    // User cannot leave any cell blank. Must type "_" if no data.
     if (rowCount > 0 && rowsData) {
         let i = 1;
         for (const key in rowsData) {
             const row = rowsData[key];
             
-            // Check if any field is empty (or just spaces)
             const isRakeEmpty = !row.rake || row.rake.trim() === "";
             const isTypeEmpty = !row.type || row.type.trim() === "";
             const isFrontEmpty = !row.f || row.f.trim() === "";
             const isRearEmpty = !row.r || row.r.trim() === "";
 
             if (isRakeEmpty || isTypeEmpty || isFrontEmpty || isRearEmpty) {
-                alert(`⚠️ VALIDATION ERROR at Row ${i}:\n\nYou left a column empty.\n\n👉 Rule: If you have no data, you MUST type "_" (underscore).\nEmpty boxes are not allowed.`);
-                return; // STOP THE FUNCTION HERE. Do not save.
+                alert(`⚠️ VALIDATION ERROR (Table 2) at Row ${i}:\n\nYou left a column empty.\n\n👉 Rule: If you have no data, you MUST type "_" (underscore).\nEmpty boxes are not allowed.`);
+                return; // STOP. Do not save.
             }
             i++;
         }
     }
-    // ---------------------------------------------------------
+    // --------------------------------------------------
 
-    // 3. Check for Empty Submission
-    if (!currentStationKey && valLen === "" && rowCount === 0) {
-        return alert("⚠️ Form is empty. Nothing to save.");
-    }
-
-    // 4. Proceed to Save
+    // 3. Confirm & Save
     if(confirm(`Confirm ${currentStationKey ? 'UPDATE' : 'SUBMISSION'}?\nStation: ${name}\nTotal Rows: ${rowCount}`)) {
         
         const updates = {};
@@ -3006,6 +3009,8 @@ window.submitStationData = async () => {
             
             // Reset UI
             document.getElementById("inpStationLength").value = "";
+            document.getElementById("inpYellowDist").value = "";
+            document.getElementById("inpYellowThick").value = "";
             document.getElementById("inpRemarks").value = "";
             document.getElementById("distanceBody").innerHTML = "";
             document.getElementById("mainDataForm").classList.add("hidden");
@@ -3571,16 +3576,38 @@ window.loadDraft = () => {
 };
 function renderRow(k, v, i) {
     const b = document.getElementById("distanceBody");
-    // Note: We do NOT clear innerHTML here, because this function is called inside a loop.
-    // The clearing happens once inside loadDraft() before the loop starts.
+    
+    // Helper to check which option was previously saved
+    const isSel = (val) => (v.type === val ? "selected" : "");
+
     b.innerHTML += `
         <tr>
-            <td>${i}</td>
-            <td><input style="width:100%" value="${v.rake}" onchange="upRow('${k}','rake',this.value)"></td>
-            <td><input style="width:100%" value="${v.type}" onchange="upRow('${k}','type',this.value)"></td>
-            <td><input style="width:100%" value="${v.f}" onchange="upRow('${k}','f',this.value)"></td>
-            <td><input style="width:100%" value="${v.r}" onchange="upRow('${k}','r',this.value)"></td>
-            <td><button class="danger" onclick="delRow('${k}')">X</button></td>
+            <td style="text-align:center; font-weight:bold;">${i}</td>
+            
+            <td>
+                <input style="width:100%" value="${v.rake}" onchange="upRow('${k}','rake',this.value)" placeholder="Type _ if empty">
+            </td>
+            
+            <td>
+                <select style="width:100%; padding:5px; font-weight:bold; border:1px solid #ced4da; border-radius:3px;" onchange="upRow('${k}','type',this.value)">
+                    <option value="" ${isSel("")}>-- Select Type --</option>
+                    <option value="BHEL RAKE (300 SERIES)" ${isSel("BHEL RAKE (300 SERIES)")}>BHEL RAKE (300 SERIES)</option>
+                    <option value="MEDHA RAKE (400 SERIES)" ${isSel("MEDHA RAKE (400 SERIES)")}>MEDHA RAKE (400 SERIES)</option>
+                    <option value="DALIAN RAKE (500 SERIES)" ${isSel("DALIAN RAKE (500 SERIES)")}>DALIAN RAKE (500 SERIES)</option>
+                </select>
+            </td>
+
+            <td>
+                <input style="width:100%" value="${v.f}" onchange="upRow('${k}','f',this.value)" placeholder="_">
+            </td>
+            
+            <td>
+                <input style="width:100%" value="${v.r}" onchange="upRow('${k}','r',this.value)" placeholder="_">
+            </td>
+            
+            <td style="text-align:center;">
+                <button class="danger" onclick="delRow('${k}')" style="padding:5px 10px;">X</button>
+            </td>
         </tr>`;
 }
 window.upRow = (k,f,v) => update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), {[f]:v});
