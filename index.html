@@ -2891,36 +2891,41 @@ window.submitStationData = async () => {
     
     if(!lineSel.value || !stnSel.value) return alert("❌ Error: Please select a Line and Station first.");
     
-    // FORCE the name format: "Station (Line)"
-    const name = `${stnSel.value} (${lineSel.value})`;
+    const name = `${stnSel.value} (${lineSel.value})`; 
 
+    // 1. Get Form Values
     const valLen = document.getElementById("inpStationLength").value.trim();
     const valYl = document.getElementById("inpYellowDist").value.trim();
     const valTh = document.getElementById("inpYellowThick").value.trim();
     const valRem = document.getElementById("inpRemarks").value.trim();
 
-    const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
-
-    // 1. Get Distance Data from Drafts
+    // 2. Get Draft Rows
     let rowsData = null;
+    let rowCount = 0;
     try {
         const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-        if (rowsSnap.exists()) rowsData = rowsSnap.val();
+        if (rowsSnap.exists()) {
+            rowsData = rowsSnap.val();
+            rowCount = Object.keys(rowsData).length;
+        }
     } catch (e) { console.error(e); }
 
-    const hasTableData = rowsData && Object.keys(rowsData).length > 0;
-
-    if (!hasStationDetails && !hasTableData) {
-        alert("⚠️ Cannot Submit: All fields are empty!");
-        return; 
+    // 3. Safety Check
+    const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
+    if (!hasStationDetails && rowCount === 0) {
+        return alert("⚠️ Cannot Submit: All fields are empty!");
     }
 
-    if(confirm("Confirm Final Submission?")) {
+    if(confirm(`Confirm Submission?\n• Station: ${name}\n• Rake Rows: ${rowCount}`)) {
+        
+        // --- KEY FIX: Generate ID first ---
         const newEntryKey = push(ref(db, "station_logs")).key;
 
-        // --- FIX: Create the Data Objects FIRST ---
-        
-        const stationUpdate = {
+        // --- KEY FIX: Define 'updates' object BEFORE using it ---
+        const updates = {}; 
+
+        // 1. Add Station Log
+        updates[`station_logs/${newEntryKey}`] = {
             name: name, 
             len: valLen,
             yl: valYl,
@@ -2929,27 +2934,21 @@ window.submitStationData = async () => {
             user: currentUser.email,
             userName: currentUser.name,
             date: new Date().toLocaleString(),
-            linkedRakeKey: newEntryKey // This links Table 1 to Table 2
+            linkedRakeKey: newEntryKey // Links to Table 2
         };
-
-        // --- FIX: Define 'updates' AFTER creating data ---
-        const updates = {};
         
-        // Add Station Data
-        updates[`station_logs/${newEntryKey}`] = stationUpdate;
-        
-        // Add Rake Data (Only if it exists)
-        if(hasTableData) {
+        // 2. Add Rake Log (Only if rows exist)
+        if(rowCount > 0) {
             updates[`rake_logs/${newEntryKey}`] = rowsData;
         } else {
             updates[`rake_logs/${newEntryKey}`] = null;
         }
 
-        // --- Execute Database Update ---
+        // --- EXECUTE SAVE ---
         try {
             await update(ref(db), updates);
             
-            // Cleanup
+            // Clean up
             await remove(ref(db, `drafts/${currentUser.uid}`));
             document.getElementById("inpStationLength").value = "";
             document.getElementById("inpYellowDist").value = "";
@@ -2957,12 +2956,11 @@ window.submitStationData = async () => {
             document.getElementById("inpRemarks").value = "";
             document.getElementById("distanceBody").innerHTML = "";
 
-            alert("✅ Data Submitted Successfully!");
+            alert("✅ SUCCESS! Data Saved.");
             
+            // Force reload the view
             document.getElementById("mainDataForm").classList.add("hidden");
             document.getElementById("stationSelect").value = ""; 
-            
-            // Go to view tab
             switchTab('dataView');
             
         } catch (error) {
