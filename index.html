@@ -2600,14 +2600,12 @@ window.loadSpecificStationData = async () => {
     const targetStationName = `${stnSel.value} (${lineSel.value})`;
     
     resultsDiv.classList.remove("hidden");
-    body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Scanning Database...</td></tr>";
+    body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Scanning Full Database...</td></tr>";
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
 
     try {
-        // --- THE FIX IS HERE ---
-        // OLD WAY: query(..., orderByChild("name"), equalTo(targetStationName)); <- Fails without index
-        // NEW WAY: Just get the last 100 items and filter them ourselves.
-        const q1 = query(ref(db, "station_logs"), limitToLast(100));
+        // --- FIX: SEARCH ENTIRE DATABASE (Removed limitToLast) ---
+        const q1 = query(ref(db, "station_logs"));
         const snap1 = await get(q1);
 
         body1.innerHTML = "";
@@ -2625,8 +2623,11 @@ window.loadSpecificStationData = async () => {
         const logs = [];
         snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
         
-        // --- MANUALLY FIND THE STATION IN JAVASCRIPT ---
-        const matches = logs.filter(log => log.name === targetStationName).reverse();
+        // --- MATCHING LOGIC ---
+        // We trim spaces to ensure "Station" matches "Station "
+        const matches = logs.filter(log => 
+            log.name && log.name.trim() === targetStationName.trim()
+        ).reverse();
 
         if (matches.length === 0) {
             body1.innerHTML = `<tr><td colspan='7' style='text-align:center; color:red;'>No data found for <b>${targetStationName}</b></td></tr>`;
@@ -2637,7 +2638,7 @@ window.loadSpecificStationData = async () => {
         // Render the matches we found
         matches.forEach(d => {
             foundMatch = true;
-            stationKey = d.key; 
+            stationKey = d.key; // Store key of most recent match for rake data
 
             let deleteBtn = "";
             if (isAdmin) {
