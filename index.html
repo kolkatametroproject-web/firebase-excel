@@ -1844,73 +1844,104 @@ window.handleLineChange = () => {
         stnSel.style.background = "#fff";
     }
 };
+// Global variables to track editing state
+let currentStationKey = null; // Key of the station_log
+let currentRakeKey = null;    // Key of the rake_log
+
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
     const formDiv = document.getElementById("mainDataForm");
     
-    // Inputs to lock
+    // Inputs
     const inpLen = document.getElementById("inpStationLength");
     const inpYl = document.getElementById("inpYellowDist");
     const inpTh = document.getElementById("inpYellowThick");
     const inpRem = document.getElementById("inpRemarks");
     const warningBox = document.getElementById("dataExistsWarning");
     const saveBtn = document.getElementById("btnSaveDraft");
+    const submitBtn = document.getElementById("btnFinalSubmit");
 
-    if (stnSel.value) {
-        // Show Form
-        formDiv.classList.remove("hidden");
-        document.getElementById("formTitle").innerText = `📝 1. Yellow Line Measurement (${stnSel.value})`;
-        
-        const fullStationName = `${stnSel.value} (${lineSel.value})`;
-        document.getElementById("inpStationName").value = fullStationName;
-
-        // --- NEW: CHECK IF DATA EXISTS ---
-        // We query station_logs to see if this station name is already there
-        const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
-        const snap = await get(q);
-
-        if (snap.exists()) {
-            // DATA EXISTS -> LOCK INPUTS
-            warningBox.classList.remove("hidden");
-            
-            // Disable inputs
-            inpLen.disabled = true;
-            inpYl.disabled = true;
-            inpTh.disabled = true;
-            inpRem.disabled = true;
-            saveBtn.disabled = true;
-            saveBtn.style.opacity = "0.5";
-            
-            // Optional: Fill them with existing data so user can see what was entered
-            let existingData = null;
-            snap.forEach(c => existingData = c.val());
-            inpLen.value = existingData.len || "";
-            inpYl.value = existingData.yl || "";
-            inpTh.value = existingData.th || "";
-            inpRem.value = "(Locked) " + (existingData.remarks || "");
-
-        } else {
-            // NO DATA -> UNLOCK INPUTS
-            warningBox.classList.add("hidden");
-            inpLen.disabled = false;
-            inpYl.disabled = false;
-            inpTh.disabled = false;
-            inpRem.disabled = false;
-            saveBtn.disabled = false;
-            saveBtn.style.opacity = "1";
-            
-            // Clear inputs for fresh entry (or load draft)
-            inpLen.value = "";
-            inpYl.value = "";
-            inpTh.value = "";
-            inpRem.value = "";
-            loadDraft(); // Only load draft if we are allowed to edit
-        }
-        
-    } else {
+    if (!stnSel.value) {
         formDiv.classList.add("hidden");
+        return;
     }
+
+    // Reset State
+    formDiv.classList.remove("hidden");
+    currentStationKey = null;
+    currentRakeKey = null;
+    
+    const fullStationName = `${stnSel.value} (${lineSel.value})`;
+    document.getElementById("inpStationName").value = fullStationName;
+    document.getElementById("formTitle").innerText = `📝 Managing: ${stnSel.value}`;
+
+    // Check DB for existing data
+    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
+    const snap = await get(q);
+
+    if (snap.exists()) {
+        // --- DATA EXISTS: ENTER APPEND MODE ---
+        let existingData = null;
+        // Get the first match
+        snap.forEach(c => { 
+            existingData = c.val(); 
+            currentStationKey = c.key; 
+        });
+
+        currentRakeKey = existingData.linkedRakeKey || currentStationKey;
+
+        // 1. Show "Append" UI
+        warningBox.classList.remove("hidden");
+        warningBox.innerHTML = `<strong>⚠️ Station Found!</strong><br>Loaded existing data. New rows will be added as <strong>SL No ${Object.keys(existingData).length + 1}+</strong>.`;
+        submitBtn.innerText = "🔄 Update & Append Rows";
+        submitBtn.style.background = "#b38600"; // Gold color for Update
+
+        // 2. Fill & Lock Station Details
+        inpLen.value = existingData.len || "";
+        inpYl.value = existingData.yl || "";
+        inpTh.value = existingData.th || "";
+        inpRem.value = existingData.remarks || "";
+        
+        inpLen.disabled = true;
+        inpYl.disabled = true;
+        inpTh.disabled = true;
+        inpRem.disabled = true;
+        saveBtn.disabled = true;
+
+        // 3. IMPORTANT: Copy existing Rake Data to Drafts so you can edit/add to it
+        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
+        if(rakeSnap.exists()) {
+            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
+        } else {
+            await remove(ref(db, `drafts/${currentUser.uid}/rows`));
+        }
+
+    } else {
+        // --- NO DATA: ENTER NEW MODE ---
+        warningBox.classList.add("hidden");
+        submitBtn.innerText = "✔ Submit Final Data";
+        submitBtn.style.background = "#003366";
+
+        // Unlock Inputs
+        inpLen.disabled = false;
+        inpYl.disabled = false;
+        inpTh.disabled = false;
+        inpRem.disabled = false;
+        saveBtn.disabled = false;
+        
+        // Clear Inputs
+        inpLen.value = "";
+        inpYl.value = "";
+        inpTh.value = "";
+        inpRem.value = "";
+        
+        // Clear Drafts (Start Fresh)
+        await remove(ref(db, `drafts/${currentUser.uid}/rows`));
+    }
+    
+    // Trigger draft listener to render the table (Empty or Pre-filled)
+    loadDraft();
 };
 async function startRealTimeDetection(video, canvas) {
     const displaySize = { width: video.videoWidth || 320, height: video.videoHeight || 240 };
@@ -2889,17 +2920,17 @@ window.submitStationData = async () => {
     const lineSel = document.getElementById("lineSelect");
     const stnSel = document.getElementById("stationSelect");
     
-    if(!lineSel.value || !stnSel.value) return alert("❌ Error: Please select a Line and Station first.");
+    if(!lineSel.value || !stnSel.value) return alert("❌ Select Line/Station.");
     
-    const name = `${stnSel.value} (${lineSel.value})`; 
+    const name = `${stnSel.value} (${lineSel.value})`;
 
-    // 1. Get Form Values
+    // Get Form Data
     const valLen = document.getElementById("inpStationLength").value.trim();
     const valYl = document.getElementById("inpYellowDist").value.trim();
     const valTh = document.getElementById("inpYellowThick").value.trim();
     const valRem = document.getElementById("inpRemarks").value.trim();
 
-    // 2. Get Draft Rows
+    // Get All Rows (Old + New)
     let rowsData = null;
     let rowCount = 0;
     try {
@@ -2910,62 +2941,63 @@ window.submitStationData = async () => {
         }
     } catch (e) { console.error(e); }
 
-    // 3. Safety Check
-    const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
-    if (!hasStationDetails && rowCount === 0) {
-        return alert("⚠️ Cannot Submit: All fields are empty!");
+    // Validation
+    if (!currentStationKey && valLen === "" && rowCount === 0) {
+        return alert("⚠️ Form is empty.");
     }
 
-    if(confirm(`Confirm Submission?\n• Station: ${name}\n• Rake Rows: ${rowCount}`)) {
+    if(confirm(`Confirm ${currentStationKey ? 'UPDATE' : 'SUBMISSION'}?\nStation: ${name}\nTotal Rows: ${rowCount}`)) {
         
-        // --- KEY FIX: Generate ID first ---
-        const newEntryKey = push(ref(db, "station_logs")).key;
+        const updates = {};
 
-        // --- KEY FIX: Define 'updates' object BEFORE using it ---
-        const updates = {}; 
+        if (currentStationKey) {
+            // --- UPDATE EXISTING RECORD ---
+            // Only update the Rake Data and Last Modified info
+            // We keep the original Station Data (Len, YL, etc.) untouched/locked
+            
+            // 1. Update metadata (optional, shows who modified last)
+            updates[`station_logs/${currentStationKey}/lastModifiedBy`] = currentUser.name;
+            updates[`station_logs/${currentStationKey}/lastModifiedDate`] = new Date().toLocaleString();
 
-        // 1. Add Station Log
-        updates[`station_logs/${newEntryKey}`] = {
-            name: name, 
-            len: valLen,
-            yl: valYl,
-            th: valTh,
-            remarks: valRem,
-            user: currentUser.email,
-            userName: currentUser.name,
-            date: new Date().toLocaleString(),
-            linkedRakeKey: newEntryKey // Links to Table 2
-        };
-        
-        // 2. Add Rake Log (Only if rows exist)
-        if(rowCount > 0) {
-            updates[`rake_logs/${newEntryKey}`] = rowsData;
+            // 2. Update the Rake List (This includes old rows + new rows)
+            if(rowCount > 0) updates[`rake_logs/${currentRakeKey}`] = rowsData;
+
         } else {
-            updates[`rake_logs/${newEntryKey}`] = null;
+            // --- CREATE NEW RECORD ---
+            const newKey = push(ref(db, "station_logs")).key;
+            
+            updates[`station_logs/${newKey}`] = {
+                name: name, 
+                len: valLen,
+                yl: valYl,
+                th: valTh,
+                remarks: valRem,
+                user: currentUser.email,
+                userName: currentUser.name,
+                date: new Date().toLocaleString(),
+                linkedRakeKey: newKey
+            };
+            
+            if(rowCount > 0) updates[`rake_logs/${newKey}`] = rowsData;
         }
 
-        // --- EXECUTE SAVE ---
+        // Execute
         try {
             await update(ref(db), updates);
-            
-            // Clean up
             await remove(ref(db, `drafts/${currentUser.uid}`));
+            
+            // Reset UI
             document.getElementById("inpStationLength").value = "";
-            document.getElementById("inpYellowDist").value = "";
-            document.getElementById("inpYellowThick").value = "";
             document.getElementById("inpRemarks").value = "";
             document.getElementById("distanceBody").innerHTML = "";
-
-            alert("✅ SUCCESS! Data Saved.");
-            
-            // Force reload the view
             document.getElementById("mainDataForm").classList.add("hidden");
             document.getElementById("stationSelect").value = ""; 
+
+            alert("✅ Data Saved Successfully!");
             switchTab('dataView');
-            
+
         } catch (error) {
-            console.error("SUBMIT FAILED:", error);
-            alert("Database Error: " + error.message);
+            alert("Error: " + error.message);
         }
     }
 };
