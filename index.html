@@ -2920,17 +2920,17 @@ window.submitStationData = async () => {
     const lineSel = document.getElementById("lineSelect");
     const stnSel = document.getElementById("stationSelect");
     
-    if(!lineSel.value || !stnSel.value) return alert("❌ Select Line/Station.");
+    if(!lineSel.value || !stnSel.value) return alert("❌ Error: Please select a Line and Station first.");
     
     const name = `${stnSel.value} (${lineSel.value})`;
 
-    // Get Form Data
+    // 1. Get Form Data
     const valLen = document.getElementById("inpStationLength").value.trim();
     const valYl = document.getElementById("inpYellowDist").value.trim();
     const valTh = document.getElementById("inpYellowThick").value.trim();
     const valRem = document.getElementById("inpRemarks").value.trim();
 
-    // Get All Rows (Old + New)
+    // 2. Get Distance Data (Rows)
     let rowsData = null;
     let rowCount = 0;
     try {
@@ -2941,24 +2941,33 @@ window.submitStationData = async () => {
         }
     } catch (e) { console.error(e); }
 
-    // Validation
-    if (!currentStationKey && valLen === "" && rowCount === 0) {
-        return alert("⚠️ Form is empty.");
-    }
-
-    // --- NEW: AUTO-FILL BLANKS WITH "_" ---
+    // --- NEW: STRICT VALIDATION (User MUST type something) ---
     if (rowCount > 0 && rowsData) {
-        Object.keys(rowsData).forEach(key => {
+        let i = 1;
+        for (const key in rowsData) {
             const row = rowsData[key];
-            // Check each field. If empty, set to "_"
-            if (!row.rake || row.rake.trim() === "") row.rake = "_";
-            if (!row.type || row.type.trim() === "") row.type = "_";
-            if (!row.f || row.f.trim() === "") row.f = "_";
-            if (!row.r || row.r.trim() === "") row.r = "_";
-        });
-    }
-    // ---------------------------------------
+            
+            // Check if any field is empty (or just spaces)
+            const isRakeEmpty = !row.rake || row.rake.trim() === "";
+            const isTypeEmpty = !row.type || row.type.trim() === "";
+            const isFrontEmpty = !row.f || row.f.trim() === "";
+            const isRearEmpty = !row.r || row.r.trim() === "";
 
+            if (isRakeEmpty || isTypeEmpty || isFrontEmpty || isRearEmpty) {
+                alert(`⚠️ VALIDATION ERROR at Row ${i}:\n\nYou left a column empty.\n\n👉 Rule: If you have no data, you MUST type "_" (underscore).\nEmpty boxes are not allowed.`);
+                return; // STOP THE FUNCTION HERE. Do not save.
+            }
+            i++;
+        }
+    }
+    // ---------------------------------------------------------
+
+    // 3. Check for Empty Submission
+    if (!currentStationKey && valLen === "" && rowCount === 0) {
+        return alert("⚠️ Form is empty. Nothing to save.");
+    }
+
+    // 4. Proceed to Save
     if(confirm(`Confirm ${currentStationKey ? 'UPDATE' : 'SUBMISSION'}?\nStation: ${name}\nTotal Rows: ${rowCount}`)) {
         
         const updates = {};
@@ -2968,7 +2977,7 @@ window.submitStationData = async () => {
             updates[`station_logs/${currentStationKey}/lastModifiedBy`] = currentUser.name;
             updates[`station_logs/${currentStationKey}/lastModifiedDate`] = new Date().toLocaleString();
 
-            // Update Rake List (With "_" filled in)
+            // Update Rake List
             if(rowCount > 0) updates[`rake_logs/${currentRakeKey}`] = rowsData;
 
         } else {
@@ -2990,7 +2999,7 @@ window.submitStationData = async () => {
             if(rowCount > 0) updates[`rake_logs/${newKey}`] = rowsData;
         }
 
-        // Execute
+        // Execute Database Update
         try {
             await update(ref(db), updates);
             await remove(ref(db, `drafts/${currentUser.uid}`));
@@ -3485,7 +3494,7 @@ window.retakeName = (uid) => update(ref(db, `users/${uid}`), { name: null }).the
     // NOTE: We do NOT load data automatically for 'dataView'.
     // The user must select a Line/Station first.
 };
-window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "_", type: "_", f: "_", r: "_" });
+window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
 function loadGallery() {
     const div = document.getElementById("galleryContainer");
