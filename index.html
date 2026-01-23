@@ -2596,7 +2596,6 @@ window.loadSpecificStationData = async () => {
 
     if (!stnSel.value || !lineSel.value) return;
 
-    // 1. Get just the Station Name (e.g., "Mahanayak Uttam Kumar")
     const searchName = stnSel.value.trim(); 
     
     resultsDiv.classList.remove("hidden");
@@ -2604,7 +2603,7 @@ window.loadSpecificStationData = async () => {
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
 
     try {
-        // Fetch ALL logs (No limit)
+        // Fetch ALL logs
         const q1 = query(ref(db, "station_logs"));
         const snap1 = await get(q1);
 
@@ -2612,44 +2611,45 @@ window.loadSpecificStationData = async () => {
         body2.innerHTML = ""; 
 
         if (!snap1.exists()) {
-            body1.innerHTML = "<tr><td colspan='7' style='text-align:center;'>Database is completely empty.</td></tr>";
+            body1.innerHTML = "<tr><td colspan='7' style='text-align:center; color:red;'><strong>DATABASE IS EMPTY</strong><br>No records exist at all.</td></tr>";
             return;
         }
 
         const logs = [];
         snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
 
-        // --- DEBUGGING: Open Console (F12) to see this ---
-        console.log(`🔎 Looking for station containing: "${searchName}"`);
-        console.log(`📊 Total records in DB: ${logs.length}`);
-
-        // --- ROBUST FILTERING ---
-        // We check if the saved name INCLUDES the station name. 
-        // This finds "Mahanayak Uttam Kumar (Blue Line)" AND "Mahanayak Uttam Kumar"
+        // Filter for matches
         const matches = logs.filter(log => {
             if (!log.name) return false;
             return log.name.includes(searchName);
         }).reverse();
 
-        console.log(`✅ Found ${matches.length} matches.`);
-
+        // --- IF NO MATCH FOUND: SHOW WHAT IS AVAILABLE ---
         if (matches.length === 0) {
-            // Debug: Show first 3 names in DB to see what's wrong
-            const examples = logs.slice(0, 3).map(l => l.name).join(", ");
-            console.log("First 3 DB entries:", examples);
+            // Create a list of names that ARE in the database
+            const availableNames = logs.map(l => `• ${l.name}`).join("<br>");
 
-            body1.innerHTML = `<tr><td colspan='7' style='text-align:center; color:red;'>
-                No match for "<b>${searchName}</b>"<br>
-                <small style="color:black;">(Check Console F12 for details)</small>
-            </td></tr>`;
+            body1.innerHTML = `
+            <tr>
+                <td colspan='7' style='text-align:center; color:red; padding:15px;'>
+                    ❌ <strong>No data found for: "${searchName}"</strong>
+                </td>
+            </tr>
+            <tr style="background:#fff3cd;">
+                <td colspan='7' style='text-align:center; color:#856404; padding:10px;'>
+                    <strong>🔍 Here is what IS in your database (${logs.length} records):</strong><br><br>
+                    ${availableNames}
+                </td>
+            </tr>`;
+            
             body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#ccc;'>No rake data.</td></tr>";
             return;
         }
 
+        // --- RENDER MATCHES ---
         let stationKey = null;
-
         matches.forEach(d => {
-            stationKey = d.key; // Keep latest key
+            stationKey = d.key; 
 
             let deleteBtn = isAdmin 
                 ? `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:4px 8px; font-size:11px;">🗑</button>`
@@ -2668,7 +2668,7 @@ window.loadSpecificStationData = async () => {
             body1.innerHTML += row;
         });
 
-        // Load Rake Data for the TOP match
+        // Load Rakes for top match
         if(stationKey) {
             const snap2 = await get(ref(db, `rake_logs/${stationKey}`));
             if(!snap2.exists()) {
@@ -2898,7 +2898,7 @@ window.submitStationData = async () => {
 
     if(confirm("Confirm Final Submission?")) {
         const newEntryKey = push(ref(db, "station_logs")).key;
-
+        updates[`station_logs/${newEntryKey}`] = stationUpdate;
         const stationUpdate = {
             name: name, 
             len: valLen,
