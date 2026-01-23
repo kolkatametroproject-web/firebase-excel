@@ -2891,42 +2891,35 @@ window.submitStationData = async () => {
     
     if(!lineSel.value || !stnSel.value) return alert("❌ Error: Please select a Line and Station first.");
     
-    const name = `${stnSel.value} (${lineSel.value})`; // Force Name Format
+    // FORCE the name format: "Station (Line)"
+    const name = `${stnSel.value} (${lineSel.value})`;
 
-    // 1. Get Yellow Line Details
     const valLen = document.getElementById("inpStationLength").value.trim();
     const valYl = document.getElementById("inpYellowDist").value.trim();
     const valTh = document.getElementById("inpYellowThick").value.trim();
     const valRem = document.getElementById("inpRemarks").value.trim();
 
-    // 2. Get Distance/Rake Data from Drafts
+    const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
+
+    // 1. Get Distance Data from Drafts
     let rowsData = null;
-    let rowCount = 0;
     try {
         const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-        if (rowsSnap.exists()) {
-            rowsData = rowsSnap.val();
-            rowCount = Object.keys(rowsData).length;
-        }
-    } catch (e) { console.error("Draft Error:", e); }
+        if (rowsSnap.exists()) rowsData = rowsSnap.val();
+    } catch (e) { console.error(e); }
 
-    // --- SAFETY CHECK ---
-    const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
-    
-    if (!hasStationDetails && rowCount === 0) {
-        return alert("⚠️ Cannot Submit: Both sections are empty!");
+    const hasTableData = rowsData && Object.keys(rowsData).length > 0;
+
+    if (!hasStationDetails && !hasTableData) {
+        alert("⚠️ Cannot Submit: All fields are empty!");
+        return; 
     }
 
-    // 3. Confirm Submission
-    let confirmMsg = `Confirm Submission for: ${name}\n`;
-    confirmMsg += hasStationDetails ? `✅ Yellow Line Data Entered\n` : `❌ No Yellow Line Data\n`;
-    confirmMsg += rowCount > 0 ? `✅ Distance Data: ${rowCount} Rows` : `❌ No Distance Data (Table Empty)`;
-
-    if(confirm(confirmMsg)) {
-        // Generate Unique ID
+    if(confirm("Confirm Final Submission?")) {
         const newEntryKey = push(ref(db, "station_logs")).key;
 
-        // Prepare Station Data
+        // --- FIX: Create the Data Objects FIRST ---
+        
         const stationUpdate = {
             name: name, 
             len: valLen,
@@ -2936,37 +2929,46 @@ window.submitStationData = async () => {
             user: currentUser.email,
             userName: currentUser.name,
             date: new Date().toLocaleString(),
-            linkedRakeKey: newEntryKey // Links to the rake data
+            linkedRakeKey: newEntryKey // This links Table 1 to Table 2
         };
 
-        // Prepare Updates Object
+        // --- FIX: Define 'updates' AFTER creating data ---
         const updates = {};
+        
+        // Add Station Data
         updates[`station_logs/${newEntryKey}`] = stationUpdate;
         
-        // IMPORTANT: Save Rake Data if it exists
-        if(rowCount > 0) {
+        // Add Rake Data (Only if it exists)
+        if(hasTableData) {
             updates[`rake_logs/${newEntryKey}`] = rowsData;
         } else {
             updates[`rake_logs/${newEntryKey}`] = null;
         }
 
-        // Execute Save
-        await update(ref(db), updates);
-        
-        // Clear Drafts & Inputs
-        await remove(ref(db, `drafts/${currentUser.uid}`));
-        document.getElementById("inpStationLength").value = "";
-        document.getElementById("inpYellowDist").value = "";
-        document.getElementById("inpYellowThick").value = "";
-        document.getElementById("inpRemarks").value = "";
-        document.getElementById("distanceBody").innerHTML = "";
+        // --- Execute Database Update ---
+        try {
+            await update(ref(db), updates);
+            
+            // Cleanup
+            await remove(ref(db, `drafts/${currentUser.uid}`));
+            document.getElementById("inpStationLength").value = "";
+            document.getElementById("inpYellowDist").value = "";
+            document.getElementById("inpYellowThick").value = "";
+            document.getElementById("inpRemarks").value = "";
+            document.getElementById("distanceBody").innerHTML = "";
 
-        alert("✅ Data Submitted Successfully!");
-        
-        // Hide Form and Switch Tab
-        document.getElementById("mainDataForm").classList.add("hidden");
-        document.getElementById("stationSelect").value = ""; 
-        switchTab('dataView');
+            alert("✅ Data Submitted Successfully!");
+            
+            document.getElementById("mainDataForm").classList.add("hidden");
+            document.getElementById("stationSelect").value = ""; 
+            
+            // Go to view tab
+            switchTab('dataView');
+            
+        } catch (error) {
+            console.error("SUBMIT FAILED:", error);
+            alert("Database Error: " + error.message);
+        }
     }
 };
 window.loadAdminPanel = async () => {
