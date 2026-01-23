@@ -276,6 +276,12 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
     color: white;
     border: 1px solid #bd2130;
 }
+select:disabled {
+    background-color: #e9ecef;
+    color: #6c757d;
+    cursor: not-allowed;
+    border-color: #ced4da;
+}
 .btn-logout:hover { background: #c82333; }
 .history-card.checkout { border-left-color: #b38600; } /* Yellow for OUT */
 .history-card.return { border-left-color: #17a2b8; }   /* Blue for IN */
@@ -379,10 +385,35 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
   </div>
 
   <div id="tab-newData">
-    <div class="panel">
-      <h3>🆕 Station Data Entry</h3>
+    <div id="tab-newData">
+  <div class="panel">
+    <h3>🆕 Select Location</h3>
+    
+    <label style="font-weight:bold; color:#003366;">Step 1: Select Metro Line</label>
+    <select id="lineSelect" onchange="handleLineChange()" style="background:#eef2f7; font-weight:bold; border:2px solid #003366;">
+      <option value="">-- Select Line --</option>
+      <option value="Blue Line">Blue Line (North-South: Dakshineswar ↔ New Garia)</option>
+      <option value="Green Line">Green Line (East-West: Sector V ↔ Howrah)</option>
+      <option value="Purple Line">Purple Line (Joka ↔ Majerhat)</option>
+      <option value="Yellow Line">Yellow Line (Noapara ↔ Airport)</option>
+      <option value="Orange Line">Orange Line (New Garia ↔ Airport)</option>
+      <option value="Pink Line">Pink Line (Baranagar ↔ Barrackpore)</option>
+    </select>
+
+    <label style="font-weight:bold; color:#003366; margin-top:10px; display:block;">Step 2: Select Station</label>
+    <select id="stationSelect" onchange="handleStationChange()" disabled style="background:#e9ecef;">
+      <option value="">-- First Select a Line --</option>
+    </select>
+  </div>
+
+  <div id="mainDataForm" class="hidden">
+    
+    <div class="panel" style="border-top: 5px solid #28a745;">
+      <h3 id="formTitle">📝 Enter Data</h3>
+      
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:15px;">
-          <input id="inpStationName" placeholder="STATION NAME">
+          <input id="inpStationName" type="hidden"> 
+          
           <input id="inpStationLength" placeholder="STATION LENGTH (M)">
           <input id="inpYellowDist" placeholder="YELLOW LINE DIST (CM)">
           <input id="inpYellowThick" placeholder="YELLOW LINE THICKNESS (CM)">
@@ -392,6 +423,31 @@ canvas.sig-canvas { border: 2px solid #003366; background: #fff; cursor: crossha
           <button class="success" onclick="saveStationDetails()">💾 Save Station Draft</button>
       </div>
     </div>
+
+    <div class="panel upload-panel">
+      <h3 style="color:#003366; margin-top:0;">📎 Evidence Upload Section</h3>
+      <p style="font-size:12px; color:#666;">Upload site photos, videos, or PDFs separately here.</p>
+      
+      <input type="file" id="evidenceFile" accept="image/*,application/pdf,video/*" onchange="handleFileUpload()">
+      <div id="fileStatus" style="font-size:13px; color:green; font-weight:bold; margin:10px 0;"></div>
+      
+      <button class="warning" onclick="uploadEvidenceOnly()">⬆ Upload Evidence to Database</button>
+      <div style="margin-top:5px;"><small style="color:red;">* Max 1.5 MB per file (Strict Limit)</small></div>
+    </div>
+
+    <div class="panel">
+      <h4>Distance Data Table</h4>
+      <div class="table-wrapper">
+        <table><thead><tr><th>SL</th><th>RAKE NO</th><th>TYPE</th><th>FRONT</th><th>REAR</th><th>ACT</th></tr></thead><tbody id="distanceBody"></tbody></table>
+      </div>
+      <div style="margin-top:10px; display:flex; justify-content:space-between;">
+          <button onclick="addDistanceRow()">+ Add Row</button>
+          <button onclick="submitStationData()" style="background:#003366;">✔ Submit Final Data</button>
+      </div>
+    </div>
+
+  </div>
+</div>
 
     <div class="panel upload-panel">
       <h3 style="color:#003366; margin-top:0;">📎 Evidence Upload Section</h3>
@@ -1638,7 +1694,86 @@ stream = await navigator.mediaDevices.getUserMedia({ video: true });
         updateStatus("Camera Hardware Error", "red");
     }
 }
+// --- 1. DEFINE METRO DATA ---
+const METRO_STATIONS = {
+    "Blue Line": [
+        "Dakshineswar", "Baranagar", "Noapara", "Dum Dum", "Belgachia", 
+        "Shyambazar", "Shobhabazar Sutanuti", "Girish Park", "Mahatma Gandhi Road", 
+        "Central", "Chandni Chowk", "Esplanade", "Park Street", "Maidan", 
+        "Rabindra Sadan", "Netaji Bhavan", "Jatin Das Park", "Kalighat", 
+        "Rabindra Sarobar", "Mahanayak Uttam Kumar", "Netaji", 
+        "Masterda Surya Sen", "Gitanjali", "Kavi Nazrul", "Shahid Khudiram", 
+        "Kavi Subhash (New Garia)"
+    ],
+    "Green Line": [
+        "Salt Lake Sector V", "Karunamoyee", "Central Park", "City Centre", 
+        "Bengal Chemical", "Salt Lake Stadium", "Phoolbagan", "Sealdah", 
+        "Esplanade", "Mahakaran", "Howrah", "Howrah Maidan"
+    ],
+    "Purple Line": [
+        "Joka", "Thakurpukur", "Sakher Bazar", "Behala Chowrasta", 
+        "Behala Bazar", "Taratala", "Majerhat"
+    ],
+    "Yellow Line": [
+        "Noapara", "Dum Dum Cantonment", "Jessore Road", "Jai Hind (Airport)"
+    ],
+    "Orange Line": [
+        "Kavi Subhash (New Garia)", "Satyajit Ray", "Jyotirindra Nandi", 
+        "Kavi Sukanta", "Hemanta Mukhopadhyay"
+    ],
+    "Pink Line": [
+        "Baranagar", "Barrackpore" // Endpoints added as placeholders
+    ]
+};
 
+// --- 2. HANDLE LINE CHANGE ---
+window.handleLineChange = () => {
+    const lineSel = document.getElementById("lineSelect");
+    const stnSel = document.getElementById("stationSelect");
+    const formDiv = document.getElementById("mainDataForm");
+    
+    // Reset
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    stnSel.disabled = true;
+    formDiv.classList.add("hidden");
+    document.getElementById("inpStationName").value = ""; // Clear hidden input
+
+    const selectedLine = lineSel.value;
+    
+    if (selectedLine && METRO_STATIONS[selectedLine]) {
+        // Populate Stations
+        METRO_STATIONS[selectedLine].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = stn;
+            opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
+        
+        stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+    }
+};
+
+// --- 3. HANDLE STATION CHANGE ---
+window.handleStationChange = () => {
+    const stnSel = document.getElementById("stationSelect");
+    const lineSel = document.getElementById("lineSelect");
+    const formDiv = document.getElementById("mainDataForm");
+    
+    if (stnSel.value) {
+        // Show Form
+        formDiv.classList.remove("hidden");
+        
+        // Update Title
+        document.getElementById("formTitle").innerText = `📝 Entry for: ${stnSel.value}`;
+        
+        // AUTO-FILL the hidden input so existing save functions work
+        const fullStationName = `${stnSel.value} (${lineSel.value})`;
+        document.getElementById("inpStationName").value = fullStationName;
+    } else {
+        formDiv.classList.add("hidden");
+    }
+};
 async function startRealTimeDetection(video, canvas) {
     const displaySize = { width: video.videoWidth || 320, height: video.videoHeight || 240 };
     faceapi.matchDimensions(canvas, displaySize);
