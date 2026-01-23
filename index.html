@@ -1806,7 +1806,92 @@ window.registerNewFace = async () => {
         alert("Registration Complete!"); location.reload();
     }
 };
+// --- LOAD STATION DATA FUNCTION ---
+window.loadStationData = () => {
+    const tbody = document.getElementById("stationDataViewBody");
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Data...</td></tr>";
 
+    // Fetch from 'history' where you saved the data
+    const q = query(ref(db, "history"), limitToLast(50));
+
+    onValue(q, (snap) => {
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // Newest entries at the top
+
+        // Filter out "Evidence Uploads" (images) so we only see Station Data
+        const stationLogs = logs.filter(l => l.name && l.name !== "Evidence Upload" && !l.fileData);
+
+        if (stationLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px; color:#666;'>No station data found.</td></tr>";
+            return;
+        }
+
+        tbody.innerHTML = "";
+
+        stationLogs.forEach(d => {
+            // Check if there are Rake Rows
+            let rowButton = `<span style="color:#aaa; font-size:11px;">No Data</span>`;
+            if (d.rows) {
+                // Encode data to pass it safely to the button function
+                const rowsData = encodeURIComponent(JSON.stringify(d.rows));
+                rowButton = `<button class="info" onclick="viewRakeRows('${rowsData}', '${d.name}')" style="padding:4px 8px; font-size:11px;">👁 View Rows</button>`;
+            }
+
+            const html = `
+            <tr class="station-row-item">
+                <td style="font-size:12px; white-space:nowrap;">${d.date}</td>
+                <td style="font-weight:bold; color:#003366;">${d.name}</td>
+                <td>${d.userName}<br><small style="color:#777;">${d.user}</small></td>
+                <td style="font-size:11px;">
+                   L: <b>${d.len || '-'}</b> | YL: <b>${d.yl || '-'}</b> | TH: <b>${d.th || '-'}</b>
+                </td>
+                <td style="font-style:italic; color:#555;">${d.remarks || '--'}</td>
+                <td style="text-align:center;">${rowButton}</td>
+            </tr>`;
+            tbody.innerHTML += html;
+        });
+    }, { onlyOnce: true }); // We use onlyOnce to prevent constant flickering
+};
+
+// --- VIEW RAKE ROWS (POPUP) ---
+window.viewRakeRows = (rowsEncoded, stationName) => {
+    try {
+        const rows = JSON.parse(decodeURIComponent(rowsEncoded));
+        let msg = `DETAILS FOR: ${stationName}\n\n`;
+        msg += `SL | RAKE | TYPE | FRONT | REAR\n`;
+        msg += `--------------------------------\n`;
+        
+        // Loop through the rows object
+        let count = 1;
+        for (let key in rows) {
+            let r = rows[key];
+            msg += `${count}. ${r.rake || '-'} | ${r.type || '-'} | ${r.f || '-'} | ${r.r || '-'}\n`;
+            count++;
+        }
+        alert(msg);
+    } catch(e) {
+        console.error(e);
+        alert("Error reading row data.");
+    }
+};
+
+// --- SEARCH FILTER ---
+window.filterStationData = () => {
+    const input = document.getElementById("stationLogSearch").value.toLowerCase();
+    const rows = document.getElementsByClassName("station-row-item");
+    
+    Array.from(rows).forEach(row => {
+        const stationName = row.cells[1].innerText.toLowerCase(); // Search Station Name
+        const submittedBy = row.cells[2].innerText.toLowerCase(); // Search User Name
+        
+        if (stationName.includes(input) || submittedBy.includes(input)) {
+            row.style.display = "";
+        } else {
+            row.style.display = "none";
+        }
+    });
+};
 function handleFail() {
     failCount++;
     if(failCount >= 3) {
