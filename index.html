@@ -2603,7 +2603,7 @@ window.loadSpecificStationData = async () => {
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
 
     try {
-        // Fetch ALL logs
+        // 1. Fetch ALL logs (No limit) so we don't miss anything
         const q1 = query(ref(db, "station_logs"));
         const snap1 = await get(q1);
 
@@ -2618,7 +2618,7 @@ window.loadSpecificStationData = async () => {
         const logs = [];
         snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
 
-        // Filter: Find matches and Reverse so NEWEST is FIRST (Index 0)
+        // 2. Filter matches and REVERSE so the NEWEST is at Index 0
         const matches = logs.filter(log => {
             if (!log.name) return false;
             return log.name.includes(searchName);
@@ -2630,25 +2630,32 @@ window.loadSpecificStationData = async () => {
             return;
         }
 
-        // --- FIX: GRAB KEY OF THE NEWEST ENTRY (Top of the list) ---
+        // --- STEP 3 LOGIC: GRAB NEWEST KEY ---
         const newestKey = matches[0].key; 
 
-        // Render Table 1 (Station Details)
+        // 3. Render Table 1 (Station Details)
         matches.forEach(d => {
-            // Highlight the row if it's the one showing data below
-            const bgStyle = (d.key === newestKey) ? "background:#e8f4ff; font-weight:bold;" : "";
-            const indicator = (d.key === newestKey) ? "👁️ (Viewing)" : "";
+            // Highlight the row if it matches the one currently showing below
+            const isActive = (d.key === newestKey);
+            const bgStyle = isActive ? "background:#e8f4ff; font-weight:bold;" : "";
+            
+            // Choose button style: Blue if active, Grey if inactive
+            const btnStyle = isActive 
+                ? "background:#0056b3; color:white; border:1px solid #004494;" 
+                : "background:#6c757d; color:white; border:1px solid #545b62;";
 
             let deleteBtn = isAdmin 
                 ? `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:4px 8px; font-size:11px;">🗑</button>`
                 : `<span style="color:#ccc; font-size:10px;">Locked</span>`;
 
-            // Add a "Show" button to manually switch the bottom table
-            const showBtn = `<button class="info" onclick="loadRakeTable('${d.key}')" style="padding:4px 8px; font-size:11px; margin-right:5px;">Show Data</button>`;
+            // 'Show Data' button triggers the loadRakeTable function manually
+            const showBtn = `<button onclick="loadRakeTable('${d.key}')" style="${btnStyle} padding:4px 8px; font-size:11px; margin-right:5px; border-radius:3px; cursor:pointer;">
+                ${isActive ? '👁️ Viewing' : 'Show Data'}
+            </button>`;
 
             const row = `
             <tr style="${bgStyle}">
-                <td style="font-size:12px;">${d.date} <br><small style="color:green">${indicator}</small></td>
+                <td style="font-size:12px;">${d.date}</td>
                 <td style="font-size:12px;">${d.userName}</td>
                 <td style="font-weight:bold;">${d.len || '-'} m</td>
                 <td style="font-weight:bold; color:#e31e24;">${d.yl || '-'} cm</td>
@@ -2662,7 +2669,7 @@ window.loadSpecificStationData = async () => {
             body1.innerHTML += row;
         });
 
-        // Load Rakes for the NEWEST match automatically
+        // 4. AUTOMATICALLY LOAD THE NEWEST DATA INTO BOTTOM TABLE
         loadRakeTable(newestKey);
 
     } catch (error) {
@@ -2670,20 +2677,25 @@ window.loadSpecificStationData = async () => {
         body1.innerHTML = `<tr><td colspan='7' style='color:red;'>Error: ${error.message}</td></tr>`;
     }
 };
-
-// --- NEW HELPER FUNCTION TO LOAD RAKE TABLE ---
+// --- LOAD RAKE TABLE (Fix for "Distance Data Not Showing") ---
 window.loadRakeTable = async (key) => {
     const body2 = document.getElementById("viewTable2Body");
     body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>⏳ Loading details...</td></tr>";
 
+    console.log("Fetching Rake Data for Key:", key);
+
     try {
+        // Fetch from 'rake_logs' container
         const snap2 = await get(ref(db, `rake_logs/${key}`));
+        
         if(!snap2.exists()) {
-            body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#777;'>No distance/rake data entered for this specific log.</td></tr>";
+            body2.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#777;'>❌ No distance data found for this entry.</td></tr>";
         } else {
             body2.innerHTML = ""; // Clear loader
             const rows = snap2.val();
             let count = 1;
+            
+            // Loop through rows
             Object.values(rows).forEach(r => {
                 const rRow = `
                 <tr>
@@ -2692,13 +2704,14 @@ window.loadRakeTable = async (key) => {
                     <td>${r.type || '-'}</td>
                     <td>${r.f || '-'}</td>
                     <td>${r.r || '-'}</td>
-                    <td style="color:#ccc; font-size:10px;">(Saved)</td>
+                    <td style="color:green; font-size:10px;">✔ Saved</td>
                 </tr>`;
                 body2.innerHTML += rRow;
             });
         }
     } catch(e) {
-        body2.innerHTML = "<tr><td colspan='6' style='color:red'>Error loading table.</td></tr>";
+        console.error(e);
+        body2.innerHTML = `<tr><td colspan='6' style='color:red'>Error loading table: ${e.message}</td></tr>`;
     }
 };
 // --- 2. FETCH RAKES (Populate Table 2 in Modal) ---
@@ -2878,34 +2891,42 @@ window.submitStationData = async () => {
     
     if(!lineSel.value || !stnSel.value) return alert("❌ Error: Please select a Line and Station first.");
     
-    // FORCE the name format: "Station (Line)"
-    const name = `${stnSel.value} (${lineSel.value})`;
+    const name = `${stnSel.value} (${lineSel.value})`; // Force Name Format
 
+    // 1. Get Yellow Line Details
     const valLen = document.getElementById("inpStationLength").value.trim();
     const valYl = document.getElementById("inpYellowDist").value.trim();
     const valTh = document.getElementById("inpYellowThick").value.trim();
     const valRem = document.getElementById("inpRemarks").value.trim();
 
-    const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
-
+    // 2. Get Distance/Rake Data from Drafts
     let rowsData = null;
+    let rowCount = 0;
     try {
         const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-        if (rowsSnap.exists()) rowsData = rowsSnap.val();
-    } catch (e) { }
+        if (rowsSnap.exists()) {
+            rowsData = rowsSnap.val();
+            rowCount = Object.keys(rowsData).length;
+        }
+    } catch (e) { console.error("Draft Error:", e); }
 
-    const hasTableData = rowsData && Object.keys(rowsData).length > 0;
-
-    if (!hasStationDetails && !hasTableData) {
-        alert("⚠️ Submission Failed\n\nPlease enter data in at least one section.");
-        return; 
+    // --- SAFETY CHECK ---
+    const hasStationDetails = (valLen !== "" || valYl !== "" || valTh !== "");
+    
+    if (!hasStationDetails && rowCount === 0) {
+        return alert("⚠️ Cannot Submit: Both sections are empty!");
     }
 
-    if(confirm("Confirm Final Submission?")) {
+    // 3. Confirm Submission
+    let confirmMsg = `Confirm Submission for: ${name}\n`;
+    confirmMsg += hasStationDetails ? `✅ Yellow Line Data Entered\n` : `❌ No Yellow Line Data\n`;
+    confirmMsg += rowCount > 0 ? `✅ Distance Data: ${rowCount} Rows` : `❌ No Distance Data (Table Empty)`;
+
+    if(confirm(confirmMsg)) {
+        // Generate Unique ID
         const newEntryKey = push(ref(db, "station_logs")).key;
 
-        // --- FIX STARTS HERE ---
-        // 1. Define the data object FIRST
+        // Prepare Station Data
         const stationUpdate = {
             name: name, 
             len: valLen,
@@ -2915,24 +2936,25 @@ window.submitStationData = async () => {
             user: currentUser.email,
             userName: currentUser.name,
             date: new Date().toLocaleString(),
-            linkedRakeKey: newEntryKey
+            linkedRakeKey: newEntryKey // Links to the rake data
         };
 
-        // 2. Define the updates object NEXT
+        // Prepare Updates Object
         const updates = {};
         updates[`station_logs/${newEntryKey}`] = stationUpdate;
         
-        // 3. Add table data if applicable
-        if(hasTableData) {
+        // IMPORTANT: Save Rake Data if it exists
+        if(rowCount > 0) {
             updates[`rake_logs/${newEntryKey}`] = rowsData;
         } else {
             updates[`rake_logs/${newEntryKey}`] = null;
         }
-        // --- FIX ENDS HERE ---
 
+        // Execute Save
         await update(ref(db), updates);
-        await remove(ref(db, `drafts/${currentUser.uid}`));
         
+        // Clear Drafts & Inputs
+        await remove(ref(db, `drafts/${currentUser.uid}`));
         document.getElementById("inpStationLength").value = "";
         document.getElementById("inpYellowDist").value = "";
         document.getElementById("inpYellowThick").value = "";
@@ -2941,10 +2963,9 @@ window.submitStationData = async () => {
 
         alert("✅ Data Submitted Successfully!");
         
+        // Hide Form and Switch Tab
         document.getElementById("mainDataForm").classList.add("hidden");
         document.getElementById("stationSelect").value = ""; 
-        
-        // Switch tab but DO NOT auto-load (User must select station manually)
         switchTab('dataView');
     }
 };
