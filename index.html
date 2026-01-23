@@ -1754,7 +1754,6 @@ window.handleLineChange = () => {
     }
 };
 
-// --- 3. HANDLE STATION CHANGE ---
 window.handleStationChange = () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
@@ -1767,9 +1766,13 @@ window.handleStationChange = () => {
         // Update Title
         document.getElementById("formTitle").innerText = `📝 Entry for: ${stnSel.value}`;
         
-        // AUTO-FILL the hidden input so existing save functions work
+        // Auto-fill hidden Name input
         const fullStationName = `${stnSel.value} (${lineSel.value})`;
         document.getElementById("inpStationName").value = fullStationName;
+
+        // NEW: Load any existing draft data for the user immediately
+        loadDraft();
+        
     } else {
         formDiv.classList.add("hidden");
     }
@@ -3019,24 +3022,63 @@ window.removeFile = (k) => {
         update(ref(db, `history/${k}`), { fileData: null, fileType: null, fileRemoved: true });
     }
 }
+// Global variables to track the active listener
+let draftRef = null;
+let draftListener = null;
 
-function loadDraft() {
-    onValue(ref(db, `drafts/${currentUser.uid}`), snap => {
+window.loadDraft = () => {
+    // 1. CLEANUP: Detach previous listener if it exists
+    // This stops the "double loading" issue
+    if (draftRef && draftListener) {
+        off(draftRef, draftListener);
+    }
+
+    const tbody = document.getElementById("distanceBody");
+    if(!tbody) return; // Safety check
+
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Loading...</td></tr>";
+
+    // 2. DEFINE NEW LISTENER
+    draftRef = ref(db, `drafts/${currentUser.uid}`);
+    
+    draftListener = onValue(draftRef, (snap) => {
         const d = snap.val();
+        
+        // Clear table immediately before rendering
+        tbody.innerHTML = ""; 
+
         if(d) {
-            document.getElementById("inpStationName").value = d.details?.name || "";
-            document.getElementById("inpStationLength").value = d.details?.len || "";
-            document.getElementById("inpYellowDist").value = d.details?.yl || "";
-            document.getElementById("inpYellowThick").value = d.details?.th || "";
-            document.getElementById("inpRemarks").value = d.details?.remarks || "";
-            const tbody = document.getElementById("distanceBody"); tbody.innerHTML="";
-            if(d.rows) Object.entries(d.rows).forEach(([k,v], i) => renderRow(k,v,i+1));
+            // A. Populate Inputs (Station Details)
+            // Only fill if the input is empty or matches the draft to avoid overwriting user typing
+            if(d.details) {
+                 if(document.getElementById("inpStationLength")) document.getElementById("inpStationLength").value = d.details.len || "";
+                 if(document.getElementById("inpYellowDist")) document.getElementById("inpYellowDist").value = d.details.yl || "";
+                 if(document.getElementById("inpYellowThick")) document.getElementById("inpYellowThick").value = d.details.th || "";
+                 if(document.getElementById("inpRemarks")) document.getElementById("inpRemarks").value = d.details.remarks || "";
+            }
+
+            // B. Populate Rows (Distance Data)
+            if(d.rows) {
+                Object.entries(d.rows).forEach(([k,v], i) => {
+                    renderRow(k, v, i+1);
+                });
+            }
         }
     });
-}
-function renderRow(k,v,i) {
+};
+function renderRow(k, v, i) {
     const b = document.getElementById("distanceBody");
-    b.innerHTML += `<tr><td>${i}</td><td><input value="${v.rake}" onchange="upRow('${k}','rake',this.value)"></td><td><input value="${v.type}" onchange="upRow('${k}','type',this.value)"></td><td><input value="${v.f}" onchange="upRow('${k}','f',this.value)"></td><td><input value="${v.r}" onchange="upRow('${k}','r',this.value)"></td><td><button class="danger" onclick="delRow('${k}')">X</button></td></tr>`;
+    // Note: We do NOT clear innerHTML here, because this function is called inside a loop.
+    // The clearing happens once inside loadDraft() before the loop starts.
+    b.innerHTML += `
+        <tr>
+            <td>${i}</td>
+            <td><input style="width:100%" value="${v.rake}" onchange="upRow('${k}','rake',this.value)"></td>
+            <td><input style="width:100%" value="${v.type}" onchange="upRow('${k}','type',this.value)"></td>
+            <td><input style="width:100%" value="${v.f}" onchange="upRow('${k}','f',this.value)"></td>
+            <td><input style="width:100%" value="${v.r}" onchange="upRow('${k}','r',this.value)"></td>
+            <td><button class="danger" onclick="delRow('${k}')">X</button></td>
+        </tr>`;
 }
 window.upRow = (k,f,v) => update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), {[f]:v});
 window.delRow = (k) => remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
