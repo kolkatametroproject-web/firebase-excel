@@ -479,8 +479,9 @@ select:disabled {
       </div>
     </div>
 
-    <div class="panel">
+   <div class="panel">
     <h4>📝 2. Distance Data (Rakes)</h4>
+    
     <div class="table-wrapper" style="margin-top:10px;">
         <table style="width:100%">
             <thead style="background:#e9ecef;">
@@ -2064,101 +2065,91 @@ window.handleLineChange = () => {
 // Global variables to track editing state
 let currentStationKey = null; // Key of the station_log
 let currentRakeKey = null;    // Key of the rake_log
-
+// --- STRICT HANDLE STATION CHANGE ---
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
     const formDiv = document.getElementById("mainDataForm");
     
-    // Inputs
-    const inpLen = document.getElementById("inpStationLength");
-    const inpYl = document.getElementById("inpYellowDist");
-    const inpTh = document.getElementById("inpYellowThick");
-    const inpRem = document.getElementById("inpRemarks");
+    // UI Elements
     const warningBox = document.getElementById("dataExistsWarning");
-    const saveBtn = document.getElementById("btnSaveDraft");
     const submitBtn = document.getElementById("btnFinalSubmit");
+    const saveBtn = document.getElementById("btnSaveDraft");
 
+    // 1. Show the Form Area
     if (!stnSel.value) {
         formDiv.classList.add("hidden");
         return;
     }
-
-    // Reset State
     formDiv.classList.remove("hidden");
-    currentStationKey = null;
-    currentRakeKey = null;
+
+    // 2. CLEAR ALL INPUTS (Clean Slate Rule)
+    // We do NOT load old data here. New Data tab is for NEW data only.
+    document.getElementById("inpStationLength").value = "";
+    document.getElementById("inpYellowDist").value = "";
+    document.getElementById("inpYellowThick").value = "";
+    document.getElementById("inpRemarks").value = "";
+    document.getElementById("inpImplementation").value = "";
+    document.getElementById("distanceBody").innerHTML = ""; // Clear Rake inputs
     
+    // Set Header
     const fullStationName = `${stnSel.value} (${lineSel.value})`;
     document.getElementById("inpStationName").value = fullStationName;
-    document.getElementById("formTitle").innerText = `📝 Managing: ${stnSel.value}`;
+    document.getElementById("formTitle").innerText = `📝 New Entry: ${stnSel.value}`;
 
-    // Check DB for existing data
+    // 3. CHECK DATABASE FOR DUPLICATES
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
-        // --- DATA EXISTS: ENTER APPEND MODE ---
-        let existingData = null;
-        // Get the first match
-        snap.forEach(c => { 
-            existingData = c.val(); 
-            currentStationKey = c.key; 
-        });
-
-        currentRakeKey = existingData.linkedRakeKey || currentStationKey;
-
-        // 1. Show "Append" UI
+        // --- STOP! DATA EXISTS ---
+        // Do NOT show the data. Just block the user.
         warningBox.classList.remove("hidden");
-        warningBox.innerHTML = `<strong>⚠️ Station Found!</strong><br>Loaded existing data. New rows will be added as <strong>SL No ${Object.keys(existingData).length + 1}+</strong>.`;
-        submitBtn.innerText = "🔄 Update & Append Rows";
-        submitBtn.style.background = "#b38600"; // Gold color for Update
+        warningBox.className = ""; // Reset class
+        warningBox.style.background = "#f8d7da";
+        warningBox.style.color = "#721c24";
+        warningBox.style.border = "1px solid #f5c6cb";
+        warningBox.style.padding = "15px";
+        warningBox.innerHTML = `
+            <strong>⛔ DATA ALREADY EXISTS</strong><br>
+            Measurements for <b>${stnSel.value}</b> are already saved.<br><br>
+            1. Go to <b>Data Logs</b> to view it.<br>
+            2. Ask an <b>Administrator</b> if you need to Edit it.
+        `;
 
-        // 2. Fill & Lock Station Details
-        inpLen.value = existingData.len || "";
-        inpYl.value = existingData.yl || "";
-        inpTh.value = existingData.th || "";
-        inpRem.value = existingData.remarks || "";
+        // DISABLE SUBMIT
+        submitBtn.disabled = true;
+        submitBtn.style.opacity = "0.5";
+        submitBtn.style.cursor = "not-allowed";
+        submitBtn.innerText = "⛔ Locked (Data Exists)";
         
-        inpLen.disabled = true;
-        inpYl.disabled = true;
-        inpTh.disabled = true;
-        inpRem.disabled = true;
         saveBtn.disabled = true;
-
-        // 3. IMPORTANT: Copy existing Rake Data to Drafts so you can edit/add to it
-        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
-        if(rakeSnap.exists()) {
-            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
-        } else {
-            await remove(ref(db, `drafts/${currentUser.uid}/rows`));
-        }
+        
+        // Reset Global Keys to prevent accidental overwrites
+        currentStationKey = null;
+        currentRakeKey = null;
 
     } else {
-        // --- NO DATA: ENTER NEW MODE ---
+        // --- GO! FRESH ENTRY ---
         warningBox.classList.add("hidden");
-        submitBtn.innerText = "✔ Submit Final Data";
-        submitBtn.style.background = "#003366";
 
-        // Unlock Inputs
-        inpLen.disabled = false;
-        inpYl.disabled = false;
-        inpTh.disabled = false;
-        inpRem.disabled = false;
+        // ENABLE SUBMIT
+        submitBtn.disabled = false;
+        submitBtn.style.opacity = "1";
+        submitBtn.style.cursor = "pointer";
+        submitBtn.style.background = "#003366";
+        submitBtn.innerText = "✔ Submit Final Data";
+        
         saveBtn.disabled = false;
+
+        // Reset Global Keys (This is a new entry)
+        currentStationKey = null;
+        currentRakeKey = null;
         
-        // Clear Inputs
-        inpLen.value = "";
-        inpYl.value = "";
-        inpTh.value = "";
-        inpRem.value = "";
-        
-        // Clear Drafts (Start Fresh)
-        await remove(ref(db, `drafts/${currentUser.uid}/rows`));
+        // Load any *Drafts* (Partial work) the user was typing just now
+        // This is different from "Old Data". This is "Current Session Draft".
+        loadDraft(); 
     }
-    
-    // Trigger draft listener to render the table (Empty or Pre-filled)
-    loadDraft();
 };
 // --- 1. HANDLE TAB & DROPDOWNS ---
 
