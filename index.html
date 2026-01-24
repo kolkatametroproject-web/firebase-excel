@@ -2262,65 +2262,116 @@ window.closePrintModal = () => {
     document.getElementById("printOptionsModal").classList.add("hidden");
     currentPrintKey = null;
 };
- window.generateFinalReport = async () => {
+window.generateFinalReport = async () => {
     if(!currentPrintKey) return alert("Error: No record selected.");
 
-    // ... (Keep Signature Logic same as previous) ...
-    let inspectorName = document.getElementById("selPrintInspector").value;
-    const authName = document.getElementById("selPrintAuthority").value;
-    if(inspectorName === "Self (Current User)") inspectorName = currentUser.name || currentUser.email;
-
+    // 1. Get Checkbox States
     const includeStation = document.getElementById("chkStationDetails").checked;
     const includeRake = document.getElementById("chkRakeData").checked;
 
+    // 2. Get Authority Names for Signature
+    let inspectorName = document.getElementById("selPrintInspector").value;
+    const authName = document.getElementById("selPrintAuthority").value;
+    if(inspectorName === "Self" || inspectorName === "Self (Current User)" || inspectorName === "") {
+        inspectorName = currentUser.name || currentUser.email;
+    }
+
     try {
+        // --- STEP 1: FETCH MAIN LOG DATA (Always needed for header info) ---
         const sSnap = await get(ref(db, `station_logs/${currentPrintKey}`));
+        if(!sSnap.exists()) return alert("Error: Data record not found in DB.");
         const sData = sSnap.val();
-        
-        // Header Info
-        document.getElementById("rptStationName").innerText = sData.name.split('(')[0].trim();
+
+        // 3. Fill Report Header (Common Info)
+        // Clean up station name "Station (Line)" -> "Station"
+        const cleanName = sData.name.split('(')[0].trim();
         const lineMatch = sData.name.match(/\(([^)]+)\)/);
+        
+        document.getElementById("rptStationName").innerText = cleanName;
         document.getElementById("rptLineName").innerText = lineMatch ? lineMatch[1] : "Metro Line";
         document.getElementById("rptDate").innerText = sData.date;
         document.getElementById("rptUser").innerText = sData.userName;
         document.getElementById("rptSigInspectorName").innerText = inspectorName;
         document.getElementById("rptSigAuthName").innerText = authName;
 
-        // SECTION A: STATION DETAILS
+
+        // ============================================================
+        // BLOCK A: STATION DETAILS (YELLOW LINE) LOGIC
+        // ============================================================
         const secA = document.getElementById("sectionStationDetails");
+        
         if(includeStation) {
-            secA.style.display = "block";
+            secA.style.display = "block"; // SHOW IT
+            
+            // Fill Data Fields
             document.getElementById("rptLen").innerText = (sData.len || '-') + " m";
             document.getElementById("rptYl").innerText = (sData.yl || '-') + " cm";
             document.getElementById("rptTh").innerText = (sData.th || '-') + " cm";
             document.getElementById("rptRem").innerText = sData.remarks || '-';
-            
-            // --- UPDATED LOGIC HERE ---
-            // Removed "Compliance/Risk" check.
-            // Added "Implementation Possible?" check.
-            const statusEl = document.getElementById("rptStatus");
-            const implVal = sData.impl || "N/A"; // Get the Yes/No value
 
-            if(implVal === "YES") {
-                 statusEl.innerHTML = "<span style='color:green; font-weight:bold; font-size:16px;'>✅ IMPLEMENTATION POSSIBLE</span>";
-            } else if (implVal === "NO") {
-                 statusEl.innerHTML = "<span style='color:red; font-weight:bold; font-size:16px;'>❌ NOT IMPLEMENTABLE</span>";
+            // Fill Implementation Status (Colored)
+            const statusEl = document.getElementById("rptStatus");
+            if(sData.impl === "YES") {
+                 statusEl.innerHTML = "<span style='color:green; font-weight:bold;'>✅ YES</span>";
+            } else if (sData.impl === "NO") {
+                 statusEl.innerHTML = "<span style='color:red; font-weight:bold;'>❌ NO</span>";
             } else {
                  statusEl.innerHTML = "--";
             }
-
         } else {
-            secA.style.display = "none";
+            secA.style.display = "none"; // HIDE IT
         }
 
-        // ... (Keep Rake Data Logic same as previous) ...
-        
-        closePrintModal();
-        document.getElementById("printableReportContainer").classList.remove("hidden");
-        window.scrollTo(0,0);
+
+        // ============================================================
+        // BLOCK B: RAKE DATA (TABLE) LOGIC
+        // ============================================================
+        const secB = document.getElementById("sectionRakeData");
+        const tbody = document.getElementById("rptRakeBody");
+
+        if(includeRake) {
+            secB.style.display = "block"; // SHOW IT
+            tbody.innerHTML = ""; // Clear any old rows first
+
+            // 1. Identify where Rake Data is stored
+            const rakeKey = sData.linkedRakeKey || currentPrintKey;
+            
+            // 2. Fetch the Rake Data separate from Station Data
+            const rSnap = await get(ref(db, `rake_logs/${rakeKey}`));
+
+            if(rSnap.exists()) {
+                const rRows = rSnap.val();
+                let count = 1;
+
+                // 3. Loop through and render rows
+                Object.values(rRows).forEach(r => {
+                    const html = `
+                        <tr>
+                            <td style="text-align:center;">${count++}</td>
+                            <td style="font-weight:bold;">${r.rake || '-'}</td>
+                            <td>${r.type || '-'}</td>
+                            <td>${r.f || '-'}</td>
+                            <td>${r.r || '-'}</td>
+                        </tr>
+                    `;
+                    tbody.innerHTML += html;
+                });
+            } else {
+                // If checkbox is YES but no data exists, show "No Data" row
+                tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:10px; color:#666;'>No Rake Data Recorded for this Station</td></tr>";
+            }
+        } else {
+            secB.style.display = "none"; // HIDE IT
+        }
+
+        // --- STEP 4: SHOW THE REPORT ---
+        closePrintModal(); // Hide the settings popup
+        document.getElementById("printableReportContainer").classList.remove("hidden"); // Show paper
+        window.scrollTo(0,0); // Scroll to top
 
     } catch(err) {
-        alert("Error: " + err.message);
+        console.error(err);
+        alert("Error generating report: " + err.message);
     }
 };
 window.closeReportPreview = () => {
