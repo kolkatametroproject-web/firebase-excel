@@ -1293,8 +1293,11 @@ let regSamples = [];
 let modelsLoaded = false;
 let isTransactionAuth = false;
 let currentTransactionType = "";
-
-// --- UNIFIED SCAN MODE VARIABLE ---
+// --- GLOBAL LISTENER TRACKERS (PREVENTS CROSSTALK) ---
+let rowListener = null;       // For Field Inspection (Rake Table)
+let galleryListener = null;   // For Compliance Docs (Gallery Grid)
+let logViewListener = null;   // For Master Log Database (Data View Table)
+let printListener = null;     // For Print Report List
 let scanMode = 'LOGIN';
 
 let receiverVerified = false;
@@ -1375,7 +1378,171 @@ window.clearSignature = (id) => {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
+// A. HARD RESET FOR INPUT FORM
+function resetInputForm() {
+    // 1. Cut the Connection
+    if (rowListener) { off(ref(db), rowListener); rowListener = null; }
 
+    // 2. Wipe Variables
+    rtStationKey = null;
+    rtRakeKey = null;
+
+    // 3. Wipe UI Inputs
+    const inputs = ["inpStationLength", "inpYellowDist", "inpYellowThick", "inpRemarks", "inpImplementation"];
+    inputs.forEach(id => {
+        const el = document.getElementById(id);
+        if(el) { el.value = ""; el.oninput = null; el.onchange = null; } // Detach events
+    });
+
+    // 4. Wipe Table
+    document.getElementById("distanceBody").innerHTML = "";
+    
+    // 5. Reset Buttons
+    document.getElementById("btnFinalSubmit").innerText = "Loading...";
+    document.getElementById("btnFinalSubmit").disabled = true;
+}
+
+// B. UPDATED STATION HANDLER
+window.handleStationChange = async () => {
+    const stnSel = document.getElementById("stationSelect");
+    const lineSel = document.getElementById("lineSelect");
+    const formDiv = document.getElementById("mainDataForm");
+
+    // 1. STOP & WIPE (The Fix)
+    resetInputForm();
+
+    if (!stnSel.value) {
+        formDiv.classList.add("hidden");
+        return;
+    }
+
+    formDiv.classList.remove("hidden");
+    const fullStationName = `${stnSel.value} (${lineSel.value})`;
+    document.getElementById("inpStationName").value = fullStationName;
+    document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
+
+    // 2. FETCH NEW DATA
+    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
+    const snap = await get(q);
+
+    let existingData = {};
+    if (snap.exists()) {
+        snap.forEach(c => { existingData = c.val(); rtStationKey = c.key; });
+        rtRakeKey = existingData.linkedRakeKey || rtStationKey;
+        
+        const btn = document.getElementById("btnFinalSubmit");
+        btn.innerText = existingData.status === "FINAL" ? "💾 Update Final Report" : "✔ Finalize Submission";
+        btn.disabled = false;
+        btn.style.background = existingData.status === "FINAL" ? "#d97706" : "#0A2342";
+    } else {
+        // Init New Record
+        const newRef = push(ref(db, "station_logs"));
+        rtStationKey = newRef.key;
+        rtRakeKey = rtStationKey;
+        await set(newRef, {
+            name: fullStationName,
+            date: "Drafting...",
+            timestamp: serverTimestamp(),
+            userName: currentUser.name,
+            user: currentUser.email,
+            status: "DRAFT",
+            linkedRakeKey: rtRakeKey
+        });
+        existingData = {};
+        
+        const btn = document.getElementById("btnFinalSubmit");
+        btn.innerText = "✔ Finalize Submission";
+        btn.disabled = false;
+        btn.style.background = "#0A2342";
+    }
+
+    // 3. POPULATE UI
+    document.getElementById("inpStationLength").value = existingData.len || "";
+    document.getElementById("inpYellowDist").value = existingData.yl || "";
+    document.getElementById("inpYellowThick").value = existingData.th || "";
+    document.getElementById("inpRemarks").value = existingData.remarks || "";
+    document.getElementById("inpImplementation").value = existingData.impl || "";
+
+    // 4. CONNECT NEW LISTENERS
+    loadRealTimeRows(); // Connects table
+    attachInputListeners(); // Connects inputs
+};
+
+// C. UPDATED RAKE ROW LOADER
+function loadRealTimeRows() {
+    if(!rtRakeKey) return;
+
+    // 1. SAFETY: Kill any lingering connection
+    if(rowListener) { off(ref(db), rowListener); rowListener = null; }
+
+    const tbody = document.getElementById("distanceBody");
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing...</td></tr>";
+
+    // 2. NEW CONNECTION
+    rowListener = onValue(ref(db, `rake_logs/${rtRakeKey}`), (snap) => {
+        tbody.innerHTML = ""; 
+        if(!snap.exists()) return;
+
+        let i = 1;
+        snap.forEach(c => renderRealTimeRow(c.key, c.val(), i++));
+    });
+}
+  // UPDATED: Handle Gallery Station Change
+window.handleGalleryStationChange = () => {
+    const line = document.getElementById("galleryLineSelect").value;
+    const stn = document.getElementById("galleryStationSelect").value;
+    const galleryDiv = document.getElementById("galleryContainer");
+    const uploadSection = document.getElementById("galleryUploadSection");
+    const targetText = document.getElementById("uploadTargetText");
+
+    // 1. STOP OLD LISTENER (Fixes Bleeding)
+    if (galleryListener) {
+        off(ref(db, "history"), galleryListener); // Note: Detaching from specific query needs care, simplifying by clearing UI first
+        galleryListener = null;
+    }
+
+    // 2. WIPE UI
+    galleryDiv.innerHTML = ""; 
+    
+    if (!line || !stn) {
+        uploadSection.classList.add("hidden");
+        return;
+    }
+
+    // 3. START NEW SESSION
+    uploadSection.classList.remove("hidden");
+    const targetName = `${stn} (${line})`;
+    targetText.innerText = `Target: ${targetName}`;
+
+    galleryDiv.innerHTML = `<p style="text-align:center; width:100%;">Loading evidence...</p>`;
+
+    // 4. FETCH ONLY FOR THIS STATION
+    const q = query(ref(db, "history"), orderByChild("stationName"), equalTo(targetName));
+    
+    // We use onValue to allow real-time updates of images
+    galleryListener = onValue(q, (snap) => {
+        galleryDiv.innerHTML = "";
+        
+        if (!snap.exists()) {
+            galleryDiv.innerHTML = `<p style="text-align:center; color:#888; width:100%;">No evidence uploaded yet.</p>`;
+            return;
+        }
+
+        snap.forEach(c => {
+            const v = c.val();
+            // (Your existing gallery render logic here)
+            let media = `<div style="padding:10px; color:#666;">Unsupported</div>`;
+            if(v.fileType && v.fileType.includes("image")) media = `<img src="${v.fileData}">`;
+            else if(v.fileType && v.fileType.includes("pdf")) media = `<div style="height:100px; display:flex; align-items:center; justify-content:center; background:#f0f0f0;">📄 PDF</div>`;
+            
+            let controls = `<br><small style="color:grey;">(View Only)</small>`;
+            if(isAdmin) {
+                controls = `<div style="margin-top:5px; display:flex; justify-content:center; gap:5px;"><a href="${v.fileData}" download="Evidence" style="background:var(--metro-blue); color:white; padding:3px 8px; text-decoration:none; font-size:11px; border-radius:3px;">⬇ Download</a><button class="danger" style="padding:2px 5px; font-size:11px;" onclick="removeFile('${c.key}')">Remove</button></div>`;
+            }
+            galleryDiv.innerHTML += `<div class="gallery-item">${media}<div style="font-size:11px; margin-top:5px;"><b>${v.name || 'Evidence'}</b><br>by ${v.userName}</div>${controls}</div>`;
+        });
+    });
+};
 // --- NEW HELPER: Signature Modal ---
 window.viewSignature = (sigData) => {
     document.getElementById("modalSigImage").src = sigData;
@@ -1398,32 +1565,33 @@ window.openBarcodeScanner = (mode) => {
 // 1. ADMIN PANEL (With Unban Logic)
 // ==========================================
 let adminListener = null;
-
 window.loadAdminPanel = () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
-
+    
     // 1. Visual Feedback
-    if(userTable) userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Refreshing Data Stream...</td></tr>";
+    if(userTable) userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Syncing User Database...</td></tr>";
 
-    // 2. Detach Previous Listener
+    // 2. DETACH OLD LISTENER (Fixes the "Refresh not working" bug)
     if (adminListener) {
         off(ref(db, "users"), adminListener);
         adminListener = null;
     }
 
-    // 3. Attach New Listener
+    // 3. START NEW LISTENER
     const usersRef = ref(db, "users");
     
     adminListener = onValue(usersRef, async (userSnap) => {
+        // Fetch online status separately
         const statusSnap = await get(ref(db, "status"));
         const statusMap = statusSnap.val() || {};
         
-        userTable.innerHTML = "";
-        userList.innerHTML = "";
+        // Clear Lists
+        if(userTable) userTable.innerHTML = "";
+        if(userList) userList.innerHTML = "";
 
         if (!userSnap.exists()) {
-             userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No users found.</td></tr>";
+             if(userTable) userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No users registered.</td></tr>";
              return;
         }
 
@@ -1432,36 +1600,49 @@ window.loadAdminPanel = () => {
             const uid = c.key;
             const displayName = u.name || u.email;
 
-            // Fill Checkbox List
-            userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
+            // A. Populate "Assign Task" Checkbox List
+            // (Only active users should appear in task assignment list)
+            if (!u.banned && userList) {
+                userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
+            }
 
-            // Status Logic
+            // B. Determine Online Status
             const s = statusMap[uid];
             const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
             const statusBadge = isOnline ? 
-                `<span class="badge-online" style="background:#dcfce7; color:#166534; padding:4px 10px; border-radius:12px; font-weight:800; font-size:10px;">● ONLINE</span>` : 
-                `<span class="badge-offline" style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:12px; font-weight:800; font-size:10px;">○ OFFLINE</span>`;
+                `<span class="badge-online" style="background:#dcfce7; color:#166534;">● ONLINE</span>` : 
+                `<span class="badge-offline">○ OFFLINE</span>`;
 
-            // --- BAN BUTTON LOGIC ---
-            let banButtonHtml = "";
-            if (u.banned) {
-                // User is BANNED -> Show UNBAN Button
-                banButtonHtml = `<button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px; margin-top:2px; background:#15803d; border-color:#15803d;">✅ Unban</button>`;
+            // C. TOGGLE BUTTON LOGIC (THE FIX)
+            let actionButton = "";
+            let rowStyle = "";
+
+            if (u.banned === true) {
+                // USER IS BANNED -> Show Green UNBAN Button & Red Row
+                rowStyle = "background-color: #fef2f2; border-left: 4px solid #dc2626;";
+                actionButton = `
+                    <button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(displayName)}')" 
+                        style="font-size:10px; padding:4px 8px; margin-top:2px; background:#15803d; border-color:#15803d;">
+                        ✅ LIFT BAN
+                    </button>`;
             } else {
-                // User is ACTIVE -> Show BAN Button
-                banButtonHtml = `<button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">🚫 Ban</button>`;
+                // USER IS ACTIVE -> Show Red BAN Button
+                actionButton = `
+                    <button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" 
+                        style="font-size:10px; padding:4px 8px; margin-top:2px;">
+                        🚫 BAN
+                    </button>`;
             }
 
-            // Render Row
+            // D. Render Row
             const row = document.createElement("tr");
-            // Highlight row red if banned
-            if(u.banned) row.style.background = "#fff1f2"; 
+            if(rowStyle) row.style.cssText = rowStyle;
 
             row.innerHTML = `
                 <td>
                     <strong>${displayName}</strong><br>
                     <small>${u.email}</small>
-                    ${u.banned ? '<br><small style="color:red; font-weight:bold;">(SUSPENDED)</small>' : ''}
+                    ${u.banned ? '<br><b style="color:red; font-size:10px;">(ACCOUNT SUSPENDED)</b>' : ''}
                 </td>
                 <td style="text-align:center;">${statusBadge}</td>
                 <td style="text-align:center;" id="task_stat_${uid}">
@@ -1470,21 +1651,23 @@ window.loadAdminPanel = () => {
                 <td style="text-align:center;">${u.faceData ? '<span style="color:green;">✔ Reg</span>' : '<span style="color:red;">❌ No</span>'}</td>
                 <td>
                     <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px;">📋 Tasks</button>
-                    ${banButtonHtml}
-                    <button class="warning" onclick="resetUserName('${uid}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">Reset</button>
+                    ${actionButton}
+                    <button class="warning" onclick="resetUserName('${uid}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">Reset ID</button>
                 </td>
             `;
-            userTable.appendChild(row);
+            if(userTable) userTable.appendChild(row);
 
-            // Load Task Stats
+            // E. Load Task Stats (Async)
             get(ref(db, `assignments/${uid}`)).then(taskSnap => {
                 const target = document.getElementById(`task_stat_${uid}`);
-                if(target && taskSnap.exists()) {
-                    let pending = 0, done = 0;
-                    taskSnap.forEach(t => t.val().status === 'Done' ? done++ : pending++);
-                    target.innerHTML = `<b style="color:green;">${done}</b> / <b style="color:#b38600;">${pending}</b>`;
-                } else if (target) {
-                    target.innerHTML = `<span style="color:#999;">-</span>`;
+                if(target) {
+                    if(taskSnap.exists()){
+                        let pending = 0, done = 0;
+                        taskSnap.forEach(t => t.val().status === 'Done' ? done++ : pending++);
+                        target.innerHTML = `<b style="color:green;">${done}</b> / <b style="color:#b38600;">${pending}</b>`;
+                    } else {
+                        target.innerHTML = `<span style="color:#999;">-</span>`;
+                    }
                 }
             });
         });
@@ -2650,45 +2833,52 @@ window.handlePrintLineChange = () => {
 };
 
 // --- 2. FETCH LOGS FOR STATION ---
+// UPDATED: Fetch Logs for Print
 window.fetchLogsForPrint = async () => {
     const line = document.getElementById("printLineSelect").value;
     const stn = document.getElementById("printStationSelect").value;
     const tbody = document.getElementById("printLogBody");
     const listDiv = document.getElementById("printLogList");
 
-    if(!line || !stn) return;
+    // 1. WIPE UI (The Fix)
+    tbody.innerHTML = "";
+    if(!line || !stn) {
+        listDiv.classList.add("hidden");
+        return;
+    }
 
     listDiv.classList.remove("hidden");
     tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'>🔍 Searching Records...</td></tr>";
 
-    // Search by Station Name
+    // 2. FETCH NEW
     const searchName = `${stn} (${line})`;
-    
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(searchName));
-    const snap = await get(q);
+    
+    try {
+        const snap = await get(q);
+        tbody.innerHTML = ""; // Clear Loading Message
 
-    if(!snap.exists()) {
-        tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:red;'>No records found for this station.</td></tr>";
-        return;
+        if(!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:red;'>No records found.</td></tr>";
+            return;
+        }
+
+        snap.forEach(c => {
+            const d = c.val();
+            const btn = `<button class="info" onclick="openPrintSetup('${c.key}')">🖨️ Select</button>`;
+            tbody.innerHTML += `
+                <tr>
+                    <td>${d.date}</td>
+                    <td style="font-weight:bold;">${d.name}</td>
+                    <td>${d.userName}</td>
+                    <td style="text-align:center;">${btn}</td>
+                </tr>
+            `;
+        });
+    } catch (e) {
+        tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:red;'>Connection Error</td></tr>";
     }
-
-    tbody.innerHTML = "";
-    snap.forEach(c => {
-        const d = c.val();
-        // Create "Select" Button
-        const btn = `<button class="info" onclick="openPrintSetup('${c.key}')">🖨️ Select</button>`;
-        
-        tbody.innerHTML += `
-            <tr>
-                <td>${d.date}</td>
-                <td style="font-weight:bold;">${d.name}</td>
-                <td>${d.userName}</td>
-                <td style="text-align:center;">${btn}</td>
-            </tr>
-        `;
-    });
 };
-
 // --- 3. OPEN CONFIG MODAL ---
 let currentPrintKey = null;
 
@@ -3571,23 +3761,35 @@ window.handleLogLineChange = () => {
         stnSel.style.background = "#fff";
     }
 };
-// 1. UPDATED: Load Data function (Cleaned up)
+// UPDATED: Load Specific Station Data (Master Log)
 window.loadSpecificStationData = async () => {
     const stnSel = document.getElementById("logStationSelect");
     const lineSel = document.getElementById("logLineSelect");
     const resultsDiv = document.getElementById("logResultsPanel");
-    const body1 = document.getElementById("viewTable1Body");
+    
+    // Use the correct ID based on your HTML structure
+    const body1 = document.getElementById("viewTable1Body") || document.getElementById("stationDataViewBody");
+
+    // 1. STOP OLD LISTENER
+    if (logViewListener) {
+        off(ref(db), logViewListener); // Broad detach or specific if you stored the query ref
+        logViewListener = null;
+    }
+
+    // 2. WIPE UI
+    body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Switching Data Streams...</td></tr>";
 
     if (!stnSel.value || !lineSel.value) return;
-
     const searchName = stnSel.value.trim(); 
     resultsDiv.classList.remove("hidden");
-    body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Searching...</td></tr>";
 
+    // 3. START NEW SEARCH
+    // Note: 'get' is a one-time fetch, so bleeding is less likely here than 'onValue', 
+    // but clearing innerHTML above is the key fix.
+    const q1 = query(ref(db, "station_logs"));
+    
     try {
-        const q1 = query(ref(db, "station_logs"));
         const snap1 = await get(q1);
-
         body1.innerHTML = "";
         
         if (!snap1.exists()) {
@@ -3597,28 +3799,25 @@ window.loadSpecificStationData = async () => {
 
         const logs = [];
         snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
-
-        // Filter and Sort
         const matches = logs.filter(log => log.name && log.name.includes(searchName)).reverse();
 
         if (matches.length === 0) {
-            body1.innerHTML = `<tr><td colspan='8' style='text-align:center; color:red;'>No data found.</td></tr>`;
+            body1.innerHTML = `<tr><td colspan='8' style='text-align:center; color:red;'>No data found for ${searchName}.</td></tr>`;
             return;
         }
 
         matches.forEach(d => {
-            // UPDATED: Button now calls openRakeModal instead of loading a bottom table
-            let buttonsHtml = `<button onclick="openRakeModal('${d.key}')" class="info" style="padding:2px 6px; font-size:11px; margin-right:4px;">📄 View Table</button>`;
-            
-            if (isAdmin || d.user === currentUser.email) {
+             // (Your existing render logic...)
+             // Just ensuring the loop runs on CLEAN HTML
+             let buttonsHtml = `<button onclick="openRakeModal('${d.key}')" class="info" style="padding:2px 6px; font-size:11px; margin-right:4px;">📄 View Table</button>`;
+             if (isAdmin || d.user === currentUser.email) {
                 buttonsHtml += `<button class="warning" onclick="editStationLog('${d.key}')" style="padding:2px 6px; font-size:11px; margin-right:4px;">✏️ Edit</button>`;
-            }
-
-            if (isAdmin) {
+             }
+             if (isAdmin) {
                 buttonsHtml += `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:2px 6px; font-size:11px;">🗑</button>`;
-            }
+             }
 
-            const row = `
+             const row = `
             <tr>
                 <td style="font-size:12px;">${d.date}</td>
                 <td style="font-size:12px;">${d.userName}</td>
@@ -3629,19 +3828,15 @@ window.loadSpecificStationData = async () => {
                     ${d.impl === 'YES' ? '<span style="color:green">✅ YES</span>' : (d.impl === 'NO' ? '<span style="color:red">❌ NO</span>' : '-')}
                 </td>
                 <td style="font-style:italic; font-size:12px;">${d.remarks || '--'}</td>
-                <td style="white-space:nowrap;">
-                    ${buttonsHtml}
-                </td>
+                <td style="white-space:nowrap;">${buttonsHtml}</td>
             </tr>`;
             body1.innerHTML += row;
         });
 
-    } catch (error) {
-        console.error(error);
-        body1.innerHTML = `<tr><td colspan='8' style='color:red;'>Error: ${error.message}</td></tr>`;
+    } catch (e) {
+        body1.innerHTML = `<tr><td colspan='8' style='color:red;'>Error: ${e.message}</td></tr>`;
     }
 };
-
 // 2. NEW: Function to open the Rake Data in a POPUP MODAL
 window.openRakeModal = async (key) => {
     const modal = document.getElementById("rakeDataModal");
@@ -4068,13 +4263,15 @@ window.submitBan = async () => {
     }
 };
 window.unbanUser = async (uid, encodedName) => {
-    if(!isAdmin) return alert("Admins Only.");
+    // 1. Security Check
+    if(!isAdmin) return alert("⛔ Access Denied: Administrator privileges required.");
     
     const name = decodeURIComponent(encodedName);
     
-    if(confirm(`⚠ LIFT SUSPENSION?\n\nUser: ${name}\n\nAre you sure you want to restore access for this user?`)) {
+    // 2. Confirmation Dialog
+    if(confirm(`🟢 RESTORE ACCESS?\n\nUser: ${name}\n\nThis will immediately allow the user to log in and access the system again.\n\nProceed?`)) {
         try {
-            // 1. Remove Ban Flags from User Profile
+            // 3. Database Update: Set all ban fields to null to delete them
             await update(ref(db, `users/${uid}`), {
                 banned: null,
                 banReason: null,
@@ -4085,18 +4282,20 @@ window.unbanUser = async (uid, encodedName) => {
                 bannedBy: null
             });
 
-            // 2. Log Action
+            // 4. Create Audit Log
             await push(ref(db, "logs"), {
                 type: "USER_UNBAN",
                 user: "System",
                 details: `Unbanned UID: ${uid}`,
+                reason: "Admin Restore Action",
                 approvedBy: currentUser.email,
                 time: serverTimestamp()
             });
 
             alert(`✅ Access Restored for ${name}.`);
             
-            // The listener in loadAdminPanel will automatically refresh the UI
+            // Note: No need to call loadAdminPanel() manually because 
+            // the onValue listener in Part 1 will update the table automatically.
             
         } catch(e) {
             console.error(e);
