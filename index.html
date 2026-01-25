@@ -3412,61 +3412,6 @@ window.handleLogLineChange = () => {
     }
 };
 window.loadSpecificStationData = async () => {
-    const stnSel = document.getElementById("logStationSelect");
-    const lineSel = document.getElementById("logLineSelect");
-    const resultsDiv = document.getElementById("logResultsPanel");
-    const body1 = document.getElementById("viewTable1Body");
-    const body2 = document.getElementById("viewTable2Body");
-
-    if (!stnSel.value) return;
-
-    const searchName = `${stnSel.value} (${lineSel.value})`;
-    resultsDiv.classList.remove("hidden");
-    body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>🔍 Searching Records...</td></tr>";
-
-    try {
-        // --- Part A: Main Inspection Logs ---
-        const snap = await get(ref(db, "station_logs"));
-        body1.innerHTML = ""; 
-
-        snap.forEach(child => {
-            const d = child.val();
-            if (d.name === searchName) {
-                body1.innerHTML += `
-                <tr>
-                    <td>${d.date}</td>
-                    <td>${d.userName}</td>
-                    <td>${d.len || '-'} m</td>
-                    <td style="color:red;">${d.yl || '-'} cm</td>
-                    <td>${d.th || '-'} cm</td>
-                    <td>${d.impl || '-'}</td>
-                    <td style="font-size:11px;">${d.remarks || '--'}</td>
-                    <td><button onclick="loadRakeTable('${child.key}')" class="info">👁️ View Rakes</button></td>
-                </tr>`;
-            }
-        });
-
-        // --- Part B: Demo Logs (NEW) ---
-        const demoSnap = await get(ref(db, "demo_master_logs"));
-        demoSnap.forEach(child => {
-            const d = child.val();
-            if (d.name === searchName) {
-                body1.innerHTML += `
-                <tr style="background:#fffdf0; border-left: 5px solid #b38600;">
-                    <td>${d.date}</td>
-                    <td>${d.userName}</td>
-                    <td colspan="4" style="text-align:center; font-weight:bold; color:#b38600;">🧪 DEMO LOG ENTRY</td>
-                    <td style="font-size:11px;">${d.comments || '--'}</td>
-                    <td><button onclick="loadDemoTable('${child.key}')" class="warning">👁️ View Demo</button></td>
-                </tr>`;
-            }
-        });
-
-    } catch (error) {
-        console.error(error);
-        body1.innerHTML = "<tr><td colspan='8'>Error loading logs.</td></tr>";
-    }
-};
 window.editStationLog = async (key) => {
     if (!confirm("✏️ Edit this record?")) return;
 
@@ -3535,6 +3480,17 @@ window.editStationLog = async (key) => {
     } catch (e) {
         console.error(e);
         alert("Error loading for edit: " + e.message);
+    }
+};
+window.viewDemoTableDetails = async (key) => {
+    const body2 = document.getElementById("viewTable2Body");
+    body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Loading demo entries...</td></tr>";
+    const snap = await get(ref(db, `demo_table_logs/${key}`));
+    body2.innerHTML = "";
+    if(snap.exists()) {
+        Object.values(snap.val()).forEach((r, i) => {
+            body2.innerHTML += `<tr><td>${i+1}</td><td>Demo Dist: ${r.dist}m</td><td colspan="3">Response: ${r.resp}</td><td>🧪</td></tr>`;
+        });
     }
 };
 window.loadDemoTable = async (key) => {
@@ -4321,38 +4277,38 @@ window.forceReUpload = (uid) => {
 }
 window.retakeName = (uid) => update(ref(db, `users/${uid}`), { name: null }).then(() => alert("Name Reset."));
 window.switchTab = (t) => {
-    // 1. Hide all tabs (Added 'printReport' to the list)
-    const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport'];
-    
+    // 1. Hide every single tab container
+    const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport', 'demoResult'];
     allTabs.forEach(x => {
         const el = document.getElementById(`tab-${x}`);
         if(el) el.classList.add("hidden");
     });
 
-    // 2. Remove active class from all buttons
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    // 2. Clear out any "floating" warnings or forms that might be stuck
+    document.getElementById("mainDataForm").classList.add("hidden");
+    document.getElementById("demoFormArea").classList.add("hidden");
 
-    // 3. Show the target tab
+    // 3. Highlight only the active button
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    
+    const btnMap = {
+        'newData': 'btnNew', 'inventory': 'btnInventory', 'gallery': 'btnGallery',
+        'assigned': 'btnAssign', 'adminPanel': 'btnAdmin', 'dataView': 'btnDataView',
+        'printReport': 'btnPrintReport', 'demoResult': 'btnDemo'
+    };
+    
+    const activeBtn = document.getElementById(btnMap[t]);
+    if(activeBtn) activeBtn.classList.add("active");
+
+    // 4. Show the target tab
     const target = document.getElementById(`tab-${t}`);
     if(target) target.classList.remove("hidden");
 
-    // 4. Highlight the correct button
-    let btnId = '';
-    if (t === 'newData') btnId = 'btnNew';
-    else if (t === 'inventory') btnId = 'btnInventory';
-    else if (t === 'gallery') btnId = 'btnGallery';
-    else if (t === 'assigned') btnId = 'btnAssign';
-    else if (t === 'adminPanel') btnId = 'btnAdmin';
-    else if (t === 'dataView') btnId = 'btnDataView'; 
-    else if (t === 'printReport') btnId = 'btnPrintReport'; // <--- NEW
-
-    const btn = document.getElementById(btnId);
-    if(btn) btn.classList.add("active");
-
-    // 5. Load data specific to the tab
-    if(t === 'adminPanel' && isAdmin) loadAdminPanel();
-    if(t === 'gallery') loadGallery();
-    // For printReport, we don't auto-load data; user must select options.
+    // 5. Special Logic: If viewing logs, refresh the list
+    if(t === 'dataView') {
+        document.getElementById("logResultsPanel").classList.add("hidden");
+        document.getElementById("logLineSelect").value = "";
+    }
 };
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
