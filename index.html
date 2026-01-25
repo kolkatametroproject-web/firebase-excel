@@ -3244,76 +3244,63 @@ window.loadSpecificStationData = async () => {
     const body1 = document.getElementById("viewTable1Body");
     const body2 = document.getElementById("viewTable2Body");
 
-    if (!stnSel.value || !lineSel.value) return;
+    if (!stnSel.value) return;
 
-    const searchName = stnSel.value.trim(); 
+    const searchName = `${stnSel.value} (${lineSel.value})`;
     resultsDiv.classList.remove("hidden");
-    body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Searching...</td></tr>";
-    body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
+    body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>🔍 Searching All Records...</td></tr>";
+    body2.innerHTML = "";
 
     try {
-        const q1 = query(ref(db, "station_logs"));
-        const snap1 = await get(q1);
+        // 1. Fetch all logs
+        const snap = await get(ref(db, "station_logs"));
+        body1.innerHTML = ""; 
 
-        body1.innerHTML = "";
-        body2.innerHTML = ""; 
-
-        if (!snap1.exists()) {
-            body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>No records found.</td></tr>";
+        if (!snap.exists()) {
+            body1.innerHTML = "<tr><td colspan='8'>No records in database.</td></tr>";
             return;
         }
 
-        const logs = [];
-        snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        let foundCount = 0;
 
-        const matches = logs.filter(log => log.name && log.name.includes(searchName)).reverse();
+        // 2. Loop through every log to find ALL matches for "Park Street" or "Uttam Kumar"
+        snap.forEach(child => {
+            const d = child.val();
+            const logKey = child.key;
 
-        if (matches.length === 0) {
-            body1.innerHTML = `<tr><td colspan='8' style='text-align:center; color:red;'>No data found.</td></tr>`;
-            return;
-        }
-
-        const newestKey = matches[0].key; 
-
-        matches.forEach(d => {
-            const isActive = (d.key === newestKey);
-            const bgStyle = isActive ? "background:#e8f4ff; font-weight:bold;" : "";
-            
-            // Buttons
-            const showBtn = `<button onclick="loadRakeTable('${d.key}')" class="info" style="padding:2px 6px; font-size:11px;">👁️ View</button>`;
-            
-            let adminBtns = "";
-            if (isAdmin) {
-                adminBtns = `<button class="warning" onclick="editStationLog('${d.key}')" style="padding:2px 5px; font-size:11px;">✏️</button> 
-                             <button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:2px 5px; font-size:11px;">🗑</button>`;
+            if (d.name === searchName) {
+                foundCount++;
+                
+                // Determine row style (Highlight the most recent one)
+                const rowStyle = foundCount === 1 ? "background:#e8f4ff; font-weight:bold;" : "";
+                
+                const row = `
+                <tr style="${rowStyle}">
+                    <td>${d.date}</td>
+                    <td>${d.userName}</td>
+                    <td>${d.len || '-'} m</td>
+                    <td style="color:red;">${d.yl || '-'} cm</td>
+                    <td>${d.th || '-'} cm</td>
+                    <td>${d.impl || '-'}</td>
+                    <td style="font-size:11px;">${d.remarks || '--'}</td>
+                    <td>
+                        <button onclick="loadRakeTable('${logKey}')" class="info" style="padding:2px 6px;">👁️ View Rakes</button>
+                        ${isAdmin ? `<button class="danger" onclick="deleteStationLog('${logKey}')" style="padding:2px 6px;">🗑</button>` : ''}
+                    </td>
+                </tr>`;
+                
+                // Use prepend so newest records appear at the top
+                body1.insertAdjacentHTML('afterbegin', row);
             }
-
-            // --- FIXED ROW HTML (CORRECT COLUMN ORDER) ---
-            const row = `
-            <tr style="${bgStyle}">
-                <td style="font-size:12px;">${d.date}</td>
-                <td style="font-size:12px;">${d.userName}</td>
-                <td style="font-weight:bold;">${d.len || '-'} m</td>
-                
-                <td style="font-weight:bold; color:#e31e24;">${d.yl || '-'} cm</td>
-                
-                <td>${d.th || '-'} cm</td>
-
-                <td style="text-align:center; font-weight:bold;">
-                    ${d.impl === 'YES' ? '<span style="color:green">✅ YES</span>' : (d.impl === 'NO' ? '<span style="color:red">❌ NO</span>' : '-')}
-                </td>
-
-                <td style="font-style:italic; font-size:12px;">${d.remarks || '--'}</td>
-                <td style="white-space:nowrap;">${showBtn} ${adminBtns}</td>
-            </tr>`;
-            body1.innerHTML += row;
         });
 
-        loadRakeTable(newestKey);
+        if (foundCount === 0) {
+            body1.innerHTML = `<tr><td colspan='8' style='text-align:center; color:red;'>No data found for ${searchName}.</td></tr>`;
+        }
 
     } catch (error) {
         console.error(error);
-        body1.innerHTML = `<tr><td colspan='8' style='color:red;'>Error: ${error.message}</td></tr>`;
+        body1.innerHTML = "<tr><td colspan='8'>Error loading logs.</td></tr>";
     }
 };
 window.editStationLog = async (key) => {
