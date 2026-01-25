@@ -508,13 +508,16 @@ select:disabled {
     <video id="cameraFeed" autoplay playsinline muted></video>
     <canvas id="overlayCanvas"></canvas>
   </div>
- 
-  <div id="otpUI" class="hidden" style="text-align:center; background:white; padding:20px; border-radius:5px; width:280px; box-shadow: 0 0 15px black; position:absolute; z-index:20;">
-    <h3 style="color:#dc3545; margin-top:0;">Face ID Failed (3/3)</h3>
-    <p style="color:#333; font-size:13px;">Camera Disabled.<br>Enter OTP/PIN:</p>
-    <input id="otpInput" type="password" placeholder="PIN (Default: 1234)" style="text-align:center; font-size:18px; letter-spacing:5px; border:2px solid #dc3545;">
-    <button class="success" onclick="verifyOTP()" style="width:100%;">Verify PIN</button>
-  </div>
+ <div id="otpUI" class="hidden" style="text-align:center; background:white; padding:20px; border-radius:8px; width:300px; box-shadow: 0 0 25px rgba(0,0,0,0.5); position:absolute; z-index:3000; border: 3px solid #dc3545;">
+    <i class="fas fa-lock-alt" style="font-size: 30px; color: #dc3545;"></i>
+    <h3 style="color:#dc3545; margin:10px 0 5px 0;">Security Lockout</h3>
+    <p style="color:#333; font-size:12px; margin-bottom:15px;">Face verification failed 3 times.<br><b>Admin must enter PIN to unlock.</b></p>
+    
+    <input id="adminPinInput" type="password" placeholder="ADMIN PIN" style="text-align:center; font-size:20px; letter-spacing:8px; border:2px solid #333; margin-bottom:10px;">
+    
+    <button class="danger" onclick="verifyAdminBypass()" style="width:100%; padding:12px; font-weight:bold;">AUTHORIZE BYPASS</button>
+    <button class="secondary" onclick="logout()" style="width:100%; margin-top:10px; font-size:11px;">Cancel & Logout</button>
+</div>
 
   <div id="faceStatus" style="color:#ffc107; margin-bottom:15px; font-weight:bold; height:20px; text-align:center;"></div>
  
@@ -2542,6 +2545,57 @@ window.generateFinalReport = async () => {
 window.closeReportPreview = () => {
     document.getElementById("printableReportContainer").classList.add("hidden");
 };
+// --- ADMIN PIN BYPASS LOGIC ---
+window.verifyAdminBypass = async () => {
+    const enteredPin = document.getElementById("adminPinInput").value;
+    const statusEl = document.getElementById("faceStatus");
+
+    updateStatus("Verifying Admin Authorization...", "orange");
+
+    try {
+        // 1. Fetch Admin PINs (we check against known admin UIDs)
+        const adminsSnap = await get(ref(db, "users"));
+        let authorized = false;
+        let adminName = "";
+
+        adminsSnap.forEach(snap => {
+            const userData = snap.val();
+            // Check if this user is an Admin AND the PIN matches
+            if (ADMIN_EMAILS.includes(userData.email) && userData.pin === enteredPin) {
+                authorized = true;
+                adminName = userData.name || userData.email;
+            }
+        });
+
+        if (authorized) {
+            // 2. Set Bypass Expiry (Current Time + 5 Minutes)
+            const expiryTime = Date.now() + (5 * 60 * 1000);
+            localStorage.setItem("adminBypassExpiry", expiryTime);
+
+            updateStatus("✅ ACCESS GRANTED BY ADMIN", "#00ff00");
+            
+            // 3. Log the bypass event for audit
+            await push(ref(db, "logs"), {
+                type: "ADMIN_BYPASS",
+                user: currentUser.email,
+                authorizedBy: adminName,
+                time: serverTimestamp()
+            });
+
+            // 4. Enter App
+            setTimeout(() => {
+                enterApp();
+            }, 1000);
+        } else {
+            alert("❌ INVALID ADMIN PIN");
+            updateStatus("Unauthorized PIN Entry", "red");
+            document.getElementById("adminPinInput").value = "";
+        }
+    } catch (e) {
+        console.error(e);
+        alert("Connection Error during authorization.");
+    }
+};
 async function startRealTimeDetection(video, canvas) {
     const displaySize = { width: video.videoWidth || 320, height: video.videoHeight || 240 };
     faceapi.matchDimensions(canvas, displaySize);
@@ -2583,115 +2637,97 @@ function stopCamera() {
 function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
 window.handleFaceScan = async () => {
     const btn = document.getElementById("btnCapture");
-    if(!currentDescriptor) { updateStatus("❌ No Face Detected.", "red"); return; }
+    if (!currentDescriptor) { 
+        updateStatus("❌ No Face Detected.", "red"); 
+        return; 
+    }
    
     btn.disabled = true;
     btn.innerText = "Processing...";
     updateStatus("Analyzing Biometrics...", "cyan");
 
     try {
-        // --- MODE 1: RECEIVER VERIFICATION ---
-        if(scanMode === 'RECEIVER') {
-            const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
-            const storedData = snap.val();
-           
-            let match = false;
-            // Check match against logged-in user
-            if(storedData) {
-                const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
-                for (let s of samples) {
-                    if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
+        // Fetch Stored Face Data
+        const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+        const storedData = snap.val();
+        let match = false;
+
+        if (storedData) {
+            const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
+            for (let s of samples) {
+                // Biometric Threshold: 0.55 (Lower is stricter)
+                if (faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { 
+                    match = true; 
+                    break; 
                 }
             }
+        }
 
-            if(match) {
-                updateStatus("✅ IDENTITY CONFIRMED", "#00ff00");
-                setTimeout(() => {
-                    stopCamera();
-                    receiverVerified = true;
-                    // Update UI based on transaction type
-                    if(currentTransactionType === 'CHECKOUT') {
-                        document.getElementById("checkout_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                        document.getElementById("checkout_status_text").style.color = "green";
-                        document.getElementById("btn_checkout_verify").classList.add("hidden");
-                        // Enable Admin Button
-                        const subBtn = document.getElementById("btn_checkout_submit");
-                        subBtn.disabled = false;
-                        subBtn.style.background = "#b38600";
-                        subBtn.style.cursor = "pointer";
-                        subBtn.style.opacity = "1";
-                    } else {
-                        document.getElementById("return_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
-                        document.getElementById("return_status_text").style.color = "green";
-                        document.getElementById("btn_return_verify").classList.add("hidden");
-                        // Enable Admin Button
-                        const subBtn = document.getElementById("btn_return_submit");
-                        subBtn.disabled = false;
-                        subBtn.style.background = "#17a2b8";
-                        subBtn.style.cursor = "pointer";
-                        subBtn.style.opacity = "1";
-                    }
-                }, 1000);
+        if (match) {
+            updateStatus("✅ IDENTITY CONFIRMED", "#00ff00");
+            failCount = 0; // Reset fails on success
+            
+            if (scanMode === 'RECEIVER') {
+                receiverVerified = true;
+                stopCamera();
+                // Custom logic for inventory transactions
+                document.getElementById(currentTransactionType === 'CHECKOUT' ? "btn_checkout_verify" : "btn_return_verify").classList.add("hidden");
             } else {
-                throw new Error("Face Does Not Match User");
-            }
-        }
-
-        // --- MODE 2: ADMIN AUTHORIZATION ---
-        else if(scanMode === 'ADMIN') {
-    // Step 1: must be logged in admin
-    if (!isAdmin) {
-        throw new Error("You are not an admin account");
-    }
-
-    // Step 2: match only against his own face
-    const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
-    const storedData = snap.val();
-
-    let match = false;
-    if (storedData) {
-        const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
-        for (let s of samples) {
-            if (faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
-                match = true;
-                break;
-            }
-        }
-    }
-
-    if (match) {
-        updateStatus("✅ ADMIN AUTHORIZED", "#00ff00");
-        await processTransaction(currentUser.name);
-    } else {
-        throw new Error("Admin face does not match");
-    }
-}
-        // --- MODE 3: LOGIN ---
-        else {
-            const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
-            const storedData = snap.val();
-            let match = false;
-            if(storedData) {
-                const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
-                for (let s of samples) {
-                     if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
-                }
-            }
-            if(match) {
-                updateStatus("✅ VERIFIED", "#00ff00");
                 await recordLogin("Biometric");
                 enterApp();
-            } else {
-                throw new Error("Face Mismatch");
             }
+        } else {
+            // Trigger the 3-fail security lockout
+            handleFail(); 
+            btn.disabled = false;
+            btn.innerText = "📸 Retry Scan";
         }
 
     } catch (error) {
         console.error(error);
-        updateStatus("❌ " + error.message, "red");
+        updateStatus("❌ System Error", "red");
         btn.disabled = false;
-        btn.innerText = "📸 Retry Scan";
     }
+};
+
+// --- THE ADMIN BYPASS FUNCTION ---
+window.verifyAdminBypass = async () => {
+    const enteredPin = document.getElementById("adminPinInput").value;
+    updateStatus("Verifying Admin PIN...", "orange");
+
+    try {
+        const usersSnap = await get(ref(db, "users"));
+        let authorized = false;
+        let adminName = "";
+
+        usersSnap.forEach(s => {
+            const u = s.val();
+            // Check if user is in ADMIN_EMAILS and PIN matches
+            if (ADMIN_EMAILS.includes(u.email) && u.pin === enteredPin) {
+                authorized = true;
+                adminName = u.name || u.email;
+            }
+        });
+
+        if (authorized) {
+            // VALID FOR 5 MINUTES (300,000 ms)
+            const expiry = Date.now() + (5 * 60 * 1000);
+            localStorage.setItem("adminBypassExpiry", expiry);
+
+            await push(ref(db, "logs"), {
+                type: "ADMIN_BYPASS",
+                user: currentUser.email,
+                authorizedBy: adminName,
+                time: serverTimestamp()
+            });
+
+            updateStatus("✅ BYPASS AUTHORIZED", "#00ff00");
+            setTimeout(enterApp, 1000);
+        } else {
+            alert("❌ INVALID ADMIN PIN");
+            document.getElementById("adminPinInput").value = "";
+        }
+    } catch (e) { alert("Auth Failed"); }
 };
 
 window.registerNewFace = async () => {
@@ -3791,7 +3827,7 @@ window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
     
-    // Attach a real-time listener to the entire users node
+    // Listen to all users in real-time
     onValue(ref(db, "users"), async (userSnap) => {
         const statusSnap = await get(ref(db, "status"));
         const statusMap = statusSnap.val() || {};
@@ -3804,34 +3840,36 @@ window.loadAdminPanel = async () => {
             const uid = c.key;
             const displayName = u.name || u.email;
 
-            // 1. Fill the "Assign Work" Checkbox list
+            // Update Checkbox List for assigning new work
             userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
 
-            // 2. Determine Online Status
+            // Online/Offline Logic
             const s = statusMap[uid];
-            const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
+            const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 25000);
             const statusBadge = isOnline ? `<span class="badge-online">● ONLINE</span>` : `<span class="badge-offline">○ OFFLINE</span>`;
 
-            // 3. Create a Row for this user
+            // Create Row
             const row = document.createElement("tr");
             row.innerHTML = `
                 <td>
                     <strong>${displayName}</strong><br>
-                    <small>${u.email}</small>
+                    <small style="color:#666;">${u.email}</small>
                 </td>
                 <td style="text-align:center;">${statusBadge}</td>
                 <td style="text-align:center;" id="task_stat_${uid}">
-                    <span style="color:#666; font-size:11px;">Loading Tasks...</span>
+                    <small>Syncing tasks...</small>
                 </td>
-                <td style="text-align:center;">${u.faceData ? '<span style="color:green;">✔ Reg</span>' : '<span style="color:red;">❌ No</span>'}</td>
+                <td style="text-align:center;">
+                    ${u.faceData ? '<span style="color:green;">✔ Registered</span>' : '<span style="color:red;">❌ Pending</span>'}
+                </td>
                 <td>
-                    <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px;">📋 Track Tasks</button>
-                    <button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">🚫 Ban</button>
+                    <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:5px 8px;">📋 Track</button>
+                    <button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:5px 8px;">🚫 Ban</button>
                 </td>
             `;
             userTable.appendChild(row);
 
-            // 4. ATTACH LIVE TASK COUNTER FOR THIS USER
+            // NESTED LIVE LISTENER: Update the specific "Task Progress" cell
             onValue(ref(db, `assignments/${uid}`), (taskSnap) => {
                 const targetCell = document.getElementById(`task_stat_${uid}`);
                 if (!targetCell) return;
@@ -3842,7 +3880,7 @@ window.loadAdminPanel = async () => {
                         t.val().status === 'Done' ? done++ : pending++;
                     });
                     targetCell.innerHTML = `
-                        <b style="color:green;">${done} Done</b> / 
+                        <b style="color:green;">${done} Done</b><br>
                         <b style="color:#b38600;">${pending} Pending</b>
                     `;
                 } else {
