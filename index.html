@@ -571,6 +571,7 @@ select:disabled {
     <button class="nav-btn hidden" onclick="switchTab('adminPanel')" id="btnAdmin" style="background:#721c24; color:white; border-color:#721c24;">Admin Control</button>
     <button class="nav-btn" onclick="switchTab('dataView')" id="btnDataView">5.📋 Data Logs</button>
     <button class="nav-btn" onclick="switchTab('printReport')" id="btnPrintReport">6. 🖨️ Print Reports</button>
+    <button class="nav-btn" onclick="switchTab('demoResult')" id="btnDemo">7. Demo Result</button>
   </div>
 <div id="tab-newData">
   <div class="panel">
@@ -1314,6 +1315,49 @@ select:disabled {
     </div>
 </div>
 </div>
+<div id="tab-demoResult" class="hidden">
+  <div class="panel">
+    <h3>🧪 1. Select Demo Location</h3>
+    <select id="demoLineSelect" onchange="handleDemoLineChange()">
+      <option value="">-- Select Line --</option>
+      <option value="Blue Line">Blue Line</option>
+      <option value="Green Line">Green Line</option>
+      <option value="Yellow Line">Yellow Line</option>
+    </select>
+    <select id="demoStationSelect" onchange="handleDemoStationChange()" disabled style="margin-top:10px;">
+      <option value="">-- Select Station --</option>
+    </select>
+  </div>
+
+  <div id="demoFormArea" class="hidden">
+    <div class="panel" style="border-top: 5px solid var(--metro-gold);">
+      <h3>📊 2. Demo Measurement Table</h3>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr style="background:#eee;">
+              <th style="width:50px;">SL</th>
+              <th>Distance (m)</th>
+              <th>System Response</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="demoTableBody"></tbody>
+        </table>
+      </div>
+      <button class="primary" onclick="addDemoRow()" style="margin-top:10px;">+ Add Entry</button>
+      
+      <div style="margin-top:20px;">
+        <label><strong>Final Comments / Summary:</strong></label>
+        <textarea id="demoComments" placeholder="Enter demo observations..."></textarea>
+      </div>
+
+      <button class="success" onclick="submitDemoData()" style="width:100%; padding:15px; font-weight:bold; margin-top:10px;">
+        ✔ SAVE DEMO LOG
+      </button>
+    </div>
+  </div>
+</div>
 </section>
 
 <script type="module">
@@ -1653,6 +1697,92 @@ window.closeReportPreview = () => {
     
     // 2. Remove the print classes so the main app returns to normal styling
     document.body.classList.remove('print-a4', 'print-pos');
+};
+// Handle Dropdowns
+window.handleDemoLineChange = () => {
+    const line = document.getElementById("demoLineSelect").value;
+    const stnSel = document.getElementById("demoStationSelect");
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    if (line && METRO_STATIONS[line]) {
+        METRO_STATIONS[line].forEach(s => {
+            let opt = document.createElement("option");
+            opt.value = s; opt.innerText = s;
+            stnSel.appendChild(opt);
+        });
+        stnSel.disabled = false;
+    }
+};
+
+window.handleDemoStationChange = () => {
+    const stn = document.getElementById("demoStationSelect").value;
+    if(stn) {
+        document.getElementById("demoFormArea").classList.remove("hidden");
+        loadDemoDraft();
+    }
+};
+
+// Draft Logic
+window.addDemoRow = () => {
+    const stn = document.getElementById("demoStationSelect").value;
+    const line = document.getElementById("demoLineSelect").value;
+    const stationId = `${line}_${stn}`.replace(/\s+/g, '_');
+    push(ref(db, `demo_drafts/${currentUser.uid}/${stationId}/rows`), { dist: "", resp: "" });
+};
+
+window.loadDemoDraft = () => {
+    const stn = document.getElementById("demoStationSelect").value;
+    const line = document.getElementById("demoLineSelect").value;
+    const stationId = `${line}_${stn}`.replace(/\s+/g, '_');
+    
+    onValue(ref(db, `demo_drafts/${currentUser.uid}/${stationId}`), (snap) => {
+        const body = document.getElementById("demoTableBody");
+        body.innerHTML = "";
+        const data = snap.val();
+        if(data && data.rows) {
+            Object.entries(data.rows).forEach(([key, val], index) => {
+                body.innerHTML += `
+                <tr>
+                    <td>${index + 1}</td>
+                    <td><input value="${val.dist}" onchange="upDemoRow('${stationId}','${key}','dist',this.value)"></td>
+                    <td><input value="${val.resp}" onchange="upDemoRow('${stationId}','${key}','resp',this.value)"></td>
+                    <td><button class="danger" onclick="delDemoRow('${stationId}','${key}')">X</button></td>
+                </tr>`;
+            });
+        }
+    });
+};
+
+window.upDemoRow = (sid, rk, f, v) => update(ref(db, `demo_drafts/${currentUser.uid}/${sid}/rows/${rk}`), {[f]:v});
+window.delDemoRow = (sid, rk) => remove(ref(db, `demo_drafts/${currentUser.uid}/${sid}/rows/${rk}`));
+
+// Submission
+window.submitDemoData = async () => {
+    const stn = document.getElementById("demoStationSelect").value;
+    const line = document.getElementById("demoLineSelect").value;
+    const stationId = `${line}_${stn}`.replace(/\s+/g, '_');
+    const comments = document.getElementById("demoComments").value;
+
+    const snap = await get(ref(db, `demo_drafts/${currentUser.uid}/${stationId}/rows`));
+    if(!snap.exists()) return alert("Please add at least one row.");
+
+    const logKey = push(ref(db, "demo_master_logs")).key;
+    const logData = {
+        name: `${stn} (${line})`,
+        comments: comments,
+        userName: currentUser.name || currentUser.email,
+        date: new Date().toLocaleString(),
+        timestamp: serverTimestamp()
+    };
+
+    const updates = {};
+    updates[`demo_master_logs/${logKey}`] = logData;
+    updates[`demo_table_logs/${logKey}`] = snap.val();
+
+    await update(ref(db), updates);
+    await remove(ref(db, `demo_drafts/${currentUser.uid}/${stationId}`));
+    
+    alert("✅ Demo Log Saved Successfully!");
+    switchTab('dataView');
 };
 window.onScanSuccess = async function(decodedText) {
     closeBarcodeScanner();
@@ -2658,7 +2788,52 @@ window.verifyAdminBypass = async () => {
         }
     } catch (e) { alert("Auth Failed"); }
 };
+window.submitDemoData = async () => {
+    const stn = document.getElementById("demoStationSelect").value;
+    const line = document.getElementById("demoLineSelect").value;
+    const stationId = `${line}_${stn}`.replace(/\s+/g, '_');
+    const comments = document.getElementById("demoComments").value;
 
+    // 1. Get the rows from your temporary draft
+    const snap = await get(ref(db, `demo_drafts/${currentUser.uid}/${stationId}/rows`));
+    
+    if(!snap.exists()) {
+        return alert("❌ No data to save. Please add at least one SL entry.");
+    }
+
+    // 2. Create a unique ID for this specific Demo Report
+    const logKey = push(ref(db, "demo_master_logs")).key;
+
+    // 3. Prepare the data packet
+    const logData = {
+        name: `${stn} (${line})`,
+        comments: comments,
+        userName: currentUser.name || currentUser.email,
+        date: new Date().toLocaleString(),
+        timestamp: serverTimestamp()
+    };
+
+    // 4. Save to two places at once: The Header Info and the Table Rows
+    const updates = {};
+    updates[`demo_master_logs/${logKey}`] = logData;
+    updates[`demo_table_logs/${logKey}`] = snap.val();
+
+    try {
+        await update(ref(db), updates);
+        
+        // 5. Success! Clear the draft so it's fresh for next time
+        await remove(ref(db, `demo_drafts/${currentUser.uid}/${stationId}`));
+        
+        alert("✅ Demo Result Saved Successfully!");
+        
+        // Reset the UI
+        document.getElementById("demoComments").value = "";
+        document.getElementById("demoFormArea").classList.add("hidden");
+        document.getElementById("demoStationSelect").value = "";
+    } catch (e) {
+        alert("Error saving data: " + e.message);
+    }
+};
 window.registerNewFace = async () => {
     if(!currentDescriptor) { updateStatus("❌ Camera cannot see face clearly.", "orange"); return; }
     regSamples.push(Array.from(currentDescriptor));
