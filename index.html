@@ -571,6 +571,7 @@ select:disabled {
     <button class="nav-btn hidden" onclick="switchTab('adminPanel')" id="btnAdmin" style="background:#721c24; color:white; border-color:#721c24;">Admin Control</button>
     <button class="nav-btn" onclick="switchTab('dataView')" id="btnDataView">5.📋 Data Logs</button>
     <button class="nav-btn" onclick="switchTab('printReport')" id="btnPrintReport">6. 🖨️ Print Reports</button>
+    <button class="nav-btn" onclick="switchTab('demoResult')" id="btnDemo">7. 🧪 Demo Results</button>
   </div>
 <div id="tab-newData">
   <div class="panel">
@@ -1314,6 +1315,56 @@ select:disabled {
     </div>
 </div>
 </div>
+  <div id="tab-demoResult" class="hidden">
+    <div class="panel">
+        <h3>🧪 New Demo Test Recording</h3>
+        <label style="font-weight:bold; color:#003366;">Test Environment / Location</label>
+        <input id="demoLocation" placeholder="e.g. Lab Test Bench 1 / Sector V Platform Demo">
+        
+        <div class="table-wrapper">
+            <table>
+                <thead style="background:#003366; color:white;">
+                    <tr>
+                        <th style="width:50px; text-align:center;">SL No.</th>
+                        <th>Distance (cm)</th>
+                        <th>System Response</th>
+                        <th style="text-align:center;">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="demoTableBody">
+                    </tbody>
+            </table>
+        </div>
+        
+        <div style="margin-top:10px; display:flex; justify-content:space-between;">
+            <button class="primary" onclick="addDemoRow()">+ Add Reading</button>
+            <button class="success" onclick="submitDemoData()" id="btnSaveDemo">💾 Save Demo Result</button>
+        </div>
+        
+        <div style="margin-top:15px;">
+            <label style="font-weight:bold;">General Comments / Observations:</label>
+            <textarea id="demoComments" rows="2" placeholder="Write overall performance comments here..."></textarea>
+        </div>
+    </div>
+
+    <div class="panel" style="border-top: 5px solid #17a2b8;">
+        <h3>📜 Previous Demo Logs</h3>
+        <div class="table-wrapper">
+            <table id="demoLogTable">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Location</th>
+                        <th>User</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="demoHistoryBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
 </section>
 
 <script type="module">
@@ -1573,9 +1624,106 @@ window.closeAuditModal = () => {
     document.getElementById("auditResultModal").classList.add("hidden");
     document.getElementById("auditSearchInput").value = ""; 
 };
+// --- DEMO RESULTS LOGIC ---
 
-// --- 4. DUMMY FUNCTION (To prevent errors if HTML still calls it) ---
-// --- REAL-TIME HISTORY LOGIC ---
+// 1. Add Row to the dynamic table
+window.addDemoRow = () => {
+    const tbody = document.getElementById("demoTableBody");
+    const sl = tbody.rows.length + 1;
+    const row = document.createElement("tr");
+    row.innerHTML = `
+        <td style="text-align:center; font-weight:bold;">${sl}</td>
+        <td><input type="number" class="demo-dist" placeholder="0.0" style="margin:0;"></td>
+        <td><input type="text" class="demo-resp" placeholder="e.g. Alarm Triggered" style="margin:0;"></td>
+        <td style="text-align:center;"><button class="danger" onclick="this.parentElement.parentElement.remove(); updateDemoSL();">X</button></td>
+    `;
+    tbody.appendChild(row);
+};
+
+// 2. Re-calculate SL Numbers if a row is deleted
+window.updateDemoSL = () => {
+    const rows = document.getElementById("demoTableBody").rows;
+    for(let i=0; i<rows.length; i++) {
+        rows[i].cells[0].innerText = i + 1;
+    }
+};
+
+// 3. Submit Demo Data to Firebase
+window.submitDemoData = async () => {
+    const loc = document.getElementById("demoLocation").value;
+    const comm = document.getElementById("demoComments").value;
+    const rows = document.querySelectorAll("#demoTableBody tr");
+
+    if(!loc || rows.length === 0) return alert("Please enter location and at least one reading.");
+
+    const readings = [];
+    rows.forEach(r => {
+        readings.push({
+            dist: r.querySelector(".demo-dist").value,
+            resp: r.querySelector(".demo-resp").value
+        });
+    });
+
+    const demoKey = push(ref(db, "demo_logs")).key;
+    const demoData = {
+        location: loc,
+        comments: comm,
+        readings: readings,
+        userName: currentUser.name || currentUser.email,
+        date: new Date().toLocaleString(),
+        timestamp: serverTimestamp()
+    };
+
+    try {
+        await set(ref(db, `demo_logs/${demoKey}`), demoData);
+        alert("✅ Demo Results Stored Successfully!");
+        
+        // Reset Form
+        document.getElementById("demoLocation").value = "";
+        document.getElementById("demoComments").value = "";
+        document.getElementById("demoTableBody").innerHTML = "";
+        loadDemoHistory();
+    } catch (e) {
+        alert("Error saving demo: " + e.message);
+    }
+};
+
+// 4. Load History
+function loadDemoHistory() {
+    const tbody = document.getElementById("demoHistoryBody");
+    onValue(ref(db, "demo_logs"), snap => {
+        tbody.innerHTML = "";
+        if(!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No demo records.</td></tr>";
+            return;
+        }
+        snap.forEach(c => {
+            const d = c.val();
+            tbody.innerHTML += `
+                <tr>
+                    <td>${d.date}</td>
+                    <td><b>${d.location}</b></td>
+                    <td>${d.userName}</td>
+                    <td><span class="badge-online">Recorded</span></td>
+                    <td>
+                        <button class="info" onclick="viewDemoDetails('${c.key}')">View</button>
+                        ${isAdmin ? `<button class="danger" onclick="deleteDemo('${c.key}')">🗑</button>` : ''}
+                    </td>
+                </tr>
+            `;
+        });
+    });
+}
+
+// 5. Delete Function (Admin)
+window.deleteDemo = (key) => {
+    if(confirm("Delete this demo record?")) {
+        remove(ref(db, `demo_logs/${key}`));
+    }
+};
+
+// Update switchTab to include 'demoResult'
+// (Find your existing switchTab and ensure 'demoResult' is in the array)
 window.loadInventoryHistory = () => {
     const tbody = document.getElementById("invHistoryBody");
     tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Live Data...</td></tr>";
@@ -4133,38 +4281,51 @@ window.forceReUpload = (uid) => {
 }
 window.retakeName = (uid) => update(ref(db, `users/${uid}`), { name: null }).then(() => alert("Name Reset."));
 window.switchTab = (t) => {
-    // 1. Hide all tabs (Added 'printReport' to the list)
-    const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport'];
-    
-    allTabs.forEach(x => {
-        const el = document.getElementById(`tab-${x}`);
-        if(el) el.classList.add("hidden");
-    });
+    // 1. All available tabs (Added 'demoResult')
+    const allTabs = [
+        'newData', 
+        'inventory', 
+        'gallery', 
+        'assigned', 
+        'adminPanel', 
+        'dataView', 
+        'printReport', 
+        'demoResult'
+    ];
+    
+    // 2. Hide all tab content sections
+    allTabs.forEach(x => {
+        const el = document.getElementById(`tab-${x}`);
+        if(el) el.classList.add("hidden");
+    });
 
-    // 2. Remove active class from all buttons
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    // 3. Remove 'active' styling from all navigation buttons
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
 
-    // 3. Show the target tab
-    const target = document.getElementById(`tab-${t}`);
-    if(target) target.classList.remove("hidden");
+    // 4. Show the selected tab content
+    const target = document.getElementById(`tab-${t}`);
+    if(target) target.classList.remove("hidden");
 
-    // 4. Highlight the correct button
-    let btnId = '';
-    if (t === 'newData') btnId = 'btnNew';
-    else if (t === 'inventory') btnId = 'btnInventory';
-    else if (t === 'gallery') btnId = 'btnGallery';
-    else if (t === 'assigned') btnId = 'btnAssign';
-    else if (t === 'adminPanel') btnId = 'btnAdmin';
-    else if (t === 'dataView') btnId = 'btnDataView'; 
-    else if (t === 'printReport') btnId = 'btnPrintReport'; // <--- NEW
+    // 5. Map the tab ID to the button ID for highlighting
+    let btnId = '';
+    switch(t) {
+        case 'newData':     btnId = 'btnNew'; break;
+        case 'inventory':   btnId = 'btnInventory'; break;
+        case 'gallery':     btnId = 'btnGallery'; break;
+        case 'assigned':    btnId = 'btnAssign'; break;
+        case 'adminPanel':  btnId = 'btnAdmin'; break;
+        case 'dataView':    btnId = 'btnDataView'; break;
+        case 'printReport': btnId = 'btnPrintReport'; break;
+        case 'demoResult':  btnId = 'btnDemo'; break; // Highlight Demo Button
+    }
 
-    const btn = document.getElementById(btnId);
-    if(btn) btn.classList.add("active");
+    const btn = document.getElementById(btnId);
+    if(btn) btn.classList.add("active");
 
-    // 5. Load data specific to the tab
-    if(t === 'adminPanel' && isAdmin) loadAdminPanel();
-    if(t === 'gallery') loadGallery();
-    // For printReport, we don't auto-load data; user must select options.
+    // 6. Context-specific data loading
+    if(t === 'adminPanel' && isAdmin) loadAdminPanel();
+    if(t === 'gallery') loadGallery();
+    if(t === 'demoResult') loadDemoHistory(); // Auto-load previous demo logs
 };
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
