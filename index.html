@@ -2222,6 +2222,7 @@ window.handleLineChange = () => {
 let currentStationKey = null; // Key of the station_log
 let currentRakeKey = null;    // Key of the rake_log
 // --- STRICT HANDLE STATION CHANGE ---
+// --- FIXED: FORCE INPUTS TO STAY UNLOCKED ---
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
@@ -2244,25 +2245,25 @@ window.handleStationChange = async () => {
         return;
     }
     
-    // Reset State
+    // 1. SHOW THE FORM
     formDiv.classList.remove("hidden");
     currentStationKey = null;
     currentRakeKey = null;
     
-    // Clear Rake Table (Always start empty input for new rows)
+    // Clear Rake Table
     document.getElementById("distanceBody").innerHTML = ""; 
-    await remove(ref(db, `drafts/${currentUser.uid}/rows`)); // Clear old drafts
+    await remove(ref(db, `drafts/${currentUser.uid}/rows`));
 
     const fullStationName = `${stnSel.value} (${lineSel.value})`;
     document.getElementById("inpStationName").value = fullStationName;
     document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
 
-    // CHECK DATABASE
+    // 2. CHECK DATABASE
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
-        // --- SCENARIO A: DATA EXISTS (APPEND MODE) ---
+        // --- DATA EXISTS: PRE-FILL BUT KEEP UNLOCKED ---
         let existingData = null;
         snap.forEach(c => { 
             existingData = c.val(); 
@@ -2270,41 +2271,34 @@ window.handleStationChange = async () => {
         });
         currentRakeKey = existingData.linkedRakeKey || currentStationKey;
 
-        // 1. Show Notification
+        // Show yellow warning but keep going
         warningBox.classList.remove("hidden");
-        warningBox.className = ""; 
-        warningBox.style.background = "#fff3cd"; // Yellow
-        warningBox.style.color = "#856404";
-        warningBox.style.padding = "10px";
         warningBox.innerHTML = `
-            <strong>⚠️ Station Data Exists</strong><br>
-            Yellow Line details are locked. <br>
-            You can <strong>ONLY add new Rake rows</strong> below.
+            <strong>⚠️ Record Found:</strong> Data pre-filled below. You can edit it.
         `;
 
-        // 2. FILL & LOCK Station Details (So user knows what is there, but can't change it)
+        // Pre-fill values
         inpLen.value = existingData.len || "";
         inpYl.value = existingData.yl || "";
         inpTh.value = existingData.th || "";
         inpRem.value = existingData.remarks || "";
         inpImpl.value = existingData.impl || "";
 
-        inpLen.disabled = true;
-        inpYl.disabled = true;
-        inpTh.disabled = true;
-        inpRem.disabled = true;
-        inpImpl.disabled = true;
+        // *** THE FIX: FORCE ENABLE ALL INPUTS ***
+        inpLen.disabled = false;
+        inpYl.disabled = false;
+        inpTh.disabled = false;
+        inpRem.disabled = false;
+        inpImpl.disabled = false;
         
-        // Disable "Save Draft" for station details (since they are locked)
-        saveBtn.disabled = true; 
+        saveBtn.disabled = false;
 
-        // 3. ENABLE SUBMIT BUTTON FOR APPENDING
         submitBtn.disabled = false;
-        submitBtn.innerText = "➕ Append New Rake Data Only";
-        submitBtn.style.background = "#28a745"; // Green button for Append
+        submitBtn.innerText = "💾 Update Existing Record";
+        submitBtn.style.background = "#d97706"; // Orange to indicate edit
 
     } else {
-        // --- SCENARIO B: FRESH ENTRY (NEW MODE) ---
+        // --- NEW ENTRY ---
         warningBox.classList.add("hidden");
         
         // Clear Inputs
@@ -2324,10 +2318,9 @@ window.handleStationChange = async () => {
 
         submitBtn.disabled = false;
         submitBtn.innerText = "✔ Submit Final Data";
-        submitBtn.style.background = "#003366";
+        submitBtn.style.background = "#0A2342"; // Navy
     }
     
-    // Load empty draft table (ready for new input)
     loadDraft();
 };
 // --- 1. HANDLE TAB & DROPDOWNS ---
