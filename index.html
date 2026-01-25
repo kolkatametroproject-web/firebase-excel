@@ -2264,107 +2264,34 @@ window.handleStationChange = async () => {
     const lineSel = document.getElementById("lineSelect");
     const formDiv = document.getElementById("mainDataForm");
     
-    // Inputs
-    const inpLen = document.getElementById("inpStationLength");
-    const inpYl = document.getElementById("inpYellowDist");
-    const inpTh = document.getElementById("inpYellowThick");
-    const inpRem = document.getElementById("inpRemarks");
-    const inpImpl = document.getElementById("inpImplementation");
-    
-    // UI Elements
-    const warningBox = document.getElementById("dataExistsWarning");
-    const submitBtn = document.getElementById("btnFinalSubmit");
-    const saveBtn = document.getElementById("btnSaveDraft");
-
     if (!stnSel.value) {
         formDiv.classList.add("hidden");
         return;
     }
-    
-    // Reset State
+
+    // 1. Show the form and reset UI state
     formDiv.classList.remove("hidden");
+    document.getElementById("formTitle").innerText = `📝 New Inspection: ${stnSel.value}`;
+    document.getElementById("inpStationName").value = `${stnSel.value} (${lineSel.value})`;
+    
+    // 2. Unlock all fields for fresh data entry
+    const fields = ["inpStationLength", "inpYellowDist", "inpYellowThick", "inpRemarks", "inpImplementation"];
+    fields.forEach(id => {
+        const el = document.getElementById(id);
+        if(el) {
+            el.value = "";
+            el.disabled = false;
+        }
+    });
+
+    // 3. Clear the UI table for Rakes
+    document.getElementById("distanceBody").innerHTML = "";
+    
+    // 4. Reset Global Keys (Ensures we aren't "editing" an old station)
     currentStationKey = null;
     currentRakeKey = null;
-    
-    // Clear Rake Table (Always start empty input for new rows)
-    document.getElementById("distanceBody").innerHTML = ""; 
-    await remove(ref(db, `drafts/${currentUser.uid}/rows`)); // Clear old drafts
 
-    const fullStationName = `${stnSel.value} (${lineSel.value})`;
-    document.getElementById("inpStationName").value = fullStationName;
-    document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
-
-    // CHECK DATABASE
-    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
-    const snap = await get(q);
-
-    if (snap.exists()) {
-        // --- SCENARIO A: DATA EXISTS (APPEND MODE) ---
-        let existingData = null;
-        snap.forEach(c => { 
-            existingData = c.val(); 
-            currentStationKey = c.key; 
-        });
-        currentRakeKey = existingData.linkedRakeKey || currentStationKey;
-
-        // 1. Show Notification
-        warningBox.classList.remove("hidden");
-        warningBox.className = ""; 
-        warningBox.style.background = "#fff3cd"; // Yellow
-        warningBox.style.color = "#856404";
-        warningBox.style.padding = "10px";
-        warningBox.innerHTML = `
-            <strong>⚠️ Station Data Exists</strong><br>
-            Yellow Line details are locked. <br>
-            You can <strong>ONLY add new Rake rows</strong> below.
-        `;
-
-        // 2. FILL & LOCK Station Details (So user knows what is there, but can't change it)
-        inpLen.value = existingData.len || "";
-        inpYl.value = existingData.yl || "";
-        inpTh.value = existingData.th || "";
-        inpRem.value = existingData.remarks || "";
-        inpImpl.value = existingData.impl || "";
-
-        inpLen.disabled = true;
-        inpYl.disabled = true;
-        inpTh.disabled = true;
-        inpRem.disabled = true;
-        inpImpl.disabled = true;
-        
-        // Disable "Save Draft" for station details (since they are locked)
-        saveBtn.disabled = true; 
-
-        // 3. ENABLE SUBMIT BUTTON FOR APPENDING
-        submitBtn.disabled = false;
-        submitBtn.innerText = "➕ Append New Rake Data Only";
-        submitBtn.style.background = "#28a745"; // Green button for Append
-
-    } else {
-        // --- SCENARIO B: FRESH ENTRY (NEW MODE) ---
-        warningBox.classList.add("hidden");
-        
-        // Clear Inputs
-        inpLen.value = "";
-        inpYl.value = "";
-        inpTh.value = "";
-        inpRem.value = "";
-        inpImpl.value = "";
-
-        // Unlock Inputs
-        inpLen.disabled = false;
-        inpYl.disabled = false;
-        inpTh.disabled = false;
-        inpRem.disabled = false;
-        inpImpl.disabled = false;
-        saveBtn.disabled = false;
-
-        submitBtn.disabled = false;
-        submitBtn.innerText = "✔ Submit Final Data";
-        submitBtn.style.background = "#003366";
-    }
-    
-    // Load empty draft table (ready for new input)
+    // 5. Load any existing draft for THIS specific station if the user left it mid-way
     loadDraft();
 };
 // --- 1. HANDLE TAB & DROPDOWNS ---
@@ -3706,14 +3633,19 @@ window.uploadEvidenceOnly = () => {
     }
 };
 window.submitStationData = async () => {
-    const logRef = ref(db, "station_logs");
-    const draftRef = ref(db, `drafts/${currentUser.uid}`);
+    const lineSel = document.getElementById("lineSelect");
+    const stnSel = document.getElementById("stationSelect");
     
-    // 1. Get the Unique Key (Reuse if editing, or create new)
-    const logId = currentStationKey || push(logRef).key;
+    if (!lineSel.value || !stnSel.value) return alert("❌ Select Line and Station.");
 
-    const stationObj = {
-        name: document.getElementById("inpStationName").value,
+    const stationName = `${stnSel.value} (${lineSel.value})`;
+    const stationId = `${lineSel.value}_${stnSel.value}`.replace(/\s+/g, '_');
+
+    // 1. Generate a brand new UNIQUE Key for this specific report
+    const reportKey = push(ref(db, "station_logs")).key;
+
+    const finalData = {
+        name: stationName,
         len: document.getElementById("inpStationLength").value,
         yl: document.getElementById("inpYellowDist").value,
         th: document.getElementById("inpYellowThick").value,
@@ -3721,31 +3653,35 @@ window.submitStationData = async () => {
         impl: document.getElementById("inpImplementation").value,
         userName: currentUser.name || currentUser.email,
         date: new Date().toLocaleString(),
-        logId: logId // Internal Reference
+        timestamp: serverTimestamp() 
     };
 
-    // 2. Fetch Draft Rake Rows
-    const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+    // 2. Fetch the Rake rows from the station-specific draft
+    const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/${stationId}/rows`));
     const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
     try {
         const updates = {};
-        // Save Station Master Info
-        updates[`station_logs/${logId}`] = stationObj;
-        
-        // Save Rake Rows under the EXACT SAME ID
-        if (rowsData) {
-            updates[`rake_logs/${logId}`] = rowsData;
-        }
+        // Save Master Log
+        updates[`station_logs/${reportKey}`] = finalData;
+        // Save Linked Rake Table
+        if (rowsData) updates[`rake_logs/${reportKey}`] = rowsData;
 
+        // 3. Execute simultaneous storage
         await update(ref(db), updates);
+
+        // 4. Cleanup ONLY this station's draft
+        await remove(ref(db, `drafts/${currentUser.uid}/${stationId}`));
         
-        // 3. Cleanup Drafts
-        await remove(draftRef);
-        alert("✅ Station Data & Rake Logs Synced Successfully!");
-        switchTab('dataView');
+        alert(`✅ Inspection Saved: ${stationName}`);
+        
+        // 5. Reset UI for next station
+        document.getElementById("mainDataForm").classList.add("hidden");
+        stnSel.value = "";
+        
     } catch (e) {
-        alert("Submission Error: " + e.message);
+        console.error(e);
+        alert("Critical Error: Data not stored.");
     }
 };
 window.loadAdminPanel = async () => {
@@ -4277,44 +4213,28 @@ window.removeFile = (k) => {
 // Global variables to track the active listener
 let draftRef = null;
 let draftListener = null;
-
 window.loadDraft = () => {
-    // 1. CLEANUP: Detach previous listener if it exists
-    // This stops the "double loading" issue
-    if (draftRef && draftListener) {
-        off(draftRef, draftListener);
-    }
+    const stn = document.getElementById("stationSelect").value;
+    const line = document.getElementById("lineSelect").value;
+    if(!stn || !line) return;
 
+    // Create a unique path for this specific station's draft
+    const stationId = `${line}_${stn}`.replace(/\s+/g, '_');
     const tbody = document.getElementById("distanceBody");
-    if(!tbody) return; // Safety check
+    
+    // Detach old listeners to prevent memory leaks or data ghosting
+    if (draftRef && draftListener) off(draftRef, draftListener);
 
-    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Loading...</td></tr>";
-
-    // 2. DEFINE NEW LISTENER
-    draftRef = ref(db, `drafts/${currentUser.uid}`);
+    draftRef = ref(db, `drafts/${currentUser.uid}/${stationId}`);
     
     draftListener = onValue(draftRef, (snap) => {
         const d = snap.val();
-        
-        // Clear table immediately before rendering
         tbody.innerHTML = ""; 
 
-        if(d) {
-            // A. Populate Inputs (Station Details)
-            // Only fill if the input is empty or matches the draft to avoid overwriting user typing
-            if(d.details) {
-                 if(document.getElementById("inpStationLength")) document.getElementById("inpStationLength").value = d.details.len || "";
-                 if(document.getElementById("inpYellowDist")) document.getElementById("inpYellowDist").value = d.details.yl || "";
-                 if(document.getElementById("inpYellowThick")) document.getElementById("inpYellowThick").value = d.details.th || "";
-                 if(document.getElementById("inpRemarks")) document.getElementById("inpRemarks").value = d.details.remarks || "";
-            }
-
-            // B. Populate Rows (Distance Data)
-            if(d.rows) {
-                Object.entries(d.rows).forEach(([k,v], i) => {
-                    renderRow(k, v, i+1);
-                });
-            }
+        if(d && d.rows) {
+            Object.entries(d.rows).forEach(([k, v], i) => {
+                renderRow(k, v, i + 1, stationId); // Pass stationId to update functions
+            });
         }
     });
 };
