@@ -3387,4 +3387,601 @@ window.editStationLog = async (key) => {
         submitBtn.innerText = "💾 Save Changes";
         submitBtn.disabled = false;
         submitBtn.style.background = "#ffc107"; // Orange
-        submit
+        submitBtn.style.color = "#000";
+        submitBtn.style.cursor = "pointer";
+
+        // 7. Load Rake Data (Exactly as it is in DB)
+        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
+        if (rakeSnap.exists()) {
+            // Copy exact DB rows to Drafts
+            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
+        }
+
+        // 8. Render Table
+        loadDraft();
+
+    } catch (e) {
+        console.error(e);
+        alert("Error loading for edit: " + e.message);
+    }
+};
+
+window.loadAdminPanel = async () => {
+    const userList = document.getElementById("userCheckboxList");
+    const userTable = document.getElementById("userListBody");
+    
+    // Attach a real-time listener to the entire users node
+    onValue(ref(db, "users"), async (userSnap) => {
+        const statusSnap = await get(ref(db, "status"));
+        const statusMap = statusSnap.val() || {};
+        
+        userTable.innerHTML = "";
+        userList.innerHTML = "";
+
+        userSnap.forEach(c => {
+            const u = c.val();
+            const uid = c.key;
+            const displayName = u.name || u.email;
+
+            // 1. Fill the "Assign Work" Checkbox list
+            userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
+
+            // 2. Determine Online Status
+            const s = statusMap[uid];
+            const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
+            const statusBadge = isOnline ? `<span class="badge-online">● ONLINE</span>` : `<span class="badge-offline">○ OFFLINE</span>`;
+
+            // 3. Create a Row for this user
+            const row = document.createElement("tr");
+            row.innerHTML = `
+                <td>
+                    <strong>${displayName}</strong><br>
+                    <small>${u.email}</small>
+                </td>
+                <td style="text-align:center;">${statusBadge}</td>
+                <td style="text-align:center;" id="task_stat_${uid}">
+                    <span style="color:#666; font-size:11px;">Loading Tasks...</span>
+                </td>
+                <td style="text-align:center;">${u.faceData ? '<span style="color:green;">✔ Reg</span>' : '<span style="color:red;">❌ No</span>'}</td>
+                <td>
+                    <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px;">📋 Track Tasks</button>
+                    <button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">🚫 Ban</button>
+                    <button class="warning" onclick="resetUserName('${uid}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">Reset Name</button>
+                </td>
+            `;
+            userTable.appendChild(row);
+
+            // 4. ATTACH LIVE TASK COUNTER FOR THIS USER
+            onValue(ref(db, `assignments/${uid}`), (taskSnap) => {
+                const targetCell = document.getElementById(`task_stat_${uid}`);
+                if (!targetCell) return;
+
+                let pending = 0, done = 0;
+                if (taskSnap.exists()) {
+                    taskSnap.forEach(t => {
+                        t.val().status === 'Done' ? done++ : pending++;
+                    });
+                    targetCell.innerHTML = `
+                        <b style="color:green;">${done} Done</b> / 
+                        <b style="color:#b38600;">${pending} Pending</b>
+                    `;
+                } else {
+                    targetCell.innerHTML = `<span style="color:#999;">No Tasks</span>`;
+                }
+            });
+        });
+    });
+};
+
+window.resetUserName = async (uid) => {
+    if(confirm("⚠ Reset this user's name?\n\nThey will be asked to enter their 'Official Name' again on the next login.")) {
+        try {
+            await update(ref(db, `users/${uid}`), { name: null });
+            alert("✅ Name cleared. User will be prompted to rename on next login.");
+            loadAdminPanel(); // Refresh list
+        } catch(e) {
+            alert("Error: " + e.message);
+        }
+    }
+};
+
+window.closeTaskModal = () => {
+    document.getElementById("adminTaskModal").classList.add("hidden");
+};
+
+// --- VIEW USER TASKS (ADMIN) ---
+window.viewUserTasks = (uid, encodedName) => {
+    const name = decodeURIComponent(encodedName);
+    document.getElementById("modalTaskUserName").innerText = name;
+    document.getElementById("adminTaskModal").classList.remove("hidden");
+    const tbody = document.getElementById("adminTaskBody");
+    tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'>Fetching data...</td></tr>";
+
+    onValue(ref(db, `assignments/${uid}`), (snap) => {
+        tbody.innerHTML = "";
+        if(!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:#666;'>No tasks assigned.</td></tr>";
+            return;
+        }
+        
+        snap.forEach(c => {
+            const t = c.val();
+            const statusBadge = t.status === 'Done' 
+                ? `<span style="color:green; font-weight:bold;">✔ COMPLETED</span>` 
+                : `<span style="color:#d97706; font-weight:bold;">⏳ PENDING</span>`;
+            
+            const row = `
+                <tr style="background:white; border-bottom:1px solid #eee;">
+                    <td>${t.date}</td>
+                    <td>${t.desc}</td>
+                    <td>${statusBadge}</td>
+                    <td style="text-align:center;">
+                        <button class="danger" onclick="deleteUserTask('${uid}', '${c.key}')" style="padding:2px 6px; font-size:10px;">🗑</button>
+                    </td>
+                </tr>
+            `;
+            tbody.innerHTML += row;
+        });
+    });
+};
+
+window.deleteUserTask = (uid, taskKey) => {
+    if(confirm("Are you sure you want to remove this task?")) {
+        remove(ref(db, `assignments/${uid}/${taskKey}`))
+            .then(() => {
+                // View updates automatically via listener
+            })
+            .catch(err => alert("Error: " + err.message));
+    }
+};
+
+// ==============================================
+//            FULL BAN SYSTEM LOGIC
+// ==============================================
+
+let currentBanTargetUid = null;
+let currentBanDays = 0; // Stores days OR 'CUSTOM'
+
+// 1. OPEN MODAL
+window.openBanModal = (uid, encodedName) => {
+    if(!isAdmin) return alert("Admins Only.");
+    if(uid === currentUser.uid) return alert("You cannot ban yourself.");
+    
+    currentBanTargetUid = uid;
+    document.getElementById("banTargetName").innerText = decodeURIComponent(encodedName);
+    document.getElementById("adminBanModal").classList.remove("hidden");
+    
+    // Reset Form
+    document.getElementById("banReasonInput").selectedIndex = 0;
+    toggleBanOtherInput(); // Hide 'Other' input
+    document.getElementById("banReasonOther").value = "";
+    document.getElementById("banActionInput").value = "";
+    document.getElementById("banRemarks").value = "";
+    document.getElementById("banCustomDate").value = "";
+    
+    // Reset Buttons
+    currentBanDays = 0;
+    document.querySelectorAll(".ban-btn-select").forEach(b => b.classList.remove("selected"));
+};
+
+// 2. CLOSE MODAL
+window.closeBanModal = () => {
+    document.getElementById("adminBanModal").classList.add("hidden");
+    currentBanTargetUid = null;
+};
+
+// 4. SUBMIT BAN (MAIN FUNCTION)
+window.submitBan = async () => {
+    if(!currentBanTargetUid) return;
+
+    // --- STEP A: REASON VALIDATION ---
+    let reason = document.getElementById("banReasonInput").value;
+    if(reason === "Other") {
+        const otherText = document.getElementById("banReasonOther").value.trim();
+        if(!otherText) return alert("Please specify the 'Other' reason details.");
+        reason = "Other: " + otherText;
+    }
+
+    // --- STEP B: ACTION VALIDATION ---
+    const actionInst = document.getElementById("banActionInput").value.trim();
+    if(!actionInst) return alert("Please enter 'Action Required' (How to dispose this matter).");
+
+    // --- STEP C: DEADLINE CALCULATION ---
+    let expiryTimestamp = 0;
+    
+    if(currentBanDays === 'CUSTOM') {
+        const dateVal = document.getElementById("banCustomDate").value;
+        if(!dateVal) return alert("Please select a Deadline Date.");
+        
+        // Set expiry to the END of that day (23:59:59)
+        const d = new Date(dateVal);
+        d.setHours(23, 59, 59, 999);
+        expiryTimestamp = d.getTime();
+        
+        // Sanity check: Date cannot be in the past
+        if(expiryTimestamp < Date.now()) return alert("Deadline cannot be in the past.");
+    } 
+    else if (typeof currentBanDays === 'number' && currentBanDays > 0) {
+        // Calculate future timestamp: Now + (Days * ms)
+        expiryTimestamp = Date.now() + (currentBanDays * 24 * 60 * 60 * 1000);
+    } 
+    else {
+        return alert("Please select a valid Tenure/Deadline.");
+    }
+
+    const remarks = document.getElementById("banRemarks").value;
+    const deadlineDateString = new Date(expiryTimestamp).toLocaleDateString();
+
+    // --- STEP D: CONFIRMATION ---
+    if(confirm(`⚠ CONFIRM BAN?\n\nUser: ${document.getElementById("banTargetName").innerText}\nReason: ${reason}\nDeadline: ${deadlineDateString}\n\nIf the user does not resolve this by the deadline, they will be permanently locked out.`)) {
+        try {
+            // Update User Profile
+            await update(ref(db, `users/${currentBanTargetUid}`), {
+                banned: true,
+                banReason: reason,
+                banAction: actionInst,
+                banExpires: expiryTimestamp,
+                banRemarks: remarks,
+                banDate: serverTimestamp(),
+                bannedBy: currentUser.email
+            });
+            
+            // Log to System
+            await push(ref(db, "logs"), {
+                type: "USER_BAN",
+                user: "System",
+                details: `Banned UID: ${currentBanTargetUid}`,
+                reason: `${reason} | Deadline: ${deadlineDateString}`,
+                approvedBy: currentUser.email,
+                time: serverTimestamp()
+            });
+
+            alert("✅ User Banned Successfully.");
+            closeBanModal();
+            loadAdminPanel(); // Refresh list
+            
+        } catch(e) {
+            console.error(e);
+            alert("Database Error: " + e.message);
+        }
+    }
+};
+
+window.assignTaskMulti = () => {
+    const desc = document.getElementById("taskDesc").value;
+    if(!desc) return alert("Please enter task details.");
+    const checkboxes = document.querySelectorAll('.user-check:checked');
+    if(checkboxes.length === 0) return alert("Select at least one user.");
+
+    checkboxes.forEach(cb => {
+        const uid = cb.value;
+        const task = { desc, by: currentUser.email, date: new Date().toLocaleString(), status: "Pending" };
+        push(ref(db, `assignments/${uid}`), task);
+    });
+    alert(`Task assigned to ${checkboxes.length} user(s).`);
+    document.getElementById("taskDesc").value = "";
+    checkboxes.forEach(cb => cb.checked = false);
+};
+
+window.switchTab = (t) => {
+    // 1. Hide all tabs
+    const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport'];
+    
+    allTabs.forEach(x => {
+        const el = document.getElementById(`tab-${x}`);
+        if(el) el.classList.add("hidden");
+    });
+
+    // 2. Remove active class from all buttons
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+
+    // 3. Show the target tab
+    const target = document.getElementById(`tab-${t}`);
+    if(target) target.classList.remove("hidden");
+
+    // 4. Highlight the correct button
+    let btnId = '';
+    if (t === 'newData') btnId = 'btnNew';
+    else if (t === 'inventory') btnId = 'btnInventory';
+    else if (t === 'gallery') btnId = 'btnGallery';
+    else if (t === 'assigned') btnId = 'btnAssign';
+    else if (t === 'adminPanel') btnId = 'btnAdmin';
+    else if (t === 'dataView') btnId = 'btnDataView'; 
+    else if (t === 'printReport') btnId = 'btnPrintReport';
+
+    const btn = document.getElementById(btnId);
+    if(btn) btn.classList.add("active");
+
+    // 5. Load data specific to the tab
+    if(t === 'adminPanel' && isAdmin) loadAdminPanel();
+    if(t === 'gallery') loadGallery();
+};
+
+window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
+
+function loadGallery() {
+    const div = document.getElementById("galleryContainer");
+    div.innerHTML = "<p>Loading...</p>";
+
+    onValue(ref(db, "history"), snap => {
+        div.innerHTML = "";
+        snap.forEach(c => {
+            const v = c.val();
+            if(v.fileData) {
+                let media = `<div style="padding:10px; color:#666;">Unsupported</div>`;
+                if(v.fileType.includes("image")) media = `<img src="${v.fileData}">`;
+                else if(v.fileType.includes("pdf")) media = `<div style="height:100px; display:flex; align-items:center; justify-content:center; background:#f0f0f0;">📄 PDF</div>`;
+                
+                let controls = `<br><small style="color:grey;">(View Only)</small>`;
+                if(isAdmin) {
+                    controls = `<div style="margin-top:5px; display:flex; justify-content:center; gap:5px;"><a href="${v.fileData}" download="Evidence" style="background:var(--metro-blue); color:white; padding:3px 8px; text-decoration:none; font-size:11px; border-radius:3px;">⬇ Download</a><button class="danger" style="padding:2px 5px; font-size:11px;" onclick="removeFile('${c.key}')">Remove File</button></div>`;
+                }
+                div.innerHTML += `<div class="gallery-item">${media}<div style="font-size:11px; margin-top:5px;"><b>${v.name}</b><br>by ${v.userName}</div>${controls}</div>`;
+            }
+        });
+        if(div.innerHTML === "") div.innerHTML = "<p>No evidence found.</p>";
+    });
+}
+
+window.removeFile = (k) => {
+    if(confirm("Remove attached file?")) {
+        update(ref(db, `history/${k}`), { fileData: null, fileType: null, fileRemoved: true });
+    }
+}
+
+// Global variables to track the active listener
+let draftRef = null;
+let draftListener = null;
+
+window.loadDraft = () => {
+    if (draftRef && draftListener) {
+        off(draftRef, draftListener);
+    }
+
+    const tbody = document.getElementById("distanceBody");
+    if(!tbody) return; 
+
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Loading...</td></tr>";
+
+    draftRef = ref(db, `drafts/${currentUser.uid}`);
+    
+    draftListener = onValue(draftRef, (snap) => {
+        const d = snap.val();
+        tbody.innerHTML = ""; 
+
+        if(d) {
+            // A. Populate Inputs (Station Details)
+            if(d.details) {
+                 if(document.getElementById("inpStationLength")) document.getElementById("inpStationLength").value = d.details.len || "";
+                 if(document.getElementById("inpYellowDist")) document.getElementById("inpYellowDist").value = d.details.yl || "";
+                 if(document.getElementById("inpYellowThick")) document.getElementById("inpYellowThick").value = d.details.th || "";
+                 if(document.getElementById("inpRemarks")) document.getElementById("inpRemarks").value = d.details.remarks || "";
+            }
+
+            // B. Populate Rows (Distance Data)
+            if(d.rows) {
+                Object.entries(d.rows).forEach(([k,v], i) => {
+                    renderRow(k, v, i+1);
+                });
+            }
+        }
+    });
+};
+
+function renderRow(k, v, i) {
+    const b = document.getElementById("distanceBody");
+    
+    // Helper to check which option was previously saved
+    const isSel = (val) => (v.type === val ? "selected" : "");
+
+    b.innerHTML += `
+        <tr>
+            <td style="text-align:center; font-weight:bold;">${i}</td>
+            
+            <td>
+                <input style="width:100%" value="${v.rake}" onchange="upRow('${k}','rake',this.value)" placeholder="Type _ if empty">
+            </td>
+            
+            <td>
+                <select style="width:100%; padding:5px; font-weight:bold; border:1px solid #ced4da; border-radius:3px;" onchange="upRow('${k}','type',this.value)">
+                    <option value="" ${isSel("")}>-- Select Type --</option>
+                    <option value="BHEL RAKE (300 SERIES)" ${isSel("BHEL RAKE (300 SERIES)")}>BHEL RAKE (300 SERIES)</option>
+                    <option value="MEDHA RAKE (400 SERIES)" ${isSel("MEDHA RAKE (400 SERIES)")}>MEDHA RAKE (400 SERIES)</option>
+                    <option value="DALIAN RAKE (500 SERIES)" ${isSel("DALIAN RAKE (500 SERIES)")}>DALIAN RAKE (500 SERIES)</option>
+                </select>
+            </td>
+
+            <td>
+                <input style="width:100%" value="${v.f}" onchange="upRow('${k}','f',this.value)" placeholder="_">
+            </td>
+            
+            <td>
+                <input style="width:100%" value="${v.r}" onchange="upRow('${k}','r',this.value)" placeholder="_">
+            </td>
+            
+            <td style="text-align:center;">
+                <button class="danger" onclick="delRow('${k}')" style="padding:5px 10px;">X</button>
+            </td>
+        </tr>`;
+}
+window.upRow = (k,f,v) => update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), {[f]:v});
+window.delRow = (k) => remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
+
+function loadInventory() {
+    const b = document.getElementById("inventoryBody");
+    const summaryEl = document.getElementById("stockSummaryText");
+    
+    b.innerHTML = "<tr><td colspan='8' style='text-align:center;'>Loading live stock...</td></tr>";
+
+    onValue(ref(db, "inventory"), snap => {
+        b.innerHTML = "";
+        let totalItems = 0;
+        let inStockCount = 0;
+
+        if(!snap.exists()) {
+             b.innerHTML = "<tr><td colspan='8' style='text-align:center;'>No inventory found. Add items first.</td></tr>";
+             if(summaryEl) summaryEl.innerText = "Total Items: 0";
+             return;
+        }
+
+        snap.forEach(c => {
+            const v = c.val();
+            const k = c.key;
+            
+            totalItems++;
+            if(v.status !== "Checked Out") inStockCount++;
+
+            // Handle "Holder" display
+            let holderDisplay = "-";
+            if(v.status === "Checked Out") {
+                holderDisplay = `<span style="color:#b38600; font-weight:bold;">👤 ${v.holder}</span>`;
+            }
+
+            // Handle "Status" Badge
+            let statusBadge = `<span style="color:green; font-weight:bold; background:#d4edda; padding:2px 6px; border-radius:4px;">In Stock</span>`;
+            if(v.status === "Checked Out") {
+                statusBadge = `<span style="color:#856404; font-weight:bold; background:#fff3cd; padding:2px 6px; border-radius:4px;">📤 Out</span>`;
+            }
+
+            // Handle Defaults
+            const addedBy = v.addedBy || "Unknown";
+            const usage = v.usageCount || 0;
+            const barcode = v.barcode || "--";
+            
+            let locDisplay = v.location || "Not Set";
+            if(v.status === "Checked Out") locDisplay = "📤 (Checked Out)";
+
+            const row = `
+            <tr class="stock-row">
+                <td style="font-family:monospace; color:var(--metro-blue); font-weight:bold;">${barcode}</td>
+                <td class="search-name">${v.item}</td>
+                <td style="font-size:12px; color:#555;">${addedBy}</td>
+                <td style="text-align:center; font-weight:bold;">${usage}</td>
+                <td>${holderDisplay}</td>
+                <td style="font-size:12px; font-weight:bold; color:var(--metro-blue);">${locDisplay}</td> <td>${statusBadge}</td>
+                <td>
+                    ${isAdmin ? `<button class="danger" onclick="delInv('${k}')" style="padding:2px 5px; font-size:10px;">Remove</button>` : ''}
+                </td>
+            </tr>`;
+            
+            b.innerHTML += row;
+        });
+
+        if(summaryEl) {
+            summaryEl.innerHTML = `Total Items: ${totalItems} | <span style="color:green;">Available: ${inStockCount}</span>`;
+        }
+    });
+}
+
+window.addUniqueItem = async () => {
+    // 1. Get Basic Data
+    const item = document.getElementById("invName").value;
+    const cond = document.getElementById("invCondition").value;
+    const barcode = document.getElementById("invBarcode").value;
+
+    if(!item || !barcode) return alert("Product Name and Barcode are required.");
+
+    // 2. Get Location Data
+    const locSelect = document.getElementById("addLocSelect");
+    const locOther = document.getElementById("addLocOther");
+    const locSpot = document.getElementById("addLocSpot");
+
+    if(!locSelect || !locSpot) {
+        return alert("Error: Location inputs not found in HTML. Please check code.");
+    }
+
+    let mainPlace = locSelect.value;
+    
+    if(mainPlace === "Other") {
+        const otherText = locOther.value.trim();
+        if(!otherText) return alert("Please specify the 'Other' location name.");
+        mainPlace = otherText;
+    }
+
+    const spotText = locSpot.value.trim();
+    if(!spotText) return alert("Please specify the Exact Spot (e.g., Cabinet, Almirah).");
+
+    const finalLocation = `${mainPlace} [${spotText}]`;
+
+    // 4. Check Uniqueness
+    const invRef = ref(db, "inventory");
+    const q = query(invRef, orderByChild("barcode"), equalTo(barcode));
+    const snap = await get(q);
+
+    if(snap.exists()) return alert("CRITICAL ERROR: Barcode already exists.");
+
+    // 5. Save to Inventory
+    await push(ref(db, "inventory"), {
+        barcode: barcode,
+        item: item,
+        condition: cond,
+        status: "In Stock",
+        holder: "Store",
+        location: finalLocation, 
+        usageCount: 0, 
+        addedBy: currentUser.name || currentUser.email, 
+        dateAdded: serverTimestamp()
+    });
+
+    // 6. Log the Action
+    await push(ref(db, "logs"), {
+        type: "STOCK_ADD",
+        item: item,
+        barcode: barcode,
+        qty: 1,
+        location: finalLocation,
+        takenBy: currentUser.name,
+        approvedBy: "Self",
+        time: serverTimestamp()
+    });
+
+    alert("✅ Item Added to: " + finalLocation);
+    
+    // 7. Reset Form
+    document.getElementById("invBarcode").value = "";
+    document.getElementById("invName").value = "";
+    document.getElementById("addLocOther").value = "";
+    document.getElementById("addLocSpot").value = "";
+    document.getElementById("addLocSelect").value = "D2 Building - Heerok Sir Lab"; 
+    document.getElementById("divAddOtherLoc").classList.add("hidden");
+    
+    document.getElementById("invBarcode").focus();
+};
+
+window.filterStockTable = () => {
+    const input = document.getElementById("mainStockSearch").value.toLowerCase();
+    const rows = document.getElementsByClassName("stock-row");
+
+    Array.from(rows).forEach(row => {
+        const barcode = row.cells[0].innerText.toLowerCase();
+        const name = row.cells[1].innerText.toLowerCase();
+        const holder = row.cells[3].innerText.toLowerCase();
+
+        if (name.includes(input) || barcode.includes(input) || holder.includes(input)) {
+            row.style.display = "";
+        } else {
+            row.style.display = "none";
+        }
+    });
+};
+
+window.delInv = (k) => remove(ref(db, `inventory/${k}`));
+
+function loadAssignments() {
+    onValue(ref(db, `assignments/${currentUser.uid}`), snap => {
+        const list = document.getElementById("taskList"); list.innerHTML = "";
+        if(!snap.exists()) { list.innerHTML = "<p>No tasks.</p>"; return; }
+        snap.forEach(c => {
+            const t = c.val();
+            const div = document.createElement("div"); div.className = "panel";
+            div.style.borderLeft = t.status === 'Done' ? "5px solid green" : "5px solid #d97706";
+            div.innerHTML = `<strong>${t.desc}</strong><br><small>By: ${t.by}</small><br>${t.status !== 'Done' ? `<button onclick="completeTask('${c.key}')" class="success">Mark Done</button>` : 'Completed'}`;
+            list.appendChild(div);
+        });
+    });
+}
+window.completeTask = (k) => update(ref(db, `assignments/${currentUser.uid}/${k}`), { status: "Done" });
+
+</script>
+</body>
+</html>
