@@ -3984,6 +3984,115 @@ function loadAssignments() {
         });
     });
 }
+// --- FIXED SUBMIT FUNCTION (ROBUST) ---
+window.submitStationData = async () => {
+    // 1. VISUAL FEEDBACK
+    const submitBtn = document.getElementById("btnFinalSubmit");
+    const originalText = submitBtn.innerText;
+    submitBtn.innerText = "⏳ Uploading...";
+    submitBtn.disabled = true;
+
+    try {
+        const lineSel = document.getElementById("lineSelect");
+        const stnSel = document.getElementById("stationSelect");
+        
+        // 2. GET INPUT VALUES
+        const inpLen = document.getElementById("inpStationLength").value;
+        const inpYl = document.getElementById("inpYellowDist").value;
+        const inpTh = document.getElementById("inpYellowThick").value;
+        const inpRem = document.getElementById("inpRemarks").value;
+        const inpImpl = document.getElementById("inpImplementation").value;
+
+        // 3. VALIDATION
+        // If it's a NEW entry, we strictly need Line, Station, and Status
+        if (!currentStationKey && (!lineSel.value || !stnSel.value || !inpImpl)) {
+            throw new Error("Please select Line, Station, and Compliance Status.");
+        }
+
+        // 4. FETCH TABLE DATA (DRAFTS)
+        // We fetch directly from DB to ensure we have the latest rows added
+        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+        const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
+
+        const timestamp = new Date().toLocaleString();
+        const updates = {};
+
+        // --- BRANCH A: UPDATING EXISTING RECORD ---
+        if (currentStationKey) {
+            console.log("Mode: UPDATING Existing Record");
+            
+            // A1. Update Yellow Line Details (Always update these since we unlocked them)
+            updates[`station_logs/${currentStationKey}/len`] = inpLen;
+            updates[`station_logs/${currentStationKey}/yl`] = inpYl;
+            updates[`station_logs/${currentStationKey}/th`] = inpTh;
+            updates[`station_logs/${currentStationKey}/remarks`] = inpRem;
+            updates[`station_logs/${currentStationKey}/impl`] = inpImpl;
+            updates[`station_logs/${currentStationKey}/lastModifiedBy`] = currentUser.name;
+            updates[`station_logs/${currentStationKey}/lastModifiedTime`] = timestamp;
+
+            // A2. Handle Rake Data
+            if (rowsData) {
+                // If we have new rows in the table, we APPEND them to the existing rake log
+                // We use the existing rake key
+                Object.keys(rowsData).forEach(tempKey => {
+                    // Generate a new unique ID for the rake log so it doesn't overwrite
+                    const newRowKey = push(ref(db, `rake_logs/${currentRakeKey}`)).key;
+                    updates[`rake_logs/${currentRakeKey}/${newRowKey}`] = rowsData[tempKey];
+                });
+            }
+        } 
+        // --- BRANCH B: CREATING NEW RECORD ---
+        else {
+            console.log("Mode: CREATING New Record");
+            
+            const name = `${stnSel.value} (${lineSel.value})`;
+            const newKey = push(ref(db, "station_logs")).key;
+            
+            const stationObj = {
+                name: name, 
+                len: inpLen,
+                yl: inpYl,
+                th: inpTh,
+                remarks: inpRem,
+                impl: inpImpl,
+                user: currentUser.email, 
+                userName: currentUser.name,
+                date: timestamp,
+                linkedRakeKey: newKey // Link to the rake log we are about to create
+            };
+
+            updates[`station_logs/${newKey}`] = stationObj;
+            
+            // If table has data, save it
+            if (rowsData) {
+                updates[`rake_logs/${newKey}`] = rowsData;
+            }
+        }
+
+        // 5. EXECUTE UPLOAD
+        await update(ref(db), updates);
+
+        // 6. CLEANUP
+        await remove(ref(db, `drafts/${currentUser.uid}`)); // Clear draft
+        
+        alert("✅ SUCCESS: Report Uploaded to Server.");
+        
+        // 7. REFRESH UI
+        document.getElementById("distanceBody").innerHTML = ""; // Clear table
+        
+        // Reload the Data View tab so you can see it immediately
+        switchTab('dataView');
+        loadStationData(); // Trigger the refresh
+
+    } catch (e) {
+        console.error(e);
+        alert("❌ UPLOAD FAILED: " + e.message);
+    } finally {
+        // Reset button
+        submitBtn.innerText = "SUBMIT FINAL REPORT";
+        submitBtn.disabled = false;
+    }
+};
 window.completeTask = (k) => update(ref(db, `assignments/${currentUser.uid}/${k}`), { status: "Done" });
 window.debugConnection = async () => {
     try {
