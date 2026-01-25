@@ -1284,13 +1284,11 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
 </div>
 
 </section>
-
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getDatabase, ref, push, set, onValue, remove, update, query, limitToLast, onDisconnect, serverTimestamp, get, orderByChild, equalTo, off } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-// YOUR EXACT FIREBASE CONFIG
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
   authDomain: "metro-railway-project.firebaseapp.com",
@@ -1302,7 +1300,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getDatabase(app);
 
-// GLOBAL VARIABLES
 let currentUser;
 let isAdmin = false;
 const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project", "sujoy@metro.project"];
@@ -1315,9 +1312,2079 @@ let regSamples = [];
 let modelsLoaded = false;
 let isTransactionAuth = false;
 let currentTransactionType = "";
+
+// --- UNIFIED SCAN MODE VARIABLE ---
 let scanMode = 'LOGIN';
+
 let receiverVerified = false;
+
+// --- NEW HIGH-PERFORMANCE VARS ---
 let detectionLoop;
 let currentDescriptor = null;
-let pendingTransactionItem = null;
+let pendingTransactionItem = null; // Stores details of scanned item for Checkout/Return
+// --- NEW BARCODE VARS ---
 let scanner = null;
+let existingItemKey = null; // To track if we are updating existing stock
+
+// --- SIGNATURE PAD LOGIC (UPDATED FOR MOBILE) ---
+function setupCanvas(id) {
+    const canvas = document.getElementById(id);
+    if (!canvas) return; // Safety check
+
+    const ctx = canvas.getContext('2d');
+    ctx.lineWidth = 3;       // Thicker line for better visibility on mobile
+    ctx.lineCap = 'round';   // Smooth edges
+    ctx.strokeStyle = '#000000';
+
+    let isDrawing = false;
+
+    // 1. FORCE DISABLE SCROLLING ON CANVAS via JS
+    canvas.style.touchAction = 'none';
+
+    // Helper to get exact coordinates
+    function getPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        // Calculate scaling (vital if CSS shrinks the canvas)
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        
+        return {
+            x: (e.clientX - rect.left) * scaleX,
+            y: (e.clientY - rect.top) * scaleY
+        };
+    }
+
+    // --- POINTER EVENTS (Handles Mouse + Touch automatically) ---
+
+    // Start Drawing
+    canvas.addEventListener('pointerdown', (e) => {
+        isDrawing = true;
+        canvas.setPointerCapture(e.pointerId); // LOCKS pointer to canvas so you can't scroll away
+        const pos = getPos(e);
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y);
+        e.preventDefault();
+    });
+
+    // Draw Line
+    canvas.addEventListener('pointermove', (e) => {
+        if (!isDrawing) return;
+        const pos = getPos(e);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+        e.preventDefault();
+    });
+
+    // Stop Drawing
+    canvas.addEventListener('pointerup', (e) => {
+        isDrawing = false;
+        canvas.releasePointerCapture(e.pointerId);
+    });
+
+    // Cancel (e.g. finger slides off screen edge)
+    canvas.addEventListener('pointercancel', () => {
+        isDrawing = false;
+    });
+}
+setupCanvas('sigCanvas');
+setupCanvas('sigCanvasReturn');
+
+window.clearSignature = (id) => {
+    const canvas = document.getElementById(id);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+// --- NEW HELPER: Signature Modal ---
+window.viewSignature = (sigData) => {
+    document.getElementById("modalSigImage").src = sigData;
+    document.getElementById("sigModal").classList.remove("hidden");
+};
+window.closeSigModal = () => document.getElementById("sigModal").classList.add("hidden");
+
+// --- NEW BARCODE LOGIC ---
+window.openBarcodeScanner = (mode) => {
+    scanMode = mode;
+    document.getElementById("barcodeModal").classList.remove("hidden");
+    
+    // START SCANNER
+    if(!scanner) {
+        scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
+        scanner.render(onScanSuccess, onScanFailure);
+    }
+}
+
+window.closeBarcodeScanner = () => {
+    document.getElementById("barcodeModal").classList.add("hidden");
+    if(scanner) {
+        scanner.clear();
+        scanner = null;
+    }
+}
+// --- NEW AUDIT LOGIC ---
+window.closeAuditModal = () => document.getElementById("auditResultModal").classList.add("hidden");
+window.fetchAuditHistory = async (barcode) => {
+    if (!barcode) return;
+
+    // Open popup
+    const modal = document.getElementById("auditResultModal");
+    const container = document.getElementById("auditTimelineContainer");
+    document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
+    modal.classList.remove("hidden");
+
+    container.innerHTML = `<div style="text-align:center; padding:20px;">Loading...</div>`;
+
+    try {
+        const q = query(
+            ref(db, "logs"),
+            orderByChild("barcode"),
+            equalTo(barcode)
+        );
+
+        const snap = await get(q);
+
+        if (!snap.exists()) {
+            container.innerHTML = `<div style="text-align:center;color:#777;">No history found</div>`;
+            return;
+        }
+
+        // 1. collect only checkout & return
+        let raw = [];
+        snap.forEach(c => {
+            const v = c.val();
+            if (v.type === "CHECKOUT" || v.type === "RETURN") {
+                raw.push(v);
+            }
+        });
+
+        // 2. sort old → new
+        raw.sort((a, b) => a.time - b.time);
+
+        // 3. pair checkout + return
+        let records = [];
+        let open = null;
+
+        raw.forEach(l => {
+            if (l.type === "CHECKOUT") {
+                open = {
+                    user: l.takenBy,
+                    checkout: l.time,
+                    return: null
+                };
+                records.push(open);
+            }
+
+            if (l.type === "RETURN" && open) {
+                open.return = l.time;
+                open = null;
+            }
+        });
+
+        // 4. last 4 only (latest first)
+        records = records.slice(-20).reverse();
+
+        // 5. render popup cards
+        container.innerHTML = "";
+
+        records.forEach(r => {
+            const co = new Date(r.checkout).toLocaleString("en-IN", {
+                timeZone: "Asia/Kolkata",
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: true
+            });
+
+            const ro = r.return
+                ? new Date(r.return).toLocaleString("en-IN", {
+                    timeZone: "Asia/Kolkata",
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: true
+                })
+                : "Still Holding";
+
+            container.innerHTML += `
+                <div class="history-card ${r.return ? 'return' : 'checkout'}">
+                    <div class="hc-header">
+                        <span class="hc-user">👤 ${r.user}</span>
+                        <span style="font-size:11px;color:#666;">
+                            ${r.return ? 'RETURNED' : 'OUT'}
+                        </span>
+                    </div>
+                    <div class="hc-meta">
+                        📤 Checkout: <b>${co}</b><br>
+                        📥 Return: <b>${ro}</b>
+                    </div>
+                </div>
+            `;
+        });
+
+    } catch (e) {
+        console.error(e);
+        container.innerHTML = `<div style="color:red;text-align:center;">Error loading data</div>`;
+    }
+};
+
+// --- 3. HELPER TO CLOSE MODAL ---
+window.closeAuditModal = () => {
+    document.getElementById("auditResultModal").classList.add("hidden");
+    document.getElementById("auditSearchInput").value = ""; 
+};
+
+// --- 4. DUMMY FUNCTION (To prevent errors if HTML still calls it) ---
+// --- REAL-TIME HISTORY LOGIC ---
+window.loadInventoryHistory = () => {
+    const tbody = document.getElementById("invHistoryBody");
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Live Data...</td></tr>";
+
+    // This listener stays open and updates automatically when DB changes
+    const dbRef = getDatabase();
+    const q = query(ref(dbRef, "logs"), limitToLast(100));
+    
+    onValue(q, (snap) => {
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // Show newest events at the top
+
+        // Filter: Show only inventory-related events (Checkout, Return, Add)
+        const invLogs = logs.filter(l => 
+            l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE'
+        );
+
+        if(invLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded recently.</td></tr>";
+            return;
+        }
+
+        tbody.innerHTML = "";
+        
+        invLogs.forEach(l => {
+            // Badge Styling
+            let badge = "";
+            if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
+            else if(l.type === 'RETURN') badge = `<span style="background:#17a2b8; color:white; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:11px;">📥 IN</span>`;
+            else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
+
+            // Barcode formatting
+            const barcodeDisplay = l.barcode ? `<div style="font-family:monospace; color:#003366; font-size:11px; margin-top:2px; letter-spacing:1px;">${l.barcode}</div>` : '';
+
+            // Row HTML
+            const row = `
+            <tr class="inv-log-row" style="border-bottom:1px solid #eee;">
+                <td style="vertical-align:middle;">${barcodeDisplay}</td>
+                <td style="font-weight:bold; vertical-align:middle;">${l.takenBy || 'Unknown'}</td>
+                <td style="vertical-align:middle;">
+                    ${formatTime(l.time)}
+                </td>
+                <td style="text-align:center; vertical-align:middle;">${badge}</td>
+                <td style="vertical-align:middle;">
+                    <span style="font-size:13px; font-weight:bold; color:#333;">${l.item}</span><br>
+                    <small style="color:#777;">Auth: ${l.approvedBy || 'System'}</small>
+                </td>
+            </tr>`;
+            
+            tbody.innerHTML += row;
+        });
+    });
+};
+// --- FULL FUNCTION: Print Report Handler ---
+window.printReport = (mode) => {
+    // 1. Clean previous classes to ensure no conflicts
+    document.body.classList.remove('print-a4', 'print-pos');
+
+    // 2. Add the selected class based on button click
+    if (mode === 'A4') {
+        document.body.classList.add('print-a4');
+    } else {
+        document.body.classList.add('print-pos');
+    }
+
+    // 3. Trigger the browser's print dialog
+    window.print();
+};
+
+// --- FULL FUNCTION: Close Preview Handler ---
+window.closeReportPreview = () => {
+    // 1. Hide the container div
+    document.getElementById("printableReportContainer").classList.add("hidden");
+    
+    // 2. Remove the print classes so the main app returns to normal styling
+    document.body.classList.remove('print-a4', 'print-pos');
+};
+window.onScanSuccess = async function(decodedText) {
+    closeBarcodeScanner();
+    console.log("SCANNED:", decodedText, "MODE:", scanMode);
+
+    // ---------------- ADD STOCK ----------------
+    if (scanMode === 'ADD') {
+        document.getElementById("invBarcode").value = decodedText;
+        checkBarcodeUnique(decodedText);
+        return;
+    }
+
+    // ---------------- CHECKOUT / RETURN ----------------
+    if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+
+        const isCheckout = scanMode === 'CHECKOUT';
+
+        const displayId = isCheckout ? "checkout_display" : "return_display";
+        const nameId    = isCheckout ? "checkout_item_name" : "return_item_name";
+        const codeId    = isCheckout ? "checkout_item_code" : "return_item_code";
+        const authBtnId = isCheckout ? "btn_checkout_verify" : "btn_return_verify";
+
+        document.getElementById(displayId).classList.remove("hidden");
+        document.getElementById(nameId).innerHTML = "🔍 Checking inventory...";
+        document.getElementById(codeId).innerText = decodedText;
+
+        try {
+            const q = query(
+                ref(db, "inventory"),
+                orderByChild("barcode"),
+                equalTo(decodedText)
+            );
+
+            const snap = await get(q);
+
+            if (!snap.exists()) {
+                document.getElementById(nameId).innerHTML =
+                    `<span style="color:red;">❌ Item not found</span>`;
+                alert("This barcode does not exist in inventory.");
+                return;
+            }
+
+            let item = null;
+            let itemKey = null;
+            snap.forEach(c => {
+                item = c.val();
+                itemKey = c.key;
+            });
+
+            const currentUserName =
+                currentUser.name || currentUser.email;
+
+            // ---------- CHECKOUT RULE ----------
+            if (isCheckout && item.status !== "In Stock") {
+                document.getElementById(nameId).innerHTML = `
+                    <span style="color:red;font-weight:bold;">⛔ ALREADY CHECKED OUT</span><br>
+                    ${item.item}<br>
+                    <small>Held by: <b>${item.holder}</b></small>
+                `;
+                document.getElementById(authBtnId).style.display = "none";
+                return;
+            }
+
+            // ---------- RETURN RULE ----------
+            if (!isCheckout) {
+
+                if (item.status === "In Stock") {
+                    document.getElementById(nameId).innerHTML = `
+                        <span style="color:red;font-weight:bold;">⛔ ALREADY RETURNED</span><br>
+                        ${item.item}
+                    `;
+                    document.getElementById(authBtnId).style.display = "none";
+                    return;
+                }
+
+                // 🚨 CORE SECURITY RULE
+                if (item.holder !== currentUserName) {
+                    document.getElementById(nameId).innerHTML = `
+                        <span style="color:red;font-weight:bold;">⛔ RETURN DENIED</span><br>
+                        ${item.item}<br>
+                        <small>
+                            Checked out by: <b>${item.holder}</b>
+                        </small>
+                    `;
+                    document.getElementById(authBtnId).style.display = "none";
+
+                    alert(
+                        "Return blocked.\n\n" +
+                        "Item was checked out by:\n" +
+                        item.holder + "\n\n" +
+                        "Only the same user can return it."
+                    );
+                    return;
+                }
+            }
+
+            // ---------- SUCCESS ----------
+            document.getElementById(nameId).innerHTML = `
+                <span style="color:${isCheckout ? '#b38600' : '#17a2b8'}; font-weight:bold;">
+                    ✔ Ready to ${isCheckout ? 'Checkout' : 'Return'}
+                </span><br>
+                <span style="font-size:1.2em">${item.item}</span>
+            `;
+
+            pendingTransactionItem = {
+                key: itemKey,
+                ...item
+            };
+
+            document.getElementById(authBtnId).style.display = "block";
+
+        } catch (err) {
+            console.error(err);
+            alert("Database error.");
+        }
+    }
+
+    // ---------------- AUDIT SEARCH ----------------
+    if (scanMode === 'AUDIT_SEARCH') {
+
+    if (!isAdmin) {
+        alert("Audit scanning is restricted to administrators.");
+        return;
+    }
+
+    document.getElementById("auditSearchInput").value = decodedText;
+    fetchAuditHistory(decodedText);
+}
+
+
+    // ---------------- STOCK SEARCH ----------------
+    if (scanMode === 'SEARCH_STOCK') {
+        document.getElementById("mainStockSearch").value = decodedText;
+        filterStockTable();
+    }
+};
+
+// --- 3. HELPER TO CLOSE MODAL ---
+window.closeAuditModal = () => {
+    document.getElementById("auditResultModal").classList.add("hidden");
+    document.getElementById("auditSearchInput").value = ""; 
+};
+
+// --- 4. EMPTY/DUMMY LOAD HISTORY (Prevents errors when clicking tab) ---
+window.loadInventoryHistory = () => {
+    // Intentionally empty or just focuses the search box
+    // Because we removed the table
+    setTimeout(() => document.getElementById("auditSearchInput").focus(), 300);
+};
+
+// --- 2. UNIFIED SCANNER HANDLER (This replaces your old one) ---
+
+
+// --- 3. HELPER TO CLOSE MODAL ---
+window.closeAuditModal = () => {
+    document.getElementById("auditResultModal").classList.add("hidden");
+    document.getElementById("auditSearchInput").value = ""; 
+};
+
+
+window.closeAuditModal = () => {
+    document.getElementById("auditResultModal").classList.add("hidden");
+    document.getElementById("auditSearchInput").value = ""; // Clear input
+};
+// --- UNIFIED SCANNER HANDLER ---
+
+function onScanFailure(error) {
+    // Do nothing, keep scanning
+}
+
+// --- INNOVATIVE BARCODE LOGIC: CHECK EXISTENCE ---
+// --- NEW LOGIC: PREVENT DUPLICATE BARCODES ---
+window.checkBarcodeUnique = async (code) => {
+    if(!code) return;
+    
+    // Reset UI
+    document.getElementById("barcodeError").classList.add("hidden");
+    document.getElementById("btnAddStock").disabled = false;
+    document.getElementById("btnAddStock").innerText = "Save Item to Stock";
+
+    // Query DB to see if barcode exists
+    const invRef = ref(db, "inventory");
+    const q = query(invRef, orderByChild("barcode"), equalTo(code));
+    const snap = await get(q);
+
+    if(snap.exists()) {
+        // ERROR: DUPLICATE FOUND
+        document.getElementById("barcodeError").classList.remove("hidden");
+        document.getElementById("btnAddStock").disabled = true;
+        document.getElementById("btnAddStock").innerText = "⛔ Duplicate Barcode";
+        
+        // Optional: Show who has it
+        let existingItem = null;
+        snap.forEach(c => existingItem = c.val());
+        alert(`STOP: Barcode '${code}' is already registered as:\n"${existingItem.item}"\nStatus: ${existingItem.status}`);
+    }
+}
+// --- HELPER: TOGGLE 'OTHER' INPUT ---
+window.toggleOtherInput = () => {
+    const val = document.getElementById("returnLocSelect").value;
+    const otherDiv = document.getElementById("divOtherLoc");
+    
+    if(val === "Other") {
+        otherDiv.classList.remove("hidden");
+        document.getElementById("returnLocOther").focus();
+    } else {
+        otherDiv.classList.add("hidden");
+    }
+};
+// --- NEW: TRIGGER RECEIVER SCAN ---
+window.startReceiverScan = (type) => {
+    scanMode = 'RECEIVER';
+    currentTransactionType = type; // 'CHECKOUT' or 'RETURN'
+    
+    document.getElementById("faceModal").classList.remove("hidden");
+    document.getElementById("modalTitle").innerText = "👤 Receiver Verification";
+    document.getElementById("modalDesc").innerText = "Please look at the camera to verify identity.";
+    document.getElementById("regProgress").classList.add("hidden");
+    document.getElementById("btnCapture").innerText = "📸 Verify My Face";
+    document.getElementById("btnCapture").disabled = false;
+    document.getElementById("btnCapture").onclick = handleFaceScan;
+    
+    // UI Cleanup
+    document.getElementById("videoContainer").classList.remove("hidden");
+    document.getElementById("camControls").classList.remove("hidden");
+    document.getElementById("otpUI").classList.add("hidden");
+    
+    initCamera(true);
+};
+// --- 1. LOAD AI MODELS ---
+async function preloadModels() {
+    if(modelsLoaded) return;
+    try {
+        await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
+            faceapi.nets.faceLandmark68Net.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
+            faceapi.nets.faceRecognitionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models')
+        ]);
+        modelsLoaded = true;
+    } catch(e) { console.error("Model Error", e); }
+}
+preloadModels();
+// ==========================================
+// 1. UPDATED LOGIN FUNCTION
+// ==========================================
+window.login = () => {
+    const emailField = document.getElementById("email");
+    const passField = document.getElementById("password");
+    const btn = document.querySelector("#loginSection button");
+    
+    if(!emailField.value || !passField.value) return alert("Please enter email and password.");
+
+    // Visual Feedback
+    btn.innerText = "🔄 Verifying Credentials...";
+    btn.disabled = true;
+
+    signInWithEmailAndPassword(auth, emailField.value, passField.value)
+    .then(() => {
+        // Success: onAuthStateChanged will handle the rest
+        console.log("Credentials accepted.");
+    })
+    .catch(e => {
+        btn.innerText = "SECURE LOGIN";
+        btn.disabled = false;
+        alert("Login Failed: " + e.message);
+    });
+};
+// ==========================================
+// 2. CRASH-PROOF AUTH LISTENER (FIXED)
+// ==========================================
+onAuthStateChanged(auth, (user) => {
+    // A. NO USER -> SHOW LOGIN SCREEN
+    if (!user) { 
+        showLoginScreen(); 
+        return; 
+    }
+
+    currentUser = user;
+    
+    // --- FIX START: Turn on the Presence System ---
+    // This sends the "Online" signal to the database
+    startPresenceSystem(user);  
+    // --- FIX END ---
+
+    // B. USER FOUND -> TRY TO LOAD DATA
+    const userRef = ref(db, `users/${user.uid}`);
+    
+    onValue(userRef, (snap) => {
+        const u = snap.val();
+
+        // 1. DATA MISSING? FORCE LOGOUT (Fixes blank screen glitch)
+        if (!u) {
+            console.log("User data missing. Force logout.");
+            alert("Account data not found. Please contact admin.");
+            signOut(auth);
+            return;
+        }
+
+        // 2. TERMINATED?
+        if (u.terminated) { 
+            alert("ACCOUNT TERMINATED."); 
+            signOut(auth); 
+            return; 
+        }
+
+        // 3. BANNED? -> SHOW RED SCREEN
+        if (u.banned) {
+            // Hide everything else
+            document.querySelector("header").style.display = "none";
+            document.getElementById("loginSection").classList.add("hidden");
+            document.getElementById("appScreen").classList.add("hidden");
+            document.getElementById("faceModal").classList.add("hidden");
+            
+            // Show Ban Screen
+            const banScreen = document.getElementById("bannedScreen");
+            if(banScreen) {
+                banScreen.classList.remove("hidden");
+                // Fill details
+                document.getElementById("displayBanReason").innerText = u.banReason || "Admin Action";
+                const deadline = u.banExpires || 0;
+                if(deadline > 0) {
+                      const dateStr = new Date(deadline).toLocaleString();
+                      document.getElementById("bannedTimeDisplay").innerText = "Deadline: " + dateStr;
+                } else {
+                      document.getElementById("bannedTimeDisplay").innerText = "PERMANENT BAN";
+                }
+            } else {
+                // Fallback if HTML is missing
+                document.body.innerHTML = "<h1 style='color:red; text-align:center; margin-top:50px;'>⛔ BANNED (Overlay Missing)</h1><button onclick='logout()'>Log Out</button>";
+            }
+            return; 
+        }
+
+        // 4. ACTIVE & CLEAN -> SHOW DASHBOARD
+        // Hide Ban Screen / Login Screen
+        document.getElementById("bannedScreen")?.classList.add("hidden");
+        document.querySelector("header").style.display = "flex";
+        
+        // Setup User Session
+        currentUser.name = u.name;
+        isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
+
+        if (!u.name) {
+            document.getElementById("nameModal").classList.remove("hidden");
+            document.getElementById("loginSection").classList.add("hidden");
+            return;
+        }
+        
+        // UPDATE UI
+        document.getElementById("userInfo").innerText = `${u.name}`;
+        document.getElementById("authContainer").classList.remove("hidden");
+        document.getElementById("loginSection").classList.add("hidden");
+
+        // LOAD ADMIN TOOLS
+        if (isAdmin) {
+            document.getElementById("adminBadge").classList.remove("hidden");
+            document.getElementById("btnAdmin").classList.remove("hidden");
+            setTimeout(loadAdminPanel, 2000);
+        }
+
+        // BIOMETRIC CHECK
+        if(!isTransactionAuth) {
+            const faceModal = document.getElementById("faceModal");
+            faceModal.classList.remove("hidden");
+            
+            if(!u.faceData) {
+                document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
+                document.getElementById("regProgress").classList.remove("hidden");
+                document.getElementById("btnCapture").onclick = registerNewFace;
+                initCamera(false);
+            } else {
+                document.getElementById("modalTitle").innerText = "Biometric Verification";
+                document.getElementById("regProgress").classList.add("hidden");
+                document.getElementById("btnCapture").onclick = handleFaceScan;
+                initCamera(true);
+            }
+        }
+    }, (error) => {
+        // IF DATABASE FAILS -> LOGOUT
+        console.error(error);
+        alert("Connection Error. Logging out...");
+        signOut(auth);
+    });
+});
+// Helper to reliably show login
+function showLoginScreen() {
+    document.querySelector("header").style.display = "flex";
+    document.getElementById("loginSection").classList.remove("hidden");
+    document.getElementById("appScreen").classList.add("hidden");
+    document.getElementById("authContainer").classList.add("hidden");
+    document.getElementById("bannedScreen")?.classList.add("hidden");
+    document.getElementById("faceModal").classList.add("hidden");
+    stopCamera();
+    
+    // Reset Button State
+    const btn = document.querySelector("#loginSection button");
+    if(btn) {
+        btn.innerText = "SECURE LOGIN";
+        btn.disabled = false;
+    }
+}
+
+// --- HELPER: TOGGLE 'OTHER' INPUT FOR ADD STOCK ---
+window.toggleAddOtherInput = () => {
+    const val = document.getElementById("addLocSelect").value;
+    const otherDiv = document.getElementById("divAddOtherLoc");
+    
+    if(val === "Other") {
+        otherDiv.classList.remove("hidden");
+        document.getElementById("addLocOther").focus();
+    } else {
+        otherDiv.classList.add("hidden");
+    }
+};
+// --- TOGGLE 'OTHER' INPUT ---
+window.toggleBanOtherInput = () => {
+    const val = document.getElementById("banReasonInput").value;
+    const div = document.getElementById("divBanOther");
+    if(val === "Other") {
+        div.classList.remove("hidden");
+        document.getElementById("banReasonOther").focus();
+    } else {
+        div.classList.add("hidden");
+    }
+};
+
+// --- HANDLE CUSTOM DATE SELECTION ---
+window.selectBanCustomDate = (input) => {
+    if(input.value) {
+        // Deselect all buttons if date is picked
+        currentBanDays = 'CUSTOM';
+        document.querySelectorAll(".ban-btn-select").forEach(b => b.classList.remove("selected"));
+        input.style.border = "2px solid #dc3545";
+    }
+};
+
+// --- UPDATED BUTTON SELECTION ---
+window.selectBanDuration = (days, btn) => {
+    currentBanDays = days;
+    // Clear Date Input
+    document.getElementById("banCustomDate").value = "";
+    document.getElementById("banCustomDate").style.border = "1px solid #ccc";
+    
+    // Highlight Button
+    document.querySelectorAll(".ban-btn-select").forEach(b => b.classList.remove("selected"));
+    btn.classList.add("selected");
+};
+// --- NEW HEARTBEAT SYSTEM ---
+function startPresenceSystem(user) {
+    const userStatusRef = ref(db, `status/${user.uid}`);
+    set(userStatusRef, { state: 'online', last_changed: serverTimestamp(), email: user.email, name: user.displayName || "User" });
+    onDisconnect(userStatusRef).set({ state: 'offline', last_changed: serverTimestamp(), email: user.email });
+    setInterval(() => { if(currentUser) update(userStatusRef, { last_seen: serverTimestamp() }); }, 5000);
+}
+
+function updateRegDots(count) {
+    document.getElementById("dot1").className = count >= 1 ? "dot active" : "dot";
+    document.getElementById("dot2").className = count >= 2 ? "dot active" : "dot";
+    document.getElementById("dot3").className = count >= 3 ? "dot active" : "dot";
+}
+
+function setupIdleTimer() {
+    // Detect mouse, clicks, touches (mobile), and keyboard
+    window.onmousemove = resetTimer;
+    window.onmousedown = resetTimer; 
+    window.onclick = resetTimer;
+    window.onkeypress = resetTimer;
+    window.ontouchstart = resetTimer; // Mobile touch
+    window.addEventListener('scroll', resetTimer, true); // Scrolling
+    
+    resetTimer(); // Start the first count
+}
+function resetTimer() {
+    clearTimeout(idleTimer);
+    if(currentUser) {
+        idleTimer = setTimeout(() => {
+            const logData = { user: currentUser.email, type: "LOGOUT", method: "Auto-Timeout", time: serverTimestamp() };
+            push(ref(db, "logs"), logData);
+            signOut(auth);
+            alert("Session Timeout.");
+        }, 3 * 60 * 1000);
+    }
+}
+
+window.saveOfficialName = () => {
+    const name = document.getElementById("officialNameInput").value;
+    if(name.length < 3) return alert("Enter full valid name.");
+    update(ref(db, `users/${currentUser.uid}`), { name: name }).then(() => {
+        document.getElementById("nameModal").classList.add("hidden");
+        location.reload();
+    });
+}
+
+function showLogin() {
+    document.getElementById("loginSection").classList.remove("hidden");
+    document.getElementById("appScreen").classList.add("hidden");
+    document.getElementById("authContainer").classList.add("hidden");
+    document.getElementById("nameModal").classList.add("hidden");
+    stopCamera();
+}
+window.logout = async () => {
+    if(currentUser) {
+        const logData = { user: currentUser.email, type: "LOGOUT", method: "Manual Click", time: serverTimestamp() };
+        await push(ref(db, "logs"), logData);
+        signOut(auth);
+    }
+};
+
+async function recordLogin(method) {
+    if(currentUser) {
+        const logData = { user: currentUser.email, type: "LOGIN", method: method, time: serverTimestamp() };
+        await push(ref(db, "logs"), logData);
+    }
+}
+
+// --- 3. HIGH PERFORMANCE CAMERA LOGIC ---
+
+async function initCamera(isVerify) {
+    const vid = document.getElementById("cameraFeed");
+    const canvas = document.getElementById("overlayCanvas");
+   
+    try {
+        if(!modelsLoaded) {
+            updateStatus("Loading AI Models...", "yellow");
+            await preloadModels();
+        }
+        
+        // Remove specific width/height constraints to let the camera decide
+stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        vid.srcObject = stream;
+        vid.onloadedmetadata = () => {
+            vid.play();
+            startRealTimeDetection(vid, canvas);
+        };
+
+        if(isVerify) updateStatus("LOOK AT CAMERA", "white");
+        else updateStatus("REGISTRATION: CENTER FACE", "cyan");
+
+    } catch(e) {
+        console.error(e);
+        updateStatus("Camera Hardware Error", "red");
+    }
+}
+// --- 1. DEFINE METRO DATA ---
+const METRO_STATIONS = {
+    "Blue Line": [
+        "Dakshineswar", "Baranagar", "Noapara", "Dum Dum", "Belgachia", 
+        "Shyambazar", "Shobhabazar Sutanuti", "Girish Park", "Mahatma Gandhi Road", 
+        "Central", "Chandni Chowk", "Esplanade", "Park Street", "Maidan", 
+        "Rabindra Sadan", "Netaji Bhavan", "Jatin Das Park", "Kalighat", 
+        "Rabindra Sarobar", "Mahanayak Uttam Kumar", "Netaji", 
+        "Masterda Surya Sen", "Gitanjali", "Kavi Nazrul", "Shahid Khudiram", 
+        "Kavi Subhash (New Garia)"
+    ],
+    "Green Line": [
+        "Salt Lake Sector V", "Karunamoyee", "Central Park", "City Centre", 
+        "Bengal Chemical", "Salt Lake Stadium", "Phoolbagan", "Sealdah", 
+        "Esplanade", "Mahakaran", "Howrah", "Howrah Maidan"
+    ],
+    "Purple Line": [
+        "Joka", "Thakurpukur", "Sakher Bazar", "Behala Chowrasta", 
+        "Behala Bazar", "Taratala", "Majerhat"
+    ],
+    "Yellow Line": [
+        "Noapara", "Dum Dum Cantonment", "Jessore Road", "Jai Hind (Airport)"
+    ],
+    "Orange Line": [
+        "Kavi Subhash (New Garia)", "Satyajit Ray", "Jyotirindra Nandi", 
+        "Kavi Sukanta", "Hemanta Mukhopadhyay"
+    ],
+    "Pink Line": [
+        "Baranagar", "Barrackpore" // Endpoints added as placeholders
+    ]
+};
+
+// --- 2. HANDLE LINE CHANGE ---
+window.handleLineChange = () => {
+    const lineSel = document.getElementById("lineSelect");
+    const stnSel = document.getElementById("stationSelect");
+    const formDiv = document.getElementById("mainDataForm");
+    
+    // Reset
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    stnSel.disabled = true;
+    formDiv.classList.add("hidden");
+    document.getElementById("inpStationName").value = ""; // Clear hidden input
+
+    const selectedLine = lineSel.value;
+    
+    if (selectedLine && METRO_STATIONS[selectedLine]) {
+        // Populate Stations
+        METRO_STATIONS[selectedLine].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = stn;
+            opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
+        
+        stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+    }
+};
+// Global variables to track editing state
+let currentStationKey = null; // Key of the station_log
+let currentRakeKey = null;    // Key of the rake_log
+// --- STRICT HANDLE STATION CHANGE ---
+window.handleStationChange = async () => {
+    const stnSel = document.getElementById("stationSelect");
+    const lineSel = document.getElementById("lineSelect");
+    const formDiv = document.getElementById("mainDataForm");
+    
+    // Inputs
+    const inpLen = document.getElementById("inpStationLength");
+    const inpYl = document.getElementById("inpYellowDist");
+    const inpTh = document.getElementById("inpYellowThick");
+    const inpRem = document.getElementById("inpRemarks");
+    const inpImpl = document.getElementById("inpImplementation");
+    
+    // UI Elements
+    const warningBox = document.getElementById("dataExistsWarning");
+    const submitBtn = document.getElementById("btnFinalSubmit");
+    const saveBtn = document.getElementById("btnSaveDraft");
+
+    if (!stnSel.value) {
+        formDiv.classList.add("hidden");
+        return;
+    }
+    
+    // Reset State
+    formDiv.classList.remove("hidden");
+    currentStationKey = null;
+    currentRakeKey = null;
+    
+    // Clear Rake Table (Always start empty input for new rows)
+    document.getElementById("distanceBody").innerHTML = ""; 
+    await remove(ref(db, `drafts/${currentUser.uid}/rows`)); // Clear old drafts
+
+    const fullStationName = `${stnSel.value} (${lineSel.value})`;
+    document.getElementById("inpStationName").value = fullStationName;
+    document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
+
+    // CHECK DATABASE
+    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
+    const snap = await get(q);
+
+    if (snap.exists()) {
+        // --- SCENARIO A: DATA EXISTS (APPEND MODE) ---
+        let existingData = null;
+        snap.forEach(c => { 
+            existingData = c.val(); 
+            currentStationKey = c.key; 
+        });
+        currentRakeKey = existingData.linkedRakeKey || currentStationKey;
+
+        // 1. Show Notification
+        warningBox.classList.remove("hidden");
+        warningBox.className = ""; 
+        warningBox.style.background = "#fff3cd"; // Yellow
+        warningBox.style.color = "#856404";
+        warningBox.style.padding = "10px";
+        warningBox.innerHTML = `
+            <strong>⚠️ Station Data Exists</strong><br>
+            Yellow Line details are locked. <br>
+            You can <strong>ONLY add new Rake rows</strong> below.
+        `;
+
+        // 2. FILL & LOCK Station Details (So user knows what is there, but can't change it)
+        inpLen.value = existingData.len || "";
+        inpYl.value = existingData.yl || "";
+        inpTh.value = existingData.th || "";
+        inpRem.value = existingData.remarks || "";
+        inpImpl.value = existingData.impl || "";
+
+        inpLen.disabled = true;
+        inpYl.disabled = true;
+        inpTh.disabled = true;
+        inpRem.disabled = true;
+        inpImpl.disabled = true;
+        
+        // Disable "Save Draft" for station details (since they are locked)
+        saveBtn.disabled = true; 
+
+        // 3. ENABLE SUBMIT BUTTON FOR APPENDING
+        submitBtn.disabled = false;
+        submitBtn.innerText = "➕ Append New Rake Data Only";
+        submitBtn.style.background = "#28a745"; // Green button for Append
+
+    } else {
+        // --- SCENARIO B: FRESH ENTRY (NEW MODE) ---
+        warningBox.classList.add("hidden");
+        
+        // Clear Inputs
+        inpLen.value = "";
+        inpYl.value = "";
+        inpTh.value = "";
+        inpRem.value = "";
+        inpImpl.value = "";
+
+        // Unlock Inputs
+        inpLen.disabled = false;
+        inpYl.disabled = false;
+        inpTh.disabled = false;
+        inpRem.disabled = false;
+        inpImpl.disabled = false;
+        saveBtn.disabled = false;
+
+        submitBtn.disabled = false;
+        submitBtn.innerText = "✔ Submit Final Data";
+        submitBtn.style.background = "#003366";
+    }
+    
+    // Load empty draft table (ready for new input)
+    loadDraft();
+};
+// --- 1. HANDLE TAB & DROPDOWNS ---
+
+// Reuse Station Data Logic for Print Tab
+window.handlePrintLineChange = () => {
+    const lineSel = document.getElementById("printLineSelect");
+    const stnSel = document.getElementById("printStationSelect");
+    
+    // Reset
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    stnSel.disabled = true;
+    document.getElementById("printLogList").classList.add("hidden");
+
+    const selectedLine = lineSel.value;
+    
+    if (selectedLine && METRO_STATIONS[selectedLine]) {
+        METRO_STATIONS[selectedLine].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = stn;
+            opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
+        stnSel.disabled = false;
+    }
+};
+
+// --- 2. FETCH LOGS FOR STATION ---
+window.fetchLogsForPrint = async () => {
+    const line = document.getElementById("printLineSelect").value;
+    const stn = document.getElementById("printStationSelect").value;
+    const tbody = document.getElementById("printLogBody");
+    const listDiv = document.getElementById("printLogList");
+
+    if(!line || !stn) return;
+
+    listDiv.classList.remove("hidden");
+    tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'>🔍 Searching Records...</td></tr>";
+
+    // Search by Station Name
+    const searchName = `${stn} (${line})`;
+    
+    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(searchName));
+    const snap = await get(q);
+
+    if(!snap.exists()) {
+        tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:red;'>No records found for this station.</td></tr>";
+        return;
+    }
+
+    tbody.innerHTML = "";
+    snap.forEach(c => {
+        const d = c.val();
+        // Create "Select" Button
+        const btn = `<button class="info" onclick="openPrintSetup('${c.key}')">🖨️ Select</button>`;
+        
+        tbody.innerHTML += `
+            <tr>
+                <td>${d.date}</td>
+                <td style="font-weight:bold;">${d.name}</td>
+                <td>${d.userName}</td>
+                <td style="text-align:center;">${btn}</td>
+            </tr>
+        `;
+    });
+};
+
+// --- 3. OPEN CONFIG MODAL ---
+let currentPrintKey = null;
+
+// --- UPDATED OPEN CONFIG MODAL ---
+window.openPrintSetup = (key) => {
+    currentPrintKey = key;
+    
+    // 1. Fetch Date for display
+    get(ref(db, `station_logs/${key}/date`)).then(snap => {
+        document.getElementById("modalPrintDate").innerText = snap.val();
+    });
+
+    // 2. Populate the "Test Conducting Member" dropdown dynamically
+    populateUserDropdown();
+
+    // 3. Show Modal
+    document.getElementById("printOptionsModal").classList.remove("hidden");
+};
+
+window.closePrintModal = () => {
+    document.getElementById("printOptionsModal").classList.add("hidden");
+    currentPrintKey = null;
+};
+window.generateFinalReport = async () => {
+    if(!currentPrintKey) return alert("Error: No record selected.");
+
+    // 1. Get Checkbox States
+    const includeStation = document.getElementById("chkStationDetails").checked;
+    const includeRake = document.getElementById("chkRakeData").checked;
+
+    // 2. Get Authority Names for Signature
+    let inspectorName = document.getElementById("selPrintInspector").value;
+    const authName = document.getElementById("selPrintAuthority").value;
+    
+    // Handle "Self" selection
+    if(inspectorName === "Self" || inspectorName === "Self (Current User)" || inspectorName === "") {
+        inspectorName = currentUser.name || currentUser.email;
+    }
+
+    try {
+        // --- STEP 1: FETCH MAIN LOG DATA ---
+        const sSnap = await get(ref(db, `station_logs/${currentPrintKey}`));
+        if(!sSnap.exists()) return alert("Error: Data record not found in DB.");
+        const sData = sSnap.val();
+
+        // 3. Fill Report Header (Common Info)
+        const cleanName = sData.name.split('(')[0].trim();
+        const lineMatch = sData.name.match(/\(([^)]+)\)/);
+        
+        document.getElementById("rptStationName").innerText = cleanName;
+        document.getElementById("rptLineName").innerText = lineMatch ? lineMatch[1] : "Metro Line";
+        document.getElementById("rptDate").innerText = sData.date;
+        
+        // --- FIX IS HERE: USE SELECTED NAME INSTEAD OF SAVED USER ---
+        document.getElementById("rptUser").innerText = inspectorName; 
+        
+        document.getElementById("rptSigInspectorName").innerText = inspectorName;
+        document.getElementById("rptSigAuthName").innerText = authName;
+
+        // ============================================================
+        // BLOCK A: STATION DETAILS (YELLOW LINE) LOGIC
+        // ============================================================
+        const secA = document.getElementById("sectionStationDetails");
+        
+        if(includeStation) {
+            secA.style.display = "block";
+            document.getElementById("rptLen").innerText = (sData.len || '-') + " m";
+            document.getElementById("rptYl").innerText = (sData.yl || '-') + " cm";
+            document.getElementById("rptTh").innerText = (sData.th || '-') + " cm";
+            document.getElementById("rptRem").innerText = sData.remarks || '-';
+
+            const statusEl = document.getElementById("rptStatus");
+            if(sData.impl === "YES") {
+                 statusEl.innerHTML = "<span style='color:green; font-weight:bold;'>✅ YES</span>";
+            } else if (sData.impl === "NO") {
+                 statusEl.innerHTML = "<span style='color:red; font-weight:bold;'>❌ NO</span>";
+            } else {
+                 statusEl.innerHTML = "--";
+            }
+        } else {
+            secA.style.display = "none";
+        }
+
+        // ============================================================
+        // BLOCK B: RAKE DATA (TABLE) LOGIC
+        // ============================================================
+        const secB = document.getElementById("sectionRakeData");
+        const tbody = document.getElementById("rptRakeBody");
+
+        if(includeRake) {
+            secB.style.display = "block";
+            tbody.innerHTML = ""; 
+
+            const rakeKey = sData.linkedRakeKey || currentPrintKey;
+            const rSnap = await get(ref(db, `rake_logs/${rakeKey}`));
+
+            if(rSnap.exists()) {
+                const rRows = rSnap.val();
+                let count = 1;
+                Object.values(rRows).forEach(r => {
+                    const html = `
+                        <tr>
+                            <td style="text-align:center;">${count++}</td>
+                            <td style="font-weight:bold;">${r.rake || '-'}</td>
+                            <td>${r.type || '-'}</td>
+                            <td>${r.f || '-'}</td>
+                            <td>${r.r || '-'}</td>
+                        </tr>
+                    `;
+                    tbody.innerHTML += html;
+                });
+            } else {
+                tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:10px; color:#666;'>No Rake Data Recorded for this Station</td></tr>";
+            }
+        } else {
+            secB.style.display = "none";
+        }
+
+        // --- STEP 4: SHOW THE REPORT ---
+        closePrintModal();
+        document.getElementById("printableReportContainer").classList.remove("hidden");
+        window.scrollTo(0,0);
+
+    } catch(err) {
+        console.error(err);
+        alert("Error generating report: " + err.message);
+    }
+};
+window.closeReportPreview = () => {
+    document.getElementById("printableReportContainer").classList.add("hidden");
+};
+async function startRealTimeDetection(video, canvas) {
+    const displaySize = { width: video.videoWidth || 320, height: video.videoHeight || 240 };
+    faceapi.matchDimensions(canvas, displaySize);
+    if (detectionLoop) clearInterval(detectionLoop);
+    detectionLoop = setInterval(async () => {
+        if (!stream) return;
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+        const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (detection) {
+            const resizedDetections = faceapi.resizeResults(detection, displaySize);
+            const box = resizedDetections.detection.box;
+            const drawBox = new faceapi.draw.DrawBox(box, { label: "Face Locked", boxColor: "#00ff00" });
+            drawBox.draw(canvas);
+            currentDescriptor = detection.descriptor;
+            const btn = document.getElementById("btnCapture");
+            if(btn && !btn.disabled) btn.style.border = "2px solid #00ff00";
+        } else {
+            currentDescriptor = null;
+            const btn = document.getElementById("btnCapture");
+            if(btn) btn.style.border = "1px solid #004494";
+        }
+    }, 100);
+}
+
+function stopCamera() {
+    if(detectionLoop) clearInterval(detectionLoop);
+    if(stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    const vid = document.getElementById("cameraFeed");
+    const canvas = document.getElementById("overlayCanvas");
+    if(vid) vid.srcObject = null;
+    if(canvas) { const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width, canvas.height); }
+    document.getElementById("faceModal").classList.add("hidden");
+    isTransactionAuth = false;
+    currentTransactionType = "";
+}
+
+function updateStatus(m,c) { const e=document.getElementById("faceStatus"); if(e) {e.innerText=m; e.style.color=c;} }
+window.handleFaceScan = async () => {
+    const btn = document.getElementById("btnCapture");
+    if(!currentDescriptor) { updateStatus("❌ No Face Detected.", "red"); return; }
+    
+    btn.disabled = true;
+    btn.innerText = "Processing...";
+    updateStatus("Analyzing Biometrics...", "cyan");
+
+    try {
+        // --- MODE 1: RECEIVER VERIFICATION ---
+        if(scanMode === 'RECEIVER') {
+            const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+            const storedData = snap.val();
+            
+            let match = false;
+            // Check match against logged-in user
+            if(storedData) {
+                const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
+                for (let s of samples) {
+                    if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
+                }
+            }
+
+            if(match) {
+                updateStatus("✅ IDENTITY CONFIRMED", "#00ff00");
+                setTimeout(() => {
+                    stopCamera();
+                    receiverVerified = true;
+                    // Update UI based on transaction type
+                    if(currentTransactionType === 'CHECKOUT') {
+                        document.getElementById("checkout_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
+                        document.getElementById("checkout_status_text").style.color = "green";
+                        document.getElementById("btn_checkout_verify").classList.add("hidden");
+                        // Enable Admin Button
+                        const subBtn = document.getElementById("btn_checkout_submit");
+                        subBtn.disabled = false;
+                        subBtn.style.background = "#b38600";
+                        subBtn.style.cursor = "pointer";
+                        subBtn.style.opacity = "1";
+                    } else {
+                        document.getElementById("return_status_text").innerHTML = "✅ VERIFIED: " + currentUser.name;
+                        document.getElementById("return_status_text").style.color = "green";
+                        document.getElementById("btn_return_verify").classList.add("hidden");
+                        // Enable Admin Button
+                        const subBtn = document.getElementById("btn_return_submit");
+                        subBtn.disabled = false;
+                        subBtn.style.background = "#17a2b8";
+                        subBtn.style.cursor = "pointer";
+                        subBtn.style.opacity = "1";
+                    }
+                }, 1000);
+            } else {
+                throw new Error("Face Does Not Match User");
+            }
+        }
+
+        // --- MODE 2: ADMIN AUTHORIZATION ---
+        else if(scanMode === 'ADMIN') {
+    // Step 1: must be logged in admin
+    if (!isAdmin) {
+        throw new Error("You are not an admin account");
+    }
+
+    // Step 2: match only against his own face
+    const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+    const storedData = snap.val();
+
+    let match = false;
+    if (storedData) {
+        const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
+        for (let s of samples) {
+            if (faceapi.euclideanDistance(s, currentDescriptor) < 0.55) {
+                match = true;
+                break;
+            }
+        }
+    }
+
+    if (match) {
+        updateStatus("✅ ADMIN AUTHORIZED", "#00ff00");
+        await processTransaction(currentUser.name);
+    } else {
+        throw new Error("Admin face does not match");
+    }
+}
+        // --- MODE 3: LOGIN ---
+        else {
+            const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+            const storedData = snap.val();
+            let match = false;
+            if(storedData) {
+                const samples = (storedData[0] instanceof Array) ? storedData : [storedData];
+                for (let s of samples) {
+                     if(faceapi.euclideanDistance(s, currentDescriptor) < 0.55) { match = true; break; }
+                }
+            }
+            if(match) {
+                updateStatus("✅ VERIFIED", "#00ff00");
+                await recordLogin("Biometric");
+                enterApp();
+            } else {
+                throw new Error("Face Mismatch");
+            }
+        }
+
+    } catch (error) {
+        console.error(error);
+        updateStatus("❌ " + error.message, "red");
+        btn.disabled = false;
+        btn.innerText = "📸 Retry Scan";
+    }
+};
+
+window.registerNewFace = async () => {
+    if(!currentDescriptor) { updateStatus("❌ Camera cannot see face clearly.", "orange"); return; }
+    regSamples.push(Array.from(currentDescriptor));
+    const count = regSamples.length;
+    updateRegDots(count);
+    if(count < 3) {
+        updateStatus(`✅ Sample ${count}/3 Captured.`, "lightgreen");
+        document.getElementById("btnCapture").innerText = `📸 Capture Sample ${count + 1} of 3`;
+    } else {
+        updateStatus("💾 Saving...", "yellow");
+        await update(ref(db, `users/${currentUser.uid}`), { faceData: regSamples });
+        alert("Registration Complete!"); location.reload();
+    }
+};
+window.loadStationData = () => {
+    // 1. Make sure the panel is visible!
+    document.getElementById("logResultsPanel").classList.remove("hidden"); 
+    document.getElementById("logTableTitle").innerText = "Recent Station Logs (All)";
+
+    const tbody = document.getElementById("stationDataViewBody");
+    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>Loading Station Logs...</td></tr>";
+
+    // FETCH FROM "station_logs"
+    const q = query(ref(db, "station_logs"), limitToLast(50));
+
+    onValue(q, (snap) => {
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No data found.</td></tr>";
+            return;
+        }
+
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); 
+
+        tbody.innerHTML = "";
+
+        logs.forEach(d => {
+            // Updated View Button to use the correct modal function
+            const rowButton = `<button class="info" onclick="fetchAndShowRakes('${d.key}')" style="padding:4px 8px; font-size:11px;">📄 View Table</button>`;
+            
+            let deleteBtn = "";
+            if (isAdmin) {
+                deleteBtn = `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:4px 8px; font-size:11px; margin-left:5px;">🗑</button>`;
+            }
+
+            const html = `
+            <tr class="station-row-item">
+                <td style="font-size:12px;">${d.date}</td>
+                <td style="font-weight:bold; color:#003366;">${d.name}</td>
+                <td>${d.userName}</td>
+                <td style="font-size:11px;">L: ${d.len || '-'} | YL: ${d.yl || '-'}</td>
+                <td style="font-style:italic; color:#555;">${d.remarks || '--'}</td>
+                <td style="text-align:center;">
+                    ${rowButton}
+                    ${deleteBtn}
+                </td>
+            </tr>`;
+            tbody.innerHTML += html;
+        });
+    }, { onlyOnce: true });
+};
+window.deleteStationLog = async (key) => {
+    if (!isAdmin) return alert("Access Denied: Admins Only.");
+
+    try {
+        // 1. Check if Rake Data exists for this entry
+        const rakeSnap = await get(ref(db, `rake_logs/${key}`));
+        const hasRakeData = rakeSnap.exists();
+
+        if (hasRakeData) {
+            // --- SCENARIO A: Rake Data Exists (PROTECT IT) ---
+            if (confirm(
+                "⚠️ SAFETY ALERT\n\n" +
+                "This record contains Distance/Rake Data (Table 2).\n" +
+                "We cannot delete the entire row, or you will lose access to Table 2.\n\n" +
+                "Click OK to CLEAR the Yellow Line details only (Length, Dist, etc).\n" +
+                "The row will remain visible."
+            )) {
+                const updates = {};
+                updates[`station_logs/${key}/len`] = null;
+                updates[`station_logs/${key}/yl`] = null;
+                updates[`station_logs/${key}/th`] = null;
+                updates[`station_logs/${key}/remarks`] = "(Details Cleared)";
+                
+                await update(ref(db), updates);
+                alert("✅ Yellow Line details cleared. Distance Data saved.");
+                loadSpecificStationData(); // Refresh
+            }
+        } else {
+            // --- SCENARIO B: No Rake Data (SAFE TO DELETE) ---
+            if (confirm("⚠ This record is empty. Delete row permanently?")) {
+                const updates = {};
+                updates[`station_logs/${key}`] = null;
+                updates[`rake_logs/${key}`] = null; // Cleanup
+                
+                await update(ref(db), updates);
+                alert("✅ Record deleted.");
+                loadSpecificStationData(); // Refresh
+            }
+        }
+
+    } catch (e) {
+        console.error(e);
+        alert("Error: " + e.message);
+    }
+};
+// --- VIEW RAKE ROWS (POPUP) ---
+window.viewRakeRows = (rowsEncoded, stationName) => {
+    try {
+        const rows = JSON.parse(decodeURIComponent(rowsEncoded));
+        let msg = `DETAILS FOR: ${stationName}\n\n`;
+        msg += `SL | RAKE | TYPE | FRONT | REAR\n`;
+        msg += `--------------------------------\n`;
+        
+        // Loop through the rows object
+        let count = 1;
+        for (let key in rows) {
+            let r = rows[key];
+            msg += `${count}. ${r.rake || '-'} | ${r.type || '-'} | ${r.f || '-'} | ${r.r || '-'}\n`;
+            count++;
+        }
+        alert(msg);
+    } catch(e) {
+        console.error(e);
+        alert("Error reading row data.");
+    }
+};
+
+// --- SEARCH FILTER ---
+window.filterStationData = () => {
+    const input = document.getElementById("stationLogSearch").value.toLowerCase();
+    const rows = document.getElementsByClassName("station-row-item");
+    
+    Array.from(rows).forEach(row => {
+        const stationName = row.cells[1].innerText.toLowerCase(); // Search Station Name
+        const submittedBy = row.cells[2].innerText.toLowerCase(); // Search User Name
+        
+        if (stationName.includes(input) || submittedBy.includes(input)) {
+            row.style.display = "";
+        } else {
+            row.style.display = "none";
+        }
+    });
+};
+function handleFail() {
+    failCount++;
+    if(failCount >= 3) {
+        stopCamera();
+        document.getElementById("faceModal").classList.remove("hidden");
+        document.getElementById("videoContainer").classList.add("hidden");
+        document.getElementById("camControls").classList.add("hidden");
+        document.getElementById("otpUI").classList.remove("hidden");
+        updateStatus("⚠️ Camera Disabled. Enter PIN.", "red");
+    } else {
+        updateStatus(`❌ Failed. Attempts left: ${3 - failCount}`, "orange");
+    }
+}
+
+window.verifyOTP = () => {
+    const input = document.getElementById("otpInput").value;
+    get(ref(db, `users/${currentUser.uid}/pin`)).then(async snap => {
+        const actualPin = snap.val() || "1234";
+        if(input === actualPin) {
+            await recordLogin("PIN Entry");
+            enterApp();
+        } else {
+            alert("Wrong PIN ❌");
+        }
+    });
+}
+
+function enterApp() {
+    stopCamera();
+    document.getElementById("faceModal").classList.add("hidden");
+    document.getElementById("appScreen").classList.remove("hidden");
+    
+    // Load Tabs
+    switchTab('newData');
+    loadDraft(); 
+    loadGallery(); 
+    loadInventory(); 
+    loadAssignments();
+
+    // --- FIX: START THE TIMER NOW ---
+    setupIdleTimer(); 
+}
+// --- FIXED TOGGLE FUNCTION (Crash-Free for Checkout & Return) ---
+window.toggleInvMode = (mode) => {
+    // 1. Hide All Panels
+    document.getElementById("inv-add").classList.add("hidden");
+    document.getElementById("inv-checkout").classList.add("hidden");
+    document.getElementById("inv-return").classList.add("hidden");
+    document.getElementById("inv-history").classList.add("hidden");
+    document.getElementById("inv-list").classList.add("hidden");
+    
+    // 2. Show the Selected Panel
+    const targetPanel = document.getElementById(`inv-${mode}`);
+    if(targetPanel) targetPanel.classList.remove("hidden");
+    
+    // 3. (REMOVED) Old Dropdown Logic
+    // We strictly removed the calls to 'populateCheckoutSelect' 
+    // and 'populateReturnSelect' here. 
+    // This stops the "innerHTML of null" error completely.
+
+    // 4. Special Focus Logic for History Tab
+    if(mode === 'history') {
+        setTimeout(() => {
+             const searchInput = document.getElementById("auditSearchInput");
+             if(searchInput) searchInput.focus();
+        }, 100);
+    }
+};
+// 1. POPULATE CHECKOUT (Show All Items)
+function populateCheckoutSelect() {
+    const sel = document.getElementById("checkoutSelect");
+    sel.innerHTML = "<option value=''>Loading...</option>";
+    onValue(ref(db, "inventory"), snap => {
+        sel.innerHTML = "<option value=''>Select Item...</option>";
+        snap.forEach(c => {
+            const v = c.val();
+            const opt = document.createElement("option");
+            opt.value = c.key;
+            opt.text = `${v.item} (Avail: ${v.qty})`;
+            opt.dataset.qty = v.qty;
+            opt.dataset.name = v.item;
+            // NEW: STORE BARCODE
+            if(v.barcode) opt.dataset.barcode = v.barcode;
+            sel.appendChild(opt);
+        });
+    }, { onlyOnce: true });
+}
+
+// 2. POPULATE RETURN (Show Only Items You Hold)
+async function populateReturnSelect() {
+    const sel = document.getElementById("returnSelect");
+    sel.innerHTML = "<option value=''>Calculating your holdings...</option>";
+
+    try {
+        // A. Get current Inventory (for keys)
+        const invSnap = await get(ref(db, "inventory"));
+        const inventoryMap = {}; // Maps ItemName -> { key, exists, barcode }
+        invSnap.forEach(c => {
+            const val = c.val();
+            inventoryMap[val.item] = { key: c.key, exists: true, barcode: val.barcode };
+        });
+
+        // B. Get User Logs
+        const logsSnap = await get(query(ref(db, "logs")));
+        const myHoldings = {}; // ItemName -> NetQuantity
+
+        logsSnap.forEach(c => {
+            const l = c.val();
+            // Check if this log belongs to current user
+            const isMe = (l.takenBy === currentUser.name) || (l.takenBy === currentUser.email);
+            
+            if (isMe) {
+                if(l.type === 'CHECKOUT') {
+                    myHoldings[l.item] = (myHoldings[l.item] || 0) + parseInt(l.qty);
+                } else if (l.type === 'RETURN') {
+                    myHoldings[l.item] = (myHoldings[l.item] || 0) - parseInt(l.qty);
+                }
+            }
+        });
+
+        // C. Render
+        sel.innerHTML = "<option value=''>Select Item...</option>";
+        let foundAny = false;
+
+        for (const [itemName, netQty] of Object.entries(myHoldings)) {
+            if (netQty > 0 && inventoryMap[itemName]) {
+                foundAny = true;
+                const opt = document.createElement("option");
+                opt.value = inventoryMap[itemName].key; // Use inventory key for update
+                opt.text = `${itemName} (You have: ${netQty})`;
+                opt.dataset.qty = netQty; // Max returnable
+                opt.dataset.name = itemName;
+                // NEW: STORE BARCODE
+                if(inventoryMap[itemName].barcode) opt.dataset.barcode = inventoryMap[itemName].barcode;
+                sel.appendChild(opt);
+            }
+        }
+
+        if(!foundAny) {
+            sel.innerHTML = "<option value=''>No items to return.</option>";
+        }
+
+    } catch (e) {
+        console.error(e);
+        sel.innerHTML = "<option>Error loading.</option>";
+    }
+}
+
+window.updateMaxQty = () => {
+    const isCheckout = !document.getElementById("inv-checkout").classList.contains("hidden");
+    const selId = isCheckout ? "checkoutSelect" : "returnSelect";
+    const inpId = isCheckout ? "checkoutAvail" : "returnAvail";
+    
+    const sel = document.getElementById(selId);
+    const opt = sel.options[sel.selectedIndex];
+    
+    if(opt && opt.dataset.qty) {
+        document.getElementById(inpId).value = opt.dataset.qty;
+    } else {
+        document.getElementById(inpId).value = "";
+    }
+};
+
+// --- NEW HISTORY LOADING LOGIC (FIXED) ---
+
+function formatTime(ts) {
+    if (!ts) return "N/A";
+    const d = new Date(ts);
+    
+    // Convert to Indian Standard Time (Asia/Kolkata)
+    return d.toLocaleString('en-IN', { 
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit', 
+        month: '2-digit', 
+        year: 'numeric', 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: true 
+    });
+}
+// --- LINEAR HISTORY LOGIC (SIMPLE LIST + BARCODES) ---
+window.loadInventoryHistory = () => {
+    const tbody = document.getElementById("invHistoryBody");
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
+
+    // Fetch last 300 logs
+    const q = query(ref(db, "logs"), limitToLast(300));
+    
+    onValue(q, (snap) => {
+        const logs = [];
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        logs.reverse(); // Show newest events at the top
+
+        // Filter: Show only inventory-related events
+        const invLogs = logs.filter(l => l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE');
+
+        if(invLogs.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded in recent history.</td></tr>";
+            return;
+        }
+
+        tbody.innerHTML = "";
+        
+        invLogs.forEach(l => {
+            // Badge Styling
+            let badge = "";
+            if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:3px 6px; border-radius:3px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
+            else if(l.type === 'RETURN') badge = `<span style="background:#17a2b8; color:white; padding:3px 6px; border-radius:3px; font-weight:bold; font-size:11px;">📥 IN</span>`;
+            else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:3px 6px; border-radius:3px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
+
+            // Barcode formatting
+            const barcodeDisplay = l.barcode ? `<div style="font-family:monospace; color:#003366; font-size:11px; margin-top:2px;">||| ${l.barcode}</div>` : '';
+
+            // Row HTML
+            const row = `
+            <tr class="inv-log-row" style="border-bottom:1px solid #eee;">
+                <td style="font-weight:bold; color:#003366;">${l.barcode || '--'}</td>
+                <td style="font-weight:bold;">${l.takenBy || 'Unknown'}</td>
+                <td>
+                    ${formatTime(l.time)}<br>
+                    <small style="color:#555;">Auth: ${l.approvedBy || 'System'}</small>
+                </td>
+                <td style="text-align:center;">${badge}</td>
+                <td>
+                    <span style="font-size:13px;">${l.item}</span>
+                </td>
+            </tr>`;
+            
+            tbody.innerHTML += row;
+        });
+    }, { onlyOnce: true });
+};
+// --- NEW SEARCH FUNCTION FOR INVENTORY ---
+window.filterInvLogs = () => {
+    const input = document.getElementById("invSearch").value.toLowerCase();
+    const rows = document.getElementsByClassName("inv-log-row");
+   
+    Array.from(rows).forEach(row => {
+        const text = row.innerText.toLowerCase();
+        row.style.display = text.includes(input) ? "" : "none";
+    });
+};
+// --- UPDATED SUBMIT FUNCTION (COMBINED LOCATION LOGIC) ---
+window.submitTransactionNoFace = (type) => {
+    if(!pendingTransactionItem) return alert("Please SCAN an item first.");
+    
+    // --- CHECKOUT VALIDATION ---
+    if(type === 'CHECKOUT') {
+        const purpose = document.getElementById("checkoutPurpose").value;
+        if(!purpose || purpose.trim() === "") return alert("Please enter the PURPOSE for this checkout.");
+    }
+    
+    // --- RETURN VALIDATION & FORMATTING ---
+    let finalLocation = "";
+    
+    if(type === 'RETURN') {
+        // 1. Get Main Place
+        const selection = document.getElementById("returnLocSelect").value;
+        let mainPlace = selection;
+        
+        if(selection === "Other") {
+            const otherText = document.getElementById("returnLocOther").value.trim();
+            if(!otherText) return alert("Please specify the 'Other' location name.");
+            mainPlace = otherText;
+        }
+
+        // 2. Get Specific Spot (Cabinet/Almirah)
+        const spot = document.getElementById("returnLocSpot").value.trim();
+        if(!spot) return alert("Please specify the Exact Spot (e.g., Cabinet, Almirah).");
+
+        // 3. Combine them
+        // Format: "D2 Building - Heerok Sir Lab [Upper Cabinet]"
+        finalLocation = `${mainPlace} [${spot}]`;
+    }
+
+    scanMode = 'DIRECT'; 
+    currentTransactionType = type;
+    
+    // Pass the calculated location to the processor
+    processTransaction("Self/System", finalLocation);
+};
+// --- UPDATED TRANSACTION LOGIC ---
+// --- UPDATED PROCESSOR TO ACCEPT LOCATION ARGUMENT ---
+async function processTransaction(adminName, customReturnLocation = null) {
+    const isCheckout = currentTransactionType === 'CHECKOUT';
+    
+    if(!pendingTransactionItem) return alert("System Error: No item scanned.");
+
+    const itemKey = pendingTransactionItem.key;
+    const itemName = pendingTransactionItem.item;
+    const barcode = pendingTransactionItem.barcode;
+
+    // Get Checkout Purpose (if applicable)
+    const purposeInput = isCheckout ? document.getElementById("checkoutPurpose").value : null;
+
+    // 1. Fetch Fresh Data
+    const invRef = ref(db, `inventory/${itemKey}`);
+    const invSnap = await get(invRef);
+    
+    if(!invSnap.exists()) return alert("Item vanished from DB.");
+    
+    const val = invSnap.val();
+    const currentStatus = val.status;
+    const currentUsage = val.usageCount || 0; 
+
+    // 2. Logic Gates
+    if(isCheckout && currentStatus === 'Checked Out') return alert(`Item already taken by: ${val.holder}`);
+    if(!isCheckout && currentStatus === 'In Stock') return alert(`Item is already in the store.`);
+
+    // 3. Prepare Update Data
+    const uSnap = await get(ref(db, `users/${currentUser.uid}`));
+    const realUserName = uSnap.val()?.name || currentUser.email;
+
+    let updateData = {};
+
+    if (isCheckout) {
+        // CHECKOUT
+        updateData = {
+            status: "Checked Out",
+            holder: realUserName,
+            purpose: purposeInput,
+            location: "Out with User", 
+            usageCount: currentUsage + 1 
+        };
+    } else {
+        // RETURN - USE THE CUSTOM LOCATION WE BUILT
+        updateData = {
+            status: "In Stock",
+            holder: "Store",
+            purpose: null,
+            location: customReturnLocation // Saves "D2 Lab [Cabinet]"
+        };
+    }
+
+    // 4. Update Database
+    await update(invRef, updateData);
+
+    // 5. Log It
+    const logData = {
+        type: currentTransactionType,
+        item: itemName,
+        barcode: barcode,
+        qty: 1,
+        takenBy: realUserName,
+        approvedBy: "Direct (No Admin)",
+        location: isCheckout ? "Out" : customReturnLocation, 
+        purpose: isCheckout ? purposeInput : "Return",
+        time: serverTimestamp()
+    };
+
+    await push(ref(db, "logs"), logData);
+    
+    alert(`✅ ${currentTransactionType} Successful!\nItem: ${itemName}`);
+    
+    // Clear Inputs
+    if(document.getElementById("checkoutPurpose")) document.getElementById("checkoutPurpose").value = "";
+    if(document.getElementById("returnLocOther")) document.getElementById("returnLocOther").value = "";
+    if(document.getElementById("returnLocSpot")) document.getElementById("returnLocSpot").value = "";
+
+    // UI Cleanup
+    document.getElementById("checkout_display").classList.add("hidden");
+    document.getElementById("return_display").classList.add("hidden");
+    pendingTransactionItem = null;
+    toggleInvMode('list');
+}
+// --- NEW HELPER: POPULATE USER DROPDOWN ---
+window.populateUserDropdown = async () => {
+    const sel = document.getElementById("selPrintInspector");
+    
+    // 1. Reset with "Self" option (Convenience)
+    const currentName = currentUser.name || currentUser.email;
+    sel.innerHTML = `<option value="">-- Select Member --</option>
+                     <option value="Self">Self (${currentName})</option>
+                     <optgroup label="All Registered Users:">`;
+
+    // 2. Fetch all users from DB
+    try {
+        const snap = await get(ref(db, "users"));
+        if (snap.exists()) {
+            snap.forEach(c => {
+                const u = c.val();
+                const uName = u.name || u.email; // Use email if name is missing
+                
+                // Add to dropdown
+                const opt = document.createElement("option");
+                opt.value = uName;
+                opt.innerText = uName;
+                sel.appendChild(opt);
+            });
+        }
+    } catch (e) {
+        console.error("Error loading users:", e);
+        sel.innerHTML += `<option disabled>Error loading users</option>`;
+    }
+};
+window.saveStationDetails = () => {
+    const name = document.getElementById("inpStationName").value.trim();
+    if(!name) return alert("Station Name Required");
+    update(ref(db, `drafts/${currentUser.uid}/details`), {
+        name: name,
+        len: document.getElementById("inpStationLength").value,
+        yl: document.getElementById("inpYellowDist").value,
+        th: document.getElementById("inpYellowThick").value,
+        remarks: document.getElementById("inpRemarks").value
+    });
+    alert("Draft Saved");
+};
+// --- 1. HANDLE LOG LINE CHANGE (Populate Station Dropdown) ---
+window.handleLogLineChange = () => {
+    const lineSel = document.getElementById("logLineSelect");
+    const stnSel = document.getElementById("logStationSelect");
+    const resultsDiv = document.getElementById("logResultsPanel");
+    
+    // Reset
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    stnSel.disabled = true;
+    resultsDiv.classList.add("hidden");
+
+    const selectedLine = lineSel.value;
+    
+    if (selectedLine && METRO_STATIONS[selectedLine]) {
+        // Populate Stations using the existing METRO_STATIONS data
+        METRO_STATIONS[selectedLine].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = stn;
+            opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
+        
+        stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+    }
+};
+window.loadSpecificStationData = async () => {
+    const stnSel = document.getElementById("logStationSelect");
+    const lineSel = document.getElementById("logLineSelect");
+    const resultsDiv = document.getElementById("logResultsPanel");
+    const body1 = document.getElementById("viewTable1Body");
+    const body2 = document.getElementById("viewTable2Body");
+
+    if (!stnSel.value || !lineSel.value) return;
+
+    const searchName = stnSel.value.trim(); 
+    resultsDiv.classList.remove("hidden");
+    body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Searching...</td></tr>";
+    body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
+
+    try {
+        const q1 = query(ref(db, "station_logs"));
+        const snap1 = await get(q1);
+
+        body1.innerHTML = "";
+        body2.innerHTML = ""; 
+
+        if (!snap1.exists()) {
+            body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>No records found.</td></tr>";
+            return;
+        }
+
+        const logs = [];
+        snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
+
+        const matches = logs.filter(log => log.name && log.name.includes(searchName)).reverse();
+
+        if (matches.length === 0) {
+            body1.innerHTML = `<tr><td colspan='8' style='text-align:center; color:red;'>No data found.</td></tr>`;
+            return;
+        }
+
+        const newestKey = matches[0].key; 
+
+        matches.forEach(d => {
+            const isActive = (d.key === newestKey);
+            const bgStyle = isActive ? "background:#e8f4ff; font-weight:bold;" : "";
+            
+            // Buttons
+            const showBtn = `<button onclick="loadRakeTable('${d.key}')" class="info" style="padding:2px 6px; font-size:11px;">👁️ View</button>`;
+            
+            let adminBtns = "";
+            if (isAdmin) {
+                adminBtns = `<button class="warning" onclick="editStationLog('${d.key}')" style="padding:2px 5px; font-size:11px;">✏️</button> 
+                             <button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:2px 5px; font-size:11px;">🗑</button>`;
+            }
+
+            // --- FIXED ROW HTML (CORRECT COLUMN ORDER) ---
+            const row = `
+            <tr style="${bgStyle}">
+                <td style="font-size:12px;">${d.date}</td>
+                <td style="font-size:12px;">${d.userName}</td>
+                <td style="font-weight:bold;">${d.len || '-'} m</td>
+                
+                <td style="font-weight:bold; color:#e31e24;">${d.yl || '-'} cm</td>
+                
+                <td>${d.th || '-'} cm</td>
+
+                <td style="text-align:center; font-weight:bold;">
+                    ${d.impl === 'YES' ? '<span style="color:green">✅ YES</span>' : (d.impl === 'NO' ? '<span style="color:red">❌ NO</span>' : '-')}
+                </td>
+
+                <td style="font-style:italic; font-size:12px;">${d.remarks || '--'}</td>
+                <td style="white-space:nowrap;">${showBtn} ${adminBtns}</td>
+            </tr>`;
+            body1.innerHTML += row;
+        });
+
+        loadRakeTable(newestKey);
+
+    } catch (error) {
+        console.error(error);
+        body1.innerHTML = `<tr><td colspan='8' style='color:red;'>Error: ${error.message}</td></tr>`;
+    }
+};
+window.editStationLog = async (key) => {
+    if (!confirm("✏️ Edit this record?")) return;
+
+    try {
+        // 1. Fetch Station Data
+        const stationSnap = await get(ref(db, `station_logs/${key}`));
+        if (!stationSnap.exists()) return alert("Record not found.");
+        const sData = stationSnap.val();
+
+        // 2. Set Global Editing Keys
+        currentStationKey = key;
+        currentRakeKey = sData.linkedRakeKey || key;
+
+        // 3. CLEAN UP DRAFTS (Fixes the "Double Rows" bug)
+        // We wipe the draft folder clean before loading data
+        await remove(ref(db, `drafts/${currentUser.uid}`));
+        document.getElementById("distanceBody").innerHTML = "";
+
+        // 4. Switch to Form Tab
+        switchTab('newData');
+        document.getElementById("mainDataForm").classList.remove("hidden");
+        document.getElementById("dataExistsWarning").classList.add("hidden"); // Hide the "Locked" warning
+
+        // 5. Fill Station Details & UNLOCK THEM
+        document.getElementById("inpStationName").value = sData.name;
+        document.getElementById("formTitle").innerText = `✏️ EDITING: ${sData.name}`;
+        
+        const inpLen = document.getElementById("inpStationLength");
+        const inpYl = document.getElementById("inpYellowDist");
+        const inpTh = document.getElementById("inpYellowThick");
+        const inpRem = document.getElementById("inpRemarks");
+        const inpImpl = document.getElementById("inpImplementation");
+
+        inpLen.value = sData.len || "";
+        inpYl.value = sData.yl || "";
+        inpTh.value = sData.th || "";
+        inpRem.value = sData.remarks || "";
+        inpImpl.value = sData.impl || "";
+
+        // Unlock inputs so you can edit Yellow Line details
+        inpLen.disabled = false;
+        inpYl.disabled = false;
+        inpTh.disabled = false;
+        inpRem.disabled = false;
+        inpImpl.disabled = false;
+        document.getElementById("btnSaveDraft").disabled = false;
+
+        // 6. Update Submit Button
+        const submitBtn = document.getElementById("btnFinalSubmit");
+        submitBtn.innerText = "💾 Save Changes";
+        submitBtn.disabled = false;
+        submitBtn.style.background = "#ffc107"; // Orange
+        submit
