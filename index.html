@@ -458,6 +458,24 @@ select:disabled {
 .report-section-title { background: #eee; border: 1px solid #000; padding: 5px; font-weight: bold; font-size: 14px; margin-top: 20px; }
 .report-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 5px; }
 .report-table th, .report-table td { border: 1px solid #000; padding: 8px; text-align: left; }
+  @media print {
+    /* Ensure hidden sections do not occupy space */
+    #sectionStationDetails:empty, 
+    #sectionRakeData:empty,
+    .hidden-section {
+        display: none !important;
+    }
+
+    /* Page break optimization */
+    .report-paper {
+        page-break-after: always;
+    }
+    
+    .report-section-title {
+        -webkit-print-color-adjust: exact;
+        margin-top: 15px !important;
+    }
+}
 </style>
 </head>
 
@@ -2440,50 +2458,90 @@ window.closePrintModal = () => {
 window.generateFinalReport = async () => {
     if(!currentPrintKey) return alert("Error: No record selected.");
 
+    // 1. Get user preferences from checkboxes
     const includeStation = document.getElementById("chkStationDetails").checked;
     const includeRake = document.getElementById("chkRakeData").checked;
+
+    if(!includeStation && !includeRake) return alert("Please select at least one data section to print.");
+
     let inspectorName = document.getElementById("selPrintInspector").value;
     const authName = document.getElementById("selPrintAuthority").value;
+    
+    if(inspectorName === "Self" || inspectorName === "") {
+        inspectorName = currentUser.name || currentUser.email;
+    }
 
     try {
         const sSnap = await get(ref(db, `station_logs/${currentPrintKey}`));
-        if(!sSnap.exists()) return alert("Error: Data not found.");
+        if(!sSnap.exists()) return alert("Error: Data record not found.");
         const sData = sSnap.val();
 
-        // 1. SET PROJECT TITLE
+        // 2. Set Official Titles and Labels
         const titleEl = document.querySelector(".report-header h2");
         if(titleEl) titleEl.innerText = "METRO RAILWAY PLATFORM SAFETY PROJECT";
 
-        // 2. SET LABELS AND NAMES
         document.getElementById("rptSigInspectorName").innerText = inspectorName;
         document.getElementById("rptSigAuthName").innerText = authName;
         
-        // Update signature label to "Test Conducted By:"
-        const inspectorLabel = document.querySelector(".report-footer small"); 
-        if(inspectorLabel) inspectorLabel.innerText = "Test Conducted By:";
+        const footerLabel = document.querySelector(".report-footer small");
+        if(footerLabel) footerLabel.innerText = "Test Conducted By:";
 
-        // 3. FILL META DATA
+        // 3. Fill Meta Data
         document.getElementById("rptStationName").innerText = sData.name.split('(')[0].trim();
-        document.getElementById("rptLineName").innerText = sData.name.match(/\(([^)]+)\)/)?.[1] || "--";
+        document.getElementById("rptLineName").innerText = sData.name.match(/\(([^)]+)\)/)?.[1] || "Blue Line";
         document.getElementById("rptDate").innerText = sData.date;
         document.getElementById("rptUser").innerText = inspectorName;
 
-        // 4. POPULATE STATION MEASUREMENTS
+        // 4. CONDITIONAL SECTION RENDERING
+        // --- Section A: Station Measurements ---
+        const secA = document.getElementById("sectionStationDetails");
         if(includeStation) {
-            document.getElementById("sectionStationDetails").style.display = "block";
-            document.getElementById("rptLen").innerText = sData.len + " m";
-            document.getElementById("rptYl").innerText = sData.yl + " cm";
-            document.getElementById("rptTh").innerText = sData.th + " cm";
+            secA.style.display = "block";
+            document.getElementById("rptLen").innerText = (sData.len || '-') + " m";
+            document.getElementById("rptYl").innerText = (sData.yl || '-') + " cm";
+            document.getElementById("rptTh").innerText = (sData.th || '-') + " cm";
+            document.getElementById("rptRem").innerText = sData.remarks || '-';
             document.getElementById("rptStatus").innerText = sData.impl === "YES" ? "✔ YES" : "✘ NO";
-            document.getElementById("rptRem").innerText = sData.remarks;
+        } else {
+            secA.style.display = "none"; // Hide Section A title and table
         }
 
+        // --- Section B: Rake Data ---
+        const secB = document.getElementById("sectionRakeData");
+        const tbody = document.getElementById("rptRakeBody");
+        if(includeRake) {
+            secB.style.display = "block";
+            tbody.innerHTML = "";
+            const rakeKey = sData.linkedRakeKey || currentPrintKey;
+            const rSnap = await get(ref(db, `rake_logs/${rakeKey}`));
+
+            if(rSnap.exists()) {
+                let count = 1;
+                Object.values(rSnap.val()).forEach(r => {
+                    tbody.innerHTML += `
+                        <tr>
+                            <td style="text-align:center;">${count++}</td>
+                            <td style="font-weight:bold;">${r.rake || '-'}</td>
+                            <td>${r.type || '-'}</td>
+                            <td>${r.f || '-'}</td>
+                            <td>${r.r || '-'}</td>
+                        </tr>`;
+                });
+            } else {
+                tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No Rake Data Found</td></tr>";
+            }
+        } else {
+            secB.style.display = "none"; // Hide Section B title and table
+        }
+
+        // 5. Show Preview
         closePrintModal();
         document.getElementById("printableReportContainer").classList.remove("hidden");
         window.scrollTo(0,0);
 
     } catch(err) {
-        console.error("Print Error:", err);
+        console.error(err);
+        alert("Error generating report: " + err.message);
     }
 };
 window.closeReportPreview = () => {
