@@ -3422,34 +3422,18 @@ window.loadSpecificStationData = async () => {
 
     const searchName = `${stnSel.value} (${lineSel.value})`;
     resultsDiv.classList.remove("hidden");
-    body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>🔍 Searching All Records...</td></tr>";
-    body2.innerHTML = "";
+    body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>🔍 Searching Records...</td></tr>";
 
     try {
-        // 1. Fetch all logs
+        // --- Part A: Main Inspection Logs ---
         const snap = await get(ref(db, "station_logs"));
         body1.innerHTML = ""; 
 
-        if (!snap.exists()) {
-            body1.innerHTML = "<tr><td colspan='8'>No records in database.</td></tr>";
-            return;
-        }
-
-        let foundCount = 0;
-
-        // 2. Loop through every log to find ALL matches for "Park Street" or "Uttam Kumar"
         snap.forEach(child => {
             const d = child.val();
-            const logKey = child.key;
-
             if (d.name === searchName) {
-                foundCount++;
-                
-                // Determine row style (Highlight the most recent one)
-                const rowStyle = foundCount === 1 ? "background:#e8f4ff; font-weight:bold;" : "";
-                
-                const row = `
-                <tr style="${rowStyle}">
+                body1.innerHTML += `
+                <tr>
                     <td>${d.date}</td>
                     <td>${d.userName}</td>
                     <td>${d.len || '-'} m</td>
@@ -3457,20 +3441,26 @@ window.loadSpecificStationData = async () => {
                     <td>${d.th || '-'} cm</td>
                     <td>${d.impl || '-'}</td>
                     <td style="font-size:11px;">${d.remarks || '--'}</td>
-                    <td>
-                        <button onclick="loadRakeTable('${logKey}')" class="info" style="padding:2px 6px;">👁️ View Rakes</button>
-                        ${isAdmin ? `<button class="danger" onclick="deleteStationLog('${logKey}')" style="padding:2px 6px;">🗑</button>` : ''}
-                    </td>
+                    <td><button onclick="loadRakeTable('${child.key}')" class="info">👁️ View Rakes</button></td>
                 </tr>`;
-                
-                // Use prepend so newest records appear at the top
-                body1.insertAdjacentHTML('afterbegin', row);
             }
         });
 
-        if (foundCount === 0) {
-            body1.innerHTML = `<tr><td colspan='8' style='text-align:center; color:red;'>No data found for ${searchName}.</td></tr>`;
-        }
+        // --- Part B: Demo Logs (NEW) ---
+        const demoSnap = await get(ref(db, "demo_master_logs"));
+        demoSnap.forEach(child => {
+            const d = child.val();
+            if (d.name === searchName) {
+                body1.innerHTML += `
+                <tr style="background:#fffdf0; border-left: 5px solid #b38600;">
+                    <td>${d.date}</td>
+                    <td>${d.userName}</td>
+                    <td colspan="4" style="text-align:center; font-weight:bold; color:#b38600;">🧪 DEMO LOG ENTRY</td>
+                    <td style="font-size:11px;">${d.comments || '--'}</td>
+                    <td><button onclick="loadDemoTable('${child.key}')" class="warning">👁️ View Demo</button></td>
+                </tr>`;
+            }
+        });
 
     } catch (error) {
         console.error(error);
@@ -3546,6 +3536,30 @@ window.editStationLog = async (key) => {
         console.error(e);
         alert("Error loading for edit: " + e.message);
     }
+};
+window.loadDemoTable = async (key) => {
+    const body2 = document.getElementById("viewTable2Body");
+    body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>⏳ Loading Demo Table...</td></tr>";
+
+    try {
+        const snap = await get(ref(db, `demo_table_logs/${key}/rows`));
+        if(!snap.exists()) {
+            body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No demo measurements found.</td></tr>";
+        } else {
+            body2.innerHTML = "";
+            let count = 1;
+            snap.forEach(child => {
+                const r = child.val();
+                body2.innerHTML += `
+                <tr>
+                    <td>${count++}</td>
+                    <td colspan="2" style="font-weight:bold; text-align:center;">${r.dist || '-'} m</td>
+                    <td colspan="2" style="color:blue; text-align:center;">${r.resp || '-'}</td>
+                    <td style="text-align:center;"><span style="color:orange;">🧪 Demo</span></td>
+                </tr>`;
+            });
+        }
+    } catch(e) { body2.innerHTML = "<tr><td>Error loading demo data.</td></tr>"; }
 };
 window.loadRakeTable = async (key) => {
     const body2 = document.getElementById("viewTable2Body");
