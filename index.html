@@ -3706,62 +3706,46 @@ window.uploadEvidenceOnly = () => {
     }
 };
 window.submitStationData = async () => {
-    const lineSel = document.getElementById("lineSelect");
-    const stnSel = document.getElementById("stationSelect");
+    const logRef = ref(db, "station_logs");
+    const draftRef = ref(db, `drafts/${currentUser.uid}`);
     
-    const inpLen = document.getElementById("inpStationLength");
-    const inpYl = document.getElementById("inpYellowDist");
-    const inpTh = document.getElementById("inpYellowThick");
-    const inpRem = document.getElementById("inpRemarks");
-    const inpImpl = document.getElementById("inpImplementation");
+    // 1. Get the Unique Key (Reuse if editing, or create new)
+    const logId = currentStationKey || push(logRef).key;
 
-    if (!lineSel.value || !stnSel.value) return alert("❌ Please select Line and Station.");
+    const stationObj = {
+        name: document.getElementById("inpStationName").value,
+        len: document.getElementById("inpStationLength").value,
+        yl: document.getElementById("inpYellowDist").value,
+        th: document.getElementById("inpYellowThick").value,
+        remarks: document.getElementById("inpRemarks").value,
+        impl: document.getElementById("inpImplementation").value,
+        userName: currentUser.name || currentUser.email,
+        date: new Date().toLocaleString(),
+        logId: logId // Internal Reference
+    };
 
-    let rowsData = null;
+    // 2. Fetch Draft Rake Rows
     const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-    if (rowsSnap.exists()) rowsData = rowsSnap.val();
-
-    const timestamp = new Date().toLocaleString();
-    const name = `${stnSel.value} (${lineSel.value})`;
+    const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
     try {
-        const isStationDetailsLocked = inpLen.disabled; 
-        const isAppendMode = currentStationKey && isStationDetailsLocked;
-
-        if (isAppendMode) {
-            const rakeRef = ref(db, `rake_logs/${currentRakeKey}`);
-            for (let key in rowsData) await push(rakeRef, rowsData[key]);
-        } else {
-            const newKey = currentStationKey || push(ref(db, "station_logs")).key;
-            const stationObj = {
-                name: name,
-                len: inpLen.value,
-                yl: inpYl.value,
-                th: inpTh.value,
-                remarks: inpRem.value,
-                impl: inpImpl.value,
-                userName: currentUser.name || currentUser.email,
-                date: timestamp,
-                linkedRakeKey: newKey
-            };
-            await set(ref(db, `station_logs/${newKey}`), stationObj);
-            if (rowsData) await set(ref(db, `rake_logs/${newKey}`), rowsData);
+        const updates = {};
+        // Save Station Master Info
+        updates[`station_logs/${logId}`] = stationObj;
+        
+        // Save Rake Rows under the EXACT SAME ID
+        if (rowsData) {
+            updates[`rake_logs/${logId}`] = rowsData;
         }
 
-        alert("✅ Data Saved Successfully!");
-
-        // CLEANUP: Reset UI but do NOT logout or reload
-        await remove(ref(db, `drafts/${currentUser.uid}`));
-        document.getElementById("distanceBody").innerHTML = "";
+        await update(ref(db), updates);
         
+        // 3. Cleanup Drafts
+        await remove(draftRef);
+        alert("✅ Station Data & Rake Logs Synced Successfully!");
         switchTab('dataView');
-        document.getElementById("logLineSelect").value = lineSel.value;
-        handleLogLineChange();
-        document.getElementById("logStationSelect").value = stnSel.value;
-        loadSpecificStationData();
-
     } catch (e) {
-        alert("Error during submission: " + e.message);
+        alert("Submission Error: " + e.message);
     }
 };
 window.loadAdminPanel = async () => {
