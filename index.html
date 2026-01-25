@@ -1059,32 +1059,8 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
         </table>
       </div>
     </div>
-
-    <div class="panel" style="border-left: 4px solid var(--success-green);">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h4 style="margin:0; color:var(--success-green);">🚆 Rake Clearance Data</h4>
-        <button id="btnDeleteAllRakes" class="danger" style="padding:4px 10px; font-size:11px; display:none;" onclick="triggerDeleteAll()">Purge All Rake Data</button>
-      </div>
-      <div class="table-wrapper" style="margin-top:15px;">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Rake ID</th>
-              <th>Series</th>
-              <th>Front</th>
-              <th>Rear</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="viewTable2Body">
-            <tr><td colspan="6" style="text-align:center;">Select a record above to see details</td></tr>
-          </tbody>
-        </table>
-      </div>
+    
     </div>
-
-  </div>
 </div>
 <div id="rakeDataModal" class="modal-overlay hidden">
     <div class="panel" style="width:700px; max-width:95%; max-height:85vh; display:flex; flex-direction:column; padding:0; overflow:hidden; border:none;">
@@ -3275,27 +3251,25 @@ window.handleLogLineChange = () => {
         stnSel.style.background = "#fff";
     }
 };
+// 1. UPDATED: Load Data function (Removed code that targeted the deleted panel)
 window.loadSpecificStationData = async () => {
     const stnSel = document.getElementById("logStationSelect");
     const lineSel = document.getElementById("logLineSelect");
     const resultsDiv = document.getElementById("logResultsPanel");
     const body1 = document.getElementById("viewTable1Body");
-    const body2 = document.getElementById("viewTable2Body");
 
     if (!stnSel.value || !lineSel.value) return;
 
     const searchName = stnSel.value.trim(); 
     resultsDiv.classList.remove("hidden");
     body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Searching...</td></tr>";
-    body2.innerHTML = "<tr><td colspan='6' style='text-align:center;'>...</td></tr>";
 
     try {
         const q1 = query(ref(db, "station_logs"));
         const snap1 = await get(q1);
 
         body1.innerHTML = "";
-        body2.innerHTML = ""; 
-
+        
         if (!snap1.exists()) {
             body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>No records found.</td></tr>";
             return;
@@ -3304,6 +3278,7 @@ window.loadSpecificStationData = async () => {
         const logs = [];
         snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
 
+        // Filter and Sort
         const matches = logs.filter(log => log.name && log.name.includes(searchName)).reverse();
 
         if (matches.length === 0) {
@@ -3311,48 +3286,98 @@ window.loadSpecificStationData = async () => {
             return;
         }
 
-        const newestKey = matches[0].key; 
-
         matches.forEach(d => {
-            const isActive = (d.key === newestKey);
-            const bgStyle = isActive ? "background:#e8f4ff; font-weight:bold;" : "";
+            // UPDATED: "View Table" now calls openRakeModal()
+            let buttonsHtml = `<button onclick="openRakeModal('${d.key}')" class="info" style="padding:2px 6px; font-size:11px; margin-right:4px;">📄 View Table</button>`;
             
-            // Buttons
-            const showBtn = `<button onclick="loadRakeTable('${d.key}')" class="info" style="padding:2px 6px; font-size:11px;">👁️ View</button>`;
-            
-            let adminBtns = "";
-            if (isAdmin) {
-                adminBtns = `<button class="warning" onclick="editStationLog('${d.key}')" style="padding:2px 5px; font-size:11px;">✏️</button> 
-                             <button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:2px 5px; font-size:11px;">🗑</button>`;
+            if (isAdmin || d.user === currentUser.email) {
+                buttonsHtml += `<button class="warning" onclick="editStationLog('${d.key}')" style="padding:2px 6px; font-size:11px; margin-right:4px;">✏️ Edit</button>`;
             }
 
-            // --- FIXED ROW HTML (CORRECT COLUMN ORDER) ---
+            if (isAdmin) {
+                buttonsHtml += `<button class="danger" onclick="deleteStationLog('${d.key}')" style="padding:2px 6px; font-size:11px;">🗑</button>`;
+            }
+
             const row = `
-            <tr style="${bgStyle}">
+            <tr>
                 <td style="font-size:12px;">${d.date}</td>
                 <td style="font-size:12px;">${d.userName}</td>
                 <td style="font-weight:bold;">${d.len || '-'} m</td>
-                
                 <td style="font-weight:bold; color:#e31e24;">${d.yl || '-'} cm</td>
-                
                 <td>${d.th || '-'} cm</td>
-
                 <td style="text-align:center; font-weight:bold;">
                     ${d.impl === 'YES' ? '<span style="color:green">✅ YES</span>' : (d.impl === 'NO' ? '<span style="color:red">❌ NO</span>' : '-')}
                 </td>
-
                 <td style="font-style:italic; font-size:12px;">${d.remarks || '--'}</td>
-                <td style="white-space:nowrap;">${showBtn} ${adminBtns}</td>
+                <td style="white-space:nowrap;">
+                    ${buttonsHtml}
+                </td>
             </tr>`;
             body1.innerHTML += row;
         });
-
-        loadRakeTable(newestKey);
 
     } catch (error) {
         console.error(error);
         body1.innerHTML = `<tr><td colspan='8' style='color:red;'>Error: ${error.message}</td></tr>`;
     }
+};
+
+// 2. NEW: Function to open the Rake Data in the MODAL
+window.openRakeModal = async (key) => {
+    const modal = document.getElementById("rakeDataModal");
+    const tbody = document.getElementById("modalRakeBody");
+    
+    // Show Modal immediately
+    modal.classList.remove("hidden");
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px;'>⏳ Fetching Rake Data...</td></tr>";
+
+    try {
+        // First get the station log to find the linkedRakeKey
+        const sSnap = await get(ref(db, `station_logs/${key}`));
+        if(!sSnap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:red;'>Log not found.</td></tr>";
+            return;
+        }
+        
+        const sData = sSnap.val();
+        const rakeKey = sData.linkedRakeKey || key;
+
+        // Fetch the Rake Data
+        const rSnap = await get(ref(db, `rake_logs/${rakeKey}`));
+        
+        if(!rSnap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px; color:#666;'>No Rake Clearance Data recorded for this entry.</td></tr>";
+            return;
+        }
+
+        // Populate Modal Table
+        tbody.innerHTML = "";
+        const rows = rSnap.val();
+        let count = 1;
+        
+        Object.values(rows).forEach(r => {
+            const html = `
+                <tr>
+                    <td style="text-align:center;">${count++}</td>
+                    <td style="font-weight:bold;">${r.rake || '-'}</td>
+                    <td>${r.type || '-'}</td>
+                    <td>${r.f || '-'}</td>
+                    <td>${r.r || '-'}</td>
+                    <td style="text-align:center;">${r.act || '-'}</td>
+                </tr>
+            `;
+            tbody.innerHTML += html;
+        });
+
+    } catch(e) {
+        console.error(e);
+        tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:red;'>Error loading data.</td></tr>";
+    }
+};
+
+// 3. Ensure Close Function Exists
+window.closeRakeModal = () => {
+    document.getElementById("rakeDataModal").classList.add("hidden");
 };
 window.editStationLog = async (key) => {
     if (!confirm("✏️ Edit this record?")) return;
