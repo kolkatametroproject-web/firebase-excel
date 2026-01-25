@@ -3714,113 +3714,85 @@ window.submitStationData = async () => {
     const inpRem = document.getElementById("inpRemarks");
     const inpImpl = document.getElementById("inpImplementation");
 
-    // 2. SAFETY CHECKS
-    if ((!lineSel.value || !stnSel.value) && !currentStationKey) {
-        return alert("❌ Select Line/Station first.");
+    if (!lineSel.value || !stnSel.value) return alert("❌ Please select Line and Station.");
+
+    // 2. FETCH DRAFT ROWS (Table 2 Data)
+    let rowsData = null;
+    const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+    if (rowsSnap.exists()) {
+        rowsData = rowsSnap.val();
     }
 
-    // 3. FETCH DRAFT ROWS (Table Data)
-    let rowsData = null;
-    try {
-        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-        if (rowsSnap.exists()) {
-            rowsData = rowsSnap.val();
-        }
-    } catch (e) { console.error(e); }
-
-    // 4. DETERMINE MODE
-    // If inputs are unlocked, we are Editing or Creating New. If locked, we are Appending.
+    // 3. DETERMINE MODE
     const isStationDetailsLocked = inpLen.disabled; 
-    const isEditMode = currentStationKey && !isStationDetailsLocked;
     const isAppendMode = currentStationKey && isStationDetailsLocked;
-    const isNewMode = !currentStationKey;
-
-    // --- LOGIC BRANCHES ---
+    const isEditMode = currentStationKey && !isStationDetailsLocked;
 
     const timestamp = new Date().toLocaleString();
-    const updates = {};
+    const name = `${stnSel.value} (${lineSel.value})`;
 
-    // === SCENARIO 1: APPEND MODE (Existing Data, Locked Yellow Line) ===
-    if (isAppendMode) {
-        if (!rowsData) return alert("⚠️ You are in Append Mode.\nPlease add at least one NEW row in the table below.");
-        
-        // We ONLY add new rake rows. We do NOT touch station_logs.
-        Object.values(rowsData).forEach(row => {
-            const newRowKey = push(ref(db, `rake_logs/${currentRakeKey}`)).key;
-            updates[`rake_logs/${currentRakeKey}/${newRowKey}`] = row;
-        });
-
-        if (confirm(`Append ${Object.keys(rowsData).length} new rows to existing data?`)) {
-            await update(ref(db), updates);
-            await remove(ref(db, `drafts/${currentUser.uid}`));
-            alert("✅ New Rake Data Appended!");
+    try {
+        // === MODE A: APPEND (Adding Rakes to Existing Station) ===
+        if (isAppendMode) {
+            if (!rowsData) return alert("No new rows to append.");
             
-            // Clean up
-            document.getElementById("distanceBody").innerHTML = "";
-            loadDraft(); 
-        }
-        return;
-    }
-
-    // === SCENARIO 2: EDIT MODE (Admin Editing Old Data) ===
-    if (isEditMode) {
-        // We update Yellow Line Details AND overwrite Rake Data
-        updates[`station_logs/${currentStationKey}/len`] = inpLen.value;
-        updates[`station_logs/${currentStationKey}/yl`] = inpYl.value;
-        updates[`station_logs/${currentStationKey}/th`] = inpTh.value;
-        updates[`station_logs/${currentStationKey}/remarks`] = inpRem.value;
-        updates[`station_logs/${currentStationKey}/impl`] = inpImpl.value;
-        updates[`station_logs/${currentStationKey}/lastModifiedBy`] = currentUser.name;
+            // Push new rows to the existing Rake key
+            const rakeRef = ref(db, `rake_logs/${currentRakeKey}`);
+            for (let key in rowsData) {
+                await push(rakeRef, rowsData[key]);
+            }
+            alert("✅ New Rake Data Appended to existing record!");
+        } 
         
-        // Replace Rake Data with current table (Handle empty table case)
-        updates[`rake_logs/${currentRakeKey}`] = rowsData || null;
-
-        if (confirm("💾 Save changes to Station Details & Rake Data?")) {
-            await update(ref(db), updates);
-            await remove(ref(db, `drafts/${currentUser.uid}`));
-            alert("✅ Records Updated Successfully!");
-            
-            // Reset and go back to view
-            document.getElementById("mainDataForm").classList.add("hidden");
-            document.getElementById("distanceBody").innerHTML = "";
-            currentStationKey = null;
-            switchTab('dataView');
-        }
-        return;
-    }
-
-    // === SCENARIO 3: NEW ENTRY MODE (Fresh Data) ===
-    if (isNewMode) {
-        // Validate Mandatory Fields
-        if (!inpLen.value || !inpImpl.value) return alert("Please fill Station Details (Yellow Line).");
-
-        const name = `${stnSel.value} (${lineSel.value})`;
-        const newKey = push(ref(db, "station_logs")).key;
+        // === MODE B: EDIT (Admin Modifying Existing Record) ===
+        else if (isEditMode) {
+            const updateObj = {
+                len: inpLen.value,
+                yl: inpYl.value,
+                th: inpTh.value,
+                remarks: inpRem.value,
+                impl: inpImpl.value,
+                lastEditedBy: currentUser.name
+            };
+            await update(ref(db, `station_logs/${currentStationKey}`), updateObj);
+            if (rowsData) {
+                await set(ref(db, `rake_logs/${currentRakeKey}`), rowsData);
+            }
+            alert("✅ Changes Saved Successfully!");
+        } 
         
-        const stationObj = {
-            name: name, 
-            len: inpLen.value,
-            yl: inpYl.value,
-            th: inpTh.value,
-            remarks: inpRem.value,
-            impl: inpImpl.value,
-            user: currentUser.email, 
-            userName: currentUser.name,
-            date: timestamp
-        };
+        // === MODE C: NEW ENTRY ===
+        else {
+            if (!inpLen.value || !inpImpl.value) return alert("Please fill Yellow Line measurements.");
 
-        // Create Station Log
-        updates[`station_logs/${newKey}`] = { ...stationObj, linkedRakeKey: newKey };
-        // Create Rake Log (if rows exist)
-        if (rowsData) updates[`rake_logs/${newKey}`] = rowsData;
+            const newStationKey = push(ref(db, "station_logs")).key;
+            const stationObj = {
+                name: name,
+                len: inpLen.value,
+                yl: inpYl.value,
+                th: inpTh.value,
+                remarks: inpRem.value,
+                impl: inpImpl.value,
+                userName: currentUser.name || currentUser.email,
+                date: timestamp,
+                linkedRakeKey: newStationKey
+            };
 
-        if (confirm("Submit New Station Data?")) {
-            await update(ref(db), updates);
-            await remove(ref(db, `drafts/${currentUser.uid}`));
-            alert("✅ New Station & Rake Data Saved!");
-            location.reload(); 
+            await set(ref(db, `station_logs/${newStationKey}`), stationObj);
+            if (rowsData) {
+                await set(ref(db, `rake_logs/${newStationKey}`), rowsData);
+            }
+            alert("✅ New Station Record Created!");
         }
-        return;
+
+        // 4. CLEANUP
+        await remove(ref(db, `drafts/${currentUser.uid}`));
+        document.getElementById("distanceBody").innerHTML = "";
+        location.reload(); // Refresh to update all logs
+
+    } catch (e) {
+        console.error(e);
+        alert("Submission Error: " + e.message);
     }
 };
 window.loadAdminPanel = async () => {
