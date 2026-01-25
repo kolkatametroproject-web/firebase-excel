@@ -1184,6 +1184,9 @@ select:disabled {
         <h3 style="color:#003366; border-bottom:2px solid #b38600; padding-bottom:10px; margin-top:0;">🖨️ Configure Report</h3>
         
         <p style="margin-bottom:15px;"><strong>Record Date:</strong> <span id="modalPrintDate" style="color:#003366; font-weight:bold;">--</span></p>
+       <label class="checkbox-item">
+    <input type="checkbox" id="chkDemoData" checked> Demo Result Table
+</label>
 
         <label style="font-weight:bold; display:block; color:#003366;">1. Select Data to Include:</label>
         <div style="display:flex; gap:10px; margin-bottom:15px;">
@@ -1713,43 +1716,69 @@ window.handleDemoLineChange = () => {
     }
 };
 
+// Handle Station Selection for Demo
 window.handleDemoStationChange = () => {
     const stn = document.getElementById("demoStationSelect").value;
-    if(stn) {
+    const line = document.getElementById("demoLineSelect").value;
+    
+    // Safety: Clear previous UI immediately so old data doesn't "ghost"
+    document.getElementById("demoTableBody").innerHTML = "";
+    document.getElementById("demoComments").value = "";
+
+    if (stn) {
         document.getElementById("demoFormArea").classList.remove("hidden");
-        loadDemoDraft();
+        loadDemoDraft(); // Fetch fresh data for this specific station
+    } else {
+        document.getElementById("demoFormArea").classList.add("hidden");
     }
 };
 
-// Draft Logic
-window.addDemoRow = () => {
-    const stn = document.getElementById("demoStationSelect").value;
-    const line = document.getElementById("demoLineSelect").value;
-    const stationId = `${line}_${stn}`.replace(/\s+/g, '_');
-    push(ref(db, `demo_drafts/${currentUser.uid}/${stationId}/rows`), { dist: "", resp: "" });
-};
-
+// Real-time Demo Draft Listener
 window.loadDemoDraft = () => {
     const stn = document.getElementById("demoStationSelect").value;
     const line = document.getElementById("demoLineSelect").value;
+    if(!stn || !line) return;
+
+    // Create a unique stationId to isolate data
     const stationId = `${line}_${stn}`.replace(/\s+/g, '_');
-    
+    const tbody = document.getElementById("demoTableBody");
+
+    // Use a dedicated 'demo_drafts' path to avoid mixing with main inspection drafts
     onValue(ref(db, `demo_drafts/${currentUser.uid}/${stationId}`), (snap) => {
-        const body = document.getElementById("demoTableBody");
-        body.innerHTML = "";
+        tbody.innerHTML = ""; 
         const data = snap.val();
-        if(data && data.rows) {
+
+        if (data && data.rows) {
             Object.entries(data.rows).forEach(([key, val], index) => {
-                body.innerHTML += `
+                tbody.innerHTML += `
                 <tr>
-                    <td>${index + 1}</td>
-                    <td><input value="${val.dist}" onchange="upDemoRow('${stationId}','${key}','dist',this.value)"></td>
-                    <td><input value="${val.resp}" onchange="upDemoRow('${stationId}','${key}','resp',this.value)"></td>
-                    <td><button class="danger" onclick="delDemoRow('${stationId}','${key}')">X</button></td>
+                    <td style="text-align:center; font-weight:bold;">${index + 1}</td>
+                    <td>
+                        <input style="width:100%" value="${val.dist || ''}" 
+                               onchange="upDemoRow('${stationId}','${key}','dist',this.value)" 
+                               placeholder="Distance (m)">
+                    </td>
+                    <td>
+                        <input style="width:100%" value="${val.resp || ''}" 
+                               onchange="upDemoRow('${stationId}','${key}','resp',this.value)" 
+                               placeholder="System Response">
+                    </td>
+                    <td style="text-align:center;">
+                        <button class="danger" onclick="delDemoRow('${stationId}','${key}')">X</button>
+                    </td>
                 </tr>`;
             });
         }
     });
+};
+
+// Helper Functions for Demo Drafts
+window.addDemoRow = () => {
+    const stn = document.getElementById("demoStationSelect").value;
+    const line = document.getElementById("demoLineSelect").value;
+    if(!stn) return alert("Select a station first.");
+    const stationId = `${line}_${stn}`.replace(/\s+/g, '_');
+    push(ref(db, `demo_drafts/${currentUser.uid}/${stationId}/rows`), { dist: "", resp: "" });
 };
 
 window.upDemoRow = (sid, rk, f, v) => update(ref(db, `demo_drafts/${currentUser.uid}/${sid}/rows/${rk}`), {[f]:v});
@@ -2388,41 +2417,26 @@ window.handleLineChange = () => {
 // Global variables to track editing state
 let currentStationKey = null; // Key of the station_log
 let currentRakeKey = null;    // Key of the rake_log
-// --- STRICT HANDLE STATION CHANGE ---
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
     const formDiv = document.getElementById("mainDataForm");
     
+    // 1. CLEAR PREVIOUS STATE
+    document.getElementById("distanceBody").innerHTML = ""; // Empty the table
+    currentStationKey = null; // Forget previous editing session
+    currentRakeKey = null;
+
     if (!stnSel.value) {
         formDiv.classList.add("hidden");
         return;
     }
 
-    // 1. Show the form and reset UI state
     formDiv.classList.remove("hidden");
-    document.getElementById("formTitle").innerText = `📝 New Inspection: ${stnSel.value}`;
-    document.getElementById("inpStationName").value = `${stnSel.value} (${lineSel.value})`;
+    document.getElementById("formTitle").innerText = `📝 Inspection: ${stnSel.value}`;
     
-    // 2. Unlock all fields for fresh data entry
-    const fields = ["inpStationLength", "inpYellowDist", "inpYellowThick", "inpRemarks", "inpImplementation"];
-    fields.forEach(id => {
-        const el = document.getElementById(id);
-        if(el) {
-            el.value = "";
-            el.disabled = false;
-        }
-    });
-
-    // 3. Clear the UI table for Rakes
-    document.getElementById("distanceBody").innerHTML = "";
-    
-    // 4. Reset Global Keys (Ensures we aren't "editing" an old station)
-    currentStationKey = null;
-    currentRakeKey = null;
-
-    // 5. Load any existing draft for THIS specific station if the user left it mid-way
-    loadDraft();
+    // 2. ONLY LOAD NEW DATA AFTER CLEARING
+    loadDraft(); 
 };
 // --- 1. HANDLE TAB & DROPDOWNS ---
 
@@ -2794,17 +2808,10 @@ window.submitDemoData = async () => {
     const stationId = `${line}_${stn}`.replace(/\s+/g, '_');
     const comments = document.getElementById("demoComments").value;
 
-    // 1. Get the rows from your temporary draft
     const snap = await get(ref(db, `demo_drafts/${currentUser.uid}/${stationId}/rows`));
-    
-    if(!snap.exists()) {
-        return alert("❌ No data to save. Please add at least one SL entry.");
-    }
+    if(!snap.exists()) return alert("❌ No data to save. Please add entries.");
 
-    // 2. Create a unique ID for this specific Demo Report
     const logKey = push(ref(db, "demo_master_logs")).key;
-
-    // 3. Prepare the data packet
     const logData = {
         name: `${stn} (${line})`,
         comments: comments,
@@ -2813,25 +2820,17 @@ window.submitDemoData = async () => {
         timestamp: serverTimestamp()
     };
 
-    // 4. Save to two places at once: The Header Info and the Table Rows
     const updates = {};
-    updates[`demo_master_logs/${logKey}`] = logData;
-    updates[`demo_table_logs/${logKey}`] = snap.val();
+    updates[`demo_master_logs/${logKey}`] = logData; // Master record
+    updates[`demo_table_logs/${logKey}`] = snap.val(); // Detailed measurement table
 
     try {
         await update(ref(db), updates);
-        
-        // 5. Success! Clear the draft so it's fresh for next time
-        await remove(ref(db, `demo_drafts/${currentUser.uid}/${stationId}`));
-        
+        await remove(ref(db, `demo_drafts/${currentUser.uid}/${stationId}`)); // Clear draft
         alert("✅ Demo Result Saved Successfully!");
-        
-        // Reset the UI
-        document.getElementById("demoComments").value = "";
-        document.getElementById("demoFormArea").classList.add("hidden");
-        document.getElementById("demoStationSelect").value = "";
+        switchTab('dataView'); // Redirect to Logs
     } catch (e) {
-        alert("Error saving data: " + e.message);
+        alert("Error saving: " + e.message);
     }
 };
 window.registerNewFace = async () => {
