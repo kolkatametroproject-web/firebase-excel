@@ -1007,17 +1007,16 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
         </div>
     </div>
 </div>
-
 <div id="tab-dataView" class="hidden">
   
   <div class="panel">
     <h3><i class="fas fa-database"></i> Master Log Database</h3>
     
     <div style="background: #e2e8f0; padding: 15px; border-radius: 6px; margin-bottom: 20px;">
-        <label style="font-weight:bold; color:var(--metro-blue); font-size: 11px;">Filter by Location (Optional):</label>
+        <label style="font-weight:bold; color:var(--metro-blue); font-size: 11px;">Filter by Location:</label>
         <div style="display: flex; gap: 10px; margin-top: 5px;">
             <select id="logLineSelect" onchange="handleLogLineChange()" style="flex: 1; border:1px solid #cbd5e1;">
-              <option value="">-- All Lines --</option>
+              <option value="">-- Select Line --</option>
               <option value="Blue Line">Blue Line</option>
               <option value="Green Line">Green Line</option>
               <option value="Purple Line">Purple Line</option>
@@ -1029,10 +1028,6 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
             <select id="logStationSelect" onchange="loadSpecificStationData()" disabled style="flex: 1; background:#f1f5f9;">
               <option value="">-- Select Line First --</option>
             </select>
-            
-            <button onclick="loadStationData()" class="info" style="white-space: nowrap;">
-                <i class="fas fa-list"></i> VIEW ALL RECENT
-            </button>
         </div>
     </div>
   </div>
@@ -1042,7 +1037,7 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
     <div class="panel" style="border-left: 4px solid var(--metro-blue);">
       <div style="display:flex; justify-content:space-between; align-items:center;">
           <h4 id="logTableTitle" style="margin:0; color:var(--metro-blue);">📊 Recent Station Records</h4>
-          <button onclick="loadStationData()" class="secondary" style="font-size:11px; padding: 6px 12px;"><i class="fas fa-sync"></i> Reload</button>
+          <button onclick="loadStationData()" class="secondary" style="font-size:11px; padding: 6px 12px;"><i class="fas fa-sync"></i> Refresh Table</button>
       </div>
       <div class="table-wrapper" style="margin-top:15px;">
         <table>
@@ -1059,7 +1054,7 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
             </tr>
           </thead>
           <tbody id="viewTable1Body">
-            <tr><td colspan="8" style="text-align:center;">Click "VIEW ALL RECENT" or Select a Station...</td></tr>
+            <tr><td colspan="8" style="text-align:center;">⏳ Syncing Database...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1091,7 +1086,6 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
 
   </div>
 </div>
-
 <div id="rakeDataModal" class="modal-overlay hidden">
     <div class="panel" style="width:700px; max-width:95%; max-height:85vh; display:flex; flex-direction:column; padding:0; overflow:hidden; border:none;">
         <div style="display:flex; justify-content:space-between; align-items:center; background:var(--metro-blue); color:white; padding:15px 20px;">
@@ -3687,7 +3681,7 @@ window.assignTaskMulti = () => {
     document.getElementById("taskDesc").value = "";
     checkboxes.forEach(cb => cb.checked = false);
 };
-
+// --- FIXED: INSTANT DATA LOAD ON TAB SWITCH ---
 window.switchTab = (t) => {
     // 1. Hide all tabs
     const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport'];
@@ -3717,11 +3711,18 @@ window.switchTab = (t) => {
     const btn = document.getElementById(btnId);
     if(btn) btn.classList.add("active");
 
-    // 5. Load data specific to the tab
+    // 5. AUTO-LOAD DATA (The Fix)
     if(t === 'adminPanel' && isAdmin) loadAdminPanel();
     if(t === 'gallery') loadGallery();
+    if(t === 'inventory') loadInventory();
+    
+    // CRITICAL FIX: Force load the logs immediately when clicking "Master Logs"
+    if(t === 'dataView') {
+        setTimeout(() => {
+            loadStationData(); 
+        }, 100); // Tiny delay to ensure the HTML div is visible first
+    }
 };
-
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
 function loadGallery() {
@@ -4005,111 +4006,100 @@ function loadAssignments() {
         });
     });
 }
-// --- FIXED SUBMIT FUNCTION (ROBUST) ---
+// --- FIXED: REAL-TIME SERVER TIMESTAMP LOGIC ---
 window.submitStationData = async () => {
-    // 1. VISUAL FEEDBACK
     const submitBtn = document.getElementById("btnFinalSubmit");
-    const originalText = submitBtn.innerText;
-    submitBtn.innerText = "⏳ Uploading...";
+    submitBtn.innerText = "⏳ Syncing with Server...";
     submitBtn.disabled = true;
 
     try {
         const lineSel = document.getElementById("lineSelect");
         const stnSel = document.getElementById("stationSelect");
         
-        // 2. GET INPUT VALUES
+        // 1. Get Inputs
         const inpLen = document.getElementById("inpStationLength").value;
         const inpYl = document.getElementById("inpYellowDist").value;
         const inpTh = document.getElementById("inpYellowThick").value;
         const inpRem = document.getElementById("inpRemarks").value;
         const inpImpl = document.getElementById("inpImplementation").value;
 
-        // 3. VALIDATION
-        // If it's a NEW entry, we strictly need Line, Station, and Status
         if (!currentStationKey && (!lineSel.value || !stnSel.value || !inpImpl)) {
-            throw new Error("Please select Line, Station, and Compliance Status.");
+            throw new Error("Missing critical station details.");
         }
 
-        // 4. FETCH TABLE DATA (DRAFTS)
-        // We fetch directly from DB to ensure we have the latest rows added
+        // 2. Fetch Draft Rows
         const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
         const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
-        const timestamp = new Date().toLocaleString();
+        // 3. GENERATE REAL-TIME STRING (Client Side fallback)
+        // We also send serverTimestamp() for backend verification
+        const now = new Date();
+        const readableDate = now.toLocaleString('en-IN', { 
+            timeZone: 'Asia/Kolkata', 
+            day: '2-digit', month: 'short', year: 'numeric', 
+            hour: '2-digit', minute: '2-digit', hour12: true 
+        });
+
         const updates = {};
 
-        // --- BRANCH A: UPDATING EXISTING RECORD ---
+        // --- BRANCH A: UPDATING (Edit Mode) ---
         if (currentStationKey) {
-            console.log("Mode: UPDATING Existing Record");
+            // CRITICAL FIX: Update the MAIN 'date' field so the table updates immediately
+            updates[`station_logs/${currentStationKey}/date`] = readableDate;
+            updates[`station_logs/${currentStationKey}/timestamp`] = serverTimestamp(); // Official Server Time
             
-            // A1. Update Yellow Line Details (Always update these since we unlocked them)
             updates[`station_logs/${currentStationKey}/len`] = inpLen;
             updates[`station_logs/${currentStationKey}/yl`] = inpYl;
             updates[`station_logs/${currentStationKey}/th`] = inpTh;
             updates[`station_logs/${currentStationKey}/remarks`] = inpRem;
             updates[`station_logs/${currentStationKey}/impl`] = inpImpl;
-            updates[`station_logs/${currentStationKey}/lastModifiedBy`] = currentUser.name;
-            updates[`station_logs/${currentStationKey}/lastModifiedTime`] = timestamp;
+            updates[`station_logs/${currentStationKey}/userName`] = currentUser.name; // Update inspector name if changed
 
-            // A2. Handle Rake Data
+            // Handle Rake Rows
             if (rowsData) {
-                // If we have new rows in the table, we APPEND them to the existing rake log
-                // We use the existing rake key
                 Object.keys(rowsData).forEach(tempKey => {
-                    // Generate a new unique ID for the rake log so it doesn't overwrite
                     const newRowKey = push(ref(db, `rake_logs/${currentRakeKey}`)).key;
                     updates[`rake_logs/${currentRakeKey}/${newRowKey}`] = rowsData[tempKey];
                 });
             }
         } 
-        // --- BRANCH B: CREATING NEW RECORD ---
+        // --- BRANCH B: NEW RECORD ---
         else {
-            console.log("Mode: CREATING New Record");
-            
             const name = `${stnSel.value} (${lineSel.value})`;
             const newKey = push(ref(db, "station_logs")).key;
             
             const stationObj = {
                 name: name, 
-                len: inpLen,
-                yl: inpYl,
-                th: inpTh,
-                remarks: inpRem,
-                impl: inpImpl,
+                len: inpLen, yl: inpYl, th: inpTh,
+                remarks: inpRem, impl: inpImpl,
                 user: currentUser.email, 
                 userName: currentUser.name,
-                date: timestamp,
-                linkedRakeKey: newKey // Link to the rake log we are about to create
+                
+                // CRITICAL: Save both readable string AND server timestamp
+                date: readableDate,
+                timestamp: serverTimestamp(),
+                
+                linkedRakeKey: newKey
             };
 
             updates[`station_logs/${newKey}`] = stationObj;
-            
-            // If table has data, save it
-            if (rowsData) {
-                updates[`rake_logs/${newKey}`] = rowsData;
-            }
+            if (rowsData) updates[`rake_logs/${newKey}`] = rowsData;
         }
 
-        // 5. EXECUTE UPLOAD
+        // 4. PUSH TO DB
         await update(ref(db), updates);
-
-        // 6. CLEANUP
-        await remove(ref(db, `drafts/${currentUser.uid}`)); // Clear draft
+        await remove(ref(db, `drafts/${currentUser.uid}`));
         
-        alert("✅ SUCCESS: Report Uploaded to Server.");
+        alert("✅ TIME-STAMPED & SAVED: " + readableDate);
         
-        // 7. REFRESH UI
-        document.getElementById("distanceBody").innerHTML = ""; // Clear table
-        
-        // Reload the Data View tab so you can see it immediately
+        document.getElementById("distanceBody").innerHTML = ""; 
         switchTab('dataView');
-        loadStationData(); // Trigger the refresh
+        loadStationData(); 
 
     } catch (e) {
         console.error(e);
-        alert("❌ UPLOAD FAILED: " + e.message);
+        alert("❌ DATA ERROR: " + e.message);
     } finally {
-        // Reset button
         submitBtn.innerText = "SUBMIT FINAL REPORT";
         submitBtn.disabled = false;
     }
