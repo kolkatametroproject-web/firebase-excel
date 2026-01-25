@@ -1395,19 +1395,18 @@ window.openBarcodeScanner = (mode) => {
     }
 }
 // ==========================================
-// 1. ADMIN PANEL REFRESH FIX
+// 1. ADMIN PANEL (With Unban Logic)
 // ==========================================
-let adminListener = null; // Global variable to track listener
+let adminListener = null;
 
 window.loadAdminPanel = () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
-    const btn = document.getElementById("btnAdminRefresh"); // Ensure your HTML button has this ID or pass 'this'
 
     // 1. Visual Feedback
     if(userTable) userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Refreshing Data Stream...</td></tr>";
 
-    // 2. Detach Previous Listener (Fixes the "Not Working" / Stacking issue)
+    // 2. Detach Previous Listener
     if (adminListener) {
         off(ref(db, "users"), adminListener);
         adminListener = null;
@@ -1438,18 +1437,31 @@ window.loadAdminPanel = () => {
 
             // Status Logic
             const s = statusMap[uid];
-            // Online if last_seen is within 20 seconds
             const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
             const statusBadge = isOnline ? 
                 `<span class="badge-online" style="background:#dcfce7; color:#166534; padding:4px 10px; border-radius:12px; font-weight:800; font-size:10px;">● ONLINE</span>` : 
                 `<span class="badge-offline" style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:12px; font-weight:800; font-size:10px;">○ OFFLINE</span>`;
 
+            // --- BAN BUTTON LOGIC ---
+            let banButtonHtml = "";
+            if (u.banned) {
+                // User is BANNED -> Show UNBAN Button
+                banButtonHtml = `<button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px; margin-top:2px; background:#15803d; border-color:#15803d;">✅ Unban</button>`;
+            } else {
+                // User is ACTIVE -> Show BAN Button
+                banButtonHtml = `<button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">🚫 Ban</button>`;
+            }
+
             // Render Row
             const row = document.createElement("tr");
+            // Highlight row red if banned
+            if(u.banned) row.style.background = "#fff1f2"; 
+
             row.innerHTML = `
                 <td>
                     <strong>${displayName}</strong><br>
                     <small>${u.email}</small>
+                    ${u.banned ? '<br><small style="color:red; font-weight:bold;">(SUSPENDED)</small>' : ''}
                 </td>
                 <td style="text-align:center;">${statusBadge}</td>
                 <td style="text-align:center;" id="task_stat_${uid}">
@@ -1458,7 +1470,7 @@ window.loadAdminPanel = () => {
                 <td style="text-align:center;">${u.faceData ? '<span style="color:green;">✔ Reg</span>' : '<span style="color:red;">❌ No</span>'}</td>
                 <td>
                     <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px;">📋 Tasks</button>
-                    <button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">🚫 Ban</button>
+                    ${banButtonHtml}
                     <button class="warning" onclick="resetUserName('${uid}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">Reset</button>
                 </td>
             `;
@@ -1467,16 +1479,17 @@ window.loadAdminPanel = () => {
             // Load Task Stats
             get(ref(db, `assignments/${uid}`)).then(taskSnap => {
                 const target = document.getElementById(`task_stat_${uid}`);
-                if(target) {
+                if(target && taskSnap.exists()) {
                     let pending = 0, done = 0;
                     taskSnap.forEach(t => t.val().status === 'Done' ? done++ : pending++);
                     target.innerHTML = `<b style="color:green;">${done}</b> / <b style="color:#b38600;">${pending}</b>`;
+                } else if (target) {
+                    target.innerHTML = `<span style="color:#999;">-</span>`;
                 }
             });
         });
     });
 };
-
 // ==========================================
 // 2. REAL-TIME MASTER LOG STORAGE (NO DRAFTS)
 // ==========================================
@@ -4054,7 +4067,43 @@ window.submitBan = async () => {
         }
     }
 };
+window.unbanUser = async (uid, encodedName) => {
+    if(!isAdmin) return alert("Admins Only.");
+    
+    const name = decodeURIComponent(encodedName);
+    
+    if(confirm(`⚠ LIFT SUSPENSION?\n\nUser: ${name}\n\nAre you sure you want to restore access for this user?`)) {
+        try {
+            // 1. Remove Ban Flags from User Profile
+            await update(ref(db, `users/${uid}`), {
+                banned: null,
+                banReason: null,
+                banAction: null,
+                banExpires: null,
+                banRemarks: null,
+                banDate: null,
+                bannedBy: null
+            });
 
+            // 2. Log Action
+            await push(ref(db, "logs"), {
+                type: "USER_UNBAN",
+                user: "System",
+                details: `Unbanned UID: ${uid}`,
+                approvedBy: currentUser.email,
+                time: serverTimestamp()
+            });
+
+            alert(`✅ Access Restored for ${name}.`);
+            
+            // The listener in loadAdminPanel will automatically refresh the UI
+            
+        } catch(e) {
+            console.error(e);
+            alert("Database Error: " + e.message);
+        }
+    }
+};
 window.assignTaskMulti = () => {
     const desc = document.getElementById("taskDesc").value;
     if(!desc) return alert("Please enter task details.");
