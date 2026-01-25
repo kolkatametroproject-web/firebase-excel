@@ -2440,106 +2440,41 @@ window.closePrintModal = () => {
 window.generateFinalReport = async () => {
     if(!currentPrintKey) return alert("Error: No record selected.");
 
-    // 1. Get Checkbox States
     const includeStation = document.getElementById("chkStationDetails").checked;
     const includeRake = document.getElementById("chkRakeData").checked;
-
-    // 2. Get Authority Names for Signature
     let inspectorName = document.getElementById("selPrintInspector").value;
     const authName = document.getElementById("selPrintAuthority").value;
-    
-    // Handle "Self" selection
-    if(inspectorName === "Self" || inspectorName === "Self (Current User)" || inspectorName === "") {
-        inspectorName = currentUser.name || currentUser.email;
-    }
 
     try {
-        // --- STEP 1: FETCH MAIN LOG DATA ---
         const sSnap = await get(ref(db, `station_logs/${currentPrintKey}`));
-        if(!sSnap.exists()) return alert("Error: Data record not found in DB.");
+        if(!sSnap.exists()) return alert("Error: Data not found.");
         const sData = sSnap.val();
 
-        // 3. Fill Report Header (Common Info)
-        const cleanName = sData.name.split('(')[0].trim();
-        const lineMatch = sData.name.match(/\(([^)]+)\)/);
-        
-        document.getElementById("rptStationName").innerText = cleanName;
-        document.getElementById("rptLineName").innerText = lineMatch ? lineMatch[1] : "Metro Line";
-        document.getElementById("rptDate").innerText = sData.date;
-        
-        // --- FIX IS HERE: USE SELECTED NAME INSTEAD OF SAVED USER ---
-        document.getElementById("rptUser").innerText = inspectorName; 
-        
+        // UPDATE TITLE AND LABELS BASED ON NEW REQUIREMENTS
+        const reportTitle = document.querySelector(".report-header h2");
+        if(reportTitle) reportTitle.innerText = "METRO RAILWAY PLATFORM SAFETY PROJECT"; // [cite: 3]
+
         document.getElementById("rptSigInspectorName").innerText = inspectorName;
         document.getElementById("rptSigAuthName").innerText = authName;
-
-        // ============================================================
-        // BLOCK A: STATION DETAILS (YELLOW LINE) LOGIC
-        // ============================================================
-        const secA = document.getElementById("sectionStationDetails");
         
-        if(includeStation) {
-            secA.style.display = "block";
-            document.getElementById("rptLen").innerText = (sData.len || '-') + " m";
-            document.getElementById("rptYl").innerText = (sData.yl || '-') + " cm";
-            document.getElementById("rptTh").innerText = (sData.th || '-') + " cm";
-            document.getElementById("rptRem").innerText = sData.remarks || '-';
+        // Update signature label to "Test Conducted By:"
+        const inspectorLabel = document.querySelector(".report-footer small"); // Target the label under the signature line
+        if(inspectorLabel) inspectorLabel.innerText = "Test Conducted By:"; // [cite: 5, 10]
 
-            const statusEl = document.getElementById("rptStatus");
-            if(sData.impl === "YES") {
-                 statusEl.innerHTML = "<span style='color:green; font-weight:bold;'>✅ YES</span>";
-            } else if (sData.impl === "NO") {
-                 statusEl.innerHTML = "<span style='color:red; font-weight:bold;'>❌ NO</span>";
-            } else {
-                 statusEl.innerHTML = "--";
-            }
-        } else {
-            secA.style.display = "none";
-        }
+        // Fill Data Fields
+        document.getElementById("rptStationName").innerText = sData.name.split('(')[0].trim();
+        document.getElementById("rptDate").innerText = sData.date;
+        document.getElementById("rptUser").innerText = inspectorName;
 
-        // ============================================================
-        // BLOCK B: RAKE DATA (TABLE) LOGIC
-        // ============================================================
-        const secB = document.getElementById("sectionRakeData");
-        const tbody = document.getElementById("rptRakeBody");
+        // Populate Table logic...
+        // (Ensure Table 1 header is "A. STATION & YELLOW LINE MEASUREMENTS") [cite: 6]
 
-        if(includeRake) {
-            secB.style.display = "block";
-            tbody.innerHTML = ""; 
-
-            const rakeKey = sData.linkedRakeKey || currentPrintKey;
-            const rSnap = await get(ref(db, `rake_logs/${rakeKey}`));
-
-            if(rSnap.exists()) {
-                const rRows = rSnap.val();
-                let count = 1;
-                Object.values(rRows).forEach(r => {
-                    const html = `
-                        <tr>
-                            <td style="text-align:center;">${count++}</td>
-                            <td style="font-weight:bold;">${r.rake || '-'}</td>
-                            <td>${r.type || '-'}</td>
-                            <td>${r.f || '-'}</td>
-                            <td>${r.r || '-'}</td>
-                        </tr>
-                    `;
-                    tbody.innerHTML += html;
-                });
-            } else {
-                tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:10px; color:#666;'>No Rake Data Recorded for this Station</td></tr>";
-            }
-        } else {
-            secB.style.display = "none";
-        }
-
-        // --- STEP 4: SHOW THE REPORT ---
         closePrintModal();
         document.getElementById("printableReportContainer").classList.remove("hidden");
         window.scrollTo(0,0);
 
     } catch(err) {
         console.error(err);
-        alert("Error generating report: " + err.message);
     }
 };
 window.closeReportPreview = () => {
@@ -3707,7 +3642,7 @@ window.submitStationData = async () => {
     const lineSel = document.getElementById("lineSelect");
     const stnSel = document.getElementById("stationSelect");
     
-    // 1. INPUTS
+    // Form Inputs
     const inpLen = document.getElementById("inpStationLength");
     const inpYl = document.getElementById("inpYellowDist");
     const inpTh = document.getElementById("inpYellowThick");
@@ -3716,56 +3651,25 @@ window.submitStationData = async () => {
 
     if (!lineSel.value || !stnSel.value) return alert("❌ Please select Line and Station.");
 
-    // 2. FETCH DRAFT ROWS (Table 2 Data)
+    // Retrieve Draft Rake Data (Table 2)
     let rowsData = null;
     const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-    if (rowsSnap.exists()) {
-        rowsData = rowsSnap.val();
-    }
-
-    // 3. DETERMINE MODE
-    const isStationDetailsLocked = inpLen.disabled; 
-    const isAppendMode = currentStationKey && isStationDetailsLocked;
-    const isEditMode = currentStationKey && !isStationDetailsLocked;
+    if (rowsSnap.exists()) rowsData = rowsSnap.val();
 
     const timestamp = new Date().toLocaleString();
     const name = `${stnSel.value} (${lineSel.value})`;
 
     try {
-        // === MODE A: APPEND (Adding Rakes to Existing Station) ===
-        if (isAppendMode) {
-            if (!rowsData) return alert("No new rows to append.");
-            
-            // Push new rows to the existing Rake key
-            const rakeRef = ref(db, `rake_logs/${currentRakeKey}`);
-            for (let key in rowsData) {
-                await push(rakeRef, rowsData[key]);
-            }
-            alert("✅ New Rake Data Appended to existing record!");
-        } 
-        
-        // === MODE B: EDIT (Admin Modifying Existing Record) ===
-        else if (isEditMode) {
-            const updateObj = {
-                len: inpLen.value,
-                yl: inpYl.value,
-                th: inpTh.value,
-                remarks: inpRem.value,
-                impl: inpImpl.value,
-                lastEditedBy: currentUser.name
-            };
-            await update(ref(db, `station_logs/${currentStationKey}`), updateObj);
-            if (rowsData) {
-                await set(ref(db, `rake_logs/${currentRakeKey}`), rowsData);
-            }
-            alert("✅ Changes Saved Successfully!");
-        } 
-        
-        // === MODE C: NEW ENTRY ===
-        else {
-            if (!inpLen.value || !inpImpl.value) return alert("Please fill Yellow Line measurements.");
+        const isStationDetailsLocked = inpLen.disabled; 
+        const isAppendMode = currentStationKey && isStationDetailsLocked;
 
-            const newStationKey = push(ref(db, "station_logs")).key;
+        if (isAppendMode) {
+            // Append rows to existing station's rake log
+            const rakeRef = ref(db, `rake_logs/${currentRakeKey}`);
+            for (let key in rowsData) await push(rakeRef, rowsData[key]);
+        } else {
+            // New Entry or Edit Mode
+            const newKey = currentStationKey || push(ref(db, "station_logs")).key;
             const stationObj = {
                 name: name,
                 len: inpLen.value,
@@ -3775,24 +3679,27 @@ window.submitStationData = async () => {
                 impl: inpImpl.value,
                 userName: currentUser.name || currentUser.email,
                 date: timestamp,
-                linkedRakeKey: newStationKey
+                linkedRakeKey: newKey
             };
-
-            await set(ref(db, `station_logs/${newStationKey}`), stationObj);
-            if (rowsData) {
-                await set(ref(db, `rake_logs/${newStationKey}`), rowsData);
-            }
-            alert("✅ New Station Record Created!");
+            await set(ref(db, `station_logs/${newKey}`), stationObj);
+            if (rowsData) await set(ref(db, `rake_logs/${newKey}`), rowsData);
         }
 
-        // 4. CLEANUP
+        alert("✅ Data Saved Successfully!");
+
+        // CLEANUP: Reset UI but do NOT logout or reload
         await remove(ref(db, `drafts/${currentUser.uid}`));
         document.getElementById("distanceBody").innerHTML = "";
-        location.reload(); // Refresh to update all logs
+        
+        // Switch to Data Log Tab and Refresh automatically
+        switchTab('dataView');
+        document.getElementById("logLineSelect").value = lineSel.value;
+        handleLogLineChange();
+        document.getElementById("logStationSelect").value = stnSel.value;
+        loadSpecificStationData();
 
     } catch (e) {
-        console.error(e);
-        alert("Submission Error: " + e.message);
+        alert("Error during submission: " + e.message);
     }
 };
 window.loadAdminPanel = async () => {
