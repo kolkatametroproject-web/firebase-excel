@@ -2926,17 +2926,18 @@ let currentRakeKey = null;
 let draftRef = null;
 let draftListener = null;
 
-// --- 1. THE NUCLEAR RESET (Ensures Strict Isolation) ---
+// --- 1. NUCLEAR RESET (Strict Isolation) ---
 async function nuclearReset() {
     console.log("☢️ NUCLEAR RESET: Clearing previous station data...");
 
-    // A. Kill the Listener (Stop receiving updates from the old station)
-    if (draftRef) { off(draftRef); }
-    if (draftListener) { off(draftRef, draftListener); }
-    draftRef = null;
-    draftListener = null;
-
-    // B. Wipe Global IDs
+    // A. Stop the Draft Listener (Prevents memory leaks and double-updates)
+    if (draftRef) { 
+        off(draftRef); // Turn off Firebase listener
+        draftRef = null;
+    }
+    
+    // B. Wipe Global ID Variables
+    // This is CRITICAL. If these aren't null, the system thinks we are "editing" old data.
     currentStationKey = null;
     currentRakeKey = null;
 
@@ -2946,20 +2947,32 @@ async function nuclearReset() {
         const el = document.getElementById(id);
         if(el) { 
             el.value = ""; 
-            el.disabled = false; 
+            el.disabled = false; // Ensure they are unlocked
         }
     });
     
-    // D. Wipe Rake Table UI
-    document.getElementById("distanceBody").innerHTML = "";
-    document.getElementById("dataExistsWarning").classList.add("hidden");
+    // D. Wipe Rake Table UI immediately
+    const tbody = document.getElementById("distanceBody");
+    if(tbody) tbody.innerHTML = "";
     
-    // E. Wipe Database Draft Node
+    // E. Hide Warnings/Titles
+    document.getElementById("dataExistsWarning").classList.add("hidden");
+    document.getElementById("formTitle").innerText = "📝 New Entry";
+    
+    // F. Reset Submit Button
+    const btn = document.getElementById("btnFinalSubmit");
+    if(btn) {
+        btn.innerText = "✔ Submit to Master Database";
+        btn.style.background = "#0A2342"; // Default Navy
+        btn.disabled = false;
+    }
+
+    // G. Wipe Database Draft Node
+    // This removes temporary data from the server so it doesn't reappear
     if(currentUser) {
         await set(ref(db, `drafts/${currentUser.uid}`), null);
     }
 }
-
 // --- 2. STATION CHANGE HANDLER (Strict Loader) ---
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
@@ -2967,7 +2980,9 @@ window.handleStationChange = async () => {
     const formDiv = document.getElementById("mainDataForm");
     const submitBtn = document.getElementById("btnFinalSubmit");
 
-    // A. FORCE RESET: Stop Station A data from leaking into Station B
+    // === STEP 1: FORCE RESET ===
+    // We strictly wait for this to finish. 
+    // This guarantees Station A is GONE before Station B loads.
     await nuclearReset(); 
 
     if (!stnSel.value) {
@@ -2975,20 +2990,23 @@ window.handleStationChange = async () => {
         return;
     }
 
-    // B. SETUP NEW CONTEXT
+    // === STEP 2: SETUP NEW CONTEXT ===
     formDiv.classList.remove("hidden");
     const fullStationName = `${stnSel.value} (${lineSel.value})`;
     
+    // Set Identifier for the UI
     document.getElementById("inpStationName").value = fullStationName;
     document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
 
-    // C. CHECK MASTER DATABASE
+    // === STEP 3: CHECK MASTER DATABASE ===
+    // Does a record already exist for this station?
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
-        // --- EXISTING RECORD FOUND (Edit Mode) ---
+        // --- SCENARIO A: EXISTING RECORD (Edit Mode) ---
         let data = null;
+        // Get the specific key for THIS station
         snap.forEach(c => { data = c.val(); currentStationKey = c.key; });
         
         // Fill Inputs
@@ -3000,8 +3018,8 @@ window.handleStationChange = async () => {
 
         // UI Feedback
         document.getElementById("dataExistsWarning").classList.remove("hidden");
-        document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying Master Record.";
-        submitBtn.innerText = "💾 Save Changes to Master DB";
+        document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying Existing Master Record.";
+        submitBtn.innerText = "💾 Update Master Record";
         submitBtn.style.background = "#d97706"; // Orange
 
         // Load Linked Rake Rows into Drafts
@@ -3012,13 +3030,16 @@ window.handleStationChange = async () => {
         }
 
     } else {
-        // --- NEW RECORD ---
-        submitBtn.innerText = "✔ Submit to Master Database";
+        // --- SCENARIO B: NEW RECORD (Create Mode) ---
+        // currentStationKey remains NULL. 
+        // This tells the system to create a NEW separate entry.
+        submitBtn.innerText = "✔ Submit New Log";
         submitBtn.style.background = "#0A2342"; // Navy
     }
 
-    // D. START LISTENER
-    loadDraftTable(); 
+    // === STEP 4: START LISTENER ===
+    // Now safe to start listening for changes on this specific station context
+    loadDraft(); 
 };
 // --- 3. DRAFT TABLE LOADER (Corrected Name) ---
 window.loadDraft = () => {
@@ -3071,7 +3092,7 @@ window.loadDraft = () => {
         });
     });
 };
-// --- 4. SUBMIT FUNCTION (Saves to Master DB) ---
+// --- 3. SUBMIT FUNCTION (Saves Station-Wise to Master DB) ---
 window.submitStationData = async () => {
     const btn = document.getElementById("btnFinalSubmit");
     btn.innerText = "⏳ Saving...";
@@ -3081,6 +3102,7 @@ window.submitStationData = async () => {
         const lineSel = document.getElementById("lineSelect");
         const stnSel = document.getElementById("stationSelect");
         
+        // Validation
         if (!lineSel.value || !stnSel.value) throw new Error("No station selected.");
 
         const fullStationName = `${stnSel.value} (${lineSel.value})`;
@@ -3099,7 +3121,7 @@ window.submitStationData = async () => {
             timestamp: serverTimestamp()
         };
 
-        // 2. Fetch Draft Rows
+        // 2. Fetch Draft Rows (Rake Data)
         const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
         const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
@@ -3107,38 +3129,44 @@ window.submitStationData = async () => {
         let targetKey = currentStationKey;
         let targetRakeKey = currentRakeKey;
 
-        // 3. Prepare Updates
+        // 3. LOGIC: Update vs Create
         if (targetKey) {
-            // Update
+            // --- UPDATING: Use the EXISTING keys (Don't create new ones) ---
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         } else {
-            // Create
+            // --- CREATING: Generate NEW UNIQUE keys ---
             targetKey = push(ref(db, "station_logs")).key;
             targetRakeKey = targetKey; 
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         }
 
-        // 4. Overwrite Rake Data
+        // 4. Update Rake Logs
         updates[`rake_logs/${targetRakeKey}`] = rowsData || null;
 
-        // 5. Execute
+        // 5. Execute DB Update
         await update(ref(db), updates);
+
+        // 6. Cleanup
         await remove(ref(db, `drafts/${currentUser.uid}`));
         
-        alert(`✅ SUCCESS: Saved ${stnSel.value} to Master DB.`);
+        alert(`✅ SUCCESS: Data for ${stnSel.value} saved separately.`);
         
-        // 6. Reset UI
+        // 7. Reset to prevent double submission
         await nuclearReset();
         document.getElementById("mainDataForm").classList.add("hidden");
         document.getElementById("stationSelect").value = "";
+        
+        // Optional: Switch to view tab to see the result
         switchTab('dataView');
 
     } catch(e) {
         console.error(e);
         alert("❌ ERROR: " + e.message);
     } finally {
-        btn.innerText = "✔ Submit to Master Database";
-        btn.disabled = false;
+        if(btn) {
+            btn.innerText = "✔ Submit to Master Database";
+            btn.disabled = false;
+        }
     }
 };
 window.viewRakeRows = (rowsEncoded, stationName) => {
