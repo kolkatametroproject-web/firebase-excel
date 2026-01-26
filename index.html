@@ -2485,40 +2485,33 @@ window.handlePrintLineChange = () => {
         stnSel.disabled = false;
     }
 };
-// --- DELETE STATION LOG (AND LINKED RAKE DATA) ---
 window.deleteStationLog = async (key) => {
-    // 1. Security Confirmation
-    if(!confirm("⚠️ PERMANENTLY DELETE this record?\n\nThis will remove the station entry AND its associated rake data.")) return;
+    if(!confirm("⚠️ PERMANENTLY DELETE this record?\n\nThis cannot be undone.")) return;
+
+    const btn = document.activeElement; // The delete button you clicked
+    if(btn) btn.innerText = "⏳";
 
     try {
-        // 2. Fetch the log first to find the linked Rake Key
-        const logRef = ref(db, `station_logs/${key}`);
-        const snap = await get(logRef);
-
+        // 1. GET DATA TO FIND LINKS
+        const snap = await get(ref(db, `station_logs/${key}`));
+        let rakeKey = key; 
         if(snap.exists()) {
-            const data = snap.val();
-            // Fallback: if linkedRakeKey is missing, assume it uses the same key
-            const rakeKey = data.linkedRakeKey || key; 
-
-            // 3. Delete the Rake Data
-            await remove(ref(db, `rake_logs/${rakeKey}`));
+             rakeKey = snap.val().linkedRakeKey || key;
         }
 
-        // 4. Delete the Station Log
-        await remove(logRef);
+        // 2. DELETE BOTH (Atomic removal)
+        await remove(ref(db, `station_logs/${key}`));
+        await remove(ref(db, `rake_logs/${rakeKey}`));
 
-        alert("✅ Record Deleted Successfully.");
-
-        // 5. Refresh the Table
-        // (If you are on the 'dataView' tab, this forces a reload)
-        const panel = document.getElementById("logResultsPanel");
-        if(panel && !panel.classList.contains("hidden")) {
-            loadStationData(); 
-        }
+        // 3. REFRESH THE VIEW INSTANTLY
+        // This proves to you immediately that the specific row is gone
+        await loadSpecificStationData(); 
+        
+        alert("✅ Record Removed.");
 
     } catch(e) {
-        console.error(e);
-        alert("❌ Error deleting record: " + e.message);
+        alert("❌ Error deleting: " + e.message);
+        if(btn) btn.innerText = "🗑";
     }
 };
 // --- 2. FETCH LOGS FOR STATION ---
@@ -3664,55 +3657,47 @@ window.handleLogLineChange = () => {
         stnSel.style.background = "#fff";
     }
 };
-// UPDATED: Load Specific Station Data (Master Log)
 window.loadSpecificStationData = async () => {
     const stnSel = document.getElementById("logStationSelect");
     const lineSel = document.getElementById("logLineSelect");
     const resultsDiv = document.getElementById("logResultsPanel");
     
-    // Use the correct ID based on your HTML structure
-    const body1 = document.getElementById("viewTable1Body") || document.getElementById("stationDataViewBody");
+    // 1. IDENTIFY THE TABLE BODY CORRECTLY
+    const tbody = document.getElementById("viewTable1Body") || document.getElementById("stationDataViewBody");
+    if (!tbody) return console.error("Table Body missing!");
 
-    // 1. STOP OLD LISTENER
-    if (logViewListener) {
-        off(ref(db), logViewListener); // Broad detach or specific if you stored the query ref
-        logViewListener = null;
-    }
-
-    // 2. WIPE UI
-    body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Switching Data Streams...</td></tr>";
-
-    if (!stnSel.value || !lineSel.value) return;
-    const searchName = stnSel.value.trim(); 
+    // 2. CLEAR UI & SHOW LOADING
+    tbody.innerHTML = "<tr><td colspan='8' style='text-align:center;'>🔍 Searching Database...</td></tr>";
     resultsDiv.classList.remove("hidden");
 
-    // 3. START NEW SEARCH
-    // Note: 'get' is a one-time fetch, so bleeding is less likely here than 'onValue', 
-    // but clearing innerHTML above is the key fix.
-    const q1 = query(ref(db, "station_logs"));
+    if (!stnSel.value || !lineSel.value) return;
+    
+    // 3. STRICT SEARCH PARAMETER
+    const searchName = `${stnSel.value} (${lineSel.value})`; 
+
+    // 4. PRECISE DATABASE QUERY
+    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(searchName));
     
     try {
-        const snap1 = await get(q1);
-        body1.innerHTML = "";
+        const snap = await get(q);
+        tbody.innerHTML = ""; // Wipe "Loading..." message
         
-        if (!snap1.exists()) {
-            body1.innerHTML = "<tr><td colspan='8' style='text-align:center;'>No records found.</td></tr>";
+        if (!snap.exists()) {
+            tbody.innerHTML = `<tr><td colspan='8' style='text-align:center; color:red; font-weight:bold;'>❌ No records found for ${stnSel.value}</td></tr>`;
             return;
         }
 
+        // 5. RENDER ONLY MATCHING RECORDS
         const logs = [];
-        snap1.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        const matches = logs.filter(log => log.name && log.name.includes(searchName)).reverse();
+        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
+        
+        // Sort by Newest First
+        logs.sort((a, b) => b.timestamp - a.timestamp);
 
-        if (matches.length === 0) {
-            body1.innerHTML = `<tr><td colspan='8' style='text-align:center; color:red;'>No data found for ${searchName}.</td></tr>`;
-            return;
-        }
-
-        matches.forEach(d => {
-             // (Your existing render logic...)
-             // Just ensuring the loop runs on CLEAN HTML
+        logs.forEach(d => {
              let buttonsHtml = `<button onclick="openRakeModal('${d.key}')" class="info" style="padding:2px 6px; font-size:11px; margin-right:4px;">📄 View Table</button>`;
+             
+             // Admin & Owner Controls
              if (isAdmin || d.user === currentUser.email) {
                 buttonsHtml += `<button class="warning" onclick="editStationLog('${d.key}')" style="padding:2px 6px; font-size:11px; margin-right:4px;">✏️ Edit</button>`;
              }
@@ -3733,11 +3718,12 @@ window.loadSpecificStationData = async () => {
                 <td style="font-style:italic; font-size:12px;">${d.remarks || '--'}</td>
                 <td style="white-space:nowrap;">${buttonsHtml}</td>
             </tr>`;
-            body1.innerHTML += row;
+            tbody.innerHTML += row;
         });
 
     } catch (e) {
-        body1.innerHTML = `<tr><td colspan='8' style='color:red;'>Error: ${e.message}</td></tr>`;
+        console.error(e);
+        tbody.innerHTML = `<tr><td colspan='8' style='color:red;'>Connection Error: ${e.message}</td></tr>`;
     }
 };
 // 2. NEW: Function to open the Rake Data in a POPUP MODAL
