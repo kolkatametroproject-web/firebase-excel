@@ -2877,41 +2877,92 @@ window.selectBanDuration = (days, btn) => {
 };
 // --- NEW HEARTBEAT SYSTEM ---
 function startPresenceSystem(user) {
-    const userStatusRef = ref(db, `status/${user.uid}`);
-    set(userStatusRef, { state: 'online', last_changed: serverTimestamp(), email: user.email, name: user.displayName || "User" });
-    onDisconnect(userStatusRef).set({ state: 'offline', last_changed: serverTimestamp(), email: user.email });
-    setInterval(() => { if(currentUser) update(userStatusRef, { last_seen: serverTimestamp() }); }, 5000);
-}
+    if (!user) return; // Safety check
 
+    const userStatusRef = ref(db, `status/${user.uid}`);
+    const connectedRef = ref(db, ".info/connected");
+
+    onValue(connectedRef, (snap) => {
+        if (snap.val() === true) {
+            // If internet disconnects, server auto-sets 'offline'
+            onDisconnect(userStatusRef).set({
+                state: 'offline',
+                last_changed: serverTimestamp(),
+                email: user.email,
+                name: user.name
+            }).then(() => {
+                // We are connected AND logged in -> Set 'online'
+                set(userStatusRef, {
+                    state: 'online',
+                    last_changed: serverTimestamp(),
+                    email: user.email,
+                    name: user.name || "User"
+                });
+            });
+        }
+    });
+}
 function updateRegDots(count) {
     document.getElementById("dot1").className = count >= 1 ? "dot active" : "dot";
     document.getElementById("dot2").className = count >= 2 ? "dot active" : "dot";
     document.getElementById("dot3").className = count >= 3 ? "dot active" : "dot";
 }
+  // ==========================================
+// 6. STRICT SESSION TIMEOUT (Auto-Offline)
+// ==========================================
 
 function setupIdleTimer() {
-    // Detect mouse, clicks, touches (mobile), and keyboard
+    // Detect any activity to keep session alive
     window.onmousemove = resetTimer;
-    window.onmousedown = resetTimer; 
+    window.onmousedown = resetTimer;
     window.onclick = resetTimer;
     window.onkeypress = resetTimer;
-    window.ontouchstart = resetTimer; // Mobile touch
-    window.addEventListener('scroll', resetTimer, true); // Scrolling
+    window.ontouchstart = resetTimer; 
+    window.addEventListener('scroll', resetTimer, true); 
     
-    resetTimer(); // Start the first count
-}
-function resetTimer() {
-    clearTimeout(idleTimer);
-    if(currentUser) {
-        idleTimer = setTimeout(() => {
-            const logData = { user: currentUser.email, type: "LOGOUT", method: "Auto-Timeout", time: serverTimestamp() };
-            push(ref(db, "logs"), logData);
-            signOut(auth);
-            alert("Session Timeout.");
-        }, 3 * 60 * 1000);
-    }
+    resetTimer(); // Start the countdown
 }
 
+function resetTimer() {
+    clearTimeout(idleTimer);
+    
+    // Only run if a user is actually logged in
+    if(currentUser) {
+        // Set Timeout for 10 Minutes (or your preferred time)
+        idleTimer = setTimeout(async () => {
+            console.log("Session Timed Out. Marking Offline...");
+
+            // 1. FORCE DATABASE STATUS TO OFFLINE
+            try {
+                await update(ref(db, `status/${currentUser.uid}`), {
+                    state: 'offline',
+                    last_changed: serverTimestamp(),
+                    email: currentUser.email
+                });
+            } catch(e) {
+                console.error("Status Update Failed", e);
+            }
+
+            // 2. LOG THE EVENT
+            try {
+                await push(ref(db, "logs"), { 
+                    user: currentUser.email, 
+                    type: "LOGOUT", 
+                    method: "Auto-Timeout (Inactivity)", 
+                    time: serverTimestamp() 
+                });
+            } catch(e) {}
+
+            // 3. KILL THE SESSION
+            await signOut(auth);
+            
+            // 4. NOTIFY USER
+            alert("Session Expired due to inactivity. You have been marked Offline.");
+            window.location.reload(); // Force refresh to clear old state
+
+        }, 10 * 60 * 1000); // 10 Minutes (Adjust as needed)
+    }
+}
 window.saveOfficialName = async () => {
     const nameInput = document.getElementById("officialNameInput");
     const name = nameInput.value.trim();
@@ -2958,13 +3009,35 @@ function showLogin() {
     stopCamera();
 }
 window.logout = async () => {
-    if(currentUser) {
-        const logData = { user: currentUser.email, type: "LOGOUT", method: "Manual Click", time: serverTimestamp() };
-        await push(ref(db, "logs"), logData);
-        signOut(auth);
+    if(!currentUser) return;
+
+    // Visual feedback
+    const btn = document.activeElement; 
+    if(btn) btn.innerText = "🔌 Going Offline...";
+
+    try {
+        // 1. FORCE DATABASE STATUS TO OFFLINE
+        await update(ref(db, `status/${currentUser.uid}`), {
+            state: 'offline',
+            last_changed: serverTimestamp()
+        });
+
+        // 2. LOG THE EVENT
+        await push(ref(db, "logs"), { 
+            user: currentUser.email, 
+            type: "LOGOUT", 
+            method: "Manual Button Click", 
+            time: serverTimestamp() 
+        });
+
+        // 3. KILL SESSION
+        await signOut(auth);
+
+    } catch (e) {
+        console.error("Logout Error", e);
+        signOut(auth); // Force signout anyway
     }
 };
-
 async function recordLogin(method) {
     if(currentUser) {
         const logData = { user: currentUser.email, type: "LOGIN", method: method, time: serverTimestamp() };
