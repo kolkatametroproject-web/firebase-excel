@@ -1401,76 +1401,7 @@ function resetInputForm() {
     document.getElementById("btnFinalSubmit").innerText = "Loading...";
     document.getElementById("btnFinalSubmit").disabled = true;
 }
-window.handleStationChange = async () => {
-    const stnSel = document.getElementById("stationSelect");
-    const lineSel = document.getElementById("lineSelect");
-    const formDiv = document.getElementById("mainDataForm");
-    const warningBox = document.getElementById("dataExistsWarning");
-    const submitBtn = document.getElementById("btnFinalSubmit");
-    const saveBtn = document.getElementById("btnSaveDraft");
 
-    // 1. PERFORM HARD RESET FIRST
-    // This prevents Station A data from appearing in Station B
-    await hardResetForm();
-
-    if (!stnSel.value) {
-        formDiv.classList.add("hidden");
-        return;
-    }
-
-    formDiv.classList.remove("hidden");
-    const fullStationName = `${stnSel.value} (${lineSel.value})`;
-    document.getElementById("inpStationName").value = fullStationName;
-    document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
-
-    // 2. CHECK DATABASE FOR *THIS SPECIFIC* STATION
-    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
-    const snap = await get(q);
-
-    if (snap.exists()) {
-        // --- EXISTING DATA FOUND ---
-        let existingData = null;
-        snap.forEach(c => { 
-            existingData = c.val(); 
-            currentStationKey = c.key; 
-        });
-        currentRakeKey = existingData.linkedRakeKey || currentStationKey;
-
-        // Populate Form with FETCHED data
-        document.getElementById("inpStationLength").value = existingData.len || "";
-        document.getElementById("inpYellowDist").value = existingData.yl || "";
-        document.getElementById("inpYellowThick").value = existingData.th || "";
-        document.getElementById("inpRemarks").value = existingData.remarks || "";
-        document.getElementById("inpImplementation").value = existingData.impl || "";
-
-        // UI Updates
-        warningBox.classList.remove("hidden");
-        warningBox.innerHTML = `<strong>⚠️ Existing Record:</strong> Data loaded. You are editing.`;
-        submitBtn.innerText = "💾 Update Record";
-        submitBtn.style.background = "#d97706";
-
-        // Load Rake Data specific to THIS station
-        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
-        if(rakeSnap.exists()) {
-            // Copy to drafts so table renders
-            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
-        }
-
-    } else {
-        // --- NEW STATION (Fresh Entry) ---
-        warningBox.classList.add("hidden");
-        submitBtn.innerText = "✔ Submit Final Data";
-        submitBtn.style.background = "#0A2342";
-        
-        // Ensure inputs are definitely empty
-        document.getElementById("inpStationLength").value = "";
-        document.getElementById("inpYellowDist").value = "";
-    }
-    
-    // 3. START LISTENING TO DRAFTS
-    // Now that we've cleared old drafts and maybe loaded specific new ones, start the listener
-    loadDraft();
-};
   // UPDATED: Handle Gallery Station Change
 window.handleGalleryStationChange = () => {
     const line = document.getElementById("galleryLineSelect").value;
@@ -1550,110 +1481,69 @@ window.openBarcodeScanner = (mode) => {
 // ==========================================
 let adminListener = null;
 window.loadAdminPanel = () => {
-    const userList = document.getElementById("userCheckboxList");
+    if (!isAdmin) return; // Security check
+
     const userTable = document.getElementById("userListBody");
     
-    // 1. Visual Feedback
-    if(userTable) userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Syncing User Database...</td></tr>";
-
-    // 2. DETACH OLD LISTENER (Fixes the "Refresh not working" bug)
-    if (adminListener) {
-        off(ref(db, "users"), adminListener);
-        adminListener = null;
+    // DETACH OLD LISTENER (Stops ghost updates)
+    if (window.adminListener) { 
+        off(ref(db, "users"), window.adminListener); 
     }
 
-    // 3. START NEW LISTENER
-    const usersRef = ref(db, "users");
-    
-    adminListener = onValue(usersRef, async (userSnap) => {
-        // Fetch online status separately
-        const statusSnap = await get(ref(db, "status"));
-        const statusMap = statusSnap.val() || {};
-        
-        // Clear Lists
-        if(userTable) userTable.innerHTML = "";
-        if(userList) userList.innerHTML = "";
+    userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Syncing User Database...</td></tr>";
 
-        if (!userSnap.exists()) {
-             if(userTable) userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No users registered.</td></tr>";
-             return;
+    window.adminListener = onValue(ref(db, "users"), async (snap) => {
+        // Clear table first
+        userTable.innerHTML = "";
+
+        if (!snap.exists()) {
+            userTable.innerHTML = "<tr><td colspan='5'>No users found.</td></tr>";
+            return;
         }
 
-        userSnap.forEach(c => {
+        // Fetch online status once
+        const statusSnap = await get(ref(db, "status"));
+        const statusMap = statusSnap.val() || {};
+
+        snap.forEach(c => {
             const u = c.val();
             const uid = c.key;
-            const displayName = u.name || u.email;
-
-            // A. Populate "Assign Task" Checkbox List
-            // (Only active users should appear in task assignment list)
-            if (!u.banned && userList) {
-                userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
-            }
-
-            // B. Determine Online Status
+            
+            // STATUS BADGE
             const s = statusMap[uid];
             const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
-            const statusBadge = isOnline ? 
-                `<span class="badge-online" style="background:#dcfce7; color:#166534;">● ONLINE</span>` : 
-                `<span class="badge-offline">○ OFFLINE</span>`;
+            const badge = isOnline ? 
+                `<span class="badge-online" style="background:#dcfce7; color:green;">● ONLINE</span>` : 
+                `<span class="badge-offline" style="background:#f1f5f9; color:grey;">○ OFFLINE</span>`;
 
-            // C. TOGGLE BUTTON LOGIC (THE FIX)
-            let actionButton = "";
+            // BUTTON LOGIC (Strict Check)
+            // If banned is TRUE, we show UNBAN. If null/false, we show BAN.
+            let actionBtn = "";
             let rowStyle = "";
 
             if (u.banned === true) {
-                // USER IS BANNED -> Show Green UNBAN Button & Red Row
-                rowStyle = "background-color: #fef2f2; border-left: 4px solid #dc2626;";
-                actionButton = `
-                    <button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(displayName)}')" 
-                        style="font-size:10px; padding:4px 8px; margin-top:2px; background:#15803d; border-color:#15803d;">
-                        ✅ LIFT BAN
-                    </button>`;
+                // IS BANNED -> Show Green UNBAN Button
+                rowStyle = "background-color: #fee2e2; border-left: 4px solid #991b1b;";
+                actionBtn = `<button onclick="unbanUser('${uid}', '${u.name}')" class="success" style="font-size:11px; padding:5px;">✅ LIFT BAN</button>`;
             } else {
-                // USER IS ACTIVE -> Show Red BAN Button
-                actionButton = `
-                    <button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" 
-                        style="font-size:10px; padding:4px 8px; margin-top:2px;">
-                        🚫 BAN
-                    </button>`;
+                // IS ACTIVE -> Show Red BAN Button
+                actionBtn = `<button onclick="openBanModal('${uid}', '${u.name}')" class="danger" style="font-size:11px; padding:5px;">🚫 BAN ACCESS</button>`;
             }
 
-            // D. Render Row
-            const row = document.createElement("tr");
-            if(rowStyle) row.style.cssText = rowStyle;
-
-            row.innerHTML = `
-                <td>
-                    <strong>${displayName}</strong><br>
-                    <small>${u.email}</small>
-                    ${u.banned ? '<br><b style="color:red; font-size:10px;">(ACCOUNT SUSPENDED)</b>' : ''}
-                </td>
-                <td style="text-align:center;">${statusBadge}</td>
-                <td style="text-align:center;" id="task_stat_${uid}">
-                    <span style="color:#cbd5e1; font-size:11px;">...</span>
-                </td>
-                <td style="text-align:center;">${u.faceData ? '<span style="color:green;">✔ Reg</span>' : '<span style="color:red;">❌ No</span>'}</td>
-                <td>
-                    <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px;">📋 Tasks</button>
-                    ${actionButton}
-                    <button class="warning" onclick="resetUserName('${uid}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">Reset ID</button>
-                </td>
+            const html = `
+                <tr style="${rowStyle}">
+                    <td>
+                        <strong>${u.name || 'No Name'}</strong><br>
+                        <small>${u.email}</small>
+                        ${u.banned ? '<br><b style="color:red; font-size:10px;">(SUSPENDED)</b>' : ''}
+                    </td>
+                    <td style="text-align:center;">${badge}</td>
+                    <td style="text-align:center;">-</td>
+                    <td style="text-align:center;">${u.faceData ? '✔' : '❌'}</td>
+                    <td>${actionBtn}</td>
+                </tr>
             `;
-            if(userTable) userTable.appendChild(row);
-
-            // E. Load Task Stats (Async)
-            get(ref(db, `assignments/${uid}`)).then(taskSnap => {
-                const target = document.getElementById(`task_stat_${uid}`);
-                if(target) {
-                    if(taskSnap.exists()){
-                        let pending = 0, done = 0;
-                        taskSnap.forEach(t => t.val().status === 'Done' ? done++ : pending++);
-                        target.innerHTML = `<b style="color:green;">${done}</b> / <b style="color:#b38600;">${pending}</b>`;
-                    } else {
-                        target.innerHTML = `<span style="color:#999;">-</span>`;
-                    }
-                }
-            });
+            userTable.innerHTML += html;
         });
     });
 };
@@ -3312,6 +3202,23 @@ window.filterStationData = () => {
         }
     });
 };
+// List of allowed admin emails (LOWERCASE)
+  function checkAdminStatus() {
+    const ADMINS = ["soham@metro.project", "heerok@metro.project", "sujoy@metro.project"];
+    
+    if (currentUser && ADMINS.includes(currentUser.email.toLowerCase())) {
+        isAdmin = true;
+        // Force the tab button to show
+        const btnAdmin = document.getElementById("btnAdmin");
+        const badge = document.getElementById("adminBadge");
+        if(btnAdmin) btnAdmin.classList.remove("hidden");
+        if(badge) badge.classList.remove("hidden");
+        console.log("✅ Admin Mode Active for:", currentUser.email);
+    } else {
+        isAdmin = false;
+        console.log("👤 User Mode Active for:", currentUser.email);
+    }
+}
 function handleFail() {
     failCount++;
     if(failCount >= 3) {
@@ -4272,39 +4179,21 @@ window.submitBan = async () => {
         }
     }
 };
-window.unbanUser = async (uid, encodedName) => {
-    if(!isAdmin) return alert("⛔ Access Denied: Administrator privileges required.");
+window.unbanUser = async (uid, name) => {
+    if(!isAdmin) return alert("Admins Only.");
     
-    const name = decodeURIComponent(encodedName);
-    
-    if(confirm(`🟢 RESTORE ACCESS?\n\nUser: ${name}\n\nThis will immediately allow the user to log in again.`)) {
+    if(confirm(`🟢 Restore access for ${name}?`)) {
         try {
-            // We specifically set fields to null to delete them
+            // We set fields to null to DELETE them from the database
             await update(ref(db, `users/${uid}`), {
-                banned: null,     // Removes the banned flag
-                banReason: null,  // Removes reason
-                banAction: null,
-                banExpires: null,
-                banRemarks: null,
-                banDate: null,
-                bannedBy: null
+                banned: null,
+                banReason: null,
+                banExpires: null
             });
-
-            // Log the action
-            await push(ref(db, "logs"), {
-                type: "USER_UNBAN",
-                user: "System",
-                details: `Unbanned UID: ${uid}`,
-                approvedBy: currentUser.email,
-                time: serverTimestamp()
-            });
-
-            alert(`✅ Access Restored for ${name}.`);
-            // The loadAdminPanel listener will automatically refresh the table
-            
+            alert("✅ User Unbanned Successfully.");
+            // Table updates automatically via listener
         } catch(e) {
-            console.error(e);
-            alert("Database Error: " + e.message);
+            alert("Error: " + e.message);
         }
     }
 };
@@ -4396,46 +4285,126 @@ window.removeFile = (k) => {
         update(ref(db, `history/${k}`), { fileData: null, fileType: null, fileRemoved: true });
     }
 }
-
-// Global variables to track the active listener
+// GLOBAL TRACKERS
+let currentStationKey = null; 
+let currentRakeKey = null;
 let draftRef = null;
-let draftListener = null;
 
-window.loadDraft = () => {
-    if (draftRef && draftListener) {
-        off(draftRef, draftListener);
+// --- 1. THE NUCLEAR RESET ---
+async function clearPreviousSession() {
+    // A. Stop listening to the old station's draft
+    if (draftRef) { off(draftRef); draftRef = null; }
+    
+    // B. Wipe Global IDs
+    currentStationKey = null;
+    currentRakeKey = null;
+
+    // C. Wipe UI Inputs
+    document.getElementById("inpStationLength").value = "";
+    document.getElementById("inpYellowDist").value = "";
+    document.getElementById("inpYellowThick").value = "";
+    document.getElementById("inpRemarks").value = "";
+    document.getElementById("inpImplementation").value = "";
+    
+    // D. Wipe Table
+    document.getElementById("distanceBody").innerHTML = "";
+
+    // E. Wipe Draft Node in Database (Prevents data crossover)
+    if(currentUser) {
+        await set(ref(db, `drafts/${currentUser.uid}`), null);
+    }
+}
+
+// --- 2. STATION CHANGE HANDLER ---
+window.handleStationChange = async () => {
+    const stnSel = document.getElementById("stationSelect");
+    const lineSel = document.getElementById("lineSelect");
+    const formDiv = document.getElementById("mainDataForm");
+    const warningBox = document.getElementById("dataExistsWarning");
+    const submitBtn = document.getElementById("btnFinalSubmit");
+
+    // === STEP 1: FORCE RESET ===
+    // This stops Station A data from leaking into Station B
+    await clearPreviousSession(); 
+
+    if (!stnSel.value) {
+        formDiv.classList.add("hidden");
+        return;
     }
 
-    const tbody = document.getElementById("distanceBody");
-    if(!tbody) return; 
+    // === STEP 2: SETUP NEW STATION ===
+    formDiv.classList.remove("hidden");
+    const fullStationName = `${stnSel.value} (${lineSel.value})`;
+    document.getElementById("inpStationName").value = fullStationName;
+    document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
 
-    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Loading...</td></tr>";
+    // === STEP 3: CHECK DATABASE FOR THIS STATION ===
+    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
+    const snap = await get(q);
 
-    draftRef = ref(db, `drafts/${currentUser.uid}`);
-    
-    draftListener = onValue(draftRef, (snap) => {
-        const d = snap.val();
-        tbody.innerHTML = ""; 
+    if (snap.exists()) {
+        // --- EXISTING RECORD FOUND ---
+        let data = null;
+        snap.forEach(c => { data = c.val(); currentStationKey = c.key; });
+        
+        // Load Data into Inputs
+        document.getElementById("inpStationLength").value = data.len || "";
+        document.getElementById("inpYellowDist").value = data.yl || "";
+        document.getElementById("inpYellowThick").value = data.th || "";
+        document.getElementById("inpRemarks").value = data.remarks || "";
+        document.getElementById("inpImplementation").value = data.impl || "";
 
-        if(d) {
-            // A. Populate Inputs (Station Details)
-            if(d.details) {
-                 if(document.getElementById("inpStationLength")) document.getElementById("inpStationLength").value = d.details.len || "";
-                 if(document.getElementById("inpYellowDist")) document.getElementById("inpYellowDist").value = d.details.yl || "";
-                 if(document.getElementById("inpYellowThick")) document.getElementById("inpYellowThick").value = d.details.th || "";
-                 if(document.getElementById("inpRemarks")) document.getElementById("inpRemarks").value = d.details.remarks || "";
-            }
+        warningBox.classList.remove("hidden");
+        warningBox.innerHTML = "⚠️ <strong>Editing Existing Record</strong>";
+        submitBtn.innerText = "💾 Update Record";
+        submitBtn.style.background = "#d97706";
 
-            // B. Populate Rows (Distance Data)
-            if(d.rows) {
-                Object.entries(d.rows).forEach(([k,v], i) => {
-                    renderRow(k, v, i+1);
-                });
-            }
+        // Load Rake Rows into Drafts (So table appears)
+        currentRakeKey = data.linkedRakeKey || currentStationKey;
+        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
+        if(rakeSnap.exists()) {
+            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
         }
-    });
+
+    } else {
+        // --- NEW RECORD ---
+        warningBox.classList.add("hidden");
+        submitBtn.innerText = "✔ Submit Final Data";
+        submitBtn.style.background = "#0A2342";
+        // Note: Inputs are already empty from Step 1
+    }
+
+    // === STEP 4: START NEW LISTENER ===
+    loadDraft(); 
 };
 
+// --- 3. DRAFT LOADER (For Table) ---
+window.loadDraft = () => {
+    draftRef = ref(db, `drafts/${currentUser.uid}/rows`);
+    
+    onValue(draftRef, (snap) => {
+        const tbody = document.getElementById("distanceBody");
+        tbody.innerHTML = "";
+        
+        if(!snap.exists()) return;
+
+        const rows = snap.val();
+        let i = 1;
+        Object.entries(rows).forEach(([key, val]) => {
+            const html = `
+                <tr>
+                    <td>${i++}</td>
+                    <td><input value="${val.rake}" onchange="upRow('${key}','rake',this.value)"></td>
+                    <td><input value="${val.type}" onchange="upRow('${key}','type',this.value)"></td>
+                    <td><input value="${val.f}" onchange="upRow('${key}','f',this.value)"></td>
+                    <td><input value="${val.r}" onchange="upRow('${key}','r',this.value)"></td>
+                    <td><button class="danger" onclick="delRow('${key}')">X</button></td>
+                </tr>
+            `;
+            tbody.innerHTML += html;
+        });
+    });
+};
 function renderRow(k, v, i) {
     const b = document.getElementById("distanceBody");
     
