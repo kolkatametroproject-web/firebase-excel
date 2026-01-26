@@ -1047,16 +1047,38 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
         </div>
     </div>
 </div>
-
 <div id="bannedScreen" class="banned-overlay hidden">
     <div class="banned-card">
-        <h1 style="color:#991b1b; margin:0; font-size: 32px; letter-spacing: 2px;">ACCESS DENIED</h1>
-        <p style="color:#333; margin-top: 10px;">Security protocols have suspended this account.</p>
+        <i class="fas fa-lock" style="font-size: 40px; color: #991b1b; margin-bottom: 15px;"></i>
+        <h1 style="color:#991b1b; margin:0; font-size: 28px; letter-spacing: 1px; text-transform:uppercase;">Account Suspended</h1>
+        <p style="color:#333; margin-top: 5px; font-size: 13px;">Your access to the Metro Safety System has been revoked.</p>
+        
         <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;">
-        <div id="displayBanReason" style="font-weight:bold; font-size: 18px; color: #1f2937;">--</div>
-        <div id="bannedTimeDisplay" class="banned-timer">--</div>
+
+        <div style="text-align:left; margin-bottom:15px;">
+            <label style="font-size:11px; font-weight:bold; color:#64748b; text-transform:uppercase;">Violation Category:</label>
+            <div id="displayBanReason" style="font-weight:bold; font-size: 16px; color: #1f2937;">--</div>
+        </div>
+
+        <div style="text-align:left; margin-bottom:15px;">
+            <label style="font-size:11px; font-weight:bold; color:#64748b; text-transform:uppercase;">Suspension Deadline:</label>
+            <div id="bannedTimeDisplay" class="banned-timer" style="margin:5px 0 0 0; text-align:center;">--</div>
+        </div>
+
+        <div style="text-align:left; background:#fff1f2; padding:10px; border-radius:4px; border:1px solid #fecdd3; margin-bottom:15px;">
+            <label style="font-size:11px; font-weight:bold; color:#991b1b; text-transform:uppercase;">⚠ Remedial Action Required:</label>
+            <div id="displayBanAction" style="color:#7f1d1d; font-weight:bold; font-size:14px; margin-top:2px;">--</div>
+        </div>
+
+        <div style="text-align:left;">
+             <label style="font-size:11px; font-weight:bold; color:#64748b; text-transform:uppercase;">Note from Admin:</label>
+             <div id="displayBanRemarks" style="font-size:13px; color:#333; font-style:italic;">--</div>
+        </div>
+
         <div style="margin-top:30px;">
-            <button onclick="logout()" style="background:#991b1b; color:white; padding:15px 30px; font-size: 16px; border:none; border-radius: 6px;">FORCE LOGOUT</button>
+            <button onclick="logout()" style="background:#991b1b; color:white; padding:12px 30px; font-size: 14px; border:none; border-radius: 6px; font-weight:bold; cursor:pointer;">
+                <i class="fas fa-sign-out-alt"></i> ACKNOWLEDGE & LOGOUT
+            </button>
         </div>
     </div>
 </div>
@@ -2433,6 +2455,7 @@ async function processUpload(dataBase64, fileType, fileName) {
 // ==========================================
 // 2. CRASH-PROOF AUTH LISTENER (FIXED)
 // ==========================================
+// --- CRASH-PROOF AUTH LISTENER (FIXED FOR BANNED USERS) ---
 onAuthStateChanged(auth, (user) => {
     // A. NO USER -> SHOW LOGIN SCREEN
     if (!user) { 
@@ -2442,21 +2465,18 @@ onAuthStateChanged(auth, (user) => {
 
     currentUser = user;
     
-    // --- FIX START: Turn on the Presence System ---
-    // This sends the "Online" signal to the database
+    // Start Presence
     startPresenceSystem(user);  
-    // --- FIX END ---
 
-    // B. USER FOUND -> TRY TO LOAD DATA
+    // B. USER FOUND -> LOAD DATA
     const userRef = ref(db, `users/${user.uid}`);
     
     onValue(userRef, (snap) => {
         const u = snap.val();
 
-        // 1. DATA MISSING? FORCE LOGOUT (Fixes blank screen glitch)
+        // 1. DATA MISSING?
         if (!u) {
-            console.log("User data missing. Force logout.");
-            alert("Account data not found. Please contact admin.");
+            alert("Account data not found. Contact admin.");
             signOut(auth);
             return;
         }
@@ -2468,62 +2488,74 @@ onAuthStateChanged(auth, (user) => {
             return; 
         }
 
-        // 3. BANNED? -> SHOW RED SCREEN
+        // 3. BANNED? -> SHOW RED SCREEN WITH DETAILS
         if (u.banned) {
-            // Hide everything else
+            // Hide App Interface
             document.querySelector("header").style.display = "none";
             document.getElementById("loginSection").classList.add("hidden");
             document.getElementById("appScreen").classList.add("hidden");
             document.getElementById("faceModal").classList.add("hidden");
             
-            // Show Ban Screen
+            // Show Ban Overlay
             const banScreen = document.getElementById("bannedScreen");
             if(banScreen) {
                 banScreen.classList.remove("hidden");
-                // Fill details
-                document.getElementById("displayBanReason").innerText = u.banReason || "Admin Action";
+                
+                // POPULATE DETAILS
+                document.getElementById("displayBanReason").innerText = u.banReason || "Security Violation";
+                
+                // Populate Action (The new field)
+                document.getElementById("displayBanAction").innerText = u.banAction || "Contact System Administrator Immediately.";
+
+                // Populate Remarks (The new field)
+                document.getElementById("displayBanRemarks").innerText = u.banRemarks || "No additional notes.";
+
+                // Populate Time
                 const deadline = u.banExpires || 0;
                 if(deadline > 0) {
-                      const dateStr = new Date(deadline).toLocaleString();
-                      document.getElementById("bannedTimeDisplay").innerText = "Deadline: " + dateStr;
+                      const dateStr = new Date(deadline).toLocaleString('en-IN', {
+                          day: '2-digit', month: 'short', year: 'numeric',
+                          hour: '2-digit', minute: '2-digit', hour12: true
+                      });
+                      document.getElementById("bannedTimeDisplay").innerText = "Expiring: " + dateStr;
                 } else {
-                      document.getElementById("bannedTimeDisplay").innerText = "PERMANENT BAN";
+                      document.getElementById("bannedTimeDisplay").innerText = "⛔ PERMANENT SUSPENSION";
                 }
             } else {
-                // Fallback if HTML is missing
-                document.body.innerHTML = "<h1 style='color:red; text-align:center; margin-top:50px;'>⛔ BANNED (Overlay Missing)</h1><button onclick='logout()'>Log Out</button>";
+                document.body.innerHTML = "<h1 style='color:red; text-align:center;'>⛔ ACCOUNT SUSPENDED</h1><br><button onclick='logout()'>Log Out</button>";
             }
-            return; 
+            return; // STOP HERE
         }
 
-        // 4. ACTIVE & CLEAN -> SHOW DASHBOARD
-        // Hide Ban Screen / Login Screen
+        // 4. ACTIVE USER -> SHOW APP
         document.getElementById("bannedScreen")?.classList.add("hidden");
         document.querySelector("header").style.display = "flex";
         
-        // Setup User Session
         currentUser.name = u.name;
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
 
+        // Name Setup Check
         if (!u.name) {
             document.getElementById("nameModal").classList.remove("hidden");
             document.getElementById("loginSection").classList.add("hidden");
             return;
         }
         
-        // UPDATE UI
+        // Update Header Info
         document.getElementById("userInfo").innerText = `${u.name}`;
         document.getElementById("authContainer").classList.remove("hidden");
         document.getElementById("loginSection").classList.add("hidden");
 
-        // LOAD ADMIN TOOLS
+        // Load Admin Tools
         if (isAdmin) {
-            document.getElementById("adminBadge").classList.remove("hidden");
-            document.getElementById("btnAdmin").classList.remove("hidden");
+            const badge = document.getElementById("adminBadge");
+            const btn = document.getElementById("btnAdmin");
+            if(badge) badge.classList.remove("hidden");
+            if(btn) btn.classList.remove("hidden");
             setTimeout(loadAdminPanel, 2000);
         }
 
-        // BIOMETRIC CHECK
+        // Biometric Check
         if(!isTransactionAuth) {
             const faceModal = document.getElementById("faceModal");
             faceModal.classList.remove("hidden");
@@ -2541,7 +2573,6 @@ onAuthStateChanged(auth, (user) => {
             }
         }
     }, (error) => {
-        // IF DATABASE FAILS -> LOGOUT
         console.error(error);
         alert("Connection Error. Logging out...");
         signOut(auth);
