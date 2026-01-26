@@ -4027,21 +4027,25 @@ window.deleteUserTask = (uid, taskKey) => {
 // =========================================================================
 // 👑 COMPLETE ADMIN SYSTEM (Assignments, Resets, Tracking, Banning)
 // =========================================================================
-
-// --- 1. LOAD ADMIN PANEL (Populates Table + Checkboxes) ---
+// --- 1. LOAD ADMIN PANEL (Fixed Duplication Logic) ---
 window.loadAdminPanel = () => {
     if (!isAdmin) return; 
 
     const userTable = document.getElementById("userListBody");
     const taskCheckboxList = document.getElementById("userCheckboxList");
     
-    // Detach old listener to prevent duplicates
-    if (window.adminListener) { off(ref(db, "users"), window.adminListener); }
+    // 🛑 STOP PREVIOUS LISTENER (THE FIX)
+    // In Modular Firebase, onValue returns a function. We call IT to unsubscribe.
+    if (window.adminListener && typeof window.adminListener === "function") {
+        window.adminListener(); // This kills the old listener immediately
+        window.adminListener = null;
+    }
 
     userTable.innerHTML = "<tr><td colspan='6' style='text-align:center;'>🔄 Syncing Database...</td></tr>";
 
+    // Start New Listener
     window.adminListener = onValue(ref(db, "users"), async (snap) => {
-        // Clear UI
+        // 1. Clear UI immediately
         userTable.innerHTML = "";
         if(taskCheckboxList) taskCheckboxList.innerHTML = "";
 
@@ -4050,27 +4054,30 @@ window.loadAdminPanel = () => {
             return;
         }
 
-        // Get Online Status Snapshot
+        // 2. Fetch Status (Wait for it)
         const statusSnap = await get(ref(db, "status"));
         const statusMap = statusSnap.val() || {};
 
+        // 3. Render Loop
         snap.forEach(c => {
             const u = c.val();
             const uid = c.key;
             const name = u.name || u.email;
             const isBanned = (u.banned === true);
 
-            // 1. ONLINE BADGE
+            // ONLINE BADGE
             const s = statusMap[uid];
+            // Check if last seen within 20 seconds
             const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
+            
             const badge = isOnline ? 
                 `<span class="badge-online" style="background:#dcfce7; color:green; border:1px solid #bbf7d0;">● ONLINE</span>` : 
                 `<span class="badge-offline" style="background:#f1f5f9; color:grey;">○ OFFLINE</span>`;
 
-            // 2. FACE STATUS
+            // FACE STATUS
             const faceIcon = u.faceData ? `<span style="color:green">✔ Reg</span>` : `<span style="color:red">❌ No</span>`;
 
-            // 3. ACTION BUTTONS (Ban/Unban)
+            // ACTION BUTTONS
             let mainActionBtn = "";
             let rowStyle = "";
             
@@ -4080,7 +4087,7 @@ window.loadAdminPanel = () => {
             } else {
                 mainActionBtn = `<button onclick="openBanModal('${uid}', '${name}')" class="danger" style="font-size:10px; padding:4px 8px;">🚫 BAN</button>`;
                 
-                // Populate Task Assignment Checkboxes (Only for active users)
+                // Populate Checkboxes (Only for active users)
                 if(taskCheckboxList) {
                     taskCheckboxList.innerHTML += `
                         <label class="checkbox-item" style="display:flex; align-items:center; gap:8px; padding:5px; border-bottom:1px solid #eee;">
@@ -4090,8 +4097,7 @@ window.loadAdminPanel = () => {
                 }
             }
 
-            // 4. RENDER ROW
-            // Includes: Name, Status, Task Counter, Face Status, Task Button, Ban Button, Reset Controls
+            // RENDER HTML
             const html = `
                 <tr style="${rowStyle}">
                     <td>
@@ -4126,8 +4132,7 @@ window.loadAdminPanel = () => {
             `;
             userTable.innerHTML += html;
 
-            // 5. LIVE TASK MONITOR (Async)
-            // Attaches a specific listener for this user's task count
+            // LIVE TASK MONITOR (Keep this separate)
             onValue(ref(db, `assignments/${uid}`), (taskSnap) => {
                 const el = document.getElementById(`task_stat_${uid}`);
                 if (el) {
@@ -4139,11 +4144,10 @@ window.loadAdminPanel = () => {
                         el.innerHTML = `<span style="color:#ccc;">-</span>`;
                     }
                 }
-            }, { onlyOnce: false }); // Keep listening for updates
+            }, { onlyOnce: false });
         });
     });
 };
-
 // --- 2. ASSIGN TASK (Multi-User) ---
 window.assignTaskMulti = async () => {
     const descInput = document.getElementById("taskDesc");
