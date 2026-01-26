@@ -2819,15 +2819,44 @@ function resetTimer() {
     }
 }
 
-window.saveOfficialName = () => {
-    const name = document.getElementById("officialNameInput").value;
-    if(name.length < 3) return alert("Enter full valid name.");
-    update(ref(db, `users/${currentUser.uid}`), { name: name }).then(() => {
-        document.getElementById("nameModal").classList.add("hidden");
-        location.reload();
-    });
-}
+window.saveOfficialName = async () => {
+    const nameInput = document.getElementById("officialNameInput");
+    const name = nameInput.value.trim();
 
+    if(name.length < 3) return alert("Please enter your full official name (e.g., Rahul Roy).");
+
+    // UI Feedback
+    const btn = nameInput.nextElementSibling; // The button
+    const originalText = btn.innerText;
+    btn.innerText = "Creating Profile...";
+    btn.disabled = true;
+
+    try {
+        // CREATE THE DATABASE PROFILE
+        // We use 'set' to ensure a clean record is created for the new user
+        await set(ref(db, `users/${currentUser.uid}`), {
+            name: name,
+            email: currentUser.email,
+            banned: false,
+            faceData: null, // This null value triggers the Face Setup logic
+            createdAt: serverTimestamp(),
+            last_login: serverTimestamp()
+        });
+
+        // Hide the modal
+        document.getElementById("nameModal").classList.add("hidden");
+        
+        // Note: We don't need location.reload(). 
+        // The onValue listener in onAuthStateChanged will detect this update automatically
+        // and switch from "Name Modal" to "Face Setup Modal" instantly.
+        
+    } catch(e) {
+        console.error(e);
+        alert("Error creating profile: " + e.message);
+        btn.innerText = originalText;
+        btn.disabled = false;
+    }
+}
 function showLogin() {
     document.getElementById("loginSection").classList.remove("hidden");
     document.getElementById("appScreen").classList.add("hidden");
@@ -4687,13 +4716,11 @@ window.deleteUserTask = (uid, taskKey) => {
             .catch(err => alert("Error: " + err.message));
     }
 };
-// =========================================================================
-// 👑 COMPLETE ADMIN SYSTEM (Assignments, Resets, Tracking, Banning)
-// =========================================================================
-// --- 1. LOAD ADMIN PANEL (With Admin Badge) ---
-// --- CRASH-PROOF AUTH LISTENER (FIXED FOR BANNED USERS) ---
+// ==========================================
+// 2. CRASH-PROOF AUTH LISTENER (GENERIC ONBOARDING)
+// ==========================================
 onAuthStateChanged(auth, (user) => {
-    // A. NO USER -> SHOW LOGIN SCREEN
+    // A. NOT LOGGED IN
     if (!user) { 
         showLoginScreen(); 
         return; 
@@ -4708,86 +4735,74 @@ onAuthStateChanged(auth, (user) => {
     onValue(userRef, (snap) => {
         const u = snap.val();
 
-        // 1. DATA MISSING?
-        if (!u) {
-            alert("Account data not found. Contact admin.");
-            signOut(auth);
-            return;
+        // --- NEW USER DETECTION ---
+        // If data is completely missing, OR if the name is missing
+        if (!u || !u.name) {
+            console.log("New user detected. Prompting for profile setup...");
+            
+            // 1. Hide Login Screen
+            document.getElementById("loginSection").classList.add("hidden");
+            document.querySelector("header").style.display = "flex";
+            
+            // 2. Hide App Screen (Security)
+            document.getElementById("appScreen").classList.add("hidden");
+            document.getElementById("authContainer").classList.add("hidden");
+
+            // 3. SHOW NAME MODAL
+            document.getElementById("nameModal").classList.remove("hidden");
+            
+            // If we have data but no name, pre-fill logic could go here, 
+            // but usually !u means we need to create the whole record.
+            return; // STOP HERE. Wait for saveOfficialName()
         }
 
-        // 2. TERMINATED?
+        // --- EXISTING USER FLOW ---
+
+        // 1. TERMINATED?
         if (u.terminated) { 
             alert("ACCOUNT TERMINATED."); 
             signOut(auth); 
             return; 
         }
 
-        // ============================================
-        // 3. BANNED USER LOGIC (THE RED WINDOW)
-        // ============================================
+        // 2. BANNED?
         if (u.banned) {
-            console.log("User is banned. Showing lock screen.");
-
-            // A. Hide ALL App Interface Elements
             document.querySelector("header").style.display = "none";
             document.getElementById("loginSection").classList.add("hidden");
             document.getElementById("appScreen").classList.add("hidden");
             document.getElementById("faceModal").classList.add("hidden");
-            document.getElementById("authContainer").classList.add("hidden");
             
-            // B. Show the Banned Overlay
             const banScreen = document.getElementById("bannedScreen");
             if(banScreen) {
                 banScreen.classList.remove("hidden");
-                
-                // C. INJECT DATA FROM DATABASE (Reason, Action, Remarks)
-                // We use || "..." to show default text if the field is empty
                 document.getElementById("displayBanReason").innerText = u.banReason || "Violation of Safety Protocols";
+                document.getElementById("displayBanAction").innerText = u.banAction || "Contact Admin.";
+                document.getElementById("displayBanRemarks").innerText = u.banRemarks || "No remarks.";
                 
-                document.getElementById("displayBanAction").innerText = u.banAction || "Please contact the System Administrator immediately.";
-
-                document.getElementById("displayBanRemarks").innerText = u.banRemarks || "No additional remarks provided.";
-
-                // D. FORMAT & SHOW TIME
                 const deadline = u.banExpires || 0;
                 if(deadline > 0) {
-                      const dateStr = new Date(deadline).toLocaleString('en-IN', {
-                          day: '2-digit', month: 'short', year: 'numeric',
-                          hour: '2-digit', minute: '2-digit', hour12: true
-                      });
+                      const dateStr = new Date(deadline).toLocaleString('en-IN');
                       document.getElementById("bannedTimeDisplay").innerText = "Expiring: " + dateStr;
                 } else {
-                      document.getElementById("bannedTimeDisplay").innerText = "⛔ PERMANENT SUSPENSION";
+                      document.getElementById("bannedTimeDisplay").innerText = "⛔ PERMANENT BAN";
                 }
-            } else {
-                // Fallback if HTML is missing
-                document.body.innerHTML = "<h1 style='color:red; text-align:center; margin-top:50px;'>⛔ ACCOUNT SUSPENDED</h1><p style='text-align:center'>Please contact Admin.</p>";
             }
-            return; // 🛑 STOP HERE. Do not load the rest of the app.
+            return; 
         }
 
-        // ============================================
-        // 4. ACTIVE USER LOGIC (NORMAL LOGIN)
-        // ============================================
+        // 3. ACTIVE USER - LOAD UI
         document.getElementById("bannedScreen")?.classList.add("hidden");
         document.querySelector("header").style.display = "flex";
         
         currentUser.name = u.name;
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
 
-        // Name Setup Check
-        if (!u.name) {
-            document.getElementById("nameModal").classList.remove("hidden");
-            document.getElementById("loginSection").classList.add("hidden");
-            return;
-        }
-        
-        // Update UI
         document.getElementById("userInfo").innerText = `${u.name}`;
         document.getElementById("authContainer").classList.remove("hidden");
         document.getElementById("loginSection").classList.add("hidden");
+        document.getElementById("nameModal").classList.add("hidden"); // Ensure name modal is gone
 
-        // Load Admin Tools
+        // Load Admin Tools if needed
         if (isAdmin) {
             const badge = document.getElementById("adminBadge");
             const btn = document.getElementById("btnAdmin");
@@ -4796,26 +4811,32 @@ onAuthStateChanged(auth, (user) => {
             setTimeout(loadAdminPanel, 2000);
         }
 
-        // Biometric Check
+        // 4. BIOMETRIC CHECK
+        // If profile exists but no Face Data -> Trigger Registration
         if(!isTransactionAuth) {
             const faceModal = document.getElementById("faceModal");
             faceModal.classList.remove("hidden");
             
             if(!u.faceData) {
+                // REGISTRATION MODE
                 document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
+                document.getElementById("modalDesc").innerText = "New Account: Register your face to continue.";
                 document.getElementById("regProgress").classList.remove("hidden");
+                document.getElementById("btnCapture").innerText = "📸 Capture Sample 1 of 3";
                 document.getElementById("btnCapture").onclick = registerNewFace;
                 initCamera(false);
             } else {
+                // VERIFICATION MODE
                 document.getElementById("modalTitle").innerText = "Biometric Verification";
+                document.getElementById("modalDesc").innerText = "Please look at the camera.";
                 document.getElementById("regProgress").classList.add("hidden");
+                document.getElementById("btnCapture").innerText = "📸 SCAN FACE";
                 document.getElementById("btnCapture").onclick = handleFaceScan;
                 initCamera(true);
             }
         }
     }, (error) => {
         console.error(error);
-        alert("Connection Error. Logging out...");
         signOut(auth);
     });
 });
