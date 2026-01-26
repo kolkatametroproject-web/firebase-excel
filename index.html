@@ -1775,40 +1775,6 @@ window.closeReportPreview = () => {
     // 2. Remove the print classes so the main app returns to normal styling
     document.body.classList.remove('print-a4', 'print-pos');
 };
-// --- 1. THE NUCLEAR RESET (Ensures Strict Isolation) ---
-async function nuclearReset() {
-    console.log("☢️ NUCLEAR RESET: Clearing previous station data...");
-
-    // A. Kill the Listener (Stop receiving updates from the old station)
-    if (draftRef) { off(draftRef); }
-    if (draftListener) { off(draftRef, draftListener); }
-    draftRef = null;
-    draftListener = null;
-
-    // B. Wipe Global IDs (Crucial step to prevent overwriting wrong station)
-    currentStationKey = null;
-    currentRakeKey = null;
-
-    // C. Wipe UI Inputs (Visually Clean)
-    const uiIds = ["inpStationLength", "inpYellowDist", "inpYellowThick", "inpRemarks", "inpImplementation"];
-    uiIds.forEach(id => {
-        const el = document.getElementById(id);
-        if(el) { 
-            el.value = ""; 
-            el.disabled = false; // Re-enable in case it was locked
-        }
-    });
-    
-    // D. Wipe Rake Table UI
-    document.getElementById("distanceBody").innerHTML = "";
-    document.getElementById("dataExistsWarning").classList.add("hidden");
-    
-    // E. Wipe Database Draft Node (The most important part)
-    // This deletes any temporary rake rows you might have added for the PREVIOUS station
-    if(currentUser) {
-        await set(ref(db, `drafts/${currentUser.uid}`), null);
-    }
-}
 window.onScanSuccess = async function(decodedText) {
     closeBarcodeScanner();
     console.log("SCANNED:", decodedText, "MODE:", scanMode);
@@ -2916,7 +2882,7 @@ window.loadStationData = () => {
     }, { onlyOnce: true });
 };
 // =========================================================
-// 🚀 ENGINE CORE: DATA ISOLATION SYSTEM
+// 🚀 ENGINE CORE: DATA ISOLATION SYSTEM (Unified)
 // =========================================================
 
 // Global State Trackers
@@ -2925,9 +2891,11 @@ let currentRakeKey = null;
 let draftRef = null;
 let draftListener = null;
 
-// --- 1. THE NUCLEAR CLEANER (Run this before ANYTHING else) ---
+// --- 1. THE NUCLEAR RESET (Ensures Strict Isolation) ---
 async function nuclearReset() {
-    // A. Kill the Listener (Stop receiving old updates)
+    console.log("☢️ NUCLEAR RESET: Clearing previous station data...");
+
+    // A. Kill the Listener (Stop receiving updates from the old station)
     if (draftRef) { off(draftRef); }
     if (draftListener) { off(draftRef, draftListener); }
     draftRef = null;
@@ -2941,29 +2909,30 @@ async function nuclearReset() {
     const uiIds = ["inpStationLength", "inpYellowDist", "inpYellowThick", "inpRemarks", "inpImplementation"];
     uiIds.forEach(id => {
         const el = document.getElementById(id);
-        if(el) { el.value = ""; el.disabled = false; }
+        if(el) { 
+            el.value = ""; 
+            el.disabled = false; 
+        }
     });
     
-    // D. Wipe Table
+    // D. Wipe Rake Table UI
     document.getElementById("distanceBody").innerHTML = "";
     document.getElementById("dataExistsWarning").classList.add("hidden");
     
-    // E. Wipe Database Draft Node (The most important part)
-    // This deletes any temporary data from the previous station
+    // E. Wipe Database Draft Node
     if(currentUser) {
         await set(ref(db, `drafts/${currentUser.uid}`), null);
     }
 }
 
-// --- 2. STATION CHANGE HANDLER (The Gatekeeper) ---
+// --- 2. STATION CHANGE HANDLER (Strict Loader) ---
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
     const formDiv = document.getElementById("mainDataForm");
     const submitBtn = document.getElementById("btnFinalSubmit");
 
-    // === STEP 1: WIPE EVERYTHING ===
-    // We wait for this to finish before loading anything new
+    // A. FORCE RESET: Stop Station A data from leaking into Station B
     await nuclearReset(); 
 
     if (!stnSel.value) {
@@ -2971,38 +2940,36 @@ window.handleStationChange = async () => {
         return;
     }
 
-    // === STEP 2: SETUP NEW CONTEXT ===
+    // B. SETUP NEW CONTEXT
     formDiv.classList.remove("hidden");
     const fullStationName = `${stnSel.value} (${lineSel.value})`;
     
-    // Set Hidden Identifier
     document.getElementById("inpStationName").value = fullStationName;
     document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
 
-    // === STEP 3: FETCH DATA FOR THIS SPECIFIC STATION ===
+    // C. CHECK MASTER DATABASE
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
-        // --- SCENARIO A: RECORD EXISTS (Load It) ---
+        // --- EXISTING RECORD FOUND (Edit Mode) ---
         let data = null;
         snap.forEach(c => { data = c.val(); currentStationKey = c.key; });
         
-        // 1. Fill Inputs
+        // Fill Inputs
         document.getElementById("inpStationLength").value = data.len || "";
         document.getElementById("inpYellowDist").value = data.yl || "";
         document.getElementById("inpYellowThick").value = data.th || "";
         document.getElementById("inpRemarks").value = data.remarks || "";
         document.getElementById("inpImplementation").value = data.impl || "";
 
-        // 2. Setup Button
+        // UI Feedback
         document.getElementById("dataExistsWarning").classList.remove("hidden");
-        document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying existing record.";
-        submitBtn.innerText = "💾 Save Changes";
-        submitBtn.style.background = "#d97706";
+        document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying Master Record.";
+        submitBtn.innerText = "💾 Save Changes to Master DB";
+        submitBtn.style.background = "#d97706"; // Orange
 
-        // 3. Load Linked Rows into Drafts
-        // We copy the saved rows into the 'Draft' area so you can edit them
+        // Load Linked Rake Rows into Drafts
         currentRakeKey = data.linkedRakeKey || currentStationKey;
         const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
         if(rakeSnap.exists()) {
@@ -3010,20 +2977,17 @@ window.handleStationChange = async () => {
         }
 
     } else {
-        // --- SCENARIO B: NEW RECORD (Clean Slate) ---
-        submitBtn.innerText = "✔ Submit Final Data";
-        submitBtn.style.background = "#0A2342";
-        // Inputs are already empty from Step 1
+        // --- NEW RECORD ---
+        submitBtn.innerText = "✔ Submit to Master Database";
+        submitBtn.style.background = "#0A2342"; // Navy
     }
 
-    // === STEP 4: START LISTENER ===
-    // Only start listening after we have set up the correct draft environment
+    // D. START LISTENER
     loadDraftTable(); 
 };
 
 // --- 3. DRAFT TABLE LOADER ---
 window.loadDraftTable = () => {
-    // We listen to the user's specific draft folder
     draftRef = ref(db, `drafts/${currentUser.uid}/rows`);
     
     draftListener = onValue(draftRef, (snap) => {
@@ -3058,40 +3022,78 @@ window.loadDraftTable = () => {
         });
     });
 };
-// --- 5. DELETE FUNCTION (With Form Cleanup) ---
-window.deleteStationLog = async (key) => {
-    if(!isAdmin) return alert("Admins Only.");
-    
-    if(confirm("🗑 Delete this entire record permanently?")) {
-        try {
-            // 1. Delete from DB
-            const updates = {};
-            updates[`station_logs/${key}`] = null;
-            updates[`rake_logs/${key}`] = null;
-            await update(ref(db), updates);
 
-            // 2. CRITICAL: If the deleted station was currently open in the editor, clear the editor
-            if(key === currentStationKey) {
-                await nuclearReset();
-                document.getElementById("mainDataForm").classList.add("hidden");
-                document.getElementById("stationSelect").value = "";
-                alert("✅ Record deleted. Editor cleared.");
-            } else {
-                alert("✅ Record deleted.");
-            }
-            
-            // Refresh list
-            loadStationData();
+// --- 4. SUBMIT FUNCTION (Saves to Master DB) ---
+window.submitStationData = async () => {
+    const btn = document.getElementById("btnFinalSubmit");
+    btn.innerText = "⏳ Saving...";
+    btn.disabled = true;
 
-        } catch(e) {
-            alert("Error: " + e.message);
+    try {
+        const lineSel = document.getElementById("lineSelect");
+        const stnSel = document.getElementById("stationSelect");
+        
+        if (!lineSel.value || !stnSel.value) throw new Error("No station selected.");
+
+        const fullStationName = `${stnSel.value} (${lineSel.value})`;
+
+        // 1. Gather Inputs
+        const formData = {
+            name: fullStationName,
+            len: document.getElementById("inpStationLength").value,
+            yl: document.getElementById("inpYellowDist").value,
+            th: document.getElementById("inpYellowThick").value,
+            remarks: document.getElementById("inpRemarks").value,
+            impl: document.getElementById("inpImplementation").value,
+            user: currentUser.email,
+            userName: currentUser.name,
+            date: new Date().toLocaleString('en-IN'),
+            timestamp: serverTimestamp()
+        };
+
+        // 2. Fetch Draft Rows
+        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+        const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
+
+        const updates = {};
+        let targetKey = currentStationKey;
+        let targetRakeKey = currentRakeKey;
+
+        // 3. Prepare Updates
+        if (targetKey) {
+            // Update
+            updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
+        } else {
+            // Create
+            targetKey = push(ref(db, "station_logs")).key;
+            targetRakeKey = targetKey; 
+            updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         }
+
+        // 4. Overwrite Rake Data
+        updates[`rake_logs/${targetRakeKey}`] = rowsData || null;
+
+        // 5. Execute
+        await update(ref(db), updates);
+        await remove(ref(db, `drafts/${currentUser.uid}`));
+        
+        alert(`✅ SUCCESS: Saved ${stnSel.value} to Master DB.`);
+        
+        // 6. Reset UI
+        await nuclearReset();
+        document.getElementById("mainDataForm").classList.add("hidden");
+        document.getElementById("stationSelect").value = "";
+        switchTab('dataView');
+
+    } catch(e) {
+        console.error(e);
+        alert("❌ ERROR: " + e.message);
+    } finally {
+        btn.innerText = "✔ Submit to Master Database";
+        btn.disabled = false;
     }
 };
-
-// --- 6. ROW HELPERS ---
-window.upRow = (k, f, v) => update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), { [f]: v });
-window.delRow = (k) => remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
+async function nuclearReset() 
 window.viewRakeRows = (rowsEncoded, stationName) => {
     try {
         const rows = JSON.parse(decodeURIComponent(rowsEncoded));
@@ -4409,69 +4411,6 @@ async function clearPreviousSession() {
         await set(ref(db, `drafts/${currentUser.uid}`), null);
     }
 }
-
-// --- 2. STATION CHANGE HANDLER ---
-window.handleStationChange = async () => {
-    const stnSel = document.getElementById("stationSelect");
-    const lineSel = document.getElementById("lineSelect");
-    const formDiv = document.getElementById("mainDataForm");
-    const warningBox = document.getElementById("dataExistsWarning");
-    const submitBtn = document.getElementById("btnFinalSubmit");
-
-    // === STEP 1: FORCE RESET ===
-    // This stops Station A data from leaking into Station B
-    await clearPreviousSession(); 
-
-    if (!stnSel.value) {
-        formDiv.classList.add("hidden");
-        return;
-    }
-
-    // === STEP 2: SETUP NEW STATION ===
-    formDiv.classList.remove("hidden");
-    const fullStationName = `${stnSel.value} (${lineSel.value})`;
-    document.getElementById("inpStationName").value = fullStationName;
-    document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
-
-    // === STEP 3: CHECK DATABASE FOR THIS STATION ===
-    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
-    const snap = await get(q);
-
-    if (snap.exists()) {
-        // --- EXISTING RECORD FOUND ---
-        let data = null;
-        snap.forEach(c => { data = c.val(); currentStationKey = c.key; });
-        
-        // Load Data into Inputs
-        document.getElementById("inpStationLength").value = data.len || "";
-        document.getElementById("inpYellowDist").value = data.yl || "";
-        document.getElementById("inpYellowThick").value = data.th || "";
-        document.getElementById("inpRemarks").value = data.remarks || "";
-        document.getElementById("inpImplementation").value = data.impl || "";
-
-        warningBox.classList.remove("hidden");
-        warningBox.innerHTML = "⚠️ <strong>Editing Existing Record</strong>";
-        submitBtn.innerText = "💾 Update Record";
-        submitBtn.style.background = "#d97706";
-
-        // Load Rake Rows into Drafts (So table appears)
-        currentRakeKey = data.linkedRakeKey || currentStationKey;
-        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
-        if(rakeSnap.exists()) {
-            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
-        }
-
-    } else {
-        // --- NEW RECORD ---
-        warningBox.classList.add("hidden");
-        submitBtn.innerText = "✔ Submit Final Data";
-        submitBtn.style.background = "#0A2342";
-        // Note: Inputs are already empty from Step 1
-    }
-
-    // === STEP 4: START NEW LISTENER ===
-    loadDraft(); 
-};
 function renderRow(k, v, i) {
     const b = document.getElementById("distanceBody");
     
@@ -4684,104 +4623,6 @@ function loadAssignments() {
         });
     });
 }
-// --- FIXED: REAL-TIME SERVER TIMESTAMP LOGIC ---
-window.submitStationData = async () => {
-    const submitBtn = document.getElementById("btnFinalSubmit");
-    submitBtn.innerText = "⏳ Syncing with Server...";
-    submitBtn.disabled = true;
-
-    try {
-        const lineSel = document.getElementById("lineSelect");
-        const stnSel = document.getElementById("stationSelect");
-        
-        // 1. Get Inputs
-        const inpLen = document.getElementById("inpStationLength").value;
-        const inpYl = document.getElementById("inpYellowDist").value;
-        const inpTh = document.getElementById("inpYellowThick").value;
-        const inpRem = document.getElementById("inpRemarks").value;
-        const inpImpl = document.getElementById("inpImplementation").value;
-
-        if (!currentStationKey && (!lineSel.value || !stnSel.value || !inpImpl)) {
-            throw new Error("Missing critical station details.");
-        }
-
-        // 2. Fetch Draft Rows
-        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-        const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
-
-        // 3. GENERATE REAL-TIME STRING (Client Side fallback)
-        // We also send serverTimestamp() for backend verification
-        const now = new Date();
-        const readableDate = now.toLocaleString('en-IN', { 
-            timeZone: 'Asia/Kolkata', 
-            day: '2-digit', month: 'short', year: 'numeric', 
-            hour: '2-digit', minute: '2-digit', hour12: true 
-        });
-
-        const updates = {};
-
-        // --- BRANCH A: UPDATING (Edit Mode) ---
-        if (currentStationKey) {
-            // CRITICAL FIX: Update the MAIN 'date' field so the table updates immediately
-            updates[`station_logs/${currentStationKey}/date`] = readableDate;
-            updates[`station_logs/${currentStationKey}/timestamp`] = serverTimestamp(); // Official Server Time
-            
-            updates[`station_logs/${currentStationKey}/len`] = inpLen;
-            updates[`station_logs/${currentStationKey}/yl`] = inpYl;
-            updates[`station_logs/${currentStationKey}/th`] = inpTh;
-            updates[`station_logs/${currentStationKey}/remarks`] = inpRem;
-            updates[`station_logs/${currentStationKey}/impl`] = inpImpl;
-            updates[`station_logs/${currentStationKey}/userName`] = currentUser.name; // Update inspector name if changed
-
-            // Handle Rake Rows
-            if (rowsData) {
-                Object.keys(rowsData).forEach(tempKey => {
-                    const newRowKey = push(ref(db, `rake_logs/${currentRakeKey}`)).key;
-                    updates[`rake_logs/${currentRakeKey}/${newRowKey}`] = rowsData[tempKey];
-                });
-            }
-        } 
-        // --- BRANCH B: NEW RECORD ---
-        else {
-            const name = `${stnSel.value} (${lineSel.value})`;
-            const newKey = push(ref(db, "station_logs")).key;
-            
-            const stationObj = {
-                name: name, 
-                len: inpLen, yl: inpYl, th: inpTh,
-                remarks: inpRem, impl: inpImpl,
-                user: currentUser.email, 
-                userName: currentUser.name,
-                
-                // CRITICAL: Save both readable string AND server timestamp
-                date: readableDate,
-                timestamp: serverTimestamp(),
-                
-                linkedRakeKey: newKey
-            };
-
-            updates[`station_logs/${newKey}`] = stationObj;
-            if (rowsData) updates[`rake_logs/${newKey}`] = rowsData;
-        }
-
-        // 4. PUSH TO DB
-        await update(ref(db), updates);
-        await remove(ref(db, `drafts/${currentUser.uid}`));
-        
-        alert("✅ TIME-STAMPED & SAVED: " + readableDate);
-        
-        document.getElementById("distanceBody").innerHTML = ""; 
-        switchTab('dataView');
-        loadStationData(); 
-
-    } catch (e) {
-        console.error(e);
-        alert("❌ DATA ERROR: " + e.message);
-    } finally {
-        submitBtn.innerText = "SUBMIT FINAL REPORT";
-        submitBtn.disabled = false;
-    }
-};
 window.completeTask = (k) => update(ref(db, `assignments/${currentUser.uid}/${k}`), { status: "Done" });
 window.debugConnection = async () => {
     try {
