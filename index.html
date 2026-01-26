@@ -1480,73 +1480,7 @@ window.openBarcodeScanner = (mode) => {
 // 1. ADMIN PANEL (With Unban Logic)
 // ==========================================
 let adminListener = null;
-window.loadAdminPanel = () => {
-    if (!isAdmin) return; // Security check
 
-    const userTable = document.getElementById("userListBody");
-    
-    // DETACH OLD LISTENER (Stops ghost updates)
-    if (window.adminListener) { 
-        off(ref(db, "users"), window.adminListener); 
-    }
-
-    userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔄 Syncing User Database...</td></tr>";
-
-    window.adminListener = onValue(ref(db, "users"), async (snap) => {
-        // Clear table first
-        userTable.innerHTML = "";
-
-        if (!snap.exists()) {
-            userTable.innerHTML = "<tr><td colspan='5'>No users found.</td></tr>";
-            return;
-        }
-
-        // Fetch online status once
-        const statusSnap = await get(ref(db, "status"));
-        const statusMap = statusSnap.val() || {};
-
-        snap.forEach(c => {
-            const u = c.val();
-            const uid = c.key;
-            
-            // STATUS BADGE
-            const s = statusMap[uid];
-            const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
-            const badge = isOnline ? 
-                `<span class="badge-online" style="background:#dcfce7; color:green;">● ONLINE</span>` : 
-                `<span class="badge-offline" style="background:#f1f5f9; color:grey;">○ OFFLINE</span>`;
-
-            // BUTTON LOGIC (Strict Check)
-            // If banned is TRUE, we show UNBAN. If null/false, we show BAN.
-            let actionBtn = "";
-            let rowStyle = "";
-
-            if (u.banned === true) {
-                // IS BANNED -> Show Green UNBAN Button
-                rowStyle = "background-color: #fee2e2; border-left: 4px solid #991b1b;";
-                actionBtn = `<button onclick="unbanUser('${uid}', '${u.name}')" class="success" style="font-size:11px; padding:5px;">✅ LIFT BAN</button>`;
-            } else {
-                // IS ACTIVE -> Show Red BAN Button
-                actionBtn = `<button onclick="openBanModal('${uid}', '${u.name}')" class="danger" style="font-size:11px; padding:5px;">🚫 BAN ACCESS</button>`;
-            }
-
-            const html = `
-                <tr style="${rowStyle}">
-                    <td>
-                        <strong>${u.name || 'No Name'}</strong><br>
-                        <small>${u.email}</small>
-                        ${u.banned ? '<br><b style="color:red; font-size:10px;">(SUSPENDED)</b>' : ''}
-                    </td>
-                    <td style="text-align:center;">${badge}</td>
-                    <td style="text-align:center;">-</td>
-                    <td style="text-align:center;">${u.faceData ? '✔' : '❌'}</td>
-                    <td>${actionBtn}</td>
-                </tr>
-            `;
-            userTable.innerHTML += html;
-        });
-    });
-};
 // ==========================================
 // 2. REAL-TIME MASTER LOG STORAGE (NO DRAFTS)
 // ==========================================
@@ -3908,81 +3842,7 @@ window.editStationLog = async (key) => {
         alert("Error loading for edit: " + e.message);
     }
 };
-window.loadAdminPanel = async () => {
-    const userList = document.getElementById("userCheckboxList");
-    const userTable = document.getElementById("userListBody");
-    
-    // Detach old listener to prevent memory leaks
-    if (adminListener) { off(ref(db, "users"), adminListener); }
 
-    const usersRef = ref(db, "users");
-    
-    adminListener = onValue(usersRef, async (userSnap) => {
-        const statusSnap = await get(ref(db, "status"));
-        const statusMap = statusSnap.val() || {};
-        
-        userTable.innerHTML = "";
-        if(userList) userList.innerHTML = "";
-
-        if (!userSnap.exists()) {
-             userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No users registered.</td></tr>";
-             return;
-        }
-
-        userSnap.forEach(c => {
-            const u = c.val();
-            const uid = c.key;
-            const displayName = u.name || u.email;
-
-            // STATUS BADGE
-            const s = statusMap[uid];
-            const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
-            const statusBadge = isOnline ? 
-                `<span class="badge-online">● ONLINE</span>` : 
-                `<span class="badge-offline">○ OFFLINE</span>`;
-
-            // CRITICAL: BUTTON LOGIC
-            // If u.banned exists and is true, show UNBAN. Otherwise show BAN.
-            let actionButton = "";
-            let rowStyle = "";
-
-            if (u.banned) {
-                // IS BANNED -> Show UNBAN Button
-                rowStyle = "background-color: #fef2f2; border-left: 4px solid #dc2626;";
-                actionButton = `
-                    <button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(displayName)}')" 
-                        style="font-size:10px; padding:4px 8px; margin-top:2px; background:#15803d; border-color:#15803d;">
-                        ✅ UNBAN
-                    </button>`;
-            } else {
-                // IS ACTIVE -> Show BAN Button
-                actionButton = `
-                    <button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" 
-                        style="font-size:10px; padding:4px 8px; margin-top:2px;">
-                        🚫 BAN
-                    </button>`;
-            }
-
-            const row = document.createElement("tr");
-            if(rowStyle) row.style.cssText = rowStyle;
-
-            row.innerHTML = `
-                <td>
-                    <strong>${displayName}</strong><br>
-                    <small>${u.email}</small>
-                    ${u.banned ? '<br><b style="color:red; font-size:10px;">(SUSPENDED)</b>' : ''}
-                </td>
-                <td style="text-align:center;">${statusBadge}</td>
-                <td style="text-align:center;" id="task_stat_${uid}">...</td>
-                <td style="text-align:center;">${u.faceData ? '✔' : '❌'}</td>
-                <td>
-                    ${actionButton}
-                </td>
-            `;
-            userTable.appendChild(row);
-        });
-    });
-};
 async function hardResetForm() {
     // A. Wipe Visual Inputs
     document.getElementById("inpStationLength").value = "";
@@ -4002,58 +3862,9 @@ async function hardResetForm() {
         await remove(ref(db, `drafts/${currentUser.uid}`));
     }
 }
-window.resetUserName = async (uid) => {
-    if(confirm("⚠ Reset this user's name?\n\nThey will be asked to enter their 'Official Name' again on the next login.")) {
-        try {
-            await update(ref(db, `users/${uid}`), { name: null });
-            alert("✅ Name cleared. User will be prompted to rename on next login.");
-            loadAdminPanel(); // Refresh list
-        } catch(e) {
-            alert("Error: " + e.message);
-        }
-    }
-};
-
 window.closeTaskModal = () => {
     document.getElementById("adminTaskModal").classList.add("hidden");
 };
-
-// --- VIEW USER TASKS (ADMIN) ---
-window.viewUserTasks = (uid, encodedName) => {
-    const name = decodeURIComponent(encodedName);
-    document.getElementById("modalTaskUserName").innerText = name;
-    document.getElementById("adminTaskModal").classList.remove("hidden");
-    const tbody = document.getElementById("adminTaskBody");
-    tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'>Fetching data...</td></tr>";
-
-    onValue(ref(db, `assignments/${uid}`), (snap) => {
-        tbody.innerHTML = "";
-        if(!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:#666;'>No tasks assigned.</td></tr>";
-            return;
-        }
-        
-        snap.forEach(c => {
-            const t = c.val();
-            const statusBadge = t.status === 'Done' 
-                ? `<span style="color:green; font-weight:bold;">✔ COMPLETED</span>` 
-                : `<span style="color:#d97706; font-weight:bold;">⏳ PENDING</span>`;
-            
-            const row = `
-                <tr style="background:white; border-bottom:1px solid #eee;">
-                    <td>${t.date}</td>
-                    <td>${t.desc}</td>
-                    <td>${statusBadge}</td>
-                    <td style="text-align:center;">
-                        <button class="danger" onclick="deleteUserTask('${uid}', '${c.key}')" style="padding:2px 6px; font-size:10px;">🗑</button>
-                    </td>
-                </tr>
-            `;
-            tbody.innerHTML += row;
-        });
-    });
-};
-
 window.deleteUserTask = (uid, taskKey) => {
     if(confirm("Are you sure you want to remove this task?")) {
         remove(ref(db, `assignments/${uid}/${taskKey}`))
@@ -4063,7 +3874,237 @@ window.deleteUserTask = (uid, taskKey) => {
             .catch(err => alert("Error: " + err.message));
     }
 };
+// =========================================================================
+// 👑 COMPLETE ADMIN SYSTEM (Assignments, Resets, Tracking, Banning)
+// =========================================================================
 
+// --- 1. LOAD ADMIN PANEL (Populates Table + Checkboxes) ---
+window.loadAdminPanel = () => {
+    if (!isAdmin) return; 
+
+    const userTable = document.getElementById("userListBody");
+    const taskCheckboxList = document.getElementById("userCheckboxList");
+    
+    // Detach old listener to prevent duplicates
+    if (window.adminListener) { off(ref(db, "users"), window.adminListener); }
+
+    userTable.innerHTML = "<tr><td colspan='6' style='text-align:center;'>🔄 Syncing Database...</td></tr>";
+
+    window.adminListener = onValue(ref(db, "users"), async (snap) => {
+        // Clear UI
+        userTable.innerHTML = "";
+        if(taskCheckboxList) taskCheckboxList.innerHTML = "";
+
+        if (!snap.exists()) {
+            userTable.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No users found.</td></tr>";
+            return;
+        }
+
+        // Get Online Status Snapshot
+        const statusSnap = await get(ref(db, "status"));
+        const statusMap = statusSnap.val() || {};
+
+        snap.forEach(c => {
+            const u = c.val();
+            const uid = c.key;
+            const name = u.name || u.email;
+            const isBanned = (u.banned === true);
+
+            // 1. ONLINE BADGE
+            const s = statusMap[uid];
+            const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
+            const badge = isOnline ? 
+                `<span class="badge-online" style="background:#dcfce7; color:green; border:1px solid #bbf7d0;">● ONLINE</span>` : 
+                `<span class="badge-offline" style="background:#f1f5f9; color:grey;">○ OFFLINE</span>`;
+
+            // 2. FACE STATUS
+            const faceIcon = u.faceData ? `<span style="color:green">✔ Reg</span>` : `<span style="color:red">❌ No</span>`;
+
+            // 3. ACTION BUTTONS (Ban/Unban)
+            let mainActionBtn = "";
+            let rowStyle = "";
+            
+            if (isBanned) {
+                rowStyle = "background-color: #fee2e2; border-left: 4px solid #991b1b;";
+                mainActionBtn = `<button onclick="unbanUser('${uid}', '${name}')" class="success" style="font-size:10px; padding:4px 8px;">✅ UNBAN</button>`;
+            } else {
+                mainActionBtn = `<button onclick="openBanModal('${uid}', '${name}')" class="danger" style="font-size:10px; padding:4px 8px;">🚫 BAN</button>`;
+                
+                // Populate Task Assignment Checkboxes (Only for active users)
+                if(taskCheckboxList) {
+                    taskCheckboxList.innerHTML += `
+                        <label class="checkbox-item" style="display:flex; align-items:center; gap:8px; padding:5px; border-bottom:1px solid #eee;">
+                            <input type="checkbox" class="user-check" value="${uid}"> 
+                            <span>${name}</span>
+                        </label>`;
+                }
+            }
+
+            // 4. RENDER ROW
+            // Includes: Name, Status, Task Counter, Face Status, Task Button, Ban Button, Reset Controls
+            const html = `
+                <tr style="${rowStyle}">
+                    <td>
+                        <strong>${name}</strong><br>
+                        <small style="color:#666;">${u.email}</small>
+                        ${isBanned ? '<br><b style="color:red; font-size:10px;">(SUSPENDED)</b>' : ''}
+                    </td>
+                    <td style="text-align:center;">${badge}</td>
+                    
+                    <td style="text-align:center;" id="task_stat_${uid}">
+                        <small>Loading...</small>
+                    </td>
+
+                    <td style="text-align:center;">${faceIcon}</td>
+
+                    <td>
+                        <button class="info" onclick="viewUserTasks('${uid}', '${name}')" style="font-size:10px; padding:4px 8px; margin-bottom:4px; width:100%;">
+                            📋 Track Work
+                        </button>
+                        ${mainActionBtn}
+                    </td>
+
+                    <td>
+                        <button class="warning" onclick="resetUserName('${uid}')" style="font-size:10px; padding:3px 6px; margin-bottom:4px; width:100%;">
+                            🔄 Reset Name
+                        </button>
+                        <button class="secondary" onclick="resetUserFace('${uid}')" style="font-size:10px; padding:3px 6px; width:100%; background:#334155; color:white;">
+                            👤 Reset Face
+                        </button>
+                    </td>
+                </tr>
+            `;
+            userTable.innerHTML += html;
+
+            // 5. LIVE TASK MONITOR (Async)
+            // Attaches a specific listener for this user's task count
+            onValue(ref(db, `assignments/${uid}`), (taskSnap) => {
+                const el = document.getElementById(`task_stat_${uid}`);
+                if (el) {
+                    let pending = 0, done = 0;
+                    if (taskSnap.exists()) {
+                        taskSnap.forEach(t => { t.val().status === 'Done' ? done++ : pending++; });
+                        el.innerHTML = `<span style="color:green; font-weight:bold;">${done}</span> / <span style="color:orange; font-weight:bold;">${pending}</span>`;
+                    } else {
+                        el.innerHTML = `<span style="color:#ccc;">-</span>`;
+                    }
+                }
+            }, { onlyOnce: false }); // Keep listening for updates
+        });
+    });
+};
+
+// --- 2. ASSIGN TASK (Multi-User) ---
+window.assignTaskMulti = async () => {
+    const descInput = document.getElementById("taskDesc");
+    const desc = descInput.value.trim();
+    
+    if(!desc) return alert("Please enter task instructions.");
+
+    // Select all checked boxes
+    const checkboxes = document.querySelectorAll('.user-check:checked');
+    if(checkboxes.length === 0) return alert("Please select at least one personnel.");
+
+    let count = 0;
+    const updates = {};
+
+    checkboxes.forEach(cb => {
+        const uid = cb.value;
+        const newKey = push(ref(db, `assignments/${uid}`)).key;
+        
+        updates[`assignments/${uid}/${newKey}`] = {
+            desc: desc,
+            by: currentUser.email,
+            date: new Date().toLocaleString(),
+            status: "Pending",
+            timestamp: serverTimestamp()
+        };
+        count++;
+    });
+
+    try {
+        await update(ref(db), updates);
+        alert(`✅ Task dispatched to ${count} users.`);
+        descInput.value = ""; // Clear input
+        checkboxes.forEach(cb => cb.checked = false); // Uncheck all
+    } catch(e) {
+        alert("Error assigning task: " + e.message);
+    }
+};
+
+// --- 3. TRACK WORK (View User Tasks) ---
+window.viewUserTasks = (uid, name) => {
+    // Show Modal
+    document.getElementById("adminTaskModal").classList.remove("hidden");
+    document.getElementById("modalTaskUserName").innerText = decodeURIComponent(name);
+    
+    const tbody = document.getElementById("adminTaskBody");
+    tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'>Fetching Tasks...</td></tr>";
+
+    // Listen to tasks
+    onValue(ref(db, `assignments/${uid}`), (snap) => {
+        tbody.innerHTML = "";
+        
+        if(!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:#999;'>No active tasks.</td></tr>";
+            return;
+        }
+
+        snap.forEach(c => {
+            const t = c.val();
+            const statusBadge = t.status === 'Done' 
+                ? `<span style="color:green; font-weight:bold; background:#dcfce7; padding:2px 6px; border-radius:4px;">✔ DONE</span>` 
+                : `<span style="color:#d97706; font-weight:bold; background:#fef3c7; padding:2px 6px; border-radius:4px;">⏳ PENDING</span>`;
+
+            tbody.innerHTML += `
+                <tr style="border-bottom:1px solid #f1f5f9;">
+                    <td style="font-size:12px;">${t.date}</td>
+                    <td style="font-weight:600;">${t.desc}</td>
+                    <td style="text-align:center;">${statusBadge}</td>
+                    <td style="text-align:center;">
+                        <button class="danger" onclick="deleteUserTask('${uid}', '${c.key}')" style="font-size:10px; padding:4px 8px;">🗑</button>
+                    </td>
+                </tr>
+            `;
+        });
+    });
+};
+
+// --- 4. DELETE SINGLE TASK ---
+window.deleteUserTask = async (uid, taskKey) => {
+    if(confirm("Remove this task?")) {
+        await remove(ref(db, `assignments/${uid}/${taskKey}`));
+    }
+};
+
+// --- 5. RESET NAME (Fixes "Not Reset Name") ---
+window.resetUserName = async (uid) => {
+    if(confirm("⚠️ Reset Name?\n\nThe user will be forced to set their 'Official Name' again on next login.")) {
+        try {
+            await update(ref(db, `users/${uid}`), { name: null });
+            alert("✅ Name Reset. User must re-enter it.");
+        } catch(e) {
+            alert("Error: " + e.message);
+        }
+    }
+};
+
+// --- 6. RESET FACE (Fixes "Not Reset Face") ---
+window.resetUserFace = async (uid) => {
+    if(confirm("⚠️ Reset Face ID?\n\nThis deletes their biometric data. They must re-register their face to access the system.")) {
+        try {
+            await update(ref(db, `users/${uid}`), { faceData: null });
+            alert("✅ Face ID Wiped. User must re-register.");
+        } catch(e) {
+            alert("Error: " + e.message);
+        }
+    }
+};
+
+// --- 7. CLOSE TASK MODAL ---
+window.closeTaskModal = () => {
+    document.getElementById("adminTaskModal").classList.add("hidden");
+};
 // ==============================================
 //            FULL BAN SYSTEM LOGIC
 // ==============================================
@@ -4192,21 +4233,6 @@ window.unbanUser = async (uid, name) => {
             alert("Error: " + e.message);
         }
     }
-};
-window.assignTaskMulti = () => {
-    const desc = document.getElementById("taskDesc").value;
-    if(!desc) return alert("Please enter task details.");
-    const checkboxes = document.querySelectorAll('.user-check:checked');
-    if(checkboxes.length === 0) return alert("Select at least one user.");
-
-    checkboxes.forEach(cb => {
-        const uid = cb.value;
-        const task = { desc, by: currentUser.email, date: new Date().toLocaleString(), status: "Pending" };
-        push(ref(db, `assignments/${uid}`), task);
-    });
-    alert(`Task assigned to ${checkboxes.length} user(s).`);
-    document.getElementById("taskDesc").value = "";
-    checkboxes.forEach(cb => cb.checked = false);
 };
 // --- FIXED: INSTANT DATA LOAD ON TAB SWITCH ---
 window.switchTab = (t) => {
