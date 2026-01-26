@@ -1534,10 +1534,10 @@ window.handleGalleryStationChange = () => {
     const uploadSection = document.getElementById("galleryUploadSection");
     const targetText = document.getElementById("uploadTargetText");
 
-    // 1. STOP OLD LISTENER (Prevents duplicates)
+    // 1. STOP OLD LISTENER
     if (galleryListener) {
-        // Try/Catch to prevent crash if listener doesn't exist
-        try { off(ref(db, "history"), galleryListener); } catch(e) {}
+        if(typeof galleryListener === "function") galleryListener(); // Fix for modular SDK
+        else try { off(ref(db, "history"), galleryListener); } catch(e) {}
         galleryListener = null;
     }
 
@@ -1545,18 +1545,18 @@ window.handleGalleryStationChange = () => {
     galleryDiv.innerHTML = ""; 
     
     if (!line || !stn) {
-        uploadSection.classList.add("hidden");
+        if(uploadSection) uploadSection.classList.add("hidden");
         return;
     }
 
     // 3. SHOW UPLOAD SECTION
-    uploadSection.classList.remove("hidden");
-    const targetName = `${stn} (${line})`;
-    targetText.innerText = `Target: ${targetName}`;
+    if(uploadSection) uploadSection.classList.remove("hidden");
+    if(targetText) targetText.innerText = `Target: ${stn} (${line})`;
 
     galleryDiv.innerHTML = `<p style="text-align:center; width:100%; color:#666;">Loading repository...</p>`;
 
     // 4. FETCH DATA
+    const targetName = `${stn} (${line})`;
     const q = query(ref(db, "history"), orderByChild("stationName"), equalTo(targetName));
     
     galleryListener = onValue(q, (snap) => {
@@ -1569,42 +1569,45 @@ window.handleGalleryStationChange = () => {
 
         snap.forEach(c => {
             const v = c.val();
+            const fileType = (v.fileType || "").toLowerCase();
             
-            // A. DETERMINE FILE TYPE DISPLAY
-            let media = `<div style="padding:10px; color:#666;">Unsupported</div>`;
-            if(v.fileType && v.fileType.includes("image")) {
-                // Click to open full size in new tab
-                media = `<img src="${v.fileData}" onclick="window.open('${v.fileData}', '_blank')" style="cursor:pointer;">`;
-            } else if(v.fileType && v.fileType.includes("pdf")) {
-                media = `<div style="height:120px; display:flex; flex-direction:column; align-items:center; justify-content:center; background:#f1f5f9; color:#ef4444;">
+            // A. FIX PREVIEW LOGIC (Smarter Check)
+            let media = `<div style="padding:20px; color:#666; background:#f1f5f9; border-radius:4px;">Unsupported Format</div>`;
+            
+            if (fileType.includes("image") || fileType.includes("jpg") || fileType.includes("png") || fileType.includes("jpeg")) {
+                // IMAGE PREVIEW
+                media = `<img src="${v.fileData}" onclick="window.open('${v.fileData}', '_blank')" style="cursor:pointer; width:100%; height:120px; object-fit:cover; border-radius:4px;">`;
+            } 
+            else if (fileType.includes("pdf")) {
+                // PDF ICON
+                media = `<div onclick="window.open('${v.fileData}', '_blank')" style="cursor:pointer; height:120px; display:flex; flex-direction:column; align-items:center; justify-content:center; background:#fee2e2; color:#ef4444; border-radius:4px;">
                             <i class="fas fa-file-pdf" style="font-size:40px; margin-bottom:10px;"></i>
-                            <span style="font-size:11px; font-weight:bold;">PDF DOCUMENT</span>
+                            <span style="font-size:11px; font-weight:bold;">OPEN PDF</span>
                          </div>`;
             }
             
-            // B. ADMIN ONLY CONTROLS (Download & Delete)
+            // B. ADMIN BUTTONS (Download & Delete)
             let controls = "";
             if(isAdmin) {
                 controls = `
                 <div style="margin-top:8px; display:flex; gap:5px;">
-                    <a href="${v.fileData}" download="${v.name}" class="info" style="flex:1; text-decoration:none; padding:5px; font-size:11px; text-align:center; border-radius:4px; background:#0ea5e9; color:white;">
+                    <a href="${v.fileData}" download="${v.name || 'download'}" class="info" style="flex:1; text-decoration:none; padding:6px; font-size:11px; text-align:center; border-radius:4px; background:#0ea5e9; color:white;">
                         <i class="fas fa-download"></i> Save
                     </a>
-                    <button class="danger" onclick="removeFile('${c.key}')" style="padding:5px 8px; font-size:11px;">
+                    <button class="danger" onclick="removeFile('${c.key}')" style="padding:6px 10px; font-size:11px; border-radius:4px;">
                         <i class="fas fa-trash"></i>
                     </button>
                 </div>`;
             } else {
-                // Regular users see nothing (or just a label)
-                controls = `<div style="margin-top:5px; font-size:10px; color:#cbd5e1;">View Only</div>`;
+                controls = `<div style="margin-top:5px; font-size:10px; color:#cbd5e1; text-align:center;">View Only</div>`;
             }
 
             // C. RENDER CARD
             const card = `
-            <div class="gallery-item" style="display:flex; flex-direction:column; justify-content:space-between;">
-                <div>
+            <div class="gallery-item" style="display:flex; flex-direction:column; justify-content:space-between; background:white; padding:10px; border-radius:8px; border:1px solid #e2e8f0; width:100%;">
+                <div style="margin-bottom:5px;">
                     ${media}
-                    <div style="font-size:11px; margin-top:8px; font-weight:bold; color:#334155; word-break:break-all;">${v.name || 'Evidence'}</div>
+                    <div style="font-size:12px; margin-top:8px; font-weight:bold; color:#334155; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${v.name}">${v.name || 'Evidence'}</div>
                     <div style="font-size:10px; color:#94a3b8;">By: ${v.userName}</div>
                 </div>
                 ${controls}
@@ -4388,17 +4391,40 @@ window.deleteUserTask = (uid, taskKey) => {
 // =========================================================================
 // 👑 COMPLETE ADMIN SYSTEM (Assignments, Resets, Tracking, Banning)
 // =========================================================================
-// --- 1. LOAD ADMIN PANEL (Fixed Duplication Logic) ---
+// --- 1. LOAD ADMIN PANEL (With Admin Badge) ---
 window.loadAdminPanel = () => {
+    // --- 🚨 EMERGENCY WIPE BUTTON ---
+    const header = document.querySelector("#tab-adminPanel h3");
+    if(header && !document.getElementById("btnEmergencyWipe")) {
+        const btn = document.createElement("button");
+        btn.id = "btnEmergencyWipe";
+        btn.innerText = "☢️ WIPE ALL STATION DATA";
+        btn.style.cssText = "background:red; color:white; font-weight:bold; margin-left:20px; border:2px solid white;";
+        
+        btn.onclick = async () => {
+            if(confirm("⚠ WARNING: This will delete ALL Station Logs and Rake Data.\n\nUse this ONLY to fix the ID corruption issues.\n\nAre you sure?")) {
+                try {
+                    await remove(ref(db, 'station_logs'));
+                    await remove(ref(db, 'rake_logs'));
+                    alert("✅ System Wiped. Corruption fixed.\n\nPlease reload the page and enter fresh data.");
+                    location.reload();
+                } catch(e) {
+                    alert("Error: " + e.message);
+                }
+            }
+        };
+        header.appendChild(btn);
+    }
+    // --- END EMERGENCY BUTTON ---
+
     if (!isAdmin) return; 
 
     const userTable = document.getElementById("userListBody");
     const taskCheckboxList = document.getElementById("userCheckboxList");
     
-    // 🛑 STOP PREVIOUS LISTENER (THE FIX)
-    // In Modular Firebase, onValue returns a function. We call IT to unsubscribe.
+    // 🛑 STOP PREVIOUS LISTENER
     if (window.adminListener && typeof window.adminListener === "function") {
-        window.adminListener(); // This kills the old listener immediately
+        window.adminListener(); 
         window.adminListener = null;
     }
 
@@ -4406,7 +4432,6 @@ window.loadAdminPanel = () => {
 
     // Start New Listener
     window.adminListener = onValue(ref(db, "users"), async (snap) => {
-        // 1. Clear UI immediately
         userTable.innerHTML = "";
         if(taskCheckboxList) taskCheckboxList.innerHTML = "";
 
@@ -4415,22 +4440,28 @@ window.loadAdminPanel = () => {
             return;
         }
 
-        // 2. Fetch Status (Wait for it)
+        // Fetch Status
         const statusSnap = await get(ref(db, "status"));
         const statusMap = statusSnap.val() || {};
 
-        // 3. Render Loop
         snap.forEach(c => {
             const u = c.val();
             const uid = c.key;
             const name = u.name || u.email;
             const isBanned = (u.banned === true);
 
+            // 1. CHECK IF USER IS ADMIN (New Logic)
+            // We check if this user's email is in your global ADMIN_EMAILS list
+            const isUserAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === u.email.toLowerCase());
+            
+            // Create Badge HTML
+            const adminBadge = isUserAdmin 
+                ? `<br><span style="background:var(--metro-red); color:white; padding:1px 6px; border-radius:4px; font-size:9px; font-weight:bold; letter-spacing:0.5px;">ADMIN</span>` 
+                : '';
+
             // ONLINE BADGE
             const s = statusMap[uid];
-            // Check if last seen within 20 seconds
             const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
-            
             const badge = isOnline ? 
                 `<span class="badge-online" style="background:#dcfce7; color:green; border:1px solid #bbf7d0;">● ONLINE</span>` : 
                 `<span class="badge-offline" style="background:#f1f5f9; color:grey;">○ OFFLINE</span>`;
@@ -4448,7 +4479,6 @@ window.loadAdminPanel = () => {
             } else {
                 mainActionBtn = `<button onclick="openBanModal('${uid}', '${name}')" class="danger" style="font-size:10px; padding:4px 8px;">🚫 BAN</button>`;
                 
-                // Populate Checkboxes (Only for active users)
                 if(taskCheckboxList) {
                     taskCheckboxList.innerHTML += `
                         <label class="checkbox-item" style="display:flex; align-items:center; gap:8px; padding:5px; border-bottom:1px solid #eee;">
@@ -4458,12 +4488,13 @@ window.loadAdminPanel = () => {
                 }
             }
 
-            // RENDER HTML
+            // RENDER HTML (Added ${adminBadge})
             const html = `
                 <tr style="${rowStyle}">
                     <td>
                         <strong>${name}</strong><br>
                         <small style="color:#666;">${u.email}</small>
+                        ${adminBadge} 
                         ${isBanned ? '<br><b style="color:red; font-size:10px;">(SUSPENDED)</b>' : ''}
                     </td>
                     <td style="text-align:center;">${badge}</td>
@@ -4493,7 +4524,7 @@ window.loadAdminPanel = () => {
             `;
             userTable.innerHTML += html;
 
-            // LIVE TASK MONITOR (Keep this separate)
+            // LIVE TASK MONITOR
             onValue(ref(db, `assignments/${uid}`), (taskSnap) => {
                 const el = document.getElementById(`task_stat_${uid}`);
                 if (el) {
@@ -4508,6 +4539,28 @@ window.loadAdminPanel = () => {
             }, { onlyOnce: false });
         });
     });
+};
+  // --- DELETE DOCUMENT FUNCTION ---
+window.removeFile = async (key) => {
+    // 1. Confirm with User
+    if(!confirm("⚠️ PERMANENTLY DELETE this document?\n\nThis cannot be undone.")) return;
+
+    const btn = document.activeElement;
+    if(btn) btn.innerText = "⏳";
+
+    try {
+        // 2. Remove from Database
+        await remove(ref(db, `history/${key}`));
+        
+        // 3. UI Update
+        // The gallery listener is 'live', so the item will disappear automatically!
+        alert("✅ Document removed successfully.");
+
+    } catch(e) {
+        console.error(e);
+        alert("❌ Error deleting file: " + e.message);
+        if(btn) btn.innerHTML = '<i class="fas fa-trash"></i>'; // Reset icon if failed
+    }
 };
 // --- 2. ASSIGN TASK (Multi-User) ---
 window.assignTaskMulti = async () => {
