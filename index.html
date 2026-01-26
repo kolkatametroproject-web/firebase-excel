@@ -2876,38 +2876,53 @@ window.selectBanDuration = (days, btn) => {
     btn.classList.add("selected");
 };
 // ==========================================
-// 4. PRESENCE SYSTEM (Fixed: No Undefined Errors)
+// 4. ROBUST PRESENCE SYSTEM (Heartbeat)
 // ==========================================
+let presenceInterval = null; // Global variable to track the timer
+
 function startPresenceSystem(user) {
-    if (!user) return; // Safety check
+    if (!user) return;
 
     const userStatusRef = ref(db, `status/${user.uid}`);
     const connectedRef = ref(db, ".info/connected");
 
+    // 1. MONITOR CONNECTION
     onValue(connectedRef, (snap) => {
         if (snap.val() === true) {
-            // 🛑 FIX: Calculate a safe name string. 
-            // If user.name is missing (not loaded yet), use displayName or email.
-            // Firebase crashes if you try to save 'undefined', so we force a string.
             const safeName = user.name || user.displayName || user.email || "Identifying...";
 
-            // 1. Set Disconnect Hook (Offline on close)
+            // Set the "Offline" trigger for when tab closes/internet dies
             onDisconnect(userStatusRef).set({
                 state: 'offline',
-                last_changed: serverTimestamp(),
+                last_seen: serverTimestamp(), // Important: Capture exact disconnect time
                 email: user.email,
                 name: safeName
-            }).then(() => {
-                // 2. Set Online Status
-                set(userStatusRef, {
-                    state: 'online',
-                    last_changed: serverTimestamp(),
-                    email: user.email,
-                    name: safeName
-                });
+            });
+
+            // Mark as Connected
+            update(userStatusRef, {
+                state: 'online',
+                last_seen: serverTimestamp(),
+                email: user.email,
+                name: safeName
             });
         }
     });
+
+    // 2. THE HEARTBEAT (Ping every 5 seconds)
+    if (presenceInterval) clearInterval(presenceInterval); // Clear old timer
+
+    presenceInterval = setInterval(() => {
+        // Only ping if we are actually logged in
+        if (auth.currentUser) {
+            update(userStatusRef, {
+                last_seen: serverTimestamp(),
+                state: 'online' // Reinforce state
+            }).catch(e => {
+                // Ignore minor network blips, don't spam console
+            });
+        }
+    }, 5000); // 5 Seconds Pulse
 }
 function updateRegDots(count) {
     document.getElementById("dot1").className = count >= 1 ? "dot active" : "dot";
@@ -3923,71 +3938,85 @@ window.submitStationData = async () => {
 // (This prevents duplicate connections when you click Refresh)
 let adminUsersListener = null;
 let adminStatusListener = null;
-
 // =========================================================
-// 🛠️ FIXED: LOAD ADMIN PANEL (With Proper Refresh Logic)
+// 🛠️ FIXED: ADMIN PANEL (Strict Heartbeat Logic)
 // =========================================================
 window.loadAdminPanel = () => {
     const tbody = document.getElementById("userListBody");
     const checkboxList = document.getElementById("userCheckboxList");
 
-    // Safety Check
     if (!tbody || !checkboxList) return;
 
-    // 1. DETACH OLD LISTENERS (The Fix for "Refresh" button)
-    // If listeners are already running, stop them before starting new ones.
-    if (adminUsersListener) {
-        // In Firebase v9+, onValue returns the unsubscribe function directly
-        if (typeof adminUsersListener === "function") adminUsersListener(); 
-        adminUsersListener = null;
-    }
-    if (adminStatusListener) {
-        if (typeof adminStatusListener === "function") adminStatusListener();
-        adminStatusListener = null;
-    }
+    // Detach old listeners to prevent memory leaks
+    if (adminUsersListener) { if (typeof adminUsersListener === "function") adminUsersListener(); adminUsersListener = null; }
+    if (adminStatusListener) { if (typeof adminStatusListener === "function") adminStatusListener(); adminStatusListener = null; }
 
-    // 2. SHOW LOADING STATE (Visual feedback)
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-sync fa-spin'></i> Refreshing Data...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-sync fa-spin'></i> Syncing Status...</td></tr>";
     
-    // Local state variables
     let localUsers = {};
     let localStatus = {};
 
-    // --- RENDER FUNCTION ---
     const renderTable = () => {
         tbody.innerHTML = "";
         checkboxList.innerHTML = "";
 
         if (!localUsers || Object.keys(localUsers).length === 0) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'>No users registered.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'>No users found.</td></tr>";
             return;
         }
+
+        const NOW = Date.now(); // Current Time for calculations
 
         Object.entries(localUsers).forEach(([uid, u]) => {
             if (!u.email) return;
 
             const isSelf = (uid === currentUser.uid);
             const isBanned = u.banned === true;
+            const hasBiometrics = !!u.faceData; // True if face data exists
 
-            // STATUS LOGIC
-            const userStatus = localStatus[uid];
-            const isOnline = userStatus && userStatus.state === 'online';
-            
-            let timeDisplay = "N/A";
-            if (userStatus && userStatus.last_changed) {
-                timeDisplay = new Date(userStatus.last_changed).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            // --- STRICT STATUS LOGIC ---
+            const s = localStatus[uid];
+            let isOnline = false;
+            let lastSeenText = "Never";
+
+            if (s && s.last_seen) {
+                // Calculate time difference in Seconds
+                const diff = NOW - s.last_seen; 
+                
+                // RULE 1: If 'last_seen' was less than 15 seconds ago, they are ONLINE.
+                // (We allow 15s buffer for slow internet)
+                if (diff < 15000) {
+                    isOnline = true;
+                }
+
+                // RULE 2: If database explicitly says 'offline' (from logout), they are OFFLINE.
+                if (s.state === 'offline') isOnline = false;
+
+                lastSeenText = new Date(s.last_seen).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             }
 
-            const statusBadge = isOnline 
-                ? `<span class="badge-online">🟢 Online</span>` 
-                : `<span class="badge-offline">⚫ Offline (${timeDisplay})</span>`;
+            // --- BADGE GENERATION ---
+            let statusBadge = "";
 
-            // BIOMETRIC CHECK
-            const bioStatus = u.faceData 
+            if (isOnline) {
+                if (hasBiometrics) {
+                    // Scenario A: Online & Verified (Perfect)
+                    statusBadge = `<span class="badge-online" style="background:#dcfce7; color:#166534; border:1px solid #bbf7d0;">🟢 Online</span>`;
+                } else {
+                    // Scenario B: Online BUT No Biometrics (Your Request)
+                    statusBadge = `<span style="background:#fff7ed; color:#c2410c; padding:4px 10px; border-radius:12px; font-size:10px; font-weight:800; border:1px solid #fdba74;">🟡 Setup Pending</span>`;
+                }
+            } else {
+                // Scenario C: Offline
+                statusBadge = `<span class="badge-offline">⚫ Offline (${lastSeenText})</span>`;
+            }
+
+            // --- BIOMETRIC COLUMN ---
+            const bioStatus = hasBiometrics 
                 ? `<span style="color:green; font-weight:bold; font-size:11px;">✔ Registered</span>` 
-                : `<span style="color:red; font-weight:bold; font-size:11px;">⚠ Pending</span>`;
+                : `<span style="color:red; font-weight:bold; font-size:11px;">⚠ Missing</span>`;
 
-            // BUTTONS
+            // --- BUTTONS ---
             let actionBtns = `
                 <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="View Tasks"><i class="fas fa-tasks"></i></button>
                 <button class="secondary" onclick="resetUserName('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Name"><i class="fas fa-eraser"></i></button>
@@ -4002,8 +4031,12 @@ window.loadAdminPanel = () => {
                 }
             }
 
-            // RENDER ROW
+            // --- RENDER ROW ---
             const rowStyle = isBanned ? "background:#fee2e2;" : "";
+            
+            // Only add checkbox if Online & Verified (Optional rule, remove if you want to assign tasks to offline users)
+            // For now, we allow assigning to anyone not banned.
+            
             tbody.innerHTML += `
                 <tr style="${rowStyle}">
                     <td>
@@ -4023,7 +4056,6 @@ window.loadAdminPanel = () => {
                 </tr>
             `;
 
-            // CHECKBOX LIST
             if (!isBanned) {
                 const checkId = `chk_user_${uid}`;
                 checkboxList.innerHTML += `
@@ -4039,21 +4071,21 @@ window.loadAdminPanel = () => {
         });
     };
 
-    // 3. START NEW LISTENERS (And save them to global vars)
-    
-    // User Listener
+    // 3. LISTENERS
     adminUsersListener = onValue(ref(db, "users"), (snap) => {
         if (snap.exists()) localUsers = snap.val();
-        else localUsers = {};
         renderTable();
     });
 
-    // Status Listener
     adminStatusListener = onValue(ref(db, "status"), (snap) => {
         if (snap.exists()) localStatus = snap.val();
-        else localStatus = {};
+        // Force re-render to update the time calculations
         renderTable();
     });
+    
+    // Auto-refresh the UI every 5 seconds to update "Offline" status locally
+    // (This makes the black badge appear automatically without refreshing the page)
+    setInterval(renderTable, 5000);
 };
 window.viewRakeRows = (rowsEncoded, stationName) => {
     try {
