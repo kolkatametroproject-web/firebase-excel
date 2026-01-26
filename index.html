@@ -1305,7 +1305,8 @@ let receiverVerified = false;
 // --- NEW HIGH-PERFORMANCE VARS ---
 let detectionLoop;
 let currentDescriptor = null;
-let pendingTransactionItem = null; // Stores details of scanned item for Checkout/Return
+let pendingTransactionItem = null; // Stores details of scanned item for Checkout/Return// --- GLOBAL STATE TRACKERS ---
+let isSwitching = false; // <--- ADD THIS SAFETY LOCK
 // --- NEW BARCODE VARS ---
 let scanner = null;
 let existingItemKey = null; // To track if we are updating existing stock
@@ -1556,13 +1557,27 @@ function renderRealTimeRow(key, v, index) {
         </tr>`;
     tbody.innerHTML += html;
 }
-
-// E. Row Operations (Direct to Master Log)
-window.addDistanceRow = () => {
-    if(!rtRakeKey) return alert("Please select a station first.");
-    push(ref(db, `rake_logs/${rtRakeKey}`), { rake: "", type: "", f: "", r: "" });
+// Updated Row Edit Function
+window.upRow = (k, f, v) => {
+    // 🛑 SAFETY LOCK: If we are switching, ignore this old event
+    if (isSwitching) {
+        console.warn("Blocked ghost write during switch.");
+        return;
+    }
+    update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), { [f]: v });
 };
 
+// Updated Add Row Function
+window.addDistanceRow = () => {
+    if (isSwitching) return; // 🛑 Block add during switch
+    push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
+};
+
+// Updated Delete Row Function
+window.delRow = (k) => {
+    if (isSwitching) return; // 🛑 Block delete during switch
+    remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
+};
 window.upRowRealTime = (rowKey, field, val) => {
     update(ref(db, `rake_logs/${rtRakeKey}/${rowKey}`), { [field]: val });
 };
@@ -2925,30 +2940,37 @@ let currentStationKey = null;
 let currentRakeKey = null;
 let draftRef = null;
 let draftListener = null;
-// --- 1. NUCLEAR RESET (Strict Isolation) ---
 async function nuclearReset() {
     console.log("☢️ NUCLEAR RESET: Clearing previous station data...");
+    
+    // 1. ENGAGE SAFETY LOCK
+    isSwitching = true; 
 
-    // A. Stop the Listener (Cut the connection to the old data)
+    // 2. Stop the Listener (Cut the connection to the old data)
     if (draftRef) { off(draftRef); draftRef = null; }
-    if (draftListener) { draftRef = null; draftListener = null; }
+    if (draftListener) { off(draftRef); draftListener = null; } // Ensure off is called
 
-    // B. Wipe Global IDs (Crucial: Makes the system forget Station A)
+    // 3. Wipe Global IDs
     currentStationKey = null;
     currentRakeKey = null;
 
-    // C. Wipe UI Inputs (Visually Clean)
+    // 4. Wipe UI Inputs
     const uiIds = ["inpStationLength", "inpYellowDist", "inpYellowThick", "inpRemarks", "inpImplementation"];
     uiIds.forEach(id => {
         const el = document.getElementById(id);
-        if(el) { el.value = ""; el.disabled = false; }
+        if(el) { 
+            el.value = ""; 
+            el.disabled = false; 
+            // Remove focus to prevent late blurs
+            el.blur(); 
+        }
     });
     
-    // D. Wipe Table UI
+    // 5. Wipe Table UI immediately
     const tbody = document.getElementById("distanceBody");
     if(tbody) tbody.innerHTML = "";
 
-    // E. Reset Buttons & Titles
+    // 6. Reset Buttons
     document.getElementById("dataExistsWarning").classList.add("hidden");
     document.getElementById("formTitle").innerText = "📝 New Entry";
     const btn = document.getElementById("btnFinalSubmit");
@@ -2958,24 +2980,24 @@ async function nuclearReset() {
         btn.disabled = false;
     }
 
-    // F. CRITICAL: Delete the "Ghost" Draft from Firebase
+    // 7. CRITICAL: Delete the "Ghost" Draft from Firebase
+    // We wait for this to finish before allowing anything else
     if(currentUser) {
         await set(ref(db, `drafts/${currentUser.uid}`), null);
     }
 }
-// --- 2. STATION CHANGE HANDLER (Strict Loader) ---
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
     const formDiv = document.getElementById("mainDataForm");
     const submitBtn = document.getElementById("btnFinalSubmit");
 
-    // === STEP 1: FORCE RESET FIRST ===
-    // This deletes Station A's ghost data before Station B loads
+    // Lock is engaged inside nuclearReset
     await nuclearReset(); 
 
     if (!stnSel.value) {
         formDiv.classList.add("hidden");
+        isSwitching = false; // Release lock if nothing selected
         return;
     }
 
@@ -2987,29 +3009,25 @@ window.handleStationChange = async () => {
     document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
 
     // === STEP 3: CHECK MASTER DATABASE ===
-    // We check if this specific station already exists in the PERMANENT records
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
-        // --- EXISTING RECORD (Edit Mode) ---
+        // --- EXISTING RECORD ---
         let data = null;
         snap.forEach(c => { data = c.val(); currentStationKey = c.key; });
         
-        // Fill Inputs
         document.getElementById("inpStationLength").value = data.len || "";
         document.getElementById("inpYellowDist").value = data.yl || "";
         document.getElementById("inpYellowThick").value = data.th || "";
         document.getElementById("inpRemarks").value = data.remarks || "";
         document.getElementById("inpImplementation").value = data.impl || "";
 
-        // UI Feedback
         document.getElementById("dataExistsWarning").classList.remove("hidden");
         document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying Existing Master Record.";
         submitBtn.innerText = "💾 Update Master Record";
         submitBtn.style.background = "#d97706"; 
 
-        // Load Linked Rake Rows into Drafts
         currentRakeKey = data.linkedRakeKey || currentStationKey;
         const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
         if(rakeSnap.exists()) {
@@ -3017,14 +3035,21 @@ window.handleStationChange = async () => {
         }
 
     } else {
-        // --- NEW RECORD (Create Mode) ---
-        // currentStationKey is NULL. This ensures we create a NEW ID.
+        // --- NEW RECORD ---
         submitBtn.innerText = "✔ Submit New Log";
         submitBtn.style.background = "#0A2342"; 
     }
 
     // === STEP 4: START LISTENER ===
     loadDraft(); 
+    
+    // === STEP 5: RELEASE LOCK ===
+    // Only now do we allow edits. Any ghost events from the previous station
+    // that fired during the `await` steps above were blocked.
+    setTimeout(() => {
+        isSwitching = false;
+        console.log("🔓 Station switch complete. Inputs unlocked.");
+    }, 300); // Small buffer to be safe
 };
 // --- 3. DRAFT TABLE LOADER (Corrected Name) ---
 window.loadDraft = () => {
@@ -4505,9 +4530,6 @@ function renderRow(k, v, i) {
             </td>
         </tr>`;
 }
-window.upRow = (k,f,v) => update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), {[f]:v});
-window.delRow = (k) => remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
-
 function loadInventory() {
     const b = document.getElementById("inventoryBody");
     const summaryEl = document.getElementById("stockSummaryText");
