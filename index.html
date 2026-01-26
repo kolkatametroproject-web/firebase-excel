@@ -1283,6 +1283,7 @@ const db = getDatabase(app);
 
 let currentUser;
 let isAdmin = false;
+let isSwitching = false;
 const ADMIN_EMAILS = ["soham@metro.project", "heerok@metro.project", "sujoy@metro.project"];
 let stream = null;
 let currentFileBase64 = null;
@@ -1306,8 +1307,6 @@ let receiverVerified = false;
 let detectionLoop;
 let currentDescriptor = null;
 let pendingTransactionItem = null; // Stores details of scanned item for Checkout/Return// --- GLOBAL STATE TRACKERS ---
-let isSwitching = false; // <--- ADD THIS SAFETY LOCK
-// --- NEW BARCODE VARS ---
 let scanner = null;
 let existingItemKey = null; // To track if we are updating existing stock
 
@@ -2944,14 +2943,22 @@ async function nuclearReset() {
     console.log("☢️ NUCLEAR RESET: Clearing previous station data...");
     
     // 1. ENGAGE SAFETY LOCK
+    // Make sure 'let isSwitching = false;' is defined at the top of your script
     isSwitching = true; 
 
-    // 2. Stop the Listener CORRECTLY (Fixes the crash)
+    // 2. Stop the Listener (THE FIX)
+    // We check if draftRef exists properly before trying to turn it off.
     if (draftRef) { 
-        off(draftRef); // Detach the listener
-        draftRef = null; // NOW clear the variable
+        try {
+            off(draftRef); // Detach the listener
+        } catch(e) {
+            console.log("Listener already detached");
+        }
+        draftRef = null; // Clear the variable AFTER detaching
     }
-    draftListener = null; // Just clear the tracker, no need to call off() again
+    
+    // Do NOT call off() again. Just clear the tracker.
+    draftListener = null; 
 
     // 3. Wipe Global IDs
     currentStationKey = null;
@@ -2973,8 +2980,12 @@ async function nuclearReset() {
     if(tbody) tbody.innerHTML = "";
 
     // 6. Reset Buttons
-    document.getElementById("dataExistsWarning").classList.add("hidden");
-    document.getElementById("formTitle").innerText = "📝 New Entry";
+    const warningEl = document.getElementById("dataExistsWarning");
+    if(warningEl) warningEl.classList.add("hidden");
+    
+    const titleEl = document.getElementById("formTitle");
+    if(titleEl) titleEl.innerText = "📝 New Entry";
+    
     const btn = document.getElementById("btnFinalSubmit");
     if(btn) {
         btn.innerText = "✔ Submit to Master Database";
