@@ -4539,154 +4539,134 @@ window.deleteUserTask = (uid, taskKey) => {
 // 👑 COMPLETE ADMIN SYSTEM (Assignments, Resets, Tracking, Banning)
 // =========================================================================
 // --- 1. LOAD ADMIN PANEL (With Admin Badge) ---
-window.loadAdminPanel = () => {
-    // --- 🚨 EMERGENCY WIPE BUTTON ---
-    const header = document.querySelector("#tab-adminPanel h3");
-    if(header && !document.getElementById("btnEmergencyWipe")) {
-        const btn = document.createElement("button");
-        btn.id = "btnEmergencyWipe";
-        btn.innerText = "☢️ WIPE ALL STATION DATA";
-        btn.style.cssText = "background:red; color:white; font-weight:bold; margin-left:20px; border:2px solid white;";
-        
-        btn.onclick = async () => {
-            if(confirm("⚠ WARNING: This will delete ALL Station Logs and Rake Data.\n\nUse this ONLY to fix the ID corruption issues.\n\nAre you sure?")) {
-                try {
-                    await remove(ref(db, 'station_logs'));
-                    await remove(ref(db, 'rake_logs'));
-                    alert("✅ System Wiped. Corruption fixed.\n\nPlease reload the page and enter fresh data.");
-                    location.reload();
-                } catch(e) {
-                    alert("Error: " + e.message);
-                }
-            }
-        };
-        header.appendChild(btn);
+// --- CRASH-PROOF AUTH LISTENER (FIXED FOR BANNED USERS) ---
+onAuthStateChanged(auth, (user) => {
+    // A. NO USER -> SHOW LOGIN SCREEN
+    if (!user) { 
+        showLoginScreen(); 
+        return; 
     }
-    // --- END EMERGENCY BUTTON ---
 
-    if (!isAdmin) return; 
+    currentUser = user;
+    startPresenceSystem(user);  
 
-    const userTable = document.getElementById("userListBody");
-    const taskCheckboxList = document.getElementById("userCheckboxList");
+    // B. LOGGED IN - CHECK DATA
+    const userRef = ref(db, `users/${user.uid}`);
     
-    // 🛑 STOP PREVIOUS LISTENER
-    if (window.adminListener && typeof window.adminListener === "function") {
-        window.adminListener(); 
-        window.adminListener = null;
-    }
+    onValue(userRef, (snap) => {
+        const u = snap.val();
 
-    userTable.innerHTML = "<tr><td colspan='6' style='text-align:center;'>🔄 Syncing Database...</td></tr>";
-
-    // Start New Listener
-    window.adminListener = onValue(ref(db, "users"), async (snap) => {
-        userTable.innerHTML = "";
-        if(taskCheckboxList) taskCheckboxList.innerHTML = "";
-
-        if (!snap.exists()) {
-            userTable.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No users found.</td></tr>";
+        // 1. DATA MISSING?
+        if (!u) {
+            alert("Account data not found. Contact admin.");
+            signOut(auth);
             return;
         }
 
-        // Fetch Status
-        const statusSnap = await get(ref(db, "status"));
-        const statusMap = statusSnap.val() || {};
+        // 2. TERMINATED?
+        if (u.terminated) { 
+            alert("ACCOUNT TERMINATED."); 
+            signOut(auth); 
+            return; 
+        }
 
-        snap.forEach(c => {
-            const u = c.val();
-            const uid = c.key;
-            const name = u.name || u.email;
-            const isBanned = (u.banned === true);
+        // ============================================
+        // 3. BANNED USER LOGIC (THE RED WINDOW)
+        // ============================================
+        if (u.banned) {
+            console.log("User is banned. Showing lock screen.");
 
-            // 1. CHECK IF USER IS ADMIN (New Logic)
-            // We check if this user's email is in your global ADMIN_EMAILS list
-            const isUserAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === u.email.toLowerCase());
+            // A. Hide ALL App Interface Elements
+            document.querySelector("header").style.display = "none";
+            document.getElementById("loginSection").classList.add("hidden");
+            document.getElementById("appScreen").classList.add("hidden");
+            document.getElementById("faceModal").classList.add("hidden");
+            document.getElementById("authContainer").classList.add("hidden");
             
-            // Create Badge HTML
-            const adminBadge = isUserAdmin 
-                ? `<br><span style="background:var(--metro-red); color:white; padding:1px 6px; border-radius:4px; font-size:9px; font-weight:bold; letter-spacing:0.5px;">ADMIN</span>` 
-                : '';
-
-            // ONLINE BADGE
-            const s = statusMap[uid];
-            const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
-            const badge = isOnline ? 
-                `<span class="badge-online" style="background:#dcfce7; color:green; border:1px solid #bbf7d0;">● ONLINE</span>` : 
-                `<span class="badge-offline" style="background:#f1f5f9; color:grey;">○ OFFLINE</span>`;
-
-            // FACE STATUS
-            const faceIcon = u.faceData ? `<span style="color:green">✔ Reg</span>` : `<span style="color:red">❌ No</span>`;
-
-            // ACTION BUTTONS
-            let mainActionBtn = "";
-            let rowStyle = "";
-            
-            if (isBanned) {
-                rowStyle = "background-color: #fee2e2; border-left: 4px solid #991b1b;";
-                mainActionBtn = `<button onclick="unbanUser('${uid}', '${name}')" class="success" style="font-size:10px; padding:4px 8px;">✅ UNBAN</button>`;
-            } else {
-                mainActionBtn = `<button onclick="openBanModal('${uid}', '${name}')" class="danger" style="font-size:10px; padding:4px 8px;">🚫 BAN</button>`;
+            // B. Show the Banned Overlay
+            const banScreen = document.getElementById("bannedScreen");
+            if(banScreen) {
+                banScreen.classList.remove("hidden");
                 
-                if(taskCheckboxList) {
-                    taskCheckboxList.innerHTML += `
-                        <label class="checkbox-item" style="display:flex; align-items:center; gap:8px; padding:5px; border-bottom:1px solid #eee;">
-                            <input type="checkbox" class="user-check" value="${uid}"> 
-                            <span>${name}</span>
-                        </label>`;
+                // C. INJECT DATA FROM DATABASE (Reason, Action, Remarks)
+                // We use || "..." to show default text if the field is empty
+                document.getElementById("displayBanReason").innerText = u.banReason || "Violation of Safety Protocols";
+                
+                document.getElementById("displayBanAction").innerText = u.banAction || "Please contact the System Administrator immediately.";
+
+                document.getElementById("displayBanRemarks").innerText = u.banRemarks || "No additional remarks provided.";
+
+                // D. FORMAT & SHOW TIME
+                const deadline = u.banExpires || 0;
+                if(deadline > 0) {
+                      const dateStr = new Date(deadline).toLocaleString('en-IN', {
+                          day: '2-digit', month: 'short', year: 'numeric',
+                          hour: '2-digit', minute: '2-digit', hour12: true
+                      });
+                      document.getElementById("bannedTimeDisplay").innerText = "Expiring: " + dateStr;
+                } else {
+                      document.getElementById("bannedTimeDisplay").innerText = "⛔ PERMANENT SUSPENSION";
                 }
+            } else {
+                // Fallback if HTML is missing
+                document.body.innerHTML = "<h1 style='color:red; text-align:center; margin-top:50px;'>⛔ ACCOUNT SUSPENDED</h1><p style='text-align:center'>Please contact Admin.</p>";
             }
+            return; // 🛑 STOP HERE. Do not load the rest of the app.
+        }
 
-            // RENDER HTML (Added ${adminBadge})
-            const html = `
-                <tr style="${rowStyle}">
-                    <td>
-                        <strong>${name}</strong><br>
-                        <small style="color:#666;">${u.email}</small>
-                        ${adminBadge} 
-                        ${isBanned ? '<br><b style="color:red; font-size:10px;">(SUSPENDED)</b>' : ''}
-                    </td>
-                    <td style="text-align:center;">${badge}</td>
-                    
-                    <td style="text-align:center;" id="task_stat_${uid}">
-                        <small>Loading...</small>
-                    </td>
+        // ============================================
+        // 4. ACTIVE USER LOGIC (NORMAL LOGIN)
+        // ============================================
+        document.getElementById("bannedScreen")?.classList.add("hidden");
+        document.querySelector("header").style.display = "flex";
+        
+        currentUser.name = u.name;
+        isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
 
-                    <td style="text-align:center;">${faceIcon}</td>
+        // Name Setup Check
+        if (!u.name) {
+            document.getElementById("nameModal").classList.remove("hidden");
+            document.getElementById("loginSection").classList.add("hidden");
+            return;
+        }
+        
+        // Update UI
+        document.getElementById("userInfo").innerText = `${u.name}`;
+        document.getElementById("authContainer").classList.remove("hidden");
+        document.getElementById("loginSection").classList.add("hidden");
 
-                    <td>
-                        <button class="info" onclick="viewUserTasks('${uid}', '${name}')" style="font-size:10px; padding:4px 8px; margin-bottom:4px; width:100%;">
-                            📋 Track Work
-                        </button>
-                        ${mainActionBtn}
-                    </td>
+        // Load Admin Tools
+        if (isAdmin) {
+            const badge = document.getElementById("adminBadge");
+            const btn = document.getElementById("btnAdmin");
+            if(badge) badge.classList.remove("hidden");
+            if(btn) btn.classList.remove("hidden");
+            setTimeout(loadAdminPanel, 2000);
+        }
 
-                    <td>
-                        <button class="warning" onclick="resetUserName('${uid}')" style="font-size:10px; padding:3px 6px; margin-bottom:4px; width:100%;">
-                            🔄 Reset Name
-                        </button>
-                        <button class="secondary" onclick="resetUserFace('${uid}')" style="font-size:10px; padding:3px 6px; width:100%; background:#334155; color:white;">
-                            👤 Reset Face
-                        </button>
-                    </td>
-                </tr>
-            `;
-            userTable.innerHTML += html;
-
-            // LIVE TASK MONITOR
-            onValue(ref(db, `assignments/${uid}`), (taskSnap) => {
-                const el = document.getElementById(`task_stat_${uid}`);
-                if (el) {
-                    let pending = 0, done = 0;
-                    if (taskSnap.exists()) {
-                        taskSnap.forEach(t => { t.val().status === 'Done' ? done++ : pending++; });
-                        el.innerHTML = `<span style="color:green; font-weight:bold;">${done}</span> / <span style="color:orange; font-weight:bold;">${pending}</span>`;
-                    } else {
-                        el.innerHTML = `<span style="color:#ccc;">-</span>`;
-                    }
-                }
-            }, { onlyOnce: false });
-        });
+        // Biometric Check
+        if(!isTransactionAuth) {
+            const faceModal = document.getElementById("faceModal");
+            faceModal.classList.remove("hidden");
+            
+            if(!u.faceData) {
+                document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
+                document.getElementById("regProgress").classList.remove("hidden");
+                document.getElementById("btnCapture").onclick = registerNewFace;
+                initCamera(false);
+            } else {
+                document.getElementById("modalTitle").innerText = "Biometric Verification";
+                document.getElementById("regProgress").classList.add("hidden");
+                document.getElementById("btnCapture").onclick = handleFaceScan;
+                initCamera(true);
+            }
+        }
+    }, (error) => {
+        console.error(error);
+        alert("Connection Error. Logging out...");
+        signOut(auth);
     });
-};
+});
 window.removeFile = async (key) => {
     if(!confirm("⚠️ Delete this file permanently?")) return;
     try {
