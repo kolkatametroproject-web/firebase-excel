@@ -3689,29 +3689,29 @@ window.submitStationData = async () => {
 // =========================================================
 // 🛠️ MISSING FUNCTION: LOAD ADMIN PANEL
 // =========================================================
+// =========================================================
+// 🛠️ FIXED FUNCTION: LOAD ADMIN PANEL (Prevents Duplication)
+// =========================================================
 window.loadAdminPanel = () => {
     const tbody = document.getElementById("userListBody");
     const checkboxList = document.getElementById("userCheckboxList");
 
-    // Safety Check: If HTML elements don't exist (e.g., restricted view), stop.
+    // Safety Check: If HTML elements don't exist, stop.
     if (!tbody || !checkboxList) return;
 
-    // 1. UI Feedback
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Personnel Data...</td></tr>";
-    checkboxList.innerHTML = "<p style='color:#666;'>Loading active personnel...</p>";
-
-    // 2. Fetch Users Data Real-time
+    // 1. Listen for Database Changes (Real-time)
     onValue(ref(db, "users"), async (snap) => {
-        // Clear previous list to prevent duplicates
+        
+        // 🔴 CRITICAL FIX: Clear the lists HERE, every time data changes
         tbody.innerHTML = "";
         checkboxList.innerHTML = "";
 
         if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No users registered in system.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'>No users registered in system.</td></tr>";
             return;
         }
 
-        // 3. Get Live Online Status Snapshot (Single fetch for efficiency)
+        // 2. Get Live Online Status Snapshot
         let onlineMap = {};
         try {
             const statusSnap = await get(ref(db, "status"));
@@ -3722,12 +3722,12 @@ window.loadAdminPanel = () => {
             console.error("Status fetch error", e);
         }
 
-        // 4. Loop through users and render
+        // 3. Loop through users and render rows
         snap.forEach(child => {
             const u = child.val();
             const uid = child.key;
             
-            // Skip rendering checking logic if data is incomplete
+            // Skip if data is incomplete
             if (!u.email) return;
 
             const isSelf = (uid === currentUser.uid);
@@ -3754,7 +3754,7 @@ window.loadAdminPanel = () => {
                 <button class="warning" onclick="resetUserFace('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Face ID"><i class="fas fa-user-slash"></i></button>
             `;
 
-            // Ban/Unban Logic (Cannot ban self)
+            // Ban/Unban Logic
             if (!isSelf) {
                 if (isBanned) {
                     actionBtns += `<button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px;">♻ Unban</button>`;
@@ -3786,7 +3786,6 @@ window.loadAdminPanel = () => {
             tbody.innerHTML += rowHtml;
 
             // --- E. RENDER CHECKBOX LIST (For Task Assignment) ---
-            // Only add to checkbox list if user is NOT banned
             if (!isBanned) {
                 const checkId = `chk_user_${uid}`;
                 const checkHtml = `
