@@ -1775,6 +1775,40 @@ window.closeReportPreview = () => {
     // 2. Remove the print classes so the main app returns to normal styling
     document.body.classList.remove('print-a4', 'print-pos');
 };
+// --- 1. THE NUCLEAR RESET (Ensures Strict Isolation) ---
+async function nuclearReset() {
+    console.log("☢️ NUCLEAR RESET: Clearing previous station data...");
+
+    // A. Kill the Listener (Stop receiving updates from the old station)
+    if (draftRef) { off(draftRef); }
+    if (draftListener) { off(draftRef, draftListener); }
+    draftRef = null;
+    draftListener = null;
+
+    // B. Wipe Global IDs (Crucial step to prevent overwriting wrong station)
+    currentStationKey = null;
+    currentRakeKey = null;
+
+    // C. Wipe UI Inputs (Visually Clean)
+    const uiIds = ["inpStationLength", "inpYellowDist", "inpYellowThick", "inpRemarks", "inpImplementation"];
+    uiIds.forEach(id => {
+        const el = document.getElementById(id);
+        if(el) { 
+            el.value = ""; 
+            el.disabled = false; // Re-enable in case it was locked
+        }
+    });
+    
+    // D. Wipe Rake Table UI
+    document.getElementById("distanceBody").innerHTML = "";
+    document.getElementById("dataExistsWarning").classList.add("hidden");
+    
+    // E. Wipe Database Draft Node (The most important part)
+    // This deletes any temporary rake rows you might have added for the PREVIOUS station
+    if(currentUser) {
+        await set(ref(db, `drafts/${currentUser.uid}`), null);
+    }
+}
 window.onScanSuccess = async function(decodedText) {
     closeBarcodeScanner();
     console.log("SCANNED:", decodedText, "MODE:", scanMode);
@@ -2376,106 +2410,72 @@ window.handleLineChange = () => {
         stnSel.style.background = "#fff";
     }
 };
-
+// --- 2. STATION CHANGE HANDLER (Strict Loader) ---
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
     const formDiv = document.getElementById("mainDataForm");
-    
-    // Inputs
-    const inpLen = document.getElementById("inpStationLength");
-    const inpYl = document.getElementById("inpYellowDist");
-    const inpTh = document.getElementById("inpYellowThick");
-    const inpRem = document.getElementById("inpRemarks");
-    const inpImpl = document.getElementById("inpImplementation");
-    
-    // UI Elements
-    const warningBox = document.getElementById("dataExistsWarning");
     const submitBtn = document.getElementById("btnFinalSubmit");
-    const saveBtn = document.getElementById("btnSaveDraft");
+
+    // === STEP 1: WIPE EVERYTHING ===
+    // We strictly wait for this to finish before loading anything new.
+    // This guarantees "Station A" data is gone before "Station B" loads.
+    await nuclearReset(); 
 
     if (!stnSel.value) {
         formDiv.classList.add("hidden");
         return;
     }
-    
-    // 1. SHOW THE FORM
-    formDiv.classList.remove("hidden");
-    currentStationKey = null;
-    currentRakeKey = null;
-    
-    // Clear Rake Table
-    document.getElementById("distanceBody").innerHTML = ""; 
-    await remove(ref(db, `drafts/${currentUser.uid}/rows`));
 
+    // === STEP 2: SETUP NEW CONTEXT ===
+    formDiv.classList.remove("hidden");
     const fullStationName = `${stnSel.value} (${lineSel.value})`;
+    
+    // Set Hidden Identifier (Source of Truth)
     document.getElementById("inpStationName").value = fullStationName;
     document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
 
-    // 2. CHECK DATABASE
+    // === STEP 3: CHECK MASTER DATABASE FOR THIS SPECIFIC STATION ===
+    // We look for an existing GLOBAL record (not user specific)
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
-        // --- DATA EXISTS: PRE-FILL BUT KEEP UNLOCKED ---
-        let existingData = null;
-        snap.forEach(c => { 
-            existingData = c.val(); 
-            currentStationKey = c.key; 
-        });
-        currentRakeKey = existingData.linkedRakeKey || currentStationKey;
-
-        // Show yellow warning but keep going
-        warningBox.classList.remove("hidden");
-        warningBox.innerHTML = `
-            <strong>⚠️ Record Found:</strong> Data pre-filled below. You can edit it.
-        `;
-
-        // Pre-fill values
-        inpLen.value = existingData.len || "";
-        inpYl.value = existingData.yl || "";
-        inpTh.value = existingData.th || "";
-        inpRem.value = existingData.remarks || "";
-        inpImpl.value = existingData.impl || "";
-
-        // *** THE FIX: FORCE ENABLE ALL INPUTS ***
-        inpLen.disabled = false;
-        inpYl.disabled = false;
-        inpTh.disabled = false;
-        inpRem.disabled = false;
-        inpImpl.disabled = false;
+        // --- SCENARIO A: MASTER RECORD EXISTS (Load It) ---
+        let data = null;
+        snap.forEach(c => { data = c.val(); currentStationKey = c.key; });
         
-        saveBtn.disabled = false;
+        // 1. Fill Inputs from Master Record
+        document.getElementById("inpStationLength").value = data.len || "";
+        document.getElementById("inpYellowDist").value = data.yl || "";
+        document.getElementById("inpYellowThick").value = data.th || "";
+        document.getElementById("inpRemarks").value = data.remarks || "";
+        document.getElementById("inpImplementation").value = data.impl || "";
 
-        submitBtn.disabled = false;
-        submitBtn.innerText = "💾 Update Existing Record";
-        submitBtn.style.background = "#d97706"; // Orange to indicate edit
+        // 2. Setup Button
+        document.getElementById("dataExistsWarning").classList.remove("hidden");
+        document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying Global Master Record.";
+        submitBtn.innerText = "💾 Save Changes to Master DB";
+        submitBtn.style.background = "#d97706";
+
+        // 3. Load Linked Rake Rows into your temporary Draft
+        // We copy the MASTER rows into your DRAFT so you can edit them safely
+        currentRakeKey = data.linkedRakeKey || currentStationKey;
+        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
+        if(rakeSnap.exists()) {
+            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
+        }
 
     } else {
-        // --- NEW ENTRY ---
-        warningBox.classList.add("hidden");
-        
-        // Clear Inputs
-        inpLen.value = "";
-        inpYl.value = "";
-        inpTh.value = "";
-        inpRem.value = "";
-        inpImpl.value = "";
-
-        // Unlock Inputs
-        inpLen.disabled = false;
-        inpYl.disabled = false;
-        inpTh.disabled = false;
-        inpRem.disabled = false;
-        inpImpl.disabled = false;
-        saveBtn.disabled = false;
-
-        submitBtn.disabled = false;
-        submitBtn.innerText = "✔ Submit Final Data";
-        submitBtn.style.background = "#0A2342"; // Navy
+        // --- SCENARIO B: NEW RECORD (Clean Slate) ---
+        // Inputs are already empty from Step 1
+        submitBtn.innerText = "✔ Submit to Master Database";
+        submitBtn.style.background = "#0A2342";
     }
-    
-    loadDraft();
+
+    // === STEP 4: START LISTENER FOR DRAFTS ===
+    // Now that the context is set, we allow you to add/remove rows
+    loadDraftTable(); 
 };
 // --- 1. HANDLE TAB & DROPDOWNS ---
 
@@ -3058,80 +3058,6 @@ window.loadDraftTable = () => {
         });
     });
 };
-
-// --- 4. SUBMIT FUNCTION (The Saver) ---
-window.submitStationData = async () => {
-    const btn = document.getElementById("btnFinalSubmit");
-    btn.innerText = "⏳ Saving...";
-    btn.disabled = true;
-
-    try {
-        const stnName = document.getElementById("inpStationName").value;
-        if(!stnName) throw new Error("Station Name Missing. Please re-select station.");
-
-        // 1. Gather Input Data
-        const formData = {
-            name: stnName,
-            len: document.getElementById("inpStationLength").value,
-            yl: document.getElementById("inpYellowDist").value,
-            th: document.getElementById("inpYellowThick").value,
-            remarks: document.getElementById("inpRemarks").value,
-            impl: document.getElementById("inpImplementation").value,
-            user: currentUser.email,
-            userName: currentUser.name,
-            date: new Date().toLocaleString(), // Readable Date
-            timestamp: serverTimestamp()       // System Time
-        };
-
-        // 2. Fetch Rake Rows from Draft
-        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
-        const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
-
-        const updates = {};
-        let targetKey = currentStationKey;
-        let targetRakeKey = currentRakeKey;
-
-        // 3. Logic: Update vs Create
-        if (targetKey) {
-            // UPDATING
-            updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
-        } else {
-            // CREATING
-            targetKey = push(ref(db, "station_logs")).key;
-            targetRakeKey = targetKey; // Link them
-            updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
-        }
-
-        // 4. Overwrite Rake Data (Replace old with new from Draft)
-        // First we clear the old rake logs for this key to avoid ghost rows
-        updates[`rake_logs/${targetRakeKey}`] = rowsData || null;
-
-        // 5. Commit to Database
-        await update(ref(db), updates);
-
-        // 6. CLEANUP (Prevent bleeding to next station)
-        await set(ref(db, `drafts/${currentUser.uid}`), null);
-        
-        alert("✅ Data Saved Successfully!");
-        
-        // 7. Refresh UI
-        switchTab('dataView');
-        loadStationData();
-        
-        // Reset the form so the user doesn't accidentally submit again
-        await nuclearReset();
-        document.getElementById("mainDataForm").classList.add("hidden");
-        document.getElementById("stationSelect").value = "";
-
-    } catch(e) {
-        alert("Error: " + e.message);
-        console.error(e);
-    } finally {
-        btn.innerText = "✔ Submit Final Data";
-        btn.disabled = false;
-    }
-};
-
 // --- 5. DELETE FUNCTION (With Form Cleanup) ---
 window.deleteStationLog = async (key) => {
     if(!isAdmin) return alert("Admins Only.");
@@ -3838,7 +3764,89 @@ window.openRakeModal = async (key) => {
         tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:red;'>Error loading data.</td></tr>";
     }
 };
+// --- 3. SUBMIT FUNCTION (Saves Station-Wise to Master DB) ---
+window.submitStationData = async () => {
+    const btn = document.getElementById("btnFinalSubmit");
+    btn.innerText = "⏳ Saving to Master DB...";
+    btn.disabled = true;
 
+    try {
+        const lineSel = document.getElementById("lineSelect");
+        const stnSel = document.getElementById("stationSelect");
+        
+        // 1. Double Check: Ensure we have a valid station selected
+        if (!lineSel.value || !stnSel.value) {
+            throw new Error("No station selected. Please refresh.");
+        }
+
+        const fullStationName = `${stnSel.value} (${lineSel.value})`;
+
+        // 2. Gather UI Inputs
+        const formData = {
+            name: fullStationName,
+            len: document.getElementById("inpStationLength").value,
+            yl: document.getElementById("inpYellowDist").value,
+            th: document.getElementById("inpYellowThick").value,
+            remarks: document.getElementById("inpRemarks").value,
+            impl: document.getElementById("inpImplementation").value,
+            user: currentUser.email,
+            userName: currentUser.name,
+            date: new Date().toLocaleString(),
+            timestamp: serverTimestamp()
+        };
+
+        // 3. Fetch Your Draft Rows (The Rake Table)
+        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+        const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
+
+        const updates = {};
+        let targetKey = currentStationKey;
+        let targetRakeKey = currentRakeKey;
+
+        // 4. Logic: Are we Updating or Creating?
+        if (targetKey) {
+            // --- UPDATING EXISTING MASTER RECORD ---
+            updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
+        } else {
+            // --- CREATING NEW MASTER RECORD ---
+            targetKey = push(ref(db, "station_logs")).key;
+            targetRakeKey = targetKey; // Link them
+            updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
+        }
+
+        // 5. OVERWRITE RAKE LOGS
+        // We replace the Public Rake Logs with exactly what is in your Draft table
+        // This ensures the Master DB matches your screen exactly.
+        updates[`rake_logs/${targetRakeKey}`] = rowsData || null;
+
+        // 6. COMMIT TO DATABASE
+        await update(ref(db), updates);
+
+        // 7. CLEANUP: Delete your private draft
+        // This ensures your personal data doesn't persist. 
+        // The data is now fully "Station-Wise" in the shared DB.
+        await remove(ref(db, `drafts/${currentUser.uid}`));
+        
+        alert(`✅ SUCCESS: Data for ${stnSel.value} saved to Master Database.`);
+        
+        // 8. Refresh and Close
+        document.getElementById("distanceBody").innerHTML = ""; 
+        switchTab('dataView');
+        loadStationData(); 
+        
+        // Reset inputs to prevent accidental double submission
+        await nuclearReset();
+        document.getElementById("mainDataForm").classList.add("hidden");
+        document.getElementById("stationSelect").value = "";
+
+    } catch(e) {
+        console.error(e);
+        alert("❌ ERROR: " + e.message);
+    } finally {
+        btn.innerText = "✔ Submit to Master Database";
+        btn.disabled = false;
+    }
+};
 // 3. Ensure Close Function Exists
 window.closeRakeModal = () => {
     document.getElementById("rakeDataModal").classList.add("hidden");
