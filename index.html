@@ -2876,30 +2876,36 @@ window.selectBanDuration = (days, btn) => {
     btn.classList.add("selected");
 };
 // ==========================================
-// 4. ROBUST PRESENCE SYSTEM (Heartbeat)
+// 4. ROBUST PRESENCE SYSTEM (Fixed)
 // ==========================================
-let presenceInterval = null; // Global variable to track the timer
+let presenceInterval = null; 
 
 function startPresenceSystem(user) {
-    if (!user) return;
+    if (!user || !user.uid) return;
+
+    // Sanity Check: Ensure UID is safe (no dots/special chars allowed in keys)
+    if (user.uid.includes(".") || user.uid.includes("#") || user.uid.includes("$")) {
+        console.error("CRITICAL: Invalid UID detected. Presence system aborted.");
+        return;
+    }
 
     const userStatusRef = ref(db, `status/${user.uid}`);
     const connectedRef = ref(db, ".info/connected");
 
-    // 1. MONITOR CONNECTION
     onValue(connectedRef, (snap) => {
         if (snap.val() === true) {
-            const safeName = user.name || user.displayName || user.email || "Identifying...";
+            // FIX: Ensure Name is a valid string, never undefined
+            const safeName = (user.name && typeof user.name === 'string') ? user.name : (user.email || "Unknown User");
 
-            // Set the "Offline" trigger for when tab closes/internet dies
+            // 1. Set Disconnect Hook
             onDisconnect(userStatusRef).set({
                 state: 'offline',
-                last_seen: serverTimestamp(), // Important: Capture exact disconnect time
+                last_seen: serverTimestamp(),
                 email: user.email,
                 name: safeName
             });
 
-            // Mark as Connected
+            // 2. Mark as Online
             update(userStatusRef, {
                 state: 'online',
                 last_seen: serverTimestamp(),
@@ -2909,20 +2915,16 @@ function startPresenceSystem(user) {
         }
     });
 
-    // 2. THE HEARTBEAT (Ping every 5 seconds)
-    if (presenceInterval) clearInterval(presenceInterval); // Clear old timer
-
+    // Heartbeat Pulse
+    if (presenceInterval) clearInterval(presenceInterval);
     presenceInterval = setInterval(() => {
-        // Only ping if we are actually logged in
         if (auth.currentUser) {
             update(userStatusRef, {
                 last_seen: serverTimestamp(),
-                state: 'online' // Reinforce state
-            }).catch(e => {
-                // Ignore minor network blips, don't spam console
-            });
+                state: 'online'
+            }).catch(() => {}); // Suppress minor network errors
         }
-    }, 5000); // 5 Seconds Pulse
+    }, 5000);
 }
 function updateRegDots(count) {
     document.getElementById("dot1").className = count >= 1 ? "dot active" : "dot";
@@ -2987,39 +2989,28 @@ function resetTimer() {
 }
 window.saveOfficialName = async () => {
     const nameInput = document.getElementById("officialNameInput");
-    const name = nameInput.value.trim();
+    // Remove special chars from name to be safe
+    const name = nameInput.value.replace(/[.#$\[\]]/g, "").trim(); 
 
-    if(name.length < 3) return alert("Please enter your full official name (e.g., Rahul Roy).");
+    if(name.length < 3) return alert("Please enter a valid name (3+ chars).");
 
-    // UI Feedback
-    const btn = nameInput.nextElementSibling; // The button
-    const originalText = btn.innerText;
+    const btn = nameInput.nextElementSibling;
     btn.innerText = "Creating Profile...";
     btn.disabled = true;
 
     try {
-        // CREATE THE DATABASE PROFILE
-        // We use 'set' to ensure a clean record is created for the new user
         await set(ref(db, `users/${currentUser.uid}`), {
             name: name,
             email: currentUser.email,
             banned: false,
-            faceData: null, // This null value triggers the Face Setup logic
+            faceData: null,
             createdAt: serverTimestamp(),
             last_login: serverTimestamp()
         });
-
-        // Hide the modal
         document.getElementById("nameModal").classList.add("hidden");
-        
-        // Note: We don't need location.reload(). 
-        // The onValue listener in onAuthStateChanged will detect this update automatically
-        // and switch from "Name Modal" to "Face Setup Modal" instantly.
-        
     } catch(e) {
-        console.error(e);
-        alert("Error creating profile: " + e.message);
-        btn.innerText = originalText;
+        alert("Error: " + e.message);
+        btn.innerText = "Save & Continue";
         btn.disabled = false;
     }
 }
@@ -3939,7 +3930,7 @@ window.submitStationData = async () => {
 let adminUsersListener = null;
 let adminStatusListener = null;
 // =========================================================
-// 🛠️ FIXED: ADMIN PANEL (Strict Heartbeat Logic)
+// 🛠️ FIXED: ADMIN PANEL (Anti-Flicker & Stable Status)
 // =========================================================
 window.loadAdminPanel = () => {
     const tbody = document.getElementById("userListBody");
@@ -3947,11 +3938,14 @@ window.loadAdminPanel = () => {
 
     if (!tbody || !checkboxList) return;
 
-    // Detach old listeners to prevent memory leaks
+    // 1. CLEANUP (Stop previous listeners to prevent loops)
     if (adminUsersListener) { if (typeof adminUsersListener === "function") adminUsersListener(); adminUsersListener = null; }
     if (adminStatusListener) { if (typeof adminStatusListener === "function") adminStatusListener(); adminStatusListener = null; }
 
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-sync fa-spin'></i> Syncing Status...</td></tr>";
+    // Clear any existing render loop
+    if (window.adminRenderInterval) clearInterval(window.adminRenderInterval);
+
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-sync fa-spin'></i> Syncing...</td></tr>";
     
     let localUsers = {};
     let localStatus = {};
@@ -3965,58 +3959,62 @@ window.loadAdminPanel = () => {
             return;
         }
 
-        const NOW = Date.now(); // Current Time for calculations
+        const NOW = Date.now(); 
 
         Object.entries(localUsers).forEach(([uid, u]) => {
             if (!u.email) return;
 
             const isSelf = (uid === currentUser.uid);
             const isBanned = u.banned === true;
-            const hasBiometrics = !!u.faceData; // True if face data exists
+            const hasBiometrics = !!u.faceData; 
 
-            // --- STRICT STATUS LOGIC ---
+            // --- STABILIZED STATUS LOGIC ---
             const s = localStatus[uid];
             let isOnline = false;
             let lastSeenText = "Never";
 
             if (s && s.last_seen) {
-                // Calculate time difference in Seconds
+                // Calculate gap in seconds
                 const diff = NOW - s.last_seen; 
                 
-                // RULE 1: If 'last_seen' was less than 15 seconds ago, they are ONLINE.
-                // (We allow 15s buffer for slow internet)
-                if (diff < 15000) {
+                // RULE 1: INCREASED TOLERANCE (35 Seconds)
+                // We allow a larger buffer (35s) to account for slow internet.
+                // Heartbeats send every 5s, so missing 1 or 2 won't flicker the status.
+                const isRecent = diff < 35000; 
+
+                // RULE 2: PRIORITY TO RECENCY
+                // If the signal was received < 10 seconds ago, they are DEFINITELY Online,
+                // even if the database text says 'offline' (which happens during micro-disconnects).
+                if (diff < 10000) {
+                    isOnline = true; 
+                } 
+                // Otherwise, respect the text status (e.g. they clicked Logout)
+                else if (isRecent && s.state !== 'offline') {
                     isOnline = true;
                 }
-
-                // RULE 2: If database explicitly says 'offline' (from logout), they are OFFLINE.
-                if (s.state === 'offline') isOnline = false;
 
                 lastSeenText = new Date(s.last_seen).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             }
 
-            // --- BADGE GENERATION ---
+            // --- BADGE UI ---
             let statusBadge = "";
 
             if (isOnline) {
                 if (hasBiometrics) {
-                    // Scenario A: Online & Verified (Perfect)
                     statusBadge = `<span class="badge-online" style="background:#dcfce7; color:#166534; border:1px solid #bbf7d0;">🟢 Online</span>`;
                 } else {
-                    // Scenario B: Online BUT No Biometrics (Your Request)
                     statusBadge = `<span style="background:#fff7ed; color:#c2410c; padding:4px 10px; border-radius:12px; font-size:10px; font-weight:800; border:1px solid #fdba74;">🟡 Setup Pending</span>`;
                 }
             } else {
-                // Scenario C: Offline
                 statusBadge = `<span class="badge-offline">⚫ Offline (${lastSeenText})</span>`;
             }
 
-            // --- BIOMETRIC COLUMN ---
+            // --- BIOMETRICS ---
             const bioStatus = hasBiometrics 
                 ? `<span style="color:green; font-weight:bold; font-size:11px;">✔ Registered</span>` 
                 : `<span style="color:red; font-weight:bold; font-size:11px;">⚠ Missing</span>`;
 
-            // --- BUTTONS ---
+            // --- ADMIN BUTTONS ---
             let actionBtns = `
                 <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="View Tasks"><i class="fas fa-tasks"></i></button>
                 <button class="secondary" onclick="resetUserName('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Name"><i class="fas fa-eraser"></i></button>
@@ -4031,12 +4029,8 @@ window.loadAdminPanel = () => {
                 }
             }
 
-            // --- RENDER ROW ---
+            // --- RENDER TABLE ROW ---
             const rowStyle = isBanned ? "background:#fee2e2;" : "";
-            
-            // Only add checkbox if Online & Verified (Optional rule, remove if you want to assign tasks to offline users)
-            // For now, we allow assigning to anyone not banned.
-            
             tbody.innerHTML += `
                 <tr style="${rowStyle}">
                     <td>
@@ -4071,7 +4065,7 @@ window.loadAdminPanel = () => {
         });
     };
 
-    // 3. LISTENERS
+    // 2. START LISTENERS
     adminUsersListener = onValue(ref(db, "users"), (snap) => {
         if (snap.exists()) localUsers = snap.val();
         renderTable();
@@ -4079,13 +4073,13 @@ window.loadAdminPanel = () => {
 
     adminStatusListener = onValue(ref(db, "status"), (snap) => {
         if (snap.exists()) localStatus = snap.val();
-        // Force re-render to update the time calculations
         renderTable();
     });
     
-    // Auto-refresh the UI every 5 seconds to update "Offline" status locally
-    // (This makes the black badge appear automatically without refreshing the page)
-    setInterval(renderTable, 5000);
+    // 3. SLOWER REFRESH INTERVAL (Prevents overloading)
+    // We only need this to update the "Offline (X min ago)" text.
+    // The listeners above handle the actual status changes.
+    window.adminRenderInterval = setInterval(renderTable, 10000); 
 };
 window.viewRakeRows = (rowsEncoded, stationName) => {
     try {
@@ -5623,17 +5617,25 @@ window.completeTask = (k) => update(ref(db, `assignments/${currentUser.uid}/${k}
 window.debugConnection = async () => {
     try {
         console.log("Testing DB Connection...");
+        // This specific path ".info/connected" is special and SAFE. 
+        // Do not change it or add user data to it.
         const testRef = ref(db, ".info/connected");
         const snap = await get(testRef);
+        
         if(snap.val() === true) {
-            alert("✅ Database Connected Successfully!");
+            console.log("✅ Database Connected Successfully!");
         } else {
-            alert("❌ Database Offline. Check Internet.");
+            console.warn("⚠️ Database Offline (Client Disconnected)");
         }
     } catch (e) {
-        alert("CRITICAL ERROR: " + e.message);
+        // Only alert if it's NOT a permission error
+        if(!e.message.includes("permission_denied")) {
+            console.error("Connection Check Failed:", e);
+        }
     }
 };
+// Run automatically on load
+setTimeout(debugConnection, 3000);
 // Run automatically on load
 setTimeout(debugConnection, 3000);
 </script>
