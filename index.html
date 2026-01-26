@@ -2390,56 +2390,56 @@ window.handleLineChange = () => {
         stnSel.style.background = "#fff";
     }
 };
-// --- 2. STATION CHANGE HANDLER (Strict Loader) ---
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
     const formDiv = document.getElementById("mainDataForm");
     const submitBtn = document.getElementById("btnFinalSubmit");
 
-    // === STEP 1: WIPE EVERYTHING ===
-    // We strictly wait for this to finish before loading anything new.
-    // This guarantees "Station A" data is gone before "Station B" loads.
+    // 🛑 STEP 1: NUCLEAR WIPE (Force the system to forget Station A)
     await nuclearReset(); 
+    
+    // 🛑 STEP 2: MANUALLY CLEAR KEYS (Double Protection)
+    currentStationKey = null; 
+    currentRakeKey = null;
 
     if (!stnSel.value) {
         formDiv.classList.add("hidden");
+        isSwitching = false;
         return;
     }
 
-    // === STEP 2: SETUP NEW CONTEXT ===
-    formDiv.classList.remove("hidden");
+    // === STEP 3: SETUP NEW STATION ===
+    formDiv.classList.remove("hidden"); // This shows the form inputs
     const fullStationName = `${stnSel.value} (${lineSel.value})`;
     
-    // Set Hidden Identifier (Source of Truth)
     document.getElementById("inpStationName").value = fullStationName;
     document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
 
-    // === STEP 3: CHECK MASTER DATABASE FOR THIS SPECIFIC STATION ===
-    // We look for an existing GLOBAL record (not user specific)
+    // === STEP 4: CHECK IF DATA ALREADY EXISTS ===
+    // We check the database: "Do we have data for THIS specific station?"
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
-        // --- SCENARIO A: MASTER RECORD EXISTS (Load It) ---
+        // --- OLD DATA FOUND (Edit Mode) ---
         let data = null;
-        snap.forEach(c => { data = c.val(); currentStationKey = c.key; });
+        snap.forEach(c => { data = c.val(); currentStationKey = c.key; }); // Load the EXISTING ID
         
-        // 1. Fill Inputs from Master Record
+        // Fill inputs
         document.getElementById("inpStationLength").value = data.len || "";
         document.getElementById("inpYellowDist").value = data.yl || "";
         document.getElementById("inpYellowThick").value = data.th || "";
         document.getElementById("inpRemarks").value = data.remarks || "";
         document.getElementById("inpImplementation").value = data.impl || "";
 
-        // 2. Setup Button
+        // Button becomes orange
         document.getElementById("dataExistsWarning").classList.remove("hidden");
-        document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying Global Master Record.";
-        submitBtn.innerText = "💾 Save Changes to Master DB";
-        submitBtn.style.background = "#d97706";
+        document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying Existing Master Record.";
+        submitBtn.innerText = "💾 Update Master Record";
+        submitBtn.style.background = "#d97706"; 
 
-        // 3. Load Linked Rake Rows into your temporary Draft
-        // We copy the MASTER rows into your DRAFT so you can edit them safely
+        // Load rows
         currentRakeKey = data.linkedRakeKey || currentStationKey;
         const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
         if(rakeSnap.exists()) {
@@ -2447,15 +2447,19 @@ window.handleStationChange = async () => {
         }
 
     } else {
-        // --- SCENARIO B: NEW RECORD (Clean Slate) ---
-        // Inputs are already empty from Step 1
-        submitBtn.innerText = "✔ Submit to Master Database";
-        submitBtn.style.background = "#0A2342";
+        // --- NO DATA FOUND (New Mode) ---
+        // currentStationKey MUST BE NULL here.
+        submitBtn.innerText = "✔ Submit New Log";
+        submitBtn.style.background = "#0A2342"; 
     }
 
-    // === STEP 4: START LISTENER FOR DRAFTS ===
-    // Now that the context is set, we allow you to add/remove rows
-    loadDraftTable(); 
+    // === STEP 5: START LISTENER ===
+    loadDraft(); 
+    
+    // Unlock the safety
+    setTimeout(() => {
+        isSwitching = false;
+    }, 300);
 };
 // --- 1. HANDLE TAB & DROPDOWNS ---
 
@@ -4418,20 +4422,19 @@ window.unbanUser = async (uid, name) => {
 window.switchTab = (t) => {
     // 1. Hide all tabs
     const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport'];
-    
     allTabs.forEach(x => {
         const el = document.getElementById(`tab-${x}`);
         if(el) el.classList.add("hidden");
     });
 
-    // 2. Remove active class from all buttons
+    // 2. Remove active class from buttons
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
 
-    // 3. Show the target tab
+    // 3. Show target tab
     const target = document.getElementById(`tab-${t}`);
     if(target) target.classList.remove("hidden");
 
-    // 4. Highlight the correct button
+    // 4. Highlight button
     let btnId = '';
     if (t === 'newData') btnId = 'btnNew';
     else if (t === 'inventory') btnId = 'btnInventory';
@@ -4444,25 +4447,24 @@ window.switchTab = (t) => {
     const btn = document.getElementById(btnId);
     if(btn) btn.classList.add("active");
 
-    // 5. AUTO-LOAD DATA
+    // 5. AUTO-LOADS (Only for these tabs)
     if(t === 'adminPanel' && isAdmin) loadAdminPanel();
     if(t === 'gallery') loadGallery();
     if(t === 'inventory') loadInventory();
     
-    // 🔴 FIX: STOP AUTO-LOADING LOGS & RESET UI
+    // 🛑 CRITICAL FIX FOR MASTER LOGS 🛑
     if(t === 'dataView') {
-        // 1. Hide the result panel immediately
+        // Force the table to be hidden
         document.getElementById("logResultsPanel").classList.add("hidden");
         
-        // 2. Reset the Line Dropdown
+        // Reset Dropdowns
         document.getElementById("logLineSelect").value = "";
-        
-        // 3. Reset the Station Dropdown
         const stnSel = document.getElementById("logStationSelect");
         stnSel.innerHTML = "<option value=''>-- Select Line First --</option>";
         stnSel.disabled = true;
 
-        // Note: The table will ONLY appear now when handleLogLineChange -> loadSpecificStationData runs.
+        // WE REMOVED THE setTimeout() HERE. 
+        // This ensures the table NEVER loads automatically.
     }
 };
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
