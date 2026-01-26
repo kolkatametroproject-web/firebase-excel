@@ -3114,21 +3114,22 @@ window.loadDraft = () => {
         });
     });
 };
-// --- 3. SUBMIT FUNCTION (Data Isolation Fix) ---
 window.submitStationData = async () => {
     const btn = document.getElementById("btnFinalSubmit");
-    btn.innerText = "⏳ Saving...";
+    btn.innerText = "⏳ Saving to Master DB...";
     btn.disabled = true;
 
     try {
         const lineSel = document.getElementById("lineSelect");
         const stnSel = document.getElementById("stationSelect");
         
-        if (!lineSel.value || !stnSel.value) throw new Error("No station selected.");
+        if (!lineSel.value || !stnSel.value) {
+            throw new Error("No station selected. Please refresh.");
+        }
 
         const fullStationName = `${stnSel.value} (${lineSel.value})`;
 
-        // 1. Gather Inputs
+        // 1. Gather UI Inputs
         const formData = {
             name: fullStationName,
             len: document.getElementById("inpStationLength").value,
@@ -3138,11 +3139,11 @@ window.submitStationData = async () => {
             impl: document.getElementById("inpImplementation").value,
             user: currentUser.email,
             userName: currentUser.name,
-            date: new Date().toLocaleString('en-IN'),
+            date: new Date().toLocaleString('en-IN'), // Fixed date format
             timestamp: serverTimestamp()
         };
 
-        // 2. Fetch Rake Data
+        // 2. Fetch Draft Rows
         const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
         const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
@@ -3150,34 +3151,38 @@ window.submitStationData = async () => {
         let targetKey = currentStationKey;
         let targetRakeKey = currentRakeKey;
 
-        // 3. LOGIC: Update vs Create
+        // 3. Logic: Update vs Create
         if (targetKey) {
-            // UPDATE: Keep same keys
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         } else {
-            // CREATE: Generate NEW UNIQUE keys
             targetKey = push(ref(db, "station_logs")).key;
             targetRakeKey = targetKey; 
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         }
 
-        // 4. Update Rake Logs
+        // 4. Set Rake Logs
         updates[`rake_logs/${targetRakeKey}`] = rowsData || null;
 
-        // 5. Execute DB Update
+        // 5. COMMIT TO DATABASE
         await update(ref(db), updates);
 
-        // 6. CLEANUP (Critical)
+        // 6. CLEANUP
         await remove(ref(db, `drafts/${currentUser.uid}`));
         
-        alert(`✅ SUCCESS: Data for ${stnSel.value} saved separately.`);
+        alert(`✅ SUCCESS: Data for ${stnSel.value} saved.`);
         
-        // 7. Reset completely
+        // 7. HARD RESET (Prevents Station Overlap)
         await nuclearReset();
+
+        // 8. RESET UI ELEMENTS
         document.getElementById("mainDataForm").classList.add("hidden");
         document.getElementById("stationSelect").value = "";
         
-        switchTab('dataView');
+        // 9. SWITCH TAB (But don't load the table yet)
+        switchTab('dataView'); 
+        
+        // 🔴 DELETED LINE: loadStationData(); 
+        // Removing this line stops the "Recent Data" table from appearing unwantedly.
 
     } catch(e) {
         console.error(e);
