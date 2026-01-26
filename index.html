@@ -1886,27 +1886,29 @@ window.fetchAuditHistory = async (barcode) => {
     container.innerHTML = `<div style="text-align:center; padding:20px;">Loading...</div>`;
 
     try {
-        const q = query(
-            ref(db, "logs"),
-            orderByChild("barcode"),
-            equalTo(barcode)
-        );
-
-        const snap = await get(q);
+        // FIX: Removed 'query' and 'orderByChild' which require database indexing.
+        // Instead, we fetch the logs reference directly and filter in the loop below.
+        const snap = await get(ref(db, "logs"));
 
         if (!snap.exists()) {
             container.innerHTML = `<div style="text-align:center;color:#777;">No history found</div>`;
             return;
         }
 
-        // 1. collect only checkout & return
+        // 1. Collect only checkout & return matching the specific BARCODE
         let raw = [];
         snap.forEach(c => {
             const v = c.val();
-            if (v.type === "CHECKOUT" || v.type === "RETURN") {
+            // We add the barcode check here explicitly
+            if (v.barcode === barcode && (v.type === "CHECKOUT" || v.type === "RETURN")) {
                 raw.push(v);
             }
         });
+
+        if (raw.length === 0) {
+            container.innerHTML = `<div style="text-align:center;color:#777;">No history found for this item</div>`;
+            return;
+        }
 
         // 2. sort old → new
         raw.sort((a, b) => a.time - b.time);
@@ -1931,7 +1933,7 @@ window.fetchAuditHistory = async (barcode) => {
             }
         });
 
-        // 4. last 4 only (latest first)
+        // 4. last 20 only (latest first)
         records = records.slice(-20).reverse();
 
         // 5. render popup cards
@@ -1978,10 +1980,9 @@ window.fetchAuditHistory = async (barcode) => {
 
     } catch (e) {
         console.error(e);
-        container.innerHTML = `<div style="color:red;text-align:center;">Error loading data</div>`;
+        container.innerHTML = `<div style="color:red;text-align:center;">Error loading data: ${e.message}</div>`;
     }
 };
-
 // --- 3. HELPER TO CLOSE MODAL ---
 window.closeAuditModal = () => {
     document.getElementById("auditResultModal").classList.add("hidden");
