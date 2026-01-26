@@ -3686,6 +3686,123 @@ window.submitStationData = async () => {
         }
     }
 };
+// =========================================================
+// 🛠️ MISSING FUNCTION: LOAD ADMIN PANEL
+// =========================================================
+window.loadAdminPanel = () => {
+    const tbody = document.getElementById("userListBody");
+    const checkboxList = document.getElementById("userCheckboxList");
+
+    // Safety Check: If HTML elements don't exist (e.g., restricted view), stop.
+    if (!tbody || !checkboxList) return;
+
+    // 1. UI Feedback
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Personnel Data...</td></tr>";
+    checkboxList.innerHTML = "<p style='color:#666;'>Loading active personnel...</p>";
+
+    // 2. Fetch Users Data Real-time
+    onValue(ref(db, "users"), async (snap) => {
+        // Clear previous list to prevent duplicates
+        tbody.innerHTML = "";
+        checkboxList.innerHTML = "";
+
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No users registered in system.</td></tr>";
+            return;
+        }
+
+        // 3. Get Live Online Status Snapshot (Single fetch for efficiency)
+        let onlineMap = {};
+        try {
+            const statusSnap = await get(ref(db, "status"));
+            if (statusSnap.exists()) {
+                onlineMap = statusSnap.val();
+            }
+        } catch (e) {
+            console.error("Status fetch error", e);
+        }
+
+        // 4. Loop through users and render
+        snap.forEach(child => {
+            const u = child.val();
+            const uid = child.key;
+            
+            // Skip rendering checking logic if data is incomplete
+            if (!u.email) return;
+
+            const isSelf = (uid === currentUser.uid);
+            const isBanned = u.banned === true;
+            
+            // --- A. STATUS CHECK ---
+            const userStatus = onlineMap[uid];
+            const isOnline = userStatus && userStatus.state === 'online';
+            const lastSeen = userStatus ? new Date(userStatus.last_changed).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'N/A';
+
+            const statusBadge = isOnline 
+                ? `<span class="badge-online">🟢 Online</span>` 
+                : `<span class="badge-offline">⚫ Offline (${lastSeen})</span>`;
+
+            // --- B. BIOMETRIC CHECK ---
+            const bioStatus = u.faceData 
+                ? `<span style="color:green; font-weight:bold; font-size:11px;">✔ Registered</span>` 
+                : `<span style="color:red; font-weight:bold; font-size:11px;">⚠ Pending</span>`;
+
+            // --- C. ADMIN ACTIONS BUTTONS ---
+            let actionBtns = `
+                <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="View Tasks"><i class="fas fa-tasks"></i></button>
+                <button class="secondary" onclick="resetUserName('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Name"><i class="fas fa-eraser"></i></button>
+                <button class="warning" onclick="resetUserFace('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Face ID"><i class="fas fa-user-slash"></i></button>
+            `;
+
+            // Ban/Unban Logic (Cannot ban self)
+            if (!isSelf) {
+                if (isBanned) {
+                    actionBtns += `<button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px;">♻ Unban</button>`;
+                } else {
+                    actionBtns += `<button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px;">⛔ Ban</button>`;
+                }
+            }
+
+            // --- D. RENDER TABLE ROW ---
+            const rowStyle = isBanned ? "background:#fee2e2;" : "";
+            const rowHtml = `
+                <tr style="${rowStyle}">
+                    <td>
+                        <div style="font-weight:bold; color:var(--metro-blue); font-size:13px;">
+                            ${u.name || 'Unknown User'} 
+                            ${isSelf ? '<span style="font-size:9px; background:#e2e8f0; padding:2px 4px; border-radius:3px;">YOU</span>' : ''}
+                        </div>
+                        <div style="font-size:10px; color:#64748b;">${u.email}</div>
+                        ${isBanned ? '<div style="color:red; font-size:9px; font-weight:bold;">⛔ ACCESS REVOKED</div>' : ''}
+                    </td>
+                    <td style="vertical-align:middle;">${statusBadge}</td>
+                    <td style="vertical-align:middle; font-size:11px; color:#334155;">-</td>
+                    <td style="vertical-align:middle;">${bioStatus}</td>
+                    <td style="vertical-align:middle;">
+                        <div style="display:flex;">${actionBtns}</div>
+                    </td>
+                </tr>
+            `;
+            tbody.innerHTML += rowHtml;
+
+            // --- E. RENDER CHECKBOX LIST (For Task Assignment) ---
+            // Only add to checkbox list if user is NOT banned
+            if (!isBanned) {
+                const checkId = `chk_user_${uid}`;
+                const checkHtml = `
+                    <label class="checkbox-item" for="${checkId}" style="display:flex; align-items:center; justify-content:space-between;">
+                        <div>
+                            <input type="checkbox" id="${checkId}" class="user-check" value="${uid}">
+                            <span style="font-weight:600; font-size:12px;">${u.name || u.email}</span>
+                        </div>
+                        <span style="font-size:10px;">${isOnline ? '🟢' : '⚫'}</span>
+                    </label>
+                `;
+                checkboxList.innerHTML += checkHtml;
+            }
+        });
+    });
+};
 window.viewRakeRows = (rowsEncoded, stationName) => {
     try {
         const rows = JSON.parse(decodeURIComponent(rowsEncoded));
