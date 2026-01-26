@@ -2944,46 +2944,38 @@ let currentRakeKey = null;
 let draftRef = null;
 let draftListener = null;
 async function nuclearReset() {
-    console.log("☢️ NUCLEAR RESET: Clearing previous station data...");
+    console.log("☢️ NUCLEAR RESET: Hard reset initiated.");
     
     // 1. ENGAGE SAFETY LOCK
-    // Make sure 'let isSwitching = false;' is defined at the top of your script
     isSwitching = true; 
 
-    // 2. Stop the Listener (THE FIX)
-    // We check if draftRef exists properly before trying to turn it off.
+    // 2. DETACH LISTENERS (Swallow errors to prevent crash)
     if (draftRef) { 
-        try {
-            off(draftRef); // Detach the listener
-        } catch(e) {
-            console.log("Listener already detached");
-        }
-        draftRef = null; // Clear the variable AFTER detaching
+        try { off(draftRef); } catch(e) { console.log("Listener clear error", e); }
+        draftRef = null;
     }
-    
-    // Do NOT call off() again. Just clear the tracker.
     draftListener = null; 
 
-    // 3. Wipe Global IDs
+    // 3. WIPE MEMORY
     currentStationKey = null;
     currentRakeKey = null;
 
-    // 4. Wipe UI Inputs
+    // 4. WIPE INPUTS (Physically clear the box)
     const uiIds = ["inpStationLength", "inpYellowDist", "inpYellowThick", "inpRemarks", "inpImplementation"];
     uiIds.forEach(id => {
         const el = document.getElementById(id);
         if(el) { 
             el.value = ""; 
             el.disabled = false; 
-            el.blur(); 
+            el.blur(); // Remove focus
         }
     });
     
-    // 5. Wipe Table UI immediately
+    // 5. WIPE TABLE
     const tbody = document.getElementById("distanceBody");
     if(tbody) tbody.innerHTML = "";
 
-    // 6. Reset Buttons
+    // 6. RESET BUTTONS
     const warningEl = document.getElementById("dataExistsWarning");
     if(warningEl) warningEl.classList.add("hidden");
     
@@ -2997,9 +2989,11 @@ async function nuclearReset() {
         btn.disabled = false;
     }
 
-    // 7. CRITICAL: Delete the "Ghost" Draft from Firebase
+    // 7. DATABASE PURGE (Clear the user's draft node completely)
     if(currentUser) {
-        await set(ref(db, `drafts/${currentUser.uid}`), null);
+        try {
+            await set(ref(db, `drafts/${currentUser.uid}`), null);
+        } catch(e) { console.error("Draft wipe failed", e); }
     }
 }
 window.handleStationChange = async () => {
@@ -3008,28 +3002,29 @@ window.handleStationChange = async () => {
     const formDiv = document.getElementById("mainDataForm");
     const submitBtn = document.getElementById("btnFinalSubmit");
 
-    // Lock is engaged inside nuclearReset
+    // 🛑 STEP 1: FORCE RESET & WAIT
     await nuclearReset(); 
 
     if (!stnSel.value) {
         formDiv.classList.add("hidden");
-        isSwitching = false; // Release lock if nothing selected
+        isSwitching = false;
         return;
     }
 
-    // === STEP 2: SETUP NEW CONTEXT ===
+    // === STEP 2: SHOW FORM ===
     formDiv.classList.remove("hidden");
     const fullStationName = `${stnSel.value} (${lineSel.value})`;
     
     document.getElementById("inpStationName").value = fullStationName;
     document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
 
-    // === STEP 3: CHECK MASTER DATABASE ===
+    // === STEP 3: CHECK DATABASE ===
+    // Use once() via get() to prevent lingering connections
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
-        // --- EXISTING RECORD ---
+        // --- EDIT MODE ---
         let data = null;
         snap.forEach(c => { data = c.val(); currentStationKey = c.key; });
         
@@ -3040,32 +3035,30 @@ window.handleStationChange = async () => {
         document.getElementById("inpImplementation").value = data.impl || "";
 
         document.getElementById("dataExistsWarning").classList.remove("hidden");
-        document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying Existing Master Record.";
+        document.getElementById("dataExistsWarning").innerHTML = "⚠️ <strong>EDIT MODE:</strong> Modifying Existing Record.";
         submitBtn.innerText = "💾 Update Master Record";
         submitBtn.style.background = "#d97706"; 
 
         currentRakeKey = data.linkedRakeKey || currentStationKey;
+        
+        // Copy Rake Data to Drafts for editing
         const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
         if(rakeSnap.exists()) {
             await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
         }
 
     } else {
-        // --- NEW RECORD ---
+        // --- NEW ENTRY MODE ---
+        // currentStationKey is NULL from nuclearReset
         submitBtn.innerText = "✔ Submit New Log";
         submitBtn.style.background = "#0A2342"; 
     }
 
-    // === STEP 4: START LISTENER ===
+    // === STEP 4: START DRAFT LISTENER ===
     loadDraft(); 
     
-    // === STEP 5: RELEASE LOCK ===
-    // Only now do we allow edits. Any ghost events from the previous station
-    // that fired during the `await` steps above were blocked.
-    setTimeout(() => {
-        isSwitching = false;
-        console.log("🔓 Station switch complete. Inputs unlocked.");
-    }, 300); // Small buffer to be safe
+    // Release the safety lock
+    setTimeout(() => { isSwitching = false; }, 500);
 };
 // --- 3. DRAFT TABLE LOADER (Corrected Name) ---
 window.loadDraft = () => {
@@ -3120,20 +3113,17 @@ window.loadDraft = () => {
 };
 window.submitStationData = async () => {
     const btn = document.getElementById("btnFinalSubmit");
-    btn.innerText = "⏳ Saving to Master DB...";
+    btn.innerText = "⏳ Saving...";
     btn.disabled = true;
 
     try {
         const lineSel = document.getElementById("lineSelect");
         const stnSel = document.getElementById("stationSelect");
         
-        if (!lineSel.value || !stnSel.value) {
-            throw new Error("No station selected. Please refresh.");
-        }
+        if (!lineSel.value || !stnSel.value) throw new Error("No station selected.");
 
         const fullStationName = `${stnSel.value} (${lineSel.value})`;
 
-        // 1. Gather UI Inputs
         const formData = {
             name: fullStationName,
             len: document.getElementById("inpStationLength").value,
@@ -3143,11 +3133,10 @@ window.submitStationData = async () => {
             impl: document.getElementById("inpImplementation").value,
             user: currentUser.email,
             userName: currentUser.name,
-            date: new Date().toLocaleString('en-IN'), // Fixed date format
+            date: new Date().toLocaleString('en-IN'), 
             timestamp: serverTimestamp()
         };
 
-        // 2. Fetch Draft Rows
         const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
         const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
@@ -3155,7 +3144,6 @@ window.submitStationData = async () => {
         let targetKey = currentStationKey;
         let targetRakeKey = currentRakeKey;
 
-        // 3. Logic: Update vs Create
         if (targetKey) {
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         } else {
@@ -3164,29 +3152,20 @@ window.submitStationData = async () => {
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         }
 
-        // 4. Set Rake Logs
         updates[`rake_logs/${targetRakeKey}`] = rowsData || null;
 
-        // 5. COMMIT TO DATABASE
         await update(ref(db), updates);
-
-        // 6. CLEANUP
         await remove(ref(db, `drafts/${currentUser.uid}`));
         
-        alert(`✅ SUCCESS: Data for ${stnSel.value} saved.`);
+        alert(`✅ Saved: ${stnSel.value}`);
         
-        // 7. HARD RESET (Prevents Station Overlap)
-        await nuclearReset();
-
-        // 8. RESET UI ELEMENTS
+        // 1. Clear everything
+        await nuclearReset(); 
         document.getElementById("mainDataForm").classList.add("hidden");
         document.getElementById("stationSelect").value = "";
-        
-        // 9. SWITCH TAB (But don't load the table yet)
-        switchTab('dataView'); 
-        
-        // 🔴 DELETED LINE: loadStationData(); 
-        // Removing this line stops the "Recent Data" table from appearing unwantedly.
+
+        // 2. Switch Tab BUT DO NOT LOAD TABLE
+        switchTab('dataView');
 
     } catch(e) {
         console.error(e);
@@ -4427,14 +4406,14 @@ window.switchTab = (t) => {
         if(el) el.classList.add("hidden");
     });
 
-    // 2. Remove active class from buttons
+    // 2. Reset Buttons
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
 
-    // 3. Show target tab
+    // 3. Show Target
     const target = document.getElementById(`tab-${t}`);
     if(target) target.classList.remove("hidden");
 
-    // 4. Highlight button
+    // 4. Highlight Button
     let btnId = '';
     if (t === 'newData') btnId = 'btnNew';
     else if (t === 'inventory') btnId = 'btnInventory';
@@ -4447,24 +4426,18 @@ window.switchTab = (t) => {
     const btn = document.getElementById(btnId);
     if(btn) btn.classList.add("active");
 
-    // 5. AUTO-LOADS (Only for these tabs)
+    // 5. AUTO-LOADS
     if(t === 'adminPanel' && isAdmin) loadAdminPanel();
     if(t === 'gallery') loadGallery();
     if(t === 'inventory') loadInventory();
     
-    // 🛑 CRITICAL FIX FOR MASTER LOGS 🛑
+    // 6. FORCE HIDE LOG TABLE
     if(t === 'dataView') {
-        // Force the table to be hidden
         document.getElementById("logResultsPanel").classList.add("hidden");
-        
-        // Reset Dropdowns
         document.getElementById("logLineSelect").value = "";
         const stnSel = document.getElementById("logStationSelect");
         stnSel.innerHTML = "<option value=''>-- Select Line First --</option>";
         stnSel.disabled = true;
-
-        // WE REMOVED THE setTimeout() HERE. 
-        // This ensures the table NEVER loads automatically.
     }
 };
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
