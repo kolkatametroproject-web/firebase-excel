@@ -3840,74 +3840,66 @@ window.submitStationData = async () => {
     }
 };
 // =========================================================
-// 🛠️ MISSING FUNCTION: LOAD ADMIN PANEL
-// =========================================================
-// =========================================================
-// 🛠️ FIXED FUNCTION: LOAD ADMIN PANEL (Prevents Duplication)
+// 🛠️ FIXED: REAL-TIME STATUS ADMIN PANEL
 // =========================================================
 window.loadAdminPanel = () => {
     const tbody = document.getElementById("userListBody");
     const checkboxList = document.getElementById("userCheckboxList");
 
-    // Safety Check: If HTML elements don't exist, stop.
+    // Safety Check
     if (!tbody || !checkboxList) return;
 
-    // 1. Listen for Database Changes (Real-time)
-    onValue(ref(db, "users"), async (snap) => {
-        
-        // 🔴 CRITICAL FIX: Clear the lists HERE, every time data changes
+    // Local state to store data from both sources
+    let localUsers = {};
+    let localStatus = {};
+
+    // --- RENDER FUNCTION (Combines Users + Live Status) ---
+    const renderTable = () => {
+        // Clear current list
         tbody.innerHTML = "";
         checkboxList.innerHTML = "";
 
-        if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'>No users registered in system.</td></tr>";
+        if (!localUsers || Object.keys(localUsers).length === 0) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'>No users registered.</td></tr>";
             return;
         }
 
-        // 2. Get Live Online Status Snapshot
-        let onlineMap = {};
-        try {
-            const statusSnap = await get(ref(db, "status"));
-            if (statusSnap.exists()) {
-                onlineMap = statusSnap.val();
-            }
-        } catch (e) {
-            console.error("Status fetch error", e);
-        }
-
-        // 3. Loop through users and render rows
-        snap.forEach(child => {
-            const u = child.val();
-            const uid = child.key;
-            
-            // Skip if data is incomplete
+        // Loop through users
+        Object.entries(localUsers).forEach(([uid, u]) => {
             if (!u.email) return;
 
             const isSelf = (uid === currentUser.uid);
             const isBanned = u.banned === true;
-            
-            // --- A. STATUS CHECK ---
-            const userStatus = onlineMap[uid];
-            const isOnline = userStatus && userStatus.state === 'online';
-            const lastSeen = userStatus ? new Date(userStatus.last_changed).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'N/A';
 
+            // --- STATUS LOGIC (Now Real-time) ---
+            const userStatus = localStatus[uid];
+            
+            // Check if status node exists AND state is explicitly 'online'
+            const isOnline = userStatus && userStatus.state === 'online';
+            
+            // Format time
+            let timeDisplay = "N/A";
+            if (userStatus && userStatus.last_changed) {
+                timeDisplay = new Date(userStatus.last_changed).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            }
+
+            // Create Badge
             const statusBadge = isOnline 
                 ? `<span class="badge-online">🟢 Online</span>` 
-                : `<span class="badge-offline">⚫ Offline (${lastSeen})</span>`;
+                : `<span class="badge-offline">⚫ Offline (${timeDisplay})</span>`;
 
-            // --- B. BIOMETRIC CHECK ---
+            // --- BIOMETRIC CHECK ---
             const bioStatus = u.faceData 
                 ? `<span style="color:green; font-weight:bold; font-size:11px;">✔ Registered</span>` 
                 : `<span style="color:red; font-weight:bold; font-size:11px;">⚠ Pending</span>`;
 
-            // --- C. ADMIN ACTIONS BUTTONS ---
+            // --- BUTTONS ---
             let actionBtns = `
                 <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="View Tasks"><i class="fas fa-tasks"></i></button>
                 <button class="secondary" onclick="resetUserName('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Name"><i class="fas fa-eraser"></i></button>
                 <button class="warning" onclick="resetUserFace('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Face ID"><i class="fas fa-user-slash"></i></button>
             `;
 
-            // Ban/Unban Logic
             if (!isSelf) {
                 if (isBanned) {
                     actionBtns += `<button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px;">♻ Unban</button>`;
@@ -3916,13 +3908,13 @@ window.loadAdminPanel = () => {
                 }
             }
 
-            // --- D. RENDER TABLE ROW ---
+            // --- RENDER TABLE ROW ---
             const rowStyle = isBanned ? "background:#fee2e2;" : "";
             const rowHtml = `
                 <tr style="${rowStyle}">
                     <td>
                         <div style="font-weight:bold; color:var(--metro-blue); font-size:13px;">
-                            ${u.name || 'Unknown User'} 
+                            ${u.name || 'Unknown'} 
                             ${isSelf ? '<span style="font-size:9px; background:#e2e8f0; padding:2px 4px; border-radius:3px;">YOU</span>' : ''}
                         </div>
                         <div style="font-size:10px; color:#64748b;">${u.email}</div>
@@ -3938,10 +3930,10 @@ window.loadAdminPanel = () => {
             `;
             tbody.innerHTML += rowHtml;
 
-            // --- E. RENDER CHECKBOX LIST (For Task Assignment) ---
+            // --- RENDER CHECKBOX LIST ---
             if (!isBanned) {
                 const checkId = `chk_user_${uid}`;
-                const checkHtml = `
+                checkboxList.innerHTML += `
                     <label class="checkbox-item" for="${checkId}" style="display:flex; align-items:center; justify-content:space-between;">
                         <div>
                             <input type="checkbox" id="${checkId}" class="user-check" value="${uid}">
@@ -3950,9 +3942,23 @@ window.loadAdminPanel = () => {
                         <span style="font-size:10px;">${isOnline ? '🟢' : '⚫'}</span>
                     </label>
                 `;
-                checkboxList.innerHTML += checkHtml;
             }
         });
+    };
+
+    // 1. LISTEN TO USERS (Real-time Profile Changes)
+    onValue(ref(db, "users"), (snap) => {
+        if (snap.exists()) localUsers = snap.val();
+        else localUsers = {};
+        renderTable();
+    });
+
+    // 2. LISTEN TO STATUS (Real-time Online/Offline Changes)
+    // This was missing before!
+    onValue(ref(db, "status"), (snap) => {
+        if (snap.exists()) localStatus = snap.val();
+        else localStatus = {};
+        renderTable(); // Re-render immediately when status changes
     });
 };
 window.viewRakeRows = (rowsEncoded, stationName) => {
