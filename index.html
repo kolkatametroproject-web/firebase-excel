@@ -1401,15 +1401,17 @@ function resetInputForm() {
     document.getElementById("btnFinalSubmit").innerText = "Loading...";
     document.getElementById("btnFinalSubmit").disabled = true;
 }
-
-// B. UPDATED STATION HANDLER
 window.handleStationChange = async () => {
     const stnSel = document.getElementById("stationSelect");
     const lineSel = document.getElementById("lineSelect");
     const formDiv = document.getElementById("mainDataForm");
+    const warningBox = document.getElementById("dataExistsWarning");
+    const submitBtn = document.getElementById("btnFinalSubmit");
+    const saveBtn = document.getElementById("btnSaveDraft");
 
-    // 1. STOP & WIPE (The Fix)
-    resetInputForm();
+    // 1. PERFORM HARD RESET FIRST
+    // This prevents Station A data from appearing in Station B
+    await hardResetForm();
 
     if (!stnSel.value) {
         formDiv.classList.add("hidden");
@@ -1421,53 +1423,54 @@ window.handleStationChange = async () => {
     document.getElementById("inpStationName").value = fullStationName;
     document.getElementById("formTitle").innerText = `📝 Entry: ${stnSel.value}`;
 
-    // 2. FETCH NEW DATA
+    // 2. CHECK DATABASE FOR *THIS SPECIFIC* STATION
     const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
-    let existingData = {};
     if (snap.exists()) {
-        snap.forEach(c => { existingData = c.val(); rtStationKey = c.key; });
-        rtRakeKey = existingData.linkedRakeKey || rtStationKey;
-        
-        const btn = document.getElementById("btnFinalSubmit");
-        btn.innerText = existingData.status === "FINAL" ? "💾 Update Final Report" : "✔ Finalize Submission";
-        btn.disabled = false;
-        btn.style.background = existingData.status === "FINAL" ? "#d97706" : "#0A2342";
-    } else {
-        // Init New Record
-        const newRef = push(ref(db, "station_logs"));
-        rtStationKey = newRef.key;
-        rtRakeKey = rtStationKey;
-        await set(newRef, {
-            name: fullStationName,
-            date: "Drafting...",
-            timestamp: serverTimestamp(),
-            userName: currentUser.name,
-            user: currentUser.email,
-            status: "DRAFT",
-            linkedRakeKey: rtRakeKey
+        // --- EXISTING DATA FOUND ---
+        let existingData = null;
+        snap.forEach(c => { 
+            existingData = c.val(); 
+            currentStationKey = c.key; 
         });
-        existingData = {};
+        currentRakeKey = existingData.linkedRakeKey || currentStationKey;
+
+        // Populate Form with FETCHED data
+        document.getElementById("inpStationLength").value = existingData.len || "";
+        document.getElementById("inpYellowDist").value = existingData.yl || "";
+        document.getElementById("inpYellowThick").value = existingData.th || "";
+        document.getElementById("inpRemarks").value = existingData.remarks || "";
+        document.getElementById("inpImplementation").value = existingData.impl || "";
+
+        // UI Updates
+        warningBox.classList.remove("hidden");
+        warningBox.innerHTML = `<strong>⚠️ Existing Record:</strong> Data loaded. You are editing.`;
+        submitBtn.innerText = "💾 Update Record";
+        submitBtn.style.background = "#d97706";
+
+        // Load Rake Data specific to THIS station
+        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
+        if(rakeSnap.exists()) {
+            // Copy to drafts so table renders
+            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
+        }
+
+    } else {
+        // --- NEW STATION (Fresh Entry) ---
+        warningBox.classList.add("hidden");
+        submitBtn.innerText = "✔ Submit Final Data";
+        submitBtn.style.background = "#0A2342";
         
-        const btn = document.getElementById("btnFinalSubmit");
-        btn.innerText = "✔ Finalize Submission";
-        btn.disabled = false;
-        btn.style.background = "#0A2342";
+        // Ensure inputs are definitely empty
+        document.getElementById("inpStationLength").value = "";
+        document.getElementById("inpYellowDist").value = "";
     }
-
-    // 3. POPULATE UI
-    document.getElementById("inpStationLength").value = existingData.len || "";
-    document.getElementById("inpYellowDist").value = existingData.yl || "";
-    document.getElementById("inpYellowThick").value = existingData.th || "";
-    document.getElementById("inpRemarks").value = existingData.remarks || "";
-    document.getElementById("inpImplementation").value = existingData.impl || "";
-
-    // 4. CONNECT NEW LISTENERS
-    loadRealTimeRows(); // Connects table
-    attachInputListeners(); // Connects inputs
+    
+    // 3. START LISTENING TO DRAFTS
+    // Now that we've cleared old drafts and maybe loaded specific new ones, start the listener
+    loadDraft();
 };
-
   // UPDATED: Handle Gallery Station Change
 window.handleGalleryStationChange = () => {
     const line = document.getElementById("galleryLineSelect").value;
@@ -4002,74 +4005,100 @@ window.editStationLog = async (key) => {
         alert("Error loading for edit: " + e.message);
     }
 };
-
 window.loadAdminPanel = async () => {
     const userList = document.getElementById("userCheckboxList");
     const userTable = document.getElementById("userListBody");
     
-    // Attach a real-time listener to the entire users node
-    onValue(ref(db, "users"), async (userSnap) => {
+    // Detach old listener to prevent memory leaks
+    if (adminListener) { off(ref(db, "users"), adminListener); }
+
+    const usersRef = ref(db, "users");
+    
+    adminListener = onValue(usersRef, async (userSnap) => {
         const statusSnap = await get(ref(db, "status"));
         const statusMap = statusSnap.val() || {};
         
         userTable.innerHTML = "";
-        userList.innerHTML = "";
+        if(userList) userList.innerHTML = "";
+
+        if (!userSnap.exists()) {
+             userTable.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No users registered.</td></tr>";
+             return;
+        }
 
         userSnap.forEach(c => {
             const u = c.val();
             const uid = c.key;
             const displayName = u.name || u.email;
 
-            // 1. Fill the "Assign Work" Checkbox list
-            userList.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="user-check" value="${uid}"> ${displayName}</label>`;
-
-            // 2. Determine Online Status
+            // STATUS BADGE
             const s = statusMap[uid];
             const isOnline = (s && s.state === 'online' && (Date.now() - (s.last_seen || 0)) < 20000);
-            const statusBadge = isOnline ? `<span class="badge-online">● ONLINE</span>` : `<span class="badge-offline">○ OFFLINE</span>`;
+            const statusBadge = isOnline ? 
+                `<span class="badge-online">● ONLINE</span>` : 
+                `<span class="badge-offline">○ OFFLINE</span>`;
 
-            // 3. Create a Row for this user
+            // CRITICAL: BUTTON LOGIC
+            // If u.banned exists and is true, show UNBAN. Otherwise show BAN.
+            let actionButton = "";
+            let rowStyle = "";
+
+            if (u.banned) {
+                // IS BANNED -> Show UNBAN Button
+                rowStyle = "background-color: #fef2f2; border-left: 4px solid #dc2626;";
+                actionButton = `
+                    <button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(displayName)}')" 
+                        style="font-size:10px; padding:4px 8px; margin-top:2px; background:#15803d; border-color:#15803d;">
+                        ✅ UNBAN
+                    </button>`;
+            } else {
+                // IS ACTIVE -> Show BAN Button
+                actionButton = `
+                    <button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" 
+                        style="font-size:10px; padding:4px 8px; margin-top:2px;">
+                        🚫 BAN
+                    </button>`;
+            }
+
             const row = document.createElement("tr");
+            if(rowStyle) row.style.cssText = rowStyle;
+
             row.innerHTML = `
                 <td>
                     <strong>${displayName}</strong><br>
                     <small>${u.email}</small>
+                    ${u.banned ? '<br><b style="color:red; font-size:10px;">(SUSPENDED)</b>' : ''}
                 </td>
                 <td style="text-align:center;">${statusBadge}</td>
-                <td style="text-align:center;" id="task_stat_${uid}">
-                    <span style="color:#666; font-size:11px;">Loading Tasks...</span>
-                </td>
-                <td style="text-align:center;">${u.faceData ? '<span style="color:green;">✔ Reg</span>' : '<span style="color:red;">❌ No</span>'}</td>
+                <td style="text-align:center;" id="task_stat_${uid}">...</td>
+                <td style="text-align:center;">${u.faceData ? '✔' : '❌'}</td>
                 <td>
-                    <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px;">📋 Track Tasks</button>
-                    <button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(displayName)}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">🚫 Ban</button>
-                    <button class="warning" onclick="resetUserName('${uid}')" style="font-size:10px; padding:4px 8px; margin-top:2px;">Reset Name</button>
+                    ${actionButton}
                 </td>
             `;
             userTable.appendChild(row);
-
-            // 4. ATTACH LIVE TASK COUNTER FOR THIS USER
-            onValue(ref(db, `assignments/${uid}`), (taskSnap) => {
-                const targetCell = document.getElementById(`task_stat_${uid}`);
-                if (!targetCell) return;
-
-                let pending = 0, done = 0;
-                if (taskSnap.exists()) {
-                    taskSnap.forEach(t => {
-                        t.val().status === 'Done' ? done++ : pending++;
-                    });
-                    targetCell.innerHTML = `
-                        <b style="color:green;">${done} Done</b> / 
-                        <b style="color:#b38600;">${pending} Pending</b>
-                    `;
-                } else {
-                    targetCell.innerHTML = `<span style="color:#999;">No Tasks</span>`;
-                }
-            });
         });
     });
 };
+async function hardResetForm() {
+    // A. Wipe Visual Inputs
+    document.getElementById("inpStationLength").value = "";
+    document.getElementById("inpYellowDist").value = "";
+    document.getElementById("inpYellowThick").value = "";
+    document.getElementById("inpRemarks").value = "";
+    document.getElementById("inpImplementation").value = "";
+    document.getElementById("distanceBody").innerHTML = ""; // Clear Rake Table
+    
+    // B. Clear Global Key variables
+    currentStationKey = null;
+    currentRakeKey = null;
 
+    // C. CRITICAL: Wipe the 'Draft' node in Firebase for this user
+    // This ensures data from the previous station doesn't persist
+    if(currentUser) {
+        await remove(ref(db, `drafts/${currentUser.uid}`));
+    }
+}
 window.resetUserName = async (uid) => {
     if(confirm("⚠ Reset this user's name?\n\nThey will be asked to enter their 'Official Name' again on the next login.")) {
         try {
@@ -4244,18 +4273,16 @@ window.submitBan = async () => {
     }
 };
 window.unbanUser = async (uid, encodedName) => {
-    // 1. Security Check
     if(!isAdmin) return alert("⛔ Access Denied: Administrator privileges required.");
     
     const name = decodeURIComponent(encodedName);
     
-    // 2. Confirmation Dialog
-    if(confirm(`🟢 RESTORE ACCESS?\n\nUser: ${name}\n\nThis will immediately allow the user to log in and access the system again.\n\nProceed?`)) {
+    if(confirm(`🟢 RESTORE ACCESS?\n\nUser: ${name}\n\nThis will immediately allow the user to log in again.`)) {
         try {
-            // 3. Database Update: Set all ban fields to null to delete them
+            // We specifically set fields to null to delete them
             await update(ref(db, `users/${uid}`), {
-                banned: null,
-                banReason: null,
+                banned: null,     // Removes the banned flag
+                banReason: null,  // Removes reason
                 banAction: null,
                 banExpires: null,
                 banRemarks: null,
@@ -4263,20 +4290,17 @@ window.unbanUser = async (uid, encodedName) => {
                 bannedBy: null
             });
 
-            // 4. Create Audit Log
+            // Log the action
             await push(ref(db, "logs"), {
                 type: "USER_UNBAN",
                 user: "System",
                 details: `Unbanned UID: ${uid}`,
-                reason: "Admin Restore Action",
                 approvedBy: currentUser.email,
                 time: serverTimestamp()
             });
 
             alert(`✅ Access Restored for ${name}.`);
-            
-            // Note: No need to call loadAdminPanel() manually because 
-            // the onValue listener in Part 1 will update the table automatically.
+            // The loadAdminPanel listener will automatically refresh the table
             
         } catch(e) {
             console.error(e);
