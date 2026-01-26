@@ -2453,8 +2453,9 @@ async function processUpload(dataBase64, fileType, fileName) {
 // ==========================================
 // 2. CRASH-PROOF AUTH LISTENER (FIXED)
 // ==========================================
-// --- CRASH-PROOF AUTH LISTENER (FIXED FOR BANNED USERS) ---
-// --- AUTH LISTENER (Populates Banned Screen) ---
+// ==========================================
+// 2. CRASH-PROOF AUTH LISTENER (AUTO-FIXES MISSING DATA)
+// ==========================================
 onAuthStateChanged(auth, (user) => {
     // A. NOT LOGGED IN
     if (!user) { 
@@ -2468,15 +2469,45 @@ onAuthStateChanged(auth, (user) => {
     // B. LOGGED IN - CHECK DATA
     const userRef = ref(db, `users/${user.uid}`);
     
-    onValue(userRef, (snap) => {
-        const u = snap.val();
+    onValue(userRef, async (snap) => {
+        let u = snap.val();
 
+        // --- FIX START: AUTO-CREATE MISSING ACCOUNTS ---
         if (!u) {
-            alert("Account data missing.");
-            signOut(auth);
-            return;
-        }
+            console.log("⚠️ Profile missing for " + user.email + ". Auto-generating...");
+            
+            // Determine Name based on Email
+            let generatedName = "Official User";
+            const emailLower = user.email.toLowerCase();
+            
+            if(emailLower.includes("hodee")) generatedName = "HOD Electrical Dept";
+            else if(emailLower.includes("hodcseaiml")) generatedName = "HOD CSE/AIML";
+            else if(emailLower.includes("sujoy")) generatedName = "Sujoy (Admin)";
+            else if(emailLower.includes("heerok")) generatedName = "Prof. Heerok Banerjee";
+            else if(emailLower.includes("soham")) generatedName = "Soham Pal";
 
+            // Create the profile object
+            const newProfile = {
+                name: generatedName,
+                email: user.email,
+                banned: false,
+                faceData: null, // This will trigger the Face Setup modal
+                createdAt: serverTimestamp()
+            };
+
+            // Save to Database
+            try {
+                await set(userRef, newProfile);
+                u = newProfile; // Update local variable to proceed immediately
+            } catch (err) {
+                alert("Critical Error creating profile: " + err.message);
+                signOut(auth);
+                return;
+            }
+        }
+        // --- FIX END ---
+
+        // 2. TERMINATED?
         if (u.terminated) { 
             alert("ACCOUNT TERMINATED."); 
             signOut(auth); 
@@ -2496,7 +2527,7 @@ onAuthStateChanged(auth, (user) => {
             if(banScreen) {
                 banScreen.classList.remove("hidden");
                 
-                // 3. FILL THE DATA (This is what shows your text)
+                // 3. FILL THE DATA
                 document.getElementById("displayBanReason").innerText = u.banReason || "Violation of Safety Protocols";
                 document.getElementById("displayBanAction").innerText = u.banAction || "Please contact the System Administrator.";
                 document.getElementById("displayBanRemarks").innerText = u.banRemarks || "No additional remarks.";
