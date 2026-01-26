@@ -3839,8 +3839,13 @@ window.submitStationData = async () => {
         }
     }
 };
+// GLOBAL VARIABLES to track active listeners
+// (This prevents duplicate connections when you click Refresh)
+let adminUsersListener = null;
+let adminStatusListener = null;
+
 // =========================================================
-// 🛠️ FIXED: REAL-TIME STATUS ADMIN PANEL
+// 🛠️ FIXED: LOAD ADMIN PANEL (With Proper Refresh Logic)
 // =========================================================
 window.loadAdminPanel = () => {
     const tbody = document.getElementById("userListBody");
@@ -3849,13 +3854,27 @@ window.loadAdminPanel = () => {
     // Safety Check
     if (!tbody || !checkboxList) return;
 
-    // Local state to store data from both sources
+    // 1. DETACH OLD LISTENERS (The Fix for "Refresh" button)
+    // If listeners are already running, stop them before starting new ones.
+    if (adminUsersListener) {
+        // In Firebase v9+, onValue returns the unsubscribe function directly
+        if (typeof adminUsersListener === "function") adminUsersListener(); 
+        adminUsersListener = null;
+    }
+    if (adminStatusListener) {
+        if (typeof adminStatusListener === "function") adminStatusListener();
+        adminStatusListener = null;
+    }
+
+    // 2. SHOW LOADING STATE (Visual feedback)
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-sync fa-spin'></i> Refreshing Data...</td></tr>";
+    
+    // Local state variables
     let localUsers = {};
     let localStatus = {};
 
-    // --- RENDER FUNCTION (Combines Users + Live Status) ---
+    // --- RENDER FUNCTION ---
     const renderTable = () => {
-        // Clear current list
         tbody.innerHTML = "";
         checkboxList.innerHTML = "";
 
@@ -3864,36 +3883,31 @@ window.loadAdminPanel = () => {
             return;
         }
 
-        // Loop through users
         Object.entries(localUsers).forEach(([uid, u]) => {
             if (!u.email) return;
 
             const isSelf = (uid === currentUser.uid);
             const isBanned = u.banned === true;
 
-            // --- STATUS LOGIC (Now Real-time) ---
+            // STATUS LOGIC
             const userStatus = localStatus[uid];
-            
-            // Check if status node exists AND state is explicitly 'online'
             const isOnline = userStatus && userStatus.state === 'online';
             
-            // Format time
             let timeDisplay = "N/A";
             if (userStatus && userStatus.last_changed) {
                 timeDisplay = new Date(userStatus.last_changed).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             }
 
-            // Create Badge
             const statusBadge = isOnline 
                 ? `<span class="badge-online">🟢 Online</span>` 
                 : `<span class="badge-offline">⚫ Offline (${timeDisplay})</span>`;
 
-            // --- BIOMETRIC CHECK ---
+            // BIOMETRIC CHECK
             const bioStatus = u.faceData 
                 ? `<span style="color:green; font-weight:bold; font-size:11px;">✔ Registered</span>` 
                 : `<span style="color:red; font-weight:bold; font-size:11px;">⚠ Pending</span>`;
 
-            // --- BUTTONS ---
+            // BUTTONS
             let actionBtns = `
                 <button class="info" onclick="viewUserTasks('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="View Tasks"><i class="fas fa-tasks"></i></button>
                 <button class="secondary" onclick="resetUserName('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Name"><i class="fas fa-eraser"></i></button>
@@ -3908,9 +3922,9 @@ window.loadAdminPanel = () => {
                 }
             }
 
-            // --- RENDER TABLE ROW ---
+            // RENDER ROW
             const rowStyle = isBanned ? "background:#fee2e2;" : "";
-            const rowHtml = `
+            tbody.innerHTML += `
                 <tr style="${rowStyle}">
                     <td>
                         <div style="font-weight:bold; color:var(--metro-blue); font-size:13px;">
@@ -3928,9 +3942,8 @@ window.loadAdminPanel = () => {
                     </td>
                 </tr>
             `;
-            tbody.innerHTML += rowHtml;
 
-            // --- RENDER CHECKBOX LIST ---
+            // CHECKBOX LIST
             if (!isBanned) {
                 const checkId = `chk_user_${uid}`;
                 checkboxList.innerHTML += `
@@ -3946,19 +3959,20 @@ window.loadAdminPanel = () => {
         });
     };
 
-    // 1. LISTEN TO USERS (Real-time Profile Changes)
-    onValue(ref(db, "users"), (snap) => {
+    // 3. START NEW LISTENERS (And save them to global vars)
+    
+    // User Listener
+    adminUsersListener = onValue(ref(db, "users"), (snap) => {
         if (snap.exists()) localUsers = snap.val();
         else localUsers = {};
         renderTable();
     });
 
-    // 2. LISTEN TO STATUS (Real-time Online/Offline Changes)
-    // This was missing before!
-    onValue(ref(db, "status"), (snap) => {
+    // Status Listener
+    adminStatusListener = onValue(ref(db, "status"), (snap) => {
         if (snap.exists()) localStatus = snap.val();
         else localStatus = {};
-        renderTable(); // Re-render immediately when status changes
+        renderTable();
     });
 };
 window.viewRakeRows = (rowsEncoded, stationName) => {
