@@ -5352,30 +5352,79 @@ window.switchTab = (t) => {
 };
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
+// --- 1. HELPER TO OPEN BIG IMAGE ---
+window.openBigPhoto = (url) => {
+    const modal = document.getElementById("bigImageModal");
+    const img = document.getElementById("bigImageViewer");
+    
+    // Set the image source
+    img.src = url;
+    
+    // Show the modal
+    modal.classList.remove("hidden");
+};
+
+// --- 2. UPDATED LOAD GALLERY FUNCTION ---
 function loadGallery() {
     const div = document.getElementById("galleryContainer");
-    div.innerHTML = "<p>Loading...</p>";
+    div.innerHTML = "<p style='text-align:center; width:100%;'>Loading images...</p>";
 
-    onValue(ref(db, "history"), snap => {
+    // Clean up old listener
+    if (galleryListener) { try { off(ref(db, "history")); } catch(e){} galleryListener = null; }
+
+    const line = document.getElementById("galleryLineSelect").value;
+    const stn = document.getElementById("galleryStationSelect").value;
+    
+    if(!line || !stn) { div.innerHTML = ""; return; }
+    
+    const targetName = `${stn} (${line})`;
+    const q = query(ref(db, "history"), orderByChild("stationName"), equalTo(targetName));
+
+    galleryListener = onValue(q, snap => {
         div.innerHTML = "";
+        if(!snap.exists()) { div.innerHTML = "<p style='text-align:center; width:100%; color:#888;'>No photos found.</p>"; return; }
+
         snap.forEach(c => {
             const v = c.val();
-            if(v.fileData) {
-                let media = `<div style="padding:10px; color:#666;">Unsupported</div>`;
-                if(v.fileType.includes("image")) media = `<img src="${v.fileData}">`;
-                else if(v.fileType.includes("pdf")) media = `<div style="height:100px; display:flex; align-items:center; justify-content:center; background:#f0f0f0;">📄 PDF</div>`;
-                
-                let controls = `<br><small style="color:grey;">(View Only)</small>`;
-                if(isAdmin) {
-                    controls = `<div style="margin-top:5px; display:flex; justify-content:center; gap:5px;"><a href="${v.fileData}" download="Evidence" style="background:var(--metro-blue); color:white; padding:3px 8px; text-decoration:none; font-size:11px; border-radius:3px;">⬇ Download</a><button class="danger" style="padding:2px 5px; font-size:11px;" onclick="removeFile('${c.key}')">Remove File</button></div>`;
-                }
-                div.innerHTML += `<div class="gallery-item">${media}<div style="font-size:11px; margin-top:5px;"><b>${v.name}</b><br>by ${v.userName}</div>${controls}</div>`;
+            let media = "";
+            
+            // --- IMAGE LOGIC: CLICK TO OPEN BIG ---
+            if(v.fileType && v.fileType.includes("image")) {
+                media = `
+                <img src="${v.fileData}" 
+                     onclick="openBigPhoto('${v.fileData}')" 
+                     style="cursor:zoom-in; width:100%; height:140px; object-fit:cover; border-radius:4px; border:1px solid #ccc; transition: transform 0.2s;"
+                     onmouseover="this.style.transform='scale(1.03)'"
+                     onmouseout="this.style.transform='scale(1)'"
+                >`;
+            } else {
+                media = `<div style="height:140px; background:#eee; display:flex; align-items:center; justify-content:center; color:#555;">📄 Document</div>`;
             }
+
+            // --- ADMIN CONTROLS (Only Admin sees Download/Delete) ---
+            let footer = `<div style="margin-top:5px; text-align:center; font-size:10px; color:#aaa;">(Click to Zoom)</div>`;
+            
+            if(isAdmin) {
+                footer = `
+                <div style="margin-top:5px; display:flex; gap:5px;">
+                    <a href="${v.fileData}" download="Evidence.jpg" class="info" style="flex:1; text-decoration:none; text-align:center; padding:5px; font-size:11px; background:#0A2342; color:white; border-radius:3px;">⬇ Save</a>
+                    <button class="danger" onclick="removeFile('${c.key}')" style="padding:5px; font-size:11px; border-radius:3px;">🗑</button>
+                </div>`;
+            }
+
+            // --- RENDER CARD ---
+            div.innerHTML += `
+            <div class="gallery-item" style="background:white; padding:10px; border-radius:8px; border:1px solid #e2e8f0; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                ${media}
+                <div style="font-size:11px; margin-top:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                    <b>${v.name}</b>
+                </div>
+                <div style="font-size:10px; color:#666;">By: ${v.userName}</div>
+                ${footer}
+            </div>`;
         });
-        if(div.innerHTML === "") div.innerHTML = "<p>No evidence found.</p>";
     });
 }
-
 window.removeFile = (k) => {
     if(confirm("Remove attached file?")) {
         update(ref(db, `history/${k}`), { fileData: null, fileType: null, fileRemoved: true });
@@ -5639,5 +5688,20 @@ setTimeout(debugConnection, 3000);
 // Run automatically on load
 setTimeout(debugConnection, 3000);
 </script>
+<div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
+    <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
+        
+        <div style="position: relative; max-width: 95%; max-height: 95%;">
+            <button onclick="document.getElementById('bigImageModal').classList.add('hidden')" 
+                    style="position: absolute; top: -15px; right: -15px; background: red; color: white; border: 2px solid white; border-radius: 50%; width: 40px; height: 40px; font-weight: bold; cursor: pointer; z-index: 1002;">
+                X
+            </button>
+            
+            <img id="bigImageViewer" src="" 
+                 style="max-width: 100%; max-height: 90vh; border: 4px solid white; border-radius: 4px; box-shadow: 0 0 50px rgba(0,0,0,0.9); object-fit: contain;">
+        </div>
+
+    </div>
+</div>
 </body>
 </html>
