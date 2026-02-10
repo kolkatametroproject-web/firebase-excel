@@ -1754,75 +1754,113 @@ window.clearPurForm = () => {
     document.getElementById("btnPurSubmit").innerText = "SAVE & DEDUCT FUND";
 };
 window.loadFinanceData = () => {
+    // 1. Show Admin Panel if Admin
     if(isAdmin) document.getElementById("adminFundPanel").classList.remove("hidden");
     
-    // 1. Setup Headers (Ensure "Action" is added only once and "Status" is gone)
+    // 2. Setup Headers (Ensure headers are correct)
     const theadRow = document.querySelector("#tab-funds thead tr");
-    // Reset headers to base 6 columns (Date, Type, Desc, Mode, Credit, Debit)
-    theadRow.innerHTML = `<th>Date</th><th>Type</th><th>Description</th><th>Mode</th><th>Credit (+)</th><th>Debit (-)</th>`;
-    
-    // Add Action Column if Admin
-    if(isAdmin) {
-        const th = document.createElement("th");
-        th.innerText = "Action";
-        theadRow.appendChild(th);
-    }
+    let headerHTML = `<th>Date</th><th>Type</th><th>Description</th><th>Mode</th><th>Credit (+)</th><th>Debit (-)</th>`;
+    if(isAdmin) headerHTML += `<th>Action</th>`; // Only add Action for Admin
+    theadRow.innerHTML = headerHTML;
 
+    // 3. Clear previous listener to prevent duplication
     if(window.financeListener) { try{ off(ref(db, "finance")); }catch(e){} }
 
+    const tbody = document.getElementById("fundTableBody");
+    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Syncing Ledger...</td></tr>";
+
+    // 4. Start Listener
     window.financeListener = onValue(ref(db, "finance"), (snap) => {
-        const tbody = document.getElementById("fundTableBody");
-        tbody.innerHTML = ""; 
-        
         let totalCredit = 0;
         let totalDebit = 0;
         const txs = [];
 
         if(snap.exists()) {
-            snap.forEach(c => txs.push({ key: c.key, ...c.val() }));
+            snap.forEach(c => {
+                // SAFETY: Ensure we have an object, even if empty
+                const val = c.val() || {}; 
+                txs.push({ key: c.key, ...val });
+            });
         }
+
+        // 5. SORTING (Safe sort - handles missing timestamps)
+        txs.sort((a,b) => {
+            const timeA = a.timestamp || 0;
+            const timeB = b.timestamp || 0;
+            return timeA - timeB; // Oldest first to calculate running balance flow, or Newest first for view?
+            // Usually Balance sheets show history top-down. Let's do Newest First for visibility.
+            // return timeB - timeA; 
+        });
         
+        // Let's do Standard Chronological (Oldest -> Newest) to make sense of a Ledger, 
+        // OR Newest -> Oldest for "Updates". 
+        // User asked for "rowwise new data", implying new rows appear. 
+        // Let's sort NEWEST FIRST (b - a) so new data appears at top.
         txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
+        // 6. BUILD HTML SAFELY
+        let rowsHtml = ""; // String builder is faster and doesn't flicker
+        
         txs.forEach(t => {
-            const isCredit = t.type === 'CREDIT';
-            const amount = parseFloat(t.amount) || 0; 
-            
-            if(isCredit && t.status === 'Approved') totalCredit += amount;
-            if(!isCredit) totalDebit += amount;
+            try {
+                const isCredit = t.type === 'CREDIT';
+                const status = t.status || 'Approved'; // Default to Approved if missing
+                
+                // SAFETY: Parse Amount. If NaN, treat as 0.
+                let rawAmt = t.amount;
+                if(typeof rawAmt !== 'number') rawAmt = parseFloat(rawAmt);
+                if(isNaN(rawAmt)) rawAmt = 0;
 
-            const dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "Pending";
-            const colorClass = isCredit ? (t.status === 'Approved' ? 'color:green' : 'color:orange') : 'color:red';
-            
-            // Admin Controls (Action Column)
-            let actionButtons = "";
-            if(isAdmin) {
+                // Calculate Totals (Only approved credits count, all debits count)
                 if(isCredit) {
-                    actionButtons = `
-                        <td>
-                            <button onclick="editFund('${t.key}')" style="padding:2px 5px; font-size:10px; cursor:pointer;">✏</button>
-                            <button onclick="deleteFund('${t.key}')" style="padding:2px 5px; font-size:10px; color:red; cursor:pointer;">🗑</button>
-                        </td>`;
+                    if(status === 'Approved') totalCredit += rawAmt;
                 } else {
-                    actionButtons = `<td><button onclick="deletePurchase('${t.key}')" style="padding:2px 5px; font-size:10px; color:red;">🗑</button></td>`;
+                    totalDebit += rawAmt;
                 }
-            }
 
-            // RENDER ROW (Removed the Status/Approved Column)
-            const row = `
-                <tr>
-                    <td style="font-size:11px;">${dateStr}</td>
-                    <td style="font-weight:bold; ${colorClass}">${t.type}</td>
-                    <td>${t.desc || '-'}</td>
-                    <td>${t.mode || '-'}</td>
-                    <td style="color:green; text-align:right;">${isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
-                    <td style="color:red; text-align:right;">${!isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
-                    ${actionButtons}
-                </tr>
-            `;
-            tbody.innerHTML += row;
+                // Formatting
+                const dateObj = t.timestamp ? new Date(t.timestamp) : null;
+                const dateStr = dateObj ? dateObj.toLocaleDateString() : "Old Record";
+                const colorClass = isCredit ? (status === 'Approved' ? 'color:green' : 'color:orange') : 'color:red';
+                const descText = t.desc || t.productName || "Unknown Entry";
+                const modeText = t.mode || t.orderId || "-";
+
+                // Admin Buttons
+                let actionButtons = "";
+                if(isAdmin) {
+                    if(isCredit) {
+                        actionButtons = `
+                            <td>
+                                <button onclick="editFund('${t.key}')" style="padding:2px 5px; font-size:10px; cursor:pointer;">✏</button>
+                                <button onclick="deleteFund('${t.key}')" style="padding:2px 5px; font-size:10px; color:red; cursor:pointer;">🗑</button>
+                            </td>`;
+                    } else {
+                        actionButtons = `<td><button onclick="deletePurchase('${t.key}')" style="padding:2px 5px; font-size:10px; color:red; cursor:pointer;">🗑</button></td>`;
+                    }
+                }
+
+                // Add to HTML String
+                rowsHtml += `
+                    <tr>
+                        <td style="font-size:11px;">${dateStr}</td>
+                        <td style="font-weight:bold; ${colorClass}">${t.type || 'MISC'}</td>
+                        <td style="font-size:12px;">${descText}</td>
+                        <td style="font-size:11px;">${modeText}</td>
+                        <td style="color:green; text-align:right;">${isCredit ? '₹'+rawAmt.toFixed(2) : '-'}</td>
+                        <td style="color:red; text-align:right;">${!isCredit ? '₹'+rawAmt.toFixed(2) : '-'}</td>
+                        ${actionButtons}
+                    </tr>
+                `;
+            } catch (err) {
+                console.error("Skipping corrupt row:", err);
+                // We simply skip rows that cause errors so the rest of the table loads
+            }
         });
 
+        // 7. INJECT HTML (Update DOM only once)
+        tbody.innerHTML = rowsHtml || "<tr><td colspan='7' style='text-align:center; color:#666;'>No data found.</td></tr>";
+
+        // 8. Update Dashboard
         updateDashboard(totalCredit, totalDebit);
     });
 };
