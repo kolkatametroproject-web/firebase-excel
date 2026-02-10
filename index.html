@@ -6057,17 +6057,23 @@ window.filterStockTable = () => {
     });
 };
 window.loadPurchaseData = () => {
+    // 1. Show Form only for Admins? 
+    // Previous request said "any user can purchase", so we KEEP form visible for all.
     const formPanel = document.getElementById("purchaseFormPanel");
-    // ALLOW EVERYONE to see the form so they can request purchases
     if(formPanel) formPanel.classList.remove("hidden");
 
     const tbody = document.getElementById("purchaseTableBody");
     tbody.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Loading Data...</td></tr>";
 
-    // Setup Headers
+    // 2. Setup Headers
     const theadRow = document.querySelector("#tab-purchase thead tr");
+    
+    // Base Headers
     let headerHTML = `<th>Sl</th><th>Product Details</th><th>Vendor & Order ID</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th>`;
-    if(isAdmin) headerHTML += `<th>Action</th>`; // Admin gets Approve/Delete buttons
+    
+    // LOGIC: If Admin -> Show "Action" Column. If Not Admin -> Show NOTHING.
+    if(isAdmin) headerHTML += `<th>Action</th>`;
+    
     theadRow.innerHTML = headerHTML;
 
     if(window.purchaseListener) { try{ off(ref(db, "finance")); }catch(e){} }
@@ -6077,6 +6083,8 @@ window.loadPurchaseData = () => {
         let sl = 1;
         const txs = [];
         if(snap.exists()) snap.forEach(c => txs.push({ key: c.key, ...c.val() }));
+        
+        // Sort: Newest First
         txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         txs.forEach(t => {
@@ -6091,27 +6099,28 @@ window.loadPurchaseData = () => {
                         ? `<span style="background:#fef3c7; color:#d97706; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">⏳ Pending</span>`
                         : `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">✅ Approved</span>`;
 
-                    // Action Cell (Admin Only)
+                    // Action Cell Logic
                     let actionCell = "";
+                    
                     if(isAdmin) {
+                        // ADMIN SEES: Edit Option (and Approve if pending)
                         if(isPending) {
-                            // SHOW APPROVE BUTTON
                             actionCell = `
                                 <td>
-                                    <button onclick="approvePurchase('${t.key}')" class="success" style="padding:4px 8px; font-size:10px;">✅ Approve</button>
-                                    <button onclick="deletePurchase('${t.key}')" class="danger" style="padding:4px 8px; font-size:10px;">🗑</button>
+                                    <button onclick="approvePurchase('${t.key}')" class="success" style="padding:4px 8px; font-size:10px; margin-right:5px;">✅ Approve</button>
+                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px;">✏ Edit</button>
                                 </td>
                             `;
                         } else {
-                            // Already Approved
+                            // Already Approved -> Only Edit
                             actionCell = `
                                 <td>
-                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:2px 5px; font-size:10px;">✏</button>
-                                    <button onclick="deletePurchase('${t.key}')" class="danger" style="padding:2px 5px; font-size:10px;">🗑</button>
+                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px;">✏ Edit</button>
                                 </td>
                             `;
                         }
-                    }
+                    } 
+                    // NON-ADMIN SEES: Nothing (Cell remains empty string "")
 
                     const row = `
                         <tr style="${isPending ? 'background:#fffbf0;' : ''}">
@@ -6133,7 +6142,6 @@ window.loadPurchaseData = () => {
         if(tbody.innerHTML === "") tbody.innerHTML = "<tr><td colspan='8' style='text-align:center; color:#999;'>No records.</td></tr>";
     });
 };
-
 // --- NEW: APPROVE FUNCTION ---
 window.approvePurchase = async (key) => {
     if(!confirm("Approve this purchase?\n\nThis will deduct the amount from the Project Fund immediately.")) return;
