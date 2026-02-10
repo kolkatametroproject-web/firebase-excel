@@ -1778,11 +1778,7 @@ window.loadFinanceData = () => {
         if(panel) panel.classList.remove("hidden");
     }
     
-    // 2. Safety Check: Ensure Table Exists
-    const tbody = document.getElementById("fundTableBody");
-    if(!tbody) return; // Prevent crash if tab is hidden
-
-    // 3. Reset Headers
+    // 2. Setup Headers
     const theadRow = document.querySelector("#tab-funds thead tr");
     if(theadRow) {
         let headerHTML = `<th>Date</th><th>Type</th><th>Description</th><th>Mode</th><th>Credit (+)</th><th>Debit (-)</th>`;
@@ -1790,19 +1786,18 @@ window.loadFinanceData = () => {
         theadRow.innerHTML = headerHTML;
     }
 
-    // 4. Detach Old Listener
+    // 3. Listener Setup
     if(window.financeListener) { try{ off(ref(db, "finance")); }catch(e){} }
+    const tbody = document.getElementById("fundTableBody");
+    if(!tbody) return;
 
-    // 5. Start Listener (With Global Error Handling)
     window.financeListener = onValue(ref(db, "finance"), (snap) => {
         try {
             tbody.innerHTML = ""; 
-            
             let totalCredit = 0;
             let totalDebit = 0;
             const txs = [];
 
-            // A. Handle Empty Database
             if(!snap.exists()) {
                 tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No records found.</td></tr>";
                 updateDashboard(0, 0);
@@ -1814,55 +1809,42 @@ window.loadFinanceData = () => {
                 if(val) txs.push({ key: c.key, ...val });
             });
             
-            // B. Sort: Newest First (Safe Sort)
             txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-            // C. Render Loop
             txs.forEach(t => {
                 const isCredit = t.type === 'CREDIT';
-                
-                // --- LEGACY DATA FIX ---
-                // If 'status' is missing:
-                // 1. Funds (CREDIT) -> Assume 'Approved' (Old data is valid)
-                // 2. Purchases (DEBIT) -> Assume 'Approved' (Old purchases are valid)
                 const currentStatus = t.status || 'Approved'; 
 
-                // Filter: Hide "Pending" Purchases
-                // (Only hide if explicit 'Pending' status exists)
+                // Skip Unapproved Purchases from Balance Sheet
                 if(t.type === 'DEBIT' && currentStatus === 'Pending') return;
 
-                // Safe Amount Parsing
                 let amount = parseFloat(t.amount);
                 if(isNaN(amount)) amount = 0;
                 
-                // D. Calculate Totals
                 if(isCredit) {
-                    // Only sum up if Approved
                     if(currentStatus === 'Approved') totalCredit += amount;
                 } else {
                     totalDebit += amount;
                 }
 
-                // E. Formatting
-                const dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "Legacy Record";
+                const dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "Legacy";
                 const colorClass = isCredit ? 'color:green' : 'color:red';
-                const desc = t.desc || t.productName || "No Description";
+                const desc = t.desc || t.productName || "-";
                 const mode = t.mode || t.orderId || "-";
                 
-                // F. Admin Buttons
+                // --- FIXED BUTTONS HERE ---
                 let actionButtons = "";
                 if(isAdmin) {
                     if(isCredit) {
                         actionButtons = `<td>
-                            <button onclick="editFund('${t.key}')" style="cursor:pointer; border:none; background:none;">✏</button>
-                            <button onclick="deleteFund('${t.key}')" style="color:red; cursor:pointer; border:none; background:none;">🗑</button>
+                            <button onclick="editFund('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px; margin-right:5px; background:#d97706; color:white;">✏ Edit</button>
+                            <button onclick="deleteFund('${t.key}')" class="danger" style="padding:4px 8px; font-size:10px; background:#B91C1C; color:white;">🗑</button>
                         </td>`;
                     } else {
                         actionButtons = `<td><small style="color:#999">See Procurement</small></td>`;
                     }
                 }
 
-                // G. Render Row
                 const row = `
                     <tr>
                         <td style="font-size:11px;">${dateStr}</td>
@@ -1877,13 +1859,9 @@ window.loadFinanceData = () => {
                 tbody.innerHTML += row;
             });
 
-            // 6. Update Cards
             updateDashboard(totalCredit, totalDebit);
 
-        } catch (globalErr) {
-            console.error("Critical Finance Error:", globalErr);
-            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; color:red;'>Error loading data. Check Console.</td></tr>";
-        }
+        } catch (globalErr) { console.error(globalErr); }
     });
 };
 // Helper to update the top cards
@@ -6057,23 +6035,15 @@ window.filterStockTable = () => {
     });
 };
 window.loadPurchaseData = () => {
-    // 1. Show Form only for Admins? 
-    // Previous request said "any user can purchase", so we KEEP form visible for all.
     const formPanel = document.getElementById("purchaseFormPanel");
     if(formPanel) formPanel.classList.remove("hidden");
 
     const tbody = document.getElementById("purchaseTableBody");
     tbody.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Loading Data...</td></tr>";
 
-    // 2. Setup Headers
     const theadRow = document.querySelector("#tab-purchase thead tr");
-    
-    // Base Headers
     let headerHTML = `<th>Sl</th><th>Product Details</th><th>Vendor & Order ID</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th>`;
-    
-    // LOGIC: If Admin -> Show "Action" Column. If Not Admin -> Show NOTHING.
     if(isAdmin) headerHTML += `<th>Action</th>`;
-    
     theadRow.innerHTML = headerHTML;
 
     if(window.purchaseListener) { try{ off(ref(db, "finance")); }catch(e){} }
@@ -6084,7 +6054,6 @@ window.loadPurchaseData = () => {
         const txs = [];
         if(snap.exists()) snap.forEach(c => txs.push({ key: c.key, ...c.val() }));
         
-        // Sort: Newest First
         txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         txs.forEach(t => {
@@ -6094,33 +6063,27 @@ window.loadPurchaseData = () => {
                     const amount = parseFloat(t.amount) || 0;
                     const isPending = t.status !== 'Approved';
                     
-                    // Status Badge
                     let statusBadge = isPending 
                         ? `<span style="background:#fef3c7; color:#d97706; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">⏳ Pending</span>`
                         : `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">✅ Approved</span>`;
 
-                    // Action Cell Logic
                     let actionCell = "";
-                    
                     if(isAdmin) {
-                        // ADMIN SEES: Edit Option (and Approve if pending)
                         if(isPending) {
                             actionCell = `
                                 <td>
-                                    <button onclick="approvePurchase('${t.key}')" class="success" style="padding:4px 8px; font-size:10px; margin-right:5px;">✅ Approve</button>
-                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px;">✏ Edit</button>
+                                    <button onclick="approvePurchase('${t.key}')" class="success" style="padding:4px 8px; font-size:10px; margin-right:5px; background:#15803d; color:white;">✅ Approve</button>
+                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px; background:#d97706; color:white;">✏ Edit</button>
                                 </td>
                             `;
                         } else {
-                            // Already Approved -> Only Edit
                             actionCell = `
                                 <td>
-                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px;">✏ Edit</button>
+                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px; background:#d97706; color:white;">✏ Edit</button>
                                 </td>
                             `;
                         }
-                    } 
-                    // NON-ADMIN SEES: Nothing (Cell remains empty string "")
+                    }
 
                     const row = `
                         <tr style="${isPending ? 'background:#fffbf0;' : ''}">
