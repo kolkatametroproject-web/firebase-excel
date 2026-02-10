@@ -6035,74 +6035,102 @@ window.filterStockTable = () => {
     });
 };
 window.loadPurchaseData = () => {
+    // 1. Show Form
     const formPanel = document.getElementById("purchaseFormPanel");
     if(formPanel) formPanel.classList.remove("hidden");
 
     const tbody = document.getElementById("purchaseTableBody");
-    tbody.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Loading Data...</td></tr>";
+    if(!tbody) return; // Safety check
+    tbody.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Syncing Procurement Data...</td></tr>";
 
+    // 2. Setup Headers
     const theadRow = document.querySelector("#tab-purchase thead tr");
-    let headerHTML = `<th>Sl</th><th>Product Details</th><th>Vendor & Order ID</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th>`;
-    if(isAdmin) headerHTML += `<th>Action</th>`;
-    theadRow.innerHTML = headerHTML;
+    if(theadRow) {
+        let headerHTML = `<th>Sl</th><th>Product Details</th><th>Vendor & Order ID</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th>`;
+        if(isAdmin) headerHTML += `<th>Action</th>`; // Only Admin sees Action column
+        theadRow.innerHTML = headerHTML;
+    }
 
+    // 3. Detach Old Listener
     if(window.purchaseListener) { try{ off(ref(db, "finance")); }catch(e){} }
 
+    // 4. Start Listener (With Crash Protection)
     window.purchaseListener = onValue(ref(db, "finance"), (snap) => {
-        tbody.innerHTML = "";
-        let sl = 1;
-        const txs = [];
-        if(snap.exists()) snap.forEach(c => txs.push({ key: c.key, ...c.val() }));
-        
-        txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+        try {
+            tbody.innerHTML = "";
+            let sl = 1;
+            const txs = [];
 
-        txs.forEach(t => {
-            try {
-                if(t.type === 'DEBIT') {
-                    const prodName = t.productName || t.desc || "Unknown";
-                    const amount = parseFloat(t.amount) || 0;
-                    const isPending = t.status !== 'Approved';
-                    
-                    let statusBadge = isPending 
-                        ? `<span style="background:#fef3c7; color:#d97706; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">⏳ Pending</span>`
-                        : `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">✅ Approved</span>`;
+            if(!snap.exists()) {
+                tbody.innerHTML = "<tr><td colspan='8' style='text-align:center; color:#999;'>No records found.</td></tr>";
+                return;
+            }
 
-                    let actionCell = "";
-                    if(isAdmin) {
-                        if(isPending) {
-                            actionCell = `
-                                <td>
-                                    <button onclick="approvePurchase('${t.key}')" class="success" style="padding:4px 8px; font-size:10px; margin-right:5px; background:#15803d; color:white;">✅ Approve</button>
-                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px; background:#d97706; color:white;">✏ Edit</button>
-                                </td>
-                            `;
-                        } else {
-                            actionCell = `
-                                <td>
-                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px; background:#d97706; color:white;">✏ Edit</button>
-                                </td>
-                            `;
+            snap.forEach(c => {
+                const val = c.val();
+                if(val) txs.push({ key: c.key, ...val });
+            });
+            
+            // Sort: Newest First
+            txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+            txs.forEach(t => {
+                try {
+                    // Only process DEBIT (Purchases)
+                    if(t.type === 'DEBIT') {
+                        
+                        // --- FIX: LEGACY DATA SUPPORT ---
+                        // If status is missing, assume it is 'Approved' (Old data)
+                        const currentStatus = t.status || 'Approved'; 
+
+                        const prodName = t.productName || t.desc || "Legacy Item";
+                        const amount = parseFloat(t.amount) || 0;
+                        const isPending = currentStatus !== 'Approved';
+                        
+                        // Status Badge
+                        let statusBadge = isPending 
+                            ? `<span style="background:#fef3c7; color:#d97706; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">⏳ Pending</span>`
+                            : `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">✅ Approved</span>`;
+
+                        // Action Buttons (Admin Only: Edit Only, or Approve+Edit if pending)
+                        let actionCell = "";
+                        if(isAdmin) {
+                            if(isPending) {
+                                actionCell = `
+                                    <td>
+                                        <button onclick="approvePurchase('${t.key}')" class="success" style="padding:4px 8px; font-size:10px; margin-right:5px; background:#15803d; color:white;">✅ Approve</button>
+                                        <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px; background:#d97706; color:white;">✏ Edit</button>
+                                    </td>
+                                `;
+                            } else {
+                                actionCell = `
+                                    <td>
+                                        <button onclick="editPurchase('${t.key}')" class="warning" style="padding:4px 8px; font-size:10px; background:#d97706; color:white;">✏ Edit</button>
+                                    </td>
+                                `;
+                            }
                         }
-                    }
 
-                    const row = `
-                        <tr style="${isPending ? 'background:#fffbf0;' : ''}">
-                            <td>${sl++}</td>
-                            <td style="font-weight:bold;">${prodName}</td>
-                            <td>${t.platform || '-'}<br><small style="color:#666">${t.orderId || '-'}</small></td>
-                            <td>${t.qty}</td>
-                            <td>${t.unitPrice}</td>
-                            <td style="color:var(--metro-red); font-weight:bold;">₹ ${amount.toFixed(2)}</td>
-                            <td>${statusBadge}</td>
-                            ${actionCell}
-                        </tr>
-                    `;
-                    tbody.innerHTML += row;
-                }
-            } catch (err) { console.error(err); }
-        });
-        
-        if(tbody.innerHTML === "") tbody.innerHTML = "<tr><td colspan='8' style='text-align:center; color:#999;'>No records.</td></tr>";
+                        const row = `
+                            <tr style="${isPending ? 'background:#fffbf0;' : ''}">
+                                <td>${sl++}</td>
+                                <td style="font-weight:bold;">${prodName}</td>
+                                <td>${t.platform || '-'}<br><small style="color:#666">${t.orderId || t.mode || '-'}</small></td>
+                                <td>${t.qty || 1}</td>
+                                <td>${t.unitPrice || '-'}</td>
+                                <td style="color:var(--metro-red); font-weight:bold;">₹ ${amount.toFixed(2)}</td>
+                                <td>${statusBadge}</td>
+                                ${actionCell}
+                            </tr>
+                        `;
+                        tbody.innerHTML += row;
+                    }
+                } catch (rowErr) { console.warn("Skipping bad purchase row", rowErr); }
+            });
+            
+            if(tbody.innerHTML === "") tbody.innerHTML = "<tr><td colspan='8' style='text-align:center; color:#999;'>No purchase records found.</td></tr>";
+
+        } catch (globalErr) { console.error(globalErr); }
     });
 };
 // --- NEW: APPROVE FUNCTION ---
