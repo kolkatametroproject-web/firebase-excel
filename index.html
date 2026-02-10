@@ -1720,19 +1720,37 @@ window.submitPurchase = async () => {
     const total = document.getElementById("purTotal").value;
     const key = document.getElementById("editPurchaseKey").value;
     
-    if(!item || !total) return alert("Fill details");
+    if(!item || !total) return alert("Please fill details");
     
+    // LOGIC: Admins auto-approve, Users must wait for approval
+    const status = isAdmin ? "Approved" : "Pending";
+
     const data = {
-        type: "DEBIT", productName: item, platform: document.getElementById("purPlatform").value,
-        orderId: document.getElementById("purOrderId").value, unitPrice: price, qty: qty,
-        amount: parseFloat(total), desc: `Purchase: ${item}`, timestamp: serverTimestamp()
+        type: "DEBIT", 
+        productName: item, 
+        platform: document.getElementById("purPlatform").value,
+        orderId: document.getElementById("purOrderId").value, 
+        unitPrice: price, 
+        qty: qty,
+        amount: parseFloat(total), 
+        desc: `Purchase: ${item}`, 
+        status: status, // <--- SAVES STATUS
+        by: currentUser.email,
+        timestamp: serverTimestamp()
     };
     
-    if(key) { await update(ref(db, `finance/${key}`), data); alert("Updated!"); }
-    else { await push(ref(db, "finance"), data); alert("Purchased!"); }
-    clearPurForm();
+    try {
+        if(key) { 
+            await update(ref(db, `finance/${key}`), data); 
+            alert("Purchase Entry Updated!"); 
+        } else { 
+            await push(ref(db, "finance"), data); 
+            if(isAdmin) alert("Purchase Saved & Approved (Fund Deducted).");
+            else alert("Purchase Request Sent! Admin approval required.");
+        }
+        clearPurForm();
+    } catch(e) { alert(e.message); }
 };
-
 window.editPurchase = async (key) => {
     const snap = await get(ref(db, `finance/${key}`));
     const d = snap.val();
@@ -1754,113 +1772,71 @@ window.clearPurForm = () => {
     document.getElementById("btnPurSubmit").innerText = "SAVE & DEDUCT FUND";
 };
 window.loadFinanceData = () => {
-    // 1. Show Admin Panel if Admin
     if(isAdmin) document.getElementById("adminFundPanel").classList.remove("hidden");
     
-    // 2. Setup Headers (Ensure headers are correct)
     const theadRow = document.querySelector("#tab-funds thead tr");
     let headerHTML = `<th>Date</th><th>Type</th><th>Description</th><th>Mode</th><th>Credit (+)</th><th>Debit (-)</th>`;
-    if(isAdmin) headerHTML += `<th>Action</th>`; // Only add Action for Admin
+    if(isAdmin) headerHTML += `<th>Action</th>`;
     theadRow.innerHTML = headerHTML;
 
-    // 3. Clear previous listener to prevent duplication
     if(window.financeListener) { try{ off(ref(db, "finance")); }catch(e){} }
 
-    const tbody = document.getElementById("fundTableBody");
-    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Syncing Ledger...</td></tr>";
-
-    // 4. Start Listener
     window.financeListener = onValue(ref(db, "finance"), (snap) => {
+        const tbody = document.getElementById("fundTableBody");
+        tbody.innerHTML = ""; 
+        
         let totalCredit = 0;
         let totalDebit = 0;
         const txs = [];
 
-        if(snap.exists()) {
-            snap.forEach(c => {
-                // SAFETY: Ensure we have an object, even if empty
-                const val = c.val() || {}; 
-                txs.push({ key: c.key, ...val });
-            });
-        }
-
-        // 5. SORTING (Safe sort - handles missing timestamps)
-        txs.sort((a,b) => {
-            const timeA = a.timestamp || 0;
-            const timeB = b.timestamp || 0;
-            return timeA - timeB; // Oldest first to calculate running balance flow, or Newest first for view?
-            // Usually Balance sheets show history top-down. Let's do Newest First for visibility.
-            // return timeB - timeA; 
-        });
-        
-        // Let's do Standard Chronological (Oldest -> Newest) to make sense of a Ledger, 
-        // OR Newest -> Oldest for "Updates". 
-        // User asked for "rowwise new data", implying new rows appear. 
-        // Let's sort NEWEST FIRST (b - a) so new data appears at top.
+        if(snap.exists()) snap.forEach(c => txs.push({ key: c.key, ...c.val() }));
         txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-        // 6. BUILD HTML SAFELY
-        let rowsHtml = ""; // String builder is faster and doesn't flicker
-        
         txs.forEach(t => {
-            try {
-                const isCredit = t.type === 'CREDIT';
-                const status = t.status || 'Approved'; // Default to Approved if missing
-                
-                // SAFETY: Parse Amount. If NaN, treat as 0.
-                let rawAmt = t.amount;
-                if(typeof rawAmt !== 'number') rawAmt = parseFloat(rawAmt);
-                if(isNaN(rawAmt)) rawAmt = 0;
+            // CRITICAL CHECK: Skip if not Approved
+            // If it's a Purchase (DEBIT) and NOT Approved, hide it from Balance Sheet
+            if(t.type === 'DEBIT' && t.status !== 'Approved') return;
 
-                // Calculate Totals (Only approved credits count, all debits count)
-                if(isCredit) {
-                    if(status === 'Approved') totalCredit += rawAmt;
-                } else {
-                    totalDebit += rawAmt;
-                }
-
-                // Formatting
-                const dateObj = t.timestamp ? new Date(t.timestamp) : null;
-                const dateStr = dateObj ? dateObj.toLocaleDateString() : "Old Record";
-                const colorClass = isCredit ? (status === 'Approved' ? 'color:green' : 'color:orange') : 'color:red';
-                const descText = t.desc || t.productName || "Unknown Entry";
-                const modeText = t.mode || t.orderId || "-";
-
-                // Admin Buttons
-                let actionButtons = "";
-                if(isAdmin) {
-                    if(isCredit) {
-                        actionButtons = `
-                            <td>
-                                <button onclick="editFund('${t.key}')" style="padding:2px 5px; font-size:10px; cursor:pointer;">✏</button>
-                                <button onclick="deleteFund('${t.key}')" style="padding:2px 5px; font-size:10px; color:red; cursor:pointer;">🗑</button>
-                            </td>`;
-                    } else {
-                        actionButtons = `<td><button onclick="deletePurchase('${t.key}')" style="padding:2px 5px; font-size:10px; color:red; cursor:pointer;">🗑</button></td>`;
-                    }
-                }
-
-                // Add to HTML String
-                rowsHtml += `
-                    <tr>
-                        <td style="font-size:11px;">${dateStr}</td>
-                        <td style="font-weight:bold; ${colorClass}">${t.type || 'MISC'}</td>
-                        <td style="font-size:12px;">${descText}</td>
-                        <td style="font-size:11px;">${modeText}</td>
-                        <td style="color:green; text-align:right;">${isCredit ? '₹'+rawAmt.toFixed(2) : '-'}</td>
-                        <td style="color:red; text-align:right;">${!isCredit ? '₹'+rawAmt.toFixed(2) : '-'}</td>
-                        ${actionButtons}
-                    </tr>
-                `;
-            } catch (err) {
-                console.error("Skipping corrupt row:", err);
-                // We simply skip rows that cause errors so the rest of the table loads
+            const isCredit = t.type === 'CREDIT';
+            const amount = parseFloat(t.amount) || 0; 
+            
+            // Calc Totals
+            if(isCredit) {
+                if(t.status === 'Approved') totalCredit += amount;
+            } else {
+                // We already filtered unapproved debits above, so just add
+                totalDebit += amount;
             }
+
+            const dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "-";
+            const colorClass = isCredit ? 'color:green' : 'color:red';
+            
+            let actionButtons = "";
+            if(isAdmin) {
+                if(isCredit) {
+                    actionButtons = `<td>
+                        <button onclick="editFund('${t.key}')" style="cursor:pointer;">✏</button>
+                        <button onclick="deleteFund('${t.key}')" style="color:red; cursor:pointer;">🗑</button>
+                    </td>`;
+                } else {
+                    actionButtons = `<td><small>View in Procurement</small></td>`;
+                }
+            }
+
+            const row = `
+                <tr>
+                    <td style="font-size:11px;">${dateStr}</td>
+                    <td style="font-weight:bold; ${colorClass}">${t.type}</td>
+                    <td>${t.desc || '-'}</td>
+                    <td>${t.mode || t.orderId || '-'}</td>
+                    <td style="color:green; text-align:right;">${isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
+                    <td style="color:red; text-align:right;">${!isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
+                    ${actionButtons}
+                </tr>
+            `;
+            tbody.innerHTML += row;
         });
 
-        // 7. INJECT HTML (Update DOM only once)
-        tbody.innerHTML = rowsHtml || "<tr><td colspan='7' style='text-align:center; color:#666;'>No data found.</td></tr>";
-
-        // 8. Update Dashboard
         updateDashboard(totalCredit, totalDebit);
     });
 };
@@ -5735,7 +5711,8 @@ window.switchTab = (t) => {
     if(t === 'adminPanel' && isAdmin) loadAdminPanel();
     if(t === 'gallery') loadGallery();
     if(t === 'inventory') loadInventory();
-    if(t === 'funds' || t === 'purchase') loadFinanceData();
+    if(t === 'funds') loadFinanceData();
+    if(t === 'purchase') loadPurchaseData(); // <--- This line is CRITICAL
 };
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
@@ -6034,80 +6011,90 @@ window.filterStockTable = () => {
     });
 };
 window.loadPurchaseData = () => {
-    // 1. Security Check: Show/Hide Form
     const formPanel = document.getElementById("purchaseFormPanel");
-    if(formPanel) {
-        if(isAdmin) formPanel.classList.remove("hidden");
-        else formPanel.classList.add("hidden");
-    }
+    // ALLOW EVERYONE to see the form so they can request purchases
+    if(formPanel) formPanel.classList.remove("hidden");
 
     const tbody = document.getElementById("purchaseTableBody");
-    tbody.innerHTML = "<tr><td colspan='8'>Loading Procurement Data...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Loading Data...</td></tr>";
 
-    // 2. Setup Table Headers (Hide Action Column for Non-Admins)
+    // Setup Headers
     const theadRow = document.querySelector("#tab-purchase thead tr");
-    let headerHTML = `<th>Sl</th><th>Product Details</th><th>Vendor & Order ID</th><th>Qty</th><th>Unit Price</th><th>Total Amount</th><th>Bill</th>`;
-    
-    // Only Admin gets the Action column
-    if(isAdmin) headerHTML += `<th>Action</th>`;
-    else headerHTML += `<th>Status</th>`; // Non-admins see Status instead
-    
+    let headerHTML = `<th>Sl</th><th>Product Details</th><th>Vendor & Order ID</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th>`;
+    if(isAdmin) headerHTML += `<th>Action</th>`; // Admin gets Approve/Delete buttons
     theadRow.innerHTML = headerHTML;
 
-    onValue(ref(db, "finance"), (snap) => {
+    if(window.purchaseListener) { try{ off(ref(db, "finance")); }catch(e){} }
+
+    window.purchaseListener = onValue(ref(db, "finance"), (snap) => {
         tbody.innerHTML = "";
         let sl = 1;
         const txs = [];
-        if(snap.exists()) snap.forEach(c => txs.push({key: c.key, ...c.val()}));
-        
-        // Sort Newest First
+        if(snap.exists()) snap.forEach(c => txs.push({ key: c.key, ...c.val() }));
         txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         txs.forEach(t => {
-            if(t.type === 'DEBIT') {
-                // Prepare Action Buttons (Admin Only)
-                let actionCell = "";
-                if(isAdmin) {
-                    actionCell = `
-                        <td>
-                            <button onclick="editPurchase('${t.key}')" class="warning" style="padding:2px 5px; font-size:10px;">✏</button>
-                            <button onclick="deletePurchase('${t.key}')" class="danger" style="padding:2px 5px; font-size:10px; margin-left:5px;">🗑</button>
-                        </td>
-                    `;
-                } else {
-                    // Non-Admins get a Read-Only Comment/Status view
-                    actionCell = `
-                        <td style="text-align:center;">
-                            <span style="font-size:10px; background:#e2e8f0; padding:2px 6px; border-radius:4px; color:#64748b;">
-                                <i class="fas fa-eye"></i> View Only
-                            </span>
-                        </td>
-                    `;
-                }
+            try {
+                if(t.type === 'DEBIT') {
+                    const prodName = t.productName || t.desc || "Unknown";
+                    const amount = parseFloat(t.amount) || 0;
+                    const isPending = t.status !== 'Approved';
+                    
+                    // Status Badge
+                    let statusBadge = isPending 
+                        ? `<span style="background:#fef3c7; color:#d97706; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">⏳ Pending</span>`
+                        : `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:10px; font-weight:bold; font-size:10px;">✅ Approved</span>`;
 
-                const row = `
-                    <tr>
-                        <td>${sl++}</td>
-                        <td style="font-weight:bold;">${t.productName}</td>
-                        <td>
-                            ${t.platform}<br>
-                            <small style="color:#666;">ID: ${t.orderId || t.mode || '-'}</small>
-                        </td>
-                        <td>${t.qty}</td>
-                        <td>${t.unitPrice}</td>
-                        <td style="color:var(--metro-red); font-weight:bold;">₹ ${t.amount}</td>
-                        <td>${t.billUrl ? '<a href="#">View</a>' : 'N/A'}</td>
-                        ${actionCell}
-                    </tr>
-                `;
-                tbody.innerHTML += row;
-            }
+                    // Action Cell (Admin Only)
+                    let actionCell = "";
+                    if(isAdmin) {
+                        if(isPending) {
+                            // SHOW APPROVE BUTTON
+                            actionCell = `
+                                <td>
+                                    <button onclick="approvePurchase('${t.key}')" class="success" style="padding:4px 8px; font-size:10px;">✅ Approve</button>
+                                    <button onclick="deletePurchase('${t.key}')" class="danger" style="padding:4px 8px; font-size:10px;">🗑</button>
+                                </td>
+                            `;
+                        } else {
+                            // Already Approved
+                            actionCell = `
+                                <td>
+                                    <button onclick="editPurchase('${t.key}')" class="warning" style="padding:2px 5px; font-size:10px;">✏</button>
+                                    <button onclick="deletePurchase('${t.key}')" class="danger" style="padding:2px 5px; font-size:10px;">🗑</button>
+                                </td>
+                            `;
+                        }
+                    }
+
+                    const row = `
+                        <tr style="${isPending ? 'background:#fffbf0;' : ''}">
+                            <td>${sl++}</td>
+                            <td style="font-weight:bold;">${prodName}</td>
+                            <td>${t.platform || '-'}<br><small style="color:#666">${t.orderId || '-'}</small></td>
+                            <td>${t.qty}</td>
+                            <td>${t.unitPrice}</td>
+                            <td style="color:var(--metro-red); font-weight:bold;">₹ ${amount.toFixed(2)}</td>
+                            <td>${statusBadge}</td>
+                            ${actionCell}
+                        </tr>
+                    `;
+                    tbody.innerHTML += row;
+                }
+            } catch (err) { console.error(err); }
         });
         
-        if(tbody.innerHTML === "") {
-            tbody.innerHTML = "<tr><td colspan='8' style='text-align:center; color:#999;'>No purchases recorded.</td></tr>";
-        }
+        if(tbody.innerHTML === "") tbody.innerHTML = "<tr><td colspan='8' style='text-align:center; color:#999;'>No records.</td></tr>";
     });
+};
+
+// --- NEW: APPROVE FUNCTION ---
+window.approvePurchase = async (key) => {
+    if(!confirm("Approve this purchase?\n\nThis will deduct the amount from the Project Fund immediately.")) return;
+    try {
+        await update(ref(db, `finance/${key}`), { status: "Approved" });
+        alert("✅ Purchase Approved & Fund Deducted.");
+    } catch(e) { alert("Error: " + e.message); }
 };
 // --- NEW: DELETE PURCHASE ---
 window.deletePurchase = async (key) => {
