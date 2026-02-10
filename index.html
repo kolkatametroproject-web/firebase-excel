@@ -1314,8 +1314,11 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
             <div><label style="font-size:11px; font-weight:bold;">Amount (₹)</label><input type="number" id="fundAmount" placeholder="0"></div>
             <div><label style="font-size:11px; font-weight:bold;">Sender / Source</label><input id="fundSource" placeholder="e.g. Metro Railway"></div>
             <div><label style="font-size:11px; font-weight:bold;">Mode</label>
-                <select id="fundMode"><option>NEFT/RTGS</option><option>Cheque</option><option>Cash</option></select>
+                <select id="fundMode"><option>NEFT/RTGS</option><option>Cheque</option><option>Cash</option><option value="UPI">UPI</option>
+                    <option value="Other">Other</option></select>
+              <input id="fundModeOther" class="hidden" placeholder="Specify Mode..." style="margin-top:5px; border-left:3px solid var(--metro-blue);">
             </div>
+          
             <div><label style="font-size:11px; font-weight:bold;">Status</label>
                 <select id="fundStatus"><option>Approved</option><option>Pending</option></select>
             </div>
@@ -1572,19 +1575,55 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebas
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getDatabase, ref, push, set, onValue, remove, update, query, limitToLast, onDisconnect, serverTimestamp, get, orderByChild, equalTo, off } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 // --- NEW: FINANCE LOGIC ---
+window.toggleFundMode = () => {
+    const mode = document.getElementById("fundMode").value;
+    const inp = document.getElementById("fundModeOther");
+    if(mode === 'Other') {
+        inp.classList.remove('hidden');
+        inp.focus();
+    } else {
+        inp.classList.add('hidden');
+        inp.value = ""; 
+    }
+};
+
 window.submitFund = async () => {
     if(!isAdmin) return alert("Admin Only");
+    
     const amt = document.getElementById("fundAmount").value;
     const src = document.getElementById("fundSource").value;
-    if(!amt || !src) return alert("Enter Amount & Source");
+    let mode = document.getElementById("fundMode").value;
+    const status = document.getElementById("fundStatus").value;
+
+    // Handle 'Other' Input
+    if(mode === 'Other') {
+        const otherVal = document.getElementById("fundModeOther").value.trim();
+        if(!otherVal) return alert("Please specify the payment mode.");
+        mode = otherVal;
+    }
+
+    if(!amt || !src) return alert("Please fill Amount & Source");
     
-    await push(ref(db, "finance"), {
-        type: "CREDIT", amount: parseFloat(amt), desc: src,
-        mode: document.getElementById("fundMode").value,
-        status: document.getElementById("fundStatus").value,
-        timestamp: serverTimestamp()
-    });
-    alert("Fund Added!"); document.getElementById("fundAmount").value = "";
+    try {
+        await push(ref(db, "finance"), {
+            type: "CREDIT", 
+            amount: parseFloat(amt), 
+            desc: src,
+            mode: mode,
+            status: status,
+            by: currentUser.email,
+            timestamp: serverTimestamp()
+        });
+        
+        alert("Fund Added Successfully!"); 
+        
+        // Reset Form
+        document.getElementById("fundAmount").value = "";
+        document.getElementById("fundSource").value = "";
+        document.getElementById("fundMode").value = "NEFT/RTGS";
+        window.toggleFundMode(); // Reset the hidden input
+        
+    } catch(e) { alert(e.message); }
 };
 
 window.calcPurTotal = () => {
