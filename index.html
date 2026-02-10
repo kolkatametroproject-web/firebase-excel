@@ -1309,7 +1309,9 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
     </div>
 
     <div id="adminFundPanel" class="panel hidden" style="border-top: 4px solid var(--success-green);">
-        <h3 style="color:var(--success-green);"><i class="fas fa-plus-circle"></i> Add Project Fund</h3>
+        <button onclick="submitFund()" class="success" id="btnFundSubmit" style="height:42px;">CREDIT FUND</button>
+        <button onclick="cancelFundEdit()" id="btnFundCancel" class="secondary hidden" style="height:42px;">CANCEL</button>
+      
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:15px; align-items:end;">
             <div><label style="font-size:11px; font-weight:bold;">Amount (₹)</label><input type="number" id="fundAmount" placeholder="0"></div>
             <div><label style="font-size:11px; font-weight:bold;">Sender / Source</label><input id="fundSource" placeholder="e.g. Metro Railway"></div>
@@ -1594,6 +1596,7 @@ window.submitFund = async () => {
     const src = document.getElementById("fundSource").value;
     let mode = document.getElementById("fundMode").value;
     const status = document.getElementById("fundStatus").value;
+    const editKey = document.getElementById("editFundKey").value; // Get Edit Key
 
     // Handle 'Other' Input
     if(mode === 'Other') {
@@ -1604,28 +1607,77 @@ window.submitFund = async () => {
 
     if(!amt || !src) return alert("Please fill Amount & Source");
     
+    const fundData = {
+        type: "CREDIT", 
+        amount: parseFloat(amt), 
+        desc: src,
+        mode: mode,
+        status: status,
+        by: currentUser.email,
+        timestamp: serverTimestamp()
+    };
+
     try {
-        await push(ref(db, "finance"), {
-            type: "CREDIT", 
-            amount: parseFloat(amt), 
-            desc: src,
-            mode: mode,
-            status: status,
-            by: currentUser.email,
-            timestamp: serverTimestamp()
-        });
-        
-        alert("Fund Added Successfully!"); 
-        
-        // Reset Form
-        document.getElementById("fundAmount").value = "";
-        document.getElementById("fundSource").value = "";
-        document.getElementById("fundMode").value = "NEFT/RTGS";
-        window.toggleFundMode(); // Reset the hidden input
+        if(editKey) {
+            // --- UPDATE EXISTING ---
+            await update(ref(db, `finance/${editKey}`), fundData);
+            alert("Fund Entry Updated!");
+        } else {
+            // --- CREATE NEW ---
+            await push(ref(db, "finance"), fundData);
+            alert("Fund Added Successfully!"); 
+        }
+        cancelFundEdit(); // Reset Form
         
     } catch(e) { alert(e.message); }
 };
 
+// --- NEW: EDIT & DELETE FUNCTIONS FOR FUNDS ---
+window.editFund = async (key) => {
+    const snap = await get(ref(db, `finance/${key}`));
+    const val = snap.val();
+    
+    document.getElementById("fundAmount").value = val.amount;
+    document.getElementById("fundSource").value = val.desc;
+    document.getElementById("fundStatus").value = val.status;
+    
+    // Handle Mode
+    const defaultModes = ["NEFT/RTGS", "Cheque", "Cash", "UPI"];
+    if(defaultModes.includes(val.mode)) {
+        document.getElementById("fundMode").value = val.mode;
+        document.getElementById("fundModeOther").classList.add("hidden");
+    } else {
+        document.getElementById("fundMode").value = "Other";
+        document.getElementById("fundModeOther").classList.remove("hidden");
+        document.getElementById("fundModeOther").value = val.mode;
+    }
+
+    // UI Changes
+    document.getElementById("editFundKey").value = key;
+    document.getElementById("btnFundSubmit").innerText = "UPDATE ENTRY";
+    document.getElementById("btnFundSubmit").classList.replace("success", "warning");
+    document.getElementById("btnFundCancel").classList.remove("hidden");
+    document.getElementById("adminFundPanel").scrollIntoView({behavior: "smooth"});
+};
+
+window.deleteFund = async (key) => {
+    if(confirm("⚠ PERMANENTLY DELETE this fund entry?\n\nThis will affect the Balance Sheet calculation.")) {
+        await remove(ref(db, `finance/${key}`));
+    }
+};
+
+window.cancelFundEdit = () => {
+    document.getElementById("fundAmount").value = "";
+    document.getElementById("fundSource").value = "";
+    document.getElementById("fundMode").value = "NEFT/RTGS";
+    document.getElementById("fundStatus").value = "Approved";
+    document.getElementById("fundModeOther").classList.add("hidden");
+    
+    document.getElementById("editFundKey").value = "";
+    document.getElementById("btnFundSubmit").innerText = "CREDIT FUND";
+    document.getElementById("btnFundSubmit").classList.replace("warning", "success");
+    document.getElementById("btnFundCancel").classList.add("hidden");
+};
 window.calcPurTotal = () => {
     const p = document.getElementById("purPrice").value || 0;
     const q = document.getElementById("purQty").value || 0;
@@ -1672,54 +1724,62 @@ window.clearPurForm = () => {
     document.getElementById("editPurchaseKey").value = "";
     document.getElementById("btnPurSubmit").innerText = "SAVE & DEDUCT FUND";
 };
-
 window.loadFinanceData = () => {
-    // 1. Show Admin Panel if applicable
     if(isAdmin) document.getElementById("adminFundPanel").classList.remove("hidden");
     
-    const tbody = document.getElementById("fundTableBody");
-    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Syncing Database...</td></tr>";
+    // 1. Setup Headers (Ensure "Action" is added only once and "Status" is gone)
+    const theadRow = document.querySelector("#tab-funds thead tr");
+    // Reset headers to base 6 columns (Date, Type, Desc, Mode, Credit, Debit)
+    theadRow.innerHTML = `<th>Date</th><th>Type</th><th>Description</th><th>Mode</th><th>Credit (+)</th><th>Debit (-)</th>`;
+    
+    // Add Action Column if Admin
+    if(isAdmin) {
+        const th = document.createElement("th");
+        th.innerText = "Action";
+        theadRow.appendChild(th);
+    }
 
-    // 2. Detach previous listener if exists (Prevent duplicates)
     if(window.financeListener) { try{ off(ref(db, "finance")); }catch(e){} }
 
-    // 3. Start New Listener
     window.financeListener = onValue(ref(db, "finance"), (snap) => {
-        tbody.innerHTML = ""; // Clear loader
+        const tbody = document.getElementById("fundTableBody");
+        tbody.innerHTML = ""; 
         
         let totalCredit = 0;
         let totalDebit = 0;
         const txs = [];
 
-        // A. Check if data exists
         if(snap.exists()) {
-            snap.forEach(c => {
-                const val = c.val();
-                txs.push({ key: c.key, ...val });
-            });
-        } else {
-            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No records found. Add a fund to start.</td></tr>";
-            updateDashboard(0, 0); // Reset zeros
-            return;
+            snap.forEach(c => txs.push({ key: c.key, ...c.val() }));
         }
         
-        // B. Sort Safely (Handle missing timestamps)
         txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-        // C. Render Rows
         txs.forEach(t => {
             const isCredit = t.type === 'CREDIT';
-            // Safety: Ensure amount is a number
             const amount = parseFloat(t.amount) || 0; 
             
-            // Calculate Totals
             if(isCredit && t.status === 'Approved') totalCredit += amount;
             if(!isCredit) totalDebit += amount;
 
-            // Formatting
             const dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "Pending";
             const colorClass = isCredit ? (t.status === 'Approved' ? 'color:green' : 'color:orange') : 'color:red';
             
+            // Admin Controls (Action Column)
+            let actionButtons = "";
+            if(isAdmin) {
+                if(isCredit) {
+                    actionButtons = `
+                        <td>
+                            <button onclick="editFund('${t.key}')" style="padding:2px 5px; font-size:10px; cursor:pointer;">✏</button>
+                            <button onclick="deleteFund('${t.key}')" style="padding:2px 5px; font-size:10px; color:red; cursor:pointer;">🗑</button>
+                        </td>`;
+                } else {
+                    actionButtons = `<td><button onclick="deletePurchase('${t.key}')" style="padding:2px 5px; font-size:10px; color:red;">🗑</button></td>`;
+                }
+            }
+
+            // RENDER ROW (Removed the Status/Approved Column)
             const row = `
                 <tr>
                     <td style="font-size:11px;">${dateStr}</td>
@@ -1728,17 +1788,15 @@ window.loadFinanceData = () => {
                     <td>${t.mode || '-'}</td>
                     <td style="color:green; text-align:right;">${isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
                     <td style="color:red; text-align:right;">${!isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
-                    <td style="font-weight:bold; font-size:11px;">${t.status || 'Approved'}</td>
+                    ${actionButtons}
                 </tr>
             `;
             tbody.innerHTML += row;
         });
 
-        // D. Update Dashboard
         updateDashboard(totalCredit, totalDebit);
     });
 };
-
 // Helper to update the top cards
 function updateDashboard(credit, debit) {
     const balance = credit - debit;
@@ -5896,7 +5954,47 @@ window.filterStockTable = () => {
         }
     });
 };
+window.loadPurchaseData = () => {
+    const tbody = document.getElementById("purchaseTableBody");
+    tbody.innerHTML = "<tr><td colspan='8'>Loading...</td></tr>";
 
+    onValue(ref(db, "finance"), (snap) => {
+        tbody.innerHTML = "";
+        let sl = 1;
+        const txs = [];
+        if(snap.exists()) snap.forEach(c => txs.push({key: c.key, ...c.val()}));
+        
+        txs.sort((a,b) => b.timestamp - a.timestamp);
+
+        txs.forEach(t => {
+            if(t.type === 'DEBIT') {
+                const row = `
+                    <tr>
+                        <td>${sl++}</td>
+                        <td style="font-weight:bold;">${t.productName}</td>
+                        <td>${t.platform}<br><small>${t.orderId || t.mode}</small></td>
+                        <td>${t.qty}</td>
+                        <td>${t.unitPrice}</td>
+                        <td style="color:var(--metro-red); font-weight:bold;">₹ ${t.amount}</td>
+                        <td>${t.billUrl ? '<a href="#">View</a>' : 'N/A'}</td>
+                        <td>
+                            <button onclick="editPurchase('${t.key}')" class="warning" style="padding:2px 5px; font-size:10px;">Edit</button>
+                            <button onclick="deletePurchase('${t.key}')" class="danger" style="padding:2px 5px; font-size:10px; margin-left:5px;">🗑</button>
+                        </td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            }
+        });
+    });
+};
+
+// --- NEW: DELETE PURCHASE ---
+window.deletePurchase = async (key) => {
+    if(confirm("⚠ Delete this purchase entry?\n\nThe amount will be credited back to the available balance.")) {
+        await remove(ref(db, `finance/${key}`));
+    }
+};
 window.delInv = (k) => remove(ref(db, `inventory/${k}`));
 
 function loadAssignments() {
