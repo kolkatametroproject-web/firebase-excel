@@ -1674,42 +1674,85 @@ window.clearPurForm = () => {
 };
 
 window.loadFinanceData = () => {
+    // 1. Show Admin Panel if applicable
     if(isAdmin) document.getElementById("adminFundPanel").classList.remove("hidden");
-    onValue(ref(db, "finance"), snap => {
-        const tbody = document.getElementById("fundTableBody");
-        const pbody = document.getElementById("purchaseTableBody");
-        tbody.innerHTML = ""; pbody.innerHTML = "";
-        let credit=0, debit=0, sl=1;
+    
+    const tbody = document.getElementById("fundTableBody");
+    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Syncing Database...</td></tr>";
+
+    // 2. Detach previous listener if exists (Prevent duplicates)
+    if(window.financeListener) { try{ off(ref(db, "finance")); }catch(e){} }
+
+    // 3. Start New Listener
+    window.financeListener = onValue(ref(db, "finance"), (snap) => {
+        tbody.innerHTML = ""; // Clear loader
         
-        const arr = [];
-        if(snap.exists()) snap.forEach(c => arr.push({k:c.key, ...c.val()}));
-        arr.sort((a,b) => b.timestamp - a.timestamp);
+        let totalCredit = 0;
+        let totalDebit = 0;
+        const txs = [];
+
+        // A. Check if data exists
+        if(snap.exists()) {
+            snap.forEach(c => {
+                const val = c.val();
+                txs.push({ key: c.key, ...val });
+            });
+        } else {
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No records found. Add a fund to start.</td></tr>";
+            updateDashboard(0, 0); // Reset zeros
+            return;
+        }
         
-        arr.forEach(t => {
-            const date = new Date(t.timestamp).toLocaleDateString();
-            // Balance Sheet
-            tbody.innerHTML += `<tr>
-                <td>${date}</td><td>${t.type}</td><td>${t.desc}</td><td>${t.mode||t.orderId}</td>
-                <td style="color:green">${t.type==='CREDIT' ? '₹'+t.amount : '-'}</td>
-                <td style="color:red">${t.type==='DEBIT' ? '₹'+t.amount : '-'}</td>
-            </tr>`;
+        // B. Sort Safely (Handle missing timestamps)
+        txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+        // C. Render Rows
+        txs.forEach(t => {
+            const isCredit = t.type === 'CREDIT';
+            // Safety: Ensure amount is a number
+            const amount = parseFloat(t.amount) || 0; 
             
-            // Purchase Table
-            if(t.type === 'DEBIT') {
-                pbody.innerHTML += `<tr>
-                    <td>${sl++}</td><td>${t.productName}</td><td>${t.platform}<br><small>${t.orderId}</small></td>
-                    <td>${t.qty}</td><td>${t.unitPrice}</td><td>₹${t.amount}</td>
-                    <td><button class="warning" onclick="editPurchase('${t.k}')">Edit</button></td>
-                </tr>`;
-                debit += t.amount;
-            } else { credit += t.amount; }
+            // Calculate Totals
+            if(isCredit && t.status === 'Approved') totalCredit += amount;
+            if(!isCredit) totalDebit += amount;
+
+            // Formatting
+            const dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "Pending";
+            const colorClass = isCredit ? (t.status === 'Approved' ? 'color:green' : 'color:orange') : 'color:red';
+            
+            const row = `
+                <tr>
+                    <td style="font-size:11px;">${dateStr}</td>
+                    <td style="font-weight:bold; ${colorClass}">${t.type}</td>
+                    <td>${t.desc || '-'}</td>
+                    <td>${t.mode || '-'}</td>
+                    <td style="color:green; text-align:right;">${isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
+                    <td style="color:red; text-align:right;">${!isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
+                    <td style="font-weight:bold; font-size:11px;">${t.status || 'Approved'}</td>
+                </tr>
+            `;
+            tbody.innerHTML += row;
         });
-        
-        document.getElementById("dispTotalCredit").innerText = "₹ "+credit;
-        document.getElementById("dispTotalDebit").innerText = "₹ "+debit;
-        document.getElementById("dispBalance").innerText = "₹ "+(credit-debit);
+
+        // D. Update Dashboard
+        updateDashboard(totalCredit, totalDebit);
     });
 };
+
+// Helper to update the top cards
+function updateDashboard(credit, debit) {
+    const balance = credit - debit;
+    document.getElementById("dispTotalCredit").innerText = `₹ ${credit.toLocaleString('en-IN')}`;
+    document.getElementById("dispTotalDebit").innerText = `₹ ${debit.toLocaleString('en-IN')}`;
+    document.getElementById("dispBalance").innerText = `₹ ${balance.toLocaleString('en-IN')}`;
+
+    const healthEl = document.getElementById("budgetHealthText");
+    const ratio = credit > 0 ? (balance / credit) * 100 : 0;
+    
+    if(ratio < 20) { healthEl.innerText = "⚠ Critical Low"; healthEl.style.color = "red"; }
+    else if(ratio < 50) { healthEl.innerText = "⚠ Tight Budget"; healthEl.style.color = "orange"; }
+    else { healthEl.innerText = "✅ Healthy"; healthEl.style.color = "green"; }
+}
 // --- CONFIGURATION ---
 const firebaseConfig = {
   apiKey: "AIzaSyAuoKptZlbl1TB3l7fZb_BeK4Oo_P9kuEw",
