@@ -1772,15 +1772,19 @@ window.clearPurForm = () => {
     document.getElementById("btnPurSubmit").innerText = "SAVE & DEDUCT FUND";
 };
 window.loadFinanceData = () => {
+    // 1. Show Admin Panel
     if(isAdmin) document.getElementById("adminFundPanel").classList.remove("hidden");
     
+    // 2. Reset Headers Cleanly
     const theadRow = document.querySelector("#tab-funds thead tr");
     let headerHTML = `<th>Date</th><th>Type</th><th>Description</th><th>Mode</th><th>Credit (+)</th><th>Debit (-)</th>`;
     if(isAdmin) headerHTML += `<th>Action</th>`;
     theadRow.innerHTML = headerHTML;
 
+    // 3. Detach Old Listener
     if(window.financeListener) { try{ off(ref(db, "finance")); }catch(e){} }
 
+    // 4. Start New Listener
     window.financeListener = onValue(ref(db, "finance"), (snap) => {
         const tbody = document.getElementById("fundTableBody");
         tbody.innerHTML = ""; 
@@ -1789,54 +1793,77 @@ window.loadFinanceData = () => {
         let totalDebit = 0;
         const txs = [];
 
-        if(snap.exists()) snap.forEach(c => txs.push({ key: c.key, ...c.val() }));
+        if(snap.exists()) {
+            snap.forEach(c => {
+                const val = c.val();
+                if(val) txs.push({ key: c.key, ...val });
+            });
+        }
+        
+        // Sort: Newest First
         txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         txs.forEach(t => {
-            // CRITICAL CHECK: Skip if not Approved
-            // If it's a Purchase (DEBIT) and NOT Approved, hide it from Balance Sheet
-            if(t.type === 'DEBIT' && t.status !== 'Approved') return;
+            // --- SAFETY BLOCK START (Prevents Crashing on Old Data) ---
+            try {
+                // 1. Filter: Hide Unapproved Purchases
+                // If it's a DEBIT (Purchase) and NOT Approved, skip it (don't show in Balance Sheet)
+                if(t.type === 'DEBIT' && t.status !== 'Approved') return;
 
-            const isCredit = t.type === 'CREDIT';
-            const amount = parseFloat(t.amount) || 0; 
-            
-            // Calc Totals
-            if(isCredit) {
-                if(t.status === 'Approved') totalCredit += amount;
-            } else {
-                // We already filtered unapproved debits above, so just add
-                totalDebit += amount;
-            }
-
-            const dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "-";
-            const colorClass = isCredit ? 'color:green' : 'color:red';
-            
-            let actionButtons = "";
-            if(isAdmin) {
+                const isCredit = t.type === 'CREDIT';
+                // Safe Amount Parsing
+                const amount = parseFloat(t.amount) || 0; 
+                
+                // 2. Calculate Totals
                 if(isCredit) {
-                    actionButtons = `<td>
-                        <button onclick="editFund('${t.key}')" style="cursor:pointer;">✏</button>
-                        <button onclick="deleteFund('${t.key}')" style="color:red; cursor:pointer;">🗑</button>
-                    </td>`;
+                    // Only count Funds if Approved (or if status is missing, assume approved for old data)
+                    if(t.status === 'Approved' || !t.status) totalCredit += amount;
                 } else {
-                    actionButtons = `<td><small>View in Procurement</small></td>`;
+                    // We already skipped unapproved debits above, so just add this
+                    totalDebit += amount;
                 }
-            }
 
-            const row = `
-                <tr>
-                    <td style="font-size:11px;">${dateStr}</td>
-                    <td style="font-weight:bold; ${colorClass}">${t.type}</td>
-                    <td>${t.desc || '-'}</td>
-                    <td>${t.mode || t.orderId || '-'}</td>
-                    <td style="color:green; text-align:right;">${isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
-                    <td style="color:red; text-align:right;">${!isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
-                    ${actionButtons}
-                </tr>
-            `;
-            tbody.innerHTML += row;
+                // 3. Formatting
+                const dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "Legacy Record";
+                const colorClass = isCredit ? 'color:green' : 'color:red';
+                const desc = t.desc || "No Description";
+                const mode = t.mode || t.orderId || "-";
+                
+                // 4. Admin Buttons
+                let actionButtons = "";
+                if(isAdmin) {
+                    if(isCredit) {
+                        actionButtons = `<td>
+                            <button onclick="editFund('${t.key}')" style="cursor:pointer; border:none; background:none;">✏</button>
+                            <button onclick="deleteFund('${t.key}')" style="color:red; cursor:pointer; border:none; background:none;">🗑</button>
+                        </td>`;
+                    } else {
+                        actionButtons = `<td><small style="color:#999">See Procurement</small></td>`;
+                    }
+                }
+
+                // 5. Render Row
+                const row = `
+                    <tr>
+                        <td style="font-size:11px;">${dateStr}</td>
+                        <td style="font-weight:bold; ${colorClass}">${t.type || 'MISC'}</td>
+                        <td style="font-size:12px;">${desc}</td>
+                        <td style="font-size:11px;">${mode}</td>
+                        <td style="color:green; text-align:right;">${isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
+                        <td style="color:red; text-align:right;">${!isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
+                        ${actionButtons}
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+
+            } catch (err) {
+                console.warn("Skipping corrupt row:", err);
+                // This 'catch' block ensures one bad row doesn't kill the whole table
+            }
+            // --- SAFETY BLOCK END ---
         });
 
+        // 6. Update Cards
         updateDashboard(totalCredit, totalDebit);
     });
 };
