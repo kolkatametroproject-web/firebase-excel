@@ -1339,13 +1339,17 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
             </div>
         </div>
     </div>
-
-    <div id="expenseFormPanel" class="panel" style="border-top: 4px solid var(--metro-red);">
-        <h3 style="color:var(--metro-red);"><i class="fas fa-receipt"></i> Record Other Expense (Non-Purchase)</h3>
+<div id="expenseFormPanel" class="panel" style="border-top: 4px solid var(--metro-red);">
+        <h3 style="color:var(--metro-red);"><i class="fas fa-receipt"></i> Record Other Expense</h3>
         <input type="hidden" id="editExpenseKey">
         <p style="font-size:11px; color:#666; margin-bottom:10px;">For travel, food, logistics, etc. (Not for equipment procurement)</p>
 
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:15px; align-items:end;">
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:15px; align-items:end;">
+            <div>
+                <label style="font-size:11px; font-weight:bold;">Expense Date</label>
+                <input type="date" id="expDate" style="border-color:#cbd5e1;">
+            </div>
+
             <div>
                 <label style="font-size:11px; font-weight:bold;">Description</label>
                 <input id="expDesc" placeholder="e.g. Travel to Site">
@@ -1358,13 +1362,13 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
                 <label style="font-size:11px; font-weight:bold;">Bill / Drive Link</label>
                 <input id="expBillUrl" placeholder="https://drive.google.com/..." style="border-color:var(--metro-blue);">
             </div>
+            
             <div style="display:flex; gap:5px;">
                 <button onclick="submitExpense()" class="danger" id="btnExpSubmit" style="height:42px; width:100%;">SUBMIT EXPENSE</button>
                 <button onclick="cancelExpEdit()" id="btnExpCancel" class="secondary hidden" style="height:42px;">CANCEL</button>
             </div>
         </div>
     </div>
-
     <div class="panel">
         <h3><i class="fas fa-file-invoice-dollar"></i> Balance Sheet & Ledger</h3>
         <div class="table-wrapper">
@@ -1676,27 +1680,33 @@ window.submitFund = async () => {
         
     } catch(e) { alert(e.message); }
 };
-// --- NEW: SUBMIT OTHER EXPENSE (Non-Purchase) ---
+// --- SUBMIT OTHER EXPENSE (With Custom Date) ---
 window.submitExpense = async () => {
     const desc = document.getElementById("expDesc").value;
     const amount = document.getElementById("expAmount").value;
     const billUrl = document.getElementById("expBillUrl").value;
+    const dateVal = document.getElementById("expDate").value; // NEW
     const key = document.getElementById("editExpenseKey").value;
 
     if(!desc || !amount) return alert("Description and Amount are required.");
-    if(!billUrl) return alert("⚠ STOP: Bill/Drive Link is REQUIRED for expenses.");
+    if(!billUrl) return alert("⚠ STOP: Bill/Drive Link is REQUIRED.");
+    if(!dateVal) return alert("⚠ Please select the Date of Expense.");
+
+    // Convert selected date string (YYYY-MM-DD) to Timestamp
+    // We append T12:00:00 to prevent timezone shifts changing the day
+    const finalTimestamp = new Date(dateVal + "T12:00:00").getTime();
 
     const status = isAdmin ? "Approved" : "Pending";
 
     const data = {
-        type: "EXPENSE", // Distinct from DEBIT (Purchase)
+        type: "EXPENSE", 
         desc: desc,
         amount: parseFloat(amount),
         billUrl: billUrl,
-        mode: "Cash/Misc", // Default for expenses
+        mode: "Cash/Misc",
         status: status,
         by: currentUser.email,
-        timestamp: serverTimestamp()
+        timestamp: finalTimestamp // Use Custom Date
     };
 
     try {
@@ -1705,7 +1715,7 @@ window.submitExpense = async () => {
             alert("Expense Updated!");
         } else {
             await push(ref(db, "finance"), data);
-            alert(isAdmin ? "Expense Added & Deducted." : "Expense Request Sent for Approval.");
+            alert(isAdmin ? "Expense Added & Deducted." : "Expense Request Sent.");
         }
         cancelExpEdit();
     } catch(e) { alert(e.message); }
@@ -1714,11 +1724,21 @@ window.submitExpense = async () => {
 window.editExpense = async (key) => {
     const snap = await get(ref(db, `finance/${key}`));
     const d = snap.val();
+    
     document.getElementById("expDesc").value = d.desc;
     document.getElementById("expAmount").value = d.amount;
     document.getElementById("expBillUrl").value = d.billUrl || "";
-    document.getElementById("editExpenseKey").value = key;
     
+    // Convert Timestamp back to YYYY-MM-DD for the input
+    if(d.timestamp) {
+        const dateObj = new Date(d.timestamp);
+        const yyyy = dateObj.getFullYear();
+        const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const dd = String(dateObj.getDate()).padStart(2, '0');
+        document.getElementById("expDate").value = `${yyyy}-${mm}-${dd}`;
+    }
+
+    document.getElementById("editExpenseKey").value = key;
     document.getElementById("btnExpSubmit").innerText = "UPDATE EXPENSE";
     document.getElementById("btnExpCancel").classList.remove("hidden");
     document.getElementById("expenseFormPanel").scrollIntoView({behavior:"smooth"});
@@ -1728,6 +1748,7 @@ window.cancelExpEdit = () => {
     document.getElementById("expDesc").value = "";
     document.getElementById("expAmount").value = "";
     document.getElementById("expBillUrl").value = "";
+    document.getElementById("expDate").value = ""; // Clear Date
     document.getElementById("editExpenseKey").value = "";
     document.getElementById("btnExpSubmit").innerText = "SUBMIT EXPENSE";
     document.getElementById("btnExpCancel").classList.add("hidden");
