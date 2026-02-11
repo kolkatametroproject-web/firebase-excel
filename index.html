@@ -1370,7 +1370,7 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
         <div class="table-wrapper">
             <table>
                 <thead>
-                    <tr><th>Date</th><th>Type</th><th>Description</th><th>Mode/Bill</th><th>Credit (+)</th><th>Debit (-)</th></tr>
+                    <tr><th>Date</th><th>Type</th><th>Description</th><th>Bill</th><th>Credit (+)</th><th>Debit (-)</th></tr>
                 </thead>
                 <tbody id="fundTableBody"></tbody>
             </table>
@@ -1852,76 +1852,118 @@ window.clearPurForm = () => {
     document.getElementById("btnPurSubmit").innerText = "SAVE & DEDUCT FUND";
 };
 window.loadFinanceData = () => {
-    if(isAdmin) document.getElementById("adminFundPanel").classList.remove("hidden");
+    // 1. Show Admin Panel
+    if(isAdmin) {
+        const panel = document.getElementById("adminFundPanel");
+        if(panel) panel.classList.remove("hidden");
+    }
     
+    const tbody = document.getElementById("fundTableBody");
+    if(!tbody) return;
+
+    // 2. Setup Headers (CHANGED: 'Mode/Bill' -> 'Bill (Proof)')
     const theadRow = document.querySelector("#tab-funds thead tr");
     if(theadRow) {
-        let headerHTML = `<th>Date</th><th>Type</th><th>Description</th><th>Mode/Bill</th><th>Credit (+)</th><th>Debit (-)</th>`;
+        let headerHTML = `<th>Date</th><th>Type</th><th>Description</th><th>Bill (Proof)</th><th>Credit (+)</th><th>Debit (-)</th>`;
         if(isAdmin) headerHTML += `<th>Action</th>`;
         theadRow.innerHTML = headerHTML;
     }
 
+    // 3. Clear Old Listener
     if(window.financeListener) { try{ off(ref(db, "finance")); }catch(e){} }
 
+    // 4. Start New Listener
     window.financeListener = onValue(ref(db, "finance"), (snap) => {
-        const tbody = document.getElementById("fundTableBody");
-        if(!tbody) return;
-        tbody.innerHTML = ""; 
-        
-        let totalCredit = 0;
-        let totalDebit = 0;
-        const txs = [];
+        try {
+            tbody.innerHTML = ""; 
+            
+            let totalCredit = 0;
+            let totalDebit = 0;
+            const txs = [];
 
-        if(snap.exists()) snap.forEach(c => txs.push({ key: c.key, ...c.val() }));
-        txs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+            if(!snap.exists()) {
+                tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No records found.</td></tr>";
+                updateDashboard(0, 0);
+                return;
+            }
 
-        txs.forEach(t => {
-            try {
-                // Filter: Approved items only for Balance Sheet
+            snap.forEach(c => {
+                const val = c.val();
+                if(val) txs.push({ key: c.key, ...val });
+            });
+            
+            // Sort: Newest First
+            txs.sort((a,b) => {
+                const tA = a.timestamp || Date.now();
+                const tB = b.timestamp || Date.now();
+                return tB - tA;
+            });
+
+            txs.forEach(t => {
                 const currentStatus = t.status || 'Approved';
-                // Show if: (Is Credit) OR (Is Debit/Expense AND Approved)
-                const isDebitOrExp = (t.type === 'DEBIT' || t.type === 'EXPENSE');
-                
-                if(isDebitOrExp && currentStatus !== 'Approved') return;
-
                 const isCredit = t.type === 'CREDIT';
-                let amount = parseFloat(t.amount) || 0;
                 
+                // Visibility Logic
+                const isDebitOrExp = (t.type === 'DEBIT' || t.type === 'EXPENSE');
+                if (isDebitOrExp && currentStatus !== 'Approved') return;
+
+                let amount = parseFloat(t.amount);
+                if(isNaN(amount)) amount = 0;
+                
+                // Balance Logic
                 if(isCredit) {
                     if(currentStatus === 'Approved') totalCredit += amount;
                 } else {
                     totalDebit += amount;
                 }
 
-                const dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "Legacy";
-                
-                // Color Logic
-                let typeColor = 'color:black';
-                if(t.type === 'CREDIT') typeColor = 'color:green';
-                if(t.type === 'DEBIT') typeColor = 'color:red';
-                if(t.type === 'EXPENSE') typeColor = 'color:orange';
+                // Formatting
+                let dateStr = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : "Legacy";
+                let colorClass = 'color:black';
+                if(isCredit) colorClass = 'color:green';
+                if(isDebitOrExp) colorClass = 'color:red';
 
                 const desc = t.desc || t.productName || "-";
                 
-                // Mode OR Bill Link
-                let modeDisplay = t.mode || t.orderId || "-";
-                if(t.billUrl && t.billUrl.startsWith("http")) {
-                    modeDisplay += ` <a href="${t.billUrl}" target="_blank" style="font-size:10px; color:blue;">[VIEW BILL]</a>`;
+                // --- NEW: BILL COLUMN LOGIC (Replaces Mode) ---
+                let billDisplay = `<span style="color:#ccc;">-</span>`;
+                
+                if(t.billUrl && t.billUrl.trim() !== "") {
+                    // If it is a web link (http/https)
+                    if(t.billUrl.startsWith("http")) {
+                        billDisplay = `
+                            <a href="${t.billUrl}" target="_blank" style="
+                                background: #e0f2fe; 
+                                color: #0284c7; 
+                                border: 1px solid #7dd3fc; 
+                                padding: 4px 8px; 
+                                border-radius: 4px; 
+                                text-decoration: none; 
+                                font-weight: bold; 
+                                font-size: 10px;
+                                display: inline-flex;
+                                align-items: center;
+                                gap: 4px;">
+                                <i class="fas fa-external-link-alt"></i> View Drive
+                            </a>`;
+                    } else {
+                        // If it's text like "Pending"
+                        billDisplay = `<span style="font-size:11px; color:orange; font-weight:bold;">${t.billUrl}</span>`;
+                    }
                 }
 
                 // Action Buttons
                 let actionButtons = "";
                 if(isAdmin) {
-                    // Edit Button Logic (Directs to correct form)
-                    let editClick = `editFund('${t.key}')`;
-                    if(t.type === 'EXPENSE') editClick = `editExpense('${t.key}')`;
+                    let editFunc = `editFund('${t.key}')`;
+                    if(t.type === 'EXPENSE') editFunc = `editExpense('${t.key}')`;
                     
                     if(t.type === 'DEBIT') {
-                        actionButtons = `<td><small>Edit in Purchase</small></td>`;
+                        actionButtons = `<td><small>Edit in Procurement</small></td>`;
                     } else {
                         actionButtons = `<td>
-                            <button onclick="${editClick}" style="cursor:pointer; border:none; background:none;">✏</button>
-                            <button onclick="deleteFund('${t.key}')" style="color:red; cursor:pointer; border:none; background:none;">🗑</button>
+                            <button onclick="${editFunc}" class="warning" style="padding:2px 5px; font-size:10px; color:white; background:#d97706; margin-right:3px;">✏</button>
+                            <button onclick="deleteFund('${t.key}')" class="danger" style="padding:2px 5px; font-size:10px; color:white; background:#B91C1C;">🗑</button>
                         </td>`;
                     }
                 }
@@ -1929,20 +1971,22 @@ window.loadFinanceData = () => {
                 const row = `
                     <tr>
                         <td style="font-size:11px;">${dateStr}</td>
-                        <td style="font-weight:bold; ${typeColor}">${t.type}</td>
+                        <td style="font-weight:bold; ${colorClass}">${t.type}</td>
                         <td style="font-size:12px;">${desc}</td>
-                        <td style="font-size:11px;">${modeDisplay}</td>
+                        
+                        <td style="text-align:center;">${billDisplay}</td>
+                        
                         <td style="color:green; text-align:right;">${isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
                         <td style="color:red; text-align:right;">${!isCredit ? '₹'+amount.toFixed(2) : '-'}</td>
                         ${actionButtons}
                     </tr>
                 `;
                 tbody.innerHTML += row;
+            });
 
-            } catch (err) { console.warn(err); }
-        });
+            updateDashboard(totalCredit, totalDebit);
 
-        updateDashboard(totalCredit, totalDebit);
+        } catch (globalErr) { console.error(globalErr); }
     });
 };
 // Helper to update the top cards
