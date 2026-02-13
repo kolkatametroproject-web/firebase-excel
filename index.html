@@ -1028,48 +1028,22 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
     <div class="panel"><h3><i class="fas fa-clipboard-check"></i> Assigned Operations</h3><div id="taskList"></div></div>
 </div>
 <div id="tab-comments" class="hidden">
-    <div class="panel">
-        <h3><i class="fas fa-comment-dots"></i> General Station Observations</h3>
-        <p style="font-size:12px; color:#64748b; margin-bottom:20px;">This tab is for general comments and commands only. Measurement data is handled in Audit Reports.</p>
-        
-        <div style="background:#f1f5f9; padding:20px; border-radius:6px; border:1px solid #cbd5e1;">
-            <label style="font-weight:bold; font-size: 11px;">Select Site:</label>
-            <div style="display:flex; gap:10px; margin-top:5px;">
-                <select id="cmtLine" onchange="handleCommentLineChange()" style="flex:1;">
-                    <option value="">-- Select Line --</option>
-                    <option value="Blue Line">Blue Line</option>
-                    <option value="Green Line">Green Line</option>
-                    <option value="Purple Line">Purple Line</option>
-                    <option value="Yellow Line">Yellow Line</option>
-                </select>
-                <select id="cmtStation" disabled style="flex:1;">
-                    <option value="">-- Select Station --</option>
-                </select>
-            </div>
-
-            <label style="font-weight:bold; font-size: 11px; margin-top:20px; display:block;">Comment / Command:</label>
-            <textarea id="cmtText" rows="6" placeholder="Write station-specific comments here..."></textarea>
-
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:15px;">
-                <div>
-                    <label style="font-size:11px; font-weight:bold;">Conducting Officer:</label>
-                    <select id="selCmtInspector"></select>
-                </div>
-                <div>
-                    <label style="font-size:11px; font-weight:bold;">Approving Authority:</label>
-                    <select id="selCmtAuthority">
-                        <option value="Soham Pal (Principal Investigator)">Soham Pal (Principal Investigator)</option>
-                        <option value="Prof. Heerok Banerjee">Prof. Heerok Banerjee</option>
-                    </select>
-                </div>
-            </div>
-
-            <button onclick="printOnlyComment()" class="info" style="width:100%; margin-top:20px; padding:15px; background: #000;">
-                <i class="fas fa-print"></i> PRINT COMMENT ONLY
-            </button>
-        </div>
+    <label style="font-weight:bold; font-size: 11px;">Select Site:</label>
+    <div style="display:flex; gap:10px; margin-top:5px;">
+        <select id="commentLineSelect" onchange="handleCommentLineChange()" style="flex:1;">
+            <option value="">-- Select Line --</option>
+            <option value="Blue Line">Blue Line</option>
+            <option value="Green Line">Green Line</option>
+            <option value="Purple Line">Purple Line</option>
+            <option value="Yellow Line">Yellow Line</option>
+            <option value="Orange Line">Orange Line</option>
+            <option value="Pink Line">Pink Line</option>
+        </select>
+        <select id="commentStationSelect" disabled style="flex:1;">
+            <option value="">-- Select Station --</option>
+        </select>
     </div>
-</div>
+    </div>
 <div id="tab-adminPanel" class="hidden">
     <div class="panel" style="border-top: 5px solid var(--metro-red);">
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -5887,34 +5861,49 @@ window.unbanUser = async (uid, name) => {
     }
 };
 window.switchTab = (t) => {
-    // 1. Define all tabs
     const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport', 'funds', 'purchase', 'comments'];
     
-    // 2. Hide all tabs
     allTabs.forEach(x => {
         const el = document.getElementById(`tab-${x}`);
         if(el) el.classList.add("hidden");
     });
     
-    // 3. Remove active button states
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
 
-    // 4. Show the selected tab
     const targetTab = document.getElementById(`tab-${t}`);
     if(targetTab) targetTab.classList.remove("hidden");
     
-    // 5. Update active button highlighting
     const btnMap = { 
         'comments': 'btnComments',
         'printReport': 'btnPrintReport',
         'newData': 'btnNew' 
-        /* ... add your other mappings here ... */
     };
     if(btnMap[t]) document.getElementById(btnMap[t])?.classList.add("active");
 
-    // --- CRITICAL FIX: Trigger the user list for the comments tab ---
+    // Load Officer List when switching to comments
     if(t === 'comments') {
-        populateCommentUsers();
+        populateCommentUsers(); 
+    }
+};
+
+// Logic for populating Station Dropdown
+window.handleCommentLineChange = () => {
+    const lineSel = document.getElementById("commentLineSelect");
+    const stnSel = document.getElementById("commentStationSelect");
+    
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    stnSel.disabled = true;
+
+    const selectedLine = lineSel.value;
+    // Uses the METRO_STATIONS data already in your code
+    if (selectedLine && METRO_STATIONS[selectedLine]) {
+        METRO_STATIONS[selectedLine].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = stn;
+            opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
+        stnSel.disabled = false;
     }
 };
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
@@ -6261,14 +6250,11 @@ window.printCommentReceipt = async () => {
     window.printReport('POS');
 };
 async function populateCommentUsers() {
-    // Match this ID to your HTML select tag (id="selCmtInspector")
     const sel = document.getElementById("selCmtInspector"); 
     if(!sel) return;
 
-    // Set the current user as default
     const currentName = currentUser.name || currentUser.email;
     sel.innerHTML = `<option value="${currentName}">Self (${currentName})</option>`;
-    sel.innerHTML += `<optgroup label="Official Personnel">`;
 
     try {
         const snap = await get(ref(db, "users"));
@@ -6284,9 +6270,7 @@ async function populateCommentUsers() {
                 }
             });
         }
-    } catch (e) {
-        console.error("Database Error:", e);
-    }
+    } catch (e) { console.error(e); }
 }
 window.loadPurchaseData = () => {
     const formPanel = document.getElementById("purchaseFormPanel");
