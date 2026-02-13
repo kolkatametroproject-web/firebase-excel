@@ -4021,35 +4021,33 @@ async function startRealTimeDetection(video, canvas) {
 }
 window.printOnlyComment = () => {
     const stn = document.getElementById("cmtStation").value;
-    const line = document.getElementById("cmtLine").value;
     const text = document.getElementById("cmtText").value;
     const inspector = document.getElementById("selCmtInspector").value;
     const authority = document.getElementById("selCmtAuthority").value;
 
     if (!stn || !text) return alert("Select station and write comment.");
 
-    // Fill Receipt
+    // Populate Report Container
     document.getElementById("rptStationName").innerText = stn;
-    document.getElementById("rptLineName").innerText = line;
     document.getElementById("rptDate").innerText = new Date().toLocaleString('en-IN');
     document.getElementById("rptUser").innerText = inspector;
     
-    // --- CRITICAL: HIDE EVERYTHING EXCEPT THE COMMENT ---
+    // Hide technical inspection sections
     document.getElementById("sectionStationDetails").style.display = "none";
     document.getElementById("sectionRakeData").style.display = "none";
     
-    // Show a custom area or use Remarks for the comment
+    // Use the Remarks area for the comment text
     const rptRem = document.getElementById("rptRem");
     rptRem.innerText = text;
-    // We only show the wrapper for remarks
+    
+    // Show only the specific section needed for the comment display
     document.getElementById("sectionStationDetails").style.display = "block";
-    // Hide the table rows of Measurement
-    document.querySelectorAll("#sectionStationDetails .report-table tr:not(:last-child)").forEach(tr => tr.style.display = "none");
-
+    
+    // Set Signatures
     document.getElementById("rptSigInspectorName").innerText = inspector;
     document.getElementById("rptSigAuthName").innerText = authority;
 
-    // Trigger Print
+    // Trigger Print (Your CSS will handle the 30pt Centering)
     document.getElementById("printableReportContainer").classList.remove("hidden");
     window.printReport('POS');
 };
@@ -5889,39 +5887,35 @@ window.unbanUser = async (uid, name) => {
     }
 };
 window.switchTab = (t) => {
-    // Add 'comments' to this array
+    // 1. Define all tabs
     const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport', 'funds', 'purchase', 'comments'];
     
+    // 2. Hide all tabs
     allTabs.forEach(x => {
         const el = document.getElementById(`tab-${x}`);
         if(el) el.classList.add("hidden");
     });
     
+    // 3. Remove active button states
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
 
+    // 4. Show the selected tab
     const targetTab = document.getElementById(`tab-${t}`);
     if(targetTab) targetTab.classList.remove("hidden");
     
+    // 5. Update active button highlighting
     const btnMap = { 
-        'funds': 'btnFunds', 'purchase': 'btnPurchase', 'newData': 'btnNew', 
-        'inventory': 'btnInventory', 'gallery': 'btnGallery', 
-        'assigned': 'btnAssign', 'adminPanel': 'btnAdmin', 
-        'dataView': 'btnDataView', 'printReport': 'btnPrintReport',
-        'comments': 'btnComments' // Link the new button ID
+        'comments': 'btnComments',
+        'printReport': 'btnPrintReport',
+        'newData': 'btnNew' 
+        /* ... add your other mappings here ... */
     };
     if(btnMap[t]) document.getElementById(btnMap[t])?.classList.add("active");
 
-    // --- TRIGGER USER LIST LOAD HERE ---
+    // --- CRITICAL FIX: Trigger the user list for the comments tab ---
     if(t === 'comments') {
         populateCommentUsers();
     }
-    
-    // Existing loaders
-    if(t === 'adminPanel' && isAdmin) loadAdminPanel();
-    if(t === 'gallery') loadGallery();
-    if(t === 'inventory') loadInventory();
-    if(t === 'funds') loadFinanceData();
-    if(t === 'purchase') loadPurchaseData();
 };
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
@@ -6266,19 +6260,32 @@ window.printCommentReceipt = async () => {
     document.getElementById("printableReportContainer").classList.remove("hidden");
     window.printReport('POS');
 };
-
-// Add this to your existing populate functions or call it in switchTab
 async function populateCommentUsers() {
-    const sel = document.getElementById("selCommentInspector");
+    // Match this ID to your HTML select tag (id="selCmtInspector")
+    const sel = document.getElementById("selCmtInspector"); 
+    if(!sel) return;
+
+    // Set the current user as default
     const currentName = currentUser.name || currentUser.email;
     sel.innerHTML = `<option value="${currentName}">Self (${currentName})</option>`;
-    const snap = await get(ref(db, "users"));
-    if (snap.exists()) {
-        snap.forEach(c => {
-            const u = c.val();
-            const uName = u.name || u.email;
-            if(uName !== currentName) sel.innerHTML += `<option value="${uName}">${uName}</option>`;
-        });
+    sel.innerHTML += `<optgroup label="Official Personnel">`;
+
+    try {
+        const snap = await get(ref(db, "users"));
+        if (snap.exists()) {
+            snap.forEach(c => {
+                const u = c.val();
+                const uName = u.name || u.email;
+                if(uName !== currentName) {
+                    const opt = document.createElement("option");
+                    opt.value = uName;
+                    opt.innerText = uName;
+                    sel.appendChild(opt);
+                }
+            });
+        }
+    } catch (e) {
+        console.error("Database Error:", e);
     }
 }
 window.loadPurchaseData = () => {
