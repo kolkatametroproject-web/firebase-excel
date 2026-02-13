@@ -5859,27 +5859,39 @@ window.unbanUser = async (uid, name) => {
     }
 };
 window.switchTab = (t) => {
+    // Add 'comments' to this array
     const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport', 'funds', 'purchase', 'comments'];
-    allTabs.forEach(x => document.getElementById(`tab-${x}`)?.classList.add("hidden"));
+    
+    allTabs.forEach(x => {
+        const el = document.getElementById(`tab-${x}`);
+        if(el) el.classList.add("hidden");
+    });
+    
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
 
-    document.getElementById(`tab-${t}`)?.classList.remove("hidden");
+    const targetTab = document.getElementById(`tab-${t}`);
+    if(targetTab) targetTab.classList.remove("hidden");
     
-    // Auto-map buttons
     const btnMap = { 
         'funds': 'btnFunds', 'purchase': 'btnPurchase', 'newData': 'btnNew', 
         'inventory': 'btnInventory', 'gallery': 'btnGallery', 
         'assigned': 'btnAssign', 'adminPanel': 'btnAdmin', 
-        'dataView': 'btnDataView', 'printReport': 'btnPrintReport' 
+        'dataView': 'btnDataView', 'printReport': 'btnPrintReport',
+        'comments': 'btnComments' // Link the new button ID
     };
     if(btnMap[t]) document.getElementById(btnMap[t])?.classList.add("active");
 
-    // Loaders
+    // --- TRIGGER USER LIST LOAD HERE ---
+    if(t === 'comments') {
+        populateCommentUsers();
+    }
+    
+    // Existing loaders
     if(t === 'adminPanel' && isAdmin) loadAdminPanel();
     if(t === 'gallery') loadGallery();
     if(t === 'inventory') loadInventory();
     if(t === 'funds') loadFinanceData();
-    if(t === 'purchase') loadPurchaseData(); // <--- This line is CRITICAL
+    if(t === 'purchase') loadPurchaseData();
 };
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
@@ -5959,6 +5971,34 @@ function loadGallery() {
 window.removeFile = (k) => {
     if(confirm("Remove attached file?")) {
         update(ref(db, `history/${k}`), { fileData: null, fileType: null, fileRemoved: true });
+    }
+}
+async function populateCommentUsers() {
+    const sel = document.getElementById("selCommentInspector");
+    if(!sel) return;
+
+    // Set default as the current logged-in user
+    const currentName = currentUser.name || currentUser.email;
+    sel.innerHTML = `<option value="${currentName}">Self (${currentName})</option>`;
+    sel.innerHTML += `<optgroup label="Registered Personnel">`;
+
+    try {
+        const snap = await get(ref(db, "users"));
+        if (snap.exists()) {
+            snap.forEach(c => {
+                const u = c.val();
+                const uName = u.name || u.email;
+                // Add everyone else to the list
+                if(uName !== currentName) {
+                    const opt = document.createElement("option");
+                    opt.value = uName;
+                    opt.innerText = uName;
+                    sel.appendChild(opt);
+                }
+            });
+        }
+    } catch (e) {
+        console.error("Error loading personnel:", e);
     }
 }
 async function clearPreviousSession() {
