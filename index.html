@@ -1092,19 +1092,19 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
       </table>
       </div>
 
-      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-red); margin-top: 30px;">2. Master Security PIN (Bypass Code)</h4>
+      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-red); margin-top: 30px;">2. Master Security PIN (Global Bypass Code)</h4>
       <div style="background:#fff1f2; border:1px solid #fecaca; padding:20px; border-radius:6px; margin-bottom: 20px;">
-          <p style="font-size:12px; color:#b91c1c; margin-top:0;"><strong>Security Note:</strong> This PIN is used for the "Master Bypass" when cameras are unavailable. Default is 1234.</p>
+          <p style="font-size:12px; color:#b91c1c; margin-top:0;"><strong>Strict Security:</strong> Changing this PIN immediately invalidates the old code for all users across all terminals.</p>
           <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:15px; align-items:end;">
               <div>
-                  <label style="font-size:11px; font-weight:bold; color:#7f1d1d;">CURRENT PIN</label>
-                  <input id="displayCurrentPin" disabled style="background:#f8fafc; font-weight:bold; letter-spacing:4px; text-align:center; color:#1e293b;" value="****">
+                  <label style="font-size:11px; font-weight:bold; color:#7f1d1d;">CURRENT SYSTEM PIN</label>
+                  <input id="displayCurrentPin" disabled style="background:#f8fafc; font-weight:bold; letter-spacing:4px; text-align:center; color:#1e293b; border: 1px solid #ddd;" value="SYNCING...">
               </div>
               <div>
                   <label style="font-size:11px; font-weight:bold; color:var(--metro-blue);">SET NEW 4-DIGIT PIN</label>
                   <input id="newPinInput" type="text" maxlength="4" placeholder="0000" style="letter-spacing:8px; text-align:center; font-weight:bold; border:2px solid #cbd5e1;">
               </div>
-              <button onclick="updateMasterPin()" class="danger" style="height:42px; width:100%; font-size: 12px;">UPDATE SYSTEM PIN</button>
+              <button onclick="updateMasterPin()" class="danger" style="height:42px; width:100%; font-size: 12px; font-weight: 800;">UPDATE SYSTEM PIN</button>
           </div>
       </div>
       
@@ -4500,11 +4500,20 @@ window.loadAdminPanel = () => {
 
     if (!tbody || !checkboxList) return;
 
-    // 1. CLEANUP (Stop previous listeners to prevent loops)
+    // --- NEW: CENTRALIZED PIN SYNC ---
+    // Fetches the active system PIN so the Admin can see it
+    get(ref(db, "system_settings/master_pin")).then(snap => {
+        const pinDisplay = document.getElementById("displayCurrentPin");
+        if (pinDisplay) {
+            pinDisplay.value = snap.exists() ? snap.val() : "1234";
+        }
+    }).catch(e => console.error("PIN Sync Error:", e));
+
+    // 1. CLEANUP (Stop previous listeners to prevent memory leaks/loops)
     if (adminUsersListener) { if (typeof adminUsersListener === "function") adminUsersListener(); adminUsersListener = null; }
     if (adminStatusListener) { if (typeof adminStatusListener === "function") adminStatusListener(); adminStatusListener = null; }
 
-    // Clear any existing render loop
+    // Clear any existing periodic render loops
     if (window.adminRenderInterval) clearInterval(window.adminRenderInterval);
 
     tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-sync fa-spin'></i> Syncing...</td></tr>";
@@ -4536,42 +4545,28 @@ window.loadAdminPanel = () => {
             let lastSeenText = "Never";
 
             if (s && s.last_seen) {
-                // Calculate gap in seconds
                 const diff = NOW - s.last_seen; 
-                
-                // RULE 1: INCREASED TOLERANCE (35 Seconds)
-                // We allow a larger buffer (35s) to account for slow internet.
-                // Heartbeats send every 5s, so missing 1 or 2 won't flicker the status.
-                const isRecent = diff < 35000; 
+                const isRecent = diff < 35000; // 35 second tolerance for slow networks
 
-                // RULE 2: PRIORITY TO RECENCY
-                // If the signal was received < 10 seconds ago, they are DEFINITELY Online,
-                // even if the database text says 'offline' (which happens during micro-disconnects).
                 if (diff < 10000) {
                     isOnline = true; 
                 } 
-                // Otherwise, respect the text status (e.g. they clicked Logout)
                 else if (isRecent && s.state !== 'offline') {
                     isOnline = true;
                 }
-
                 lastSeenText = new Date(s.last_seen).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             }
 
             // --- BADGE UI ---
             let statusBadge = "";
-
             if (isOnline) {
-                if (hasBiometrics) {
-                    statusBadge = `<span class="badge-online" style="background:#dcfce7; color:#166534; border:1px solid #bbf7d0;">🟢 Online</span>`;
-                } else {
-                    statusBadge = `<span style="background:#fff7ed; color:#c2410c; padding:4px 10px; border-radius:12px; font-size:10px; font-weight:800; border:1px solid #fdba74;">🟡 Setup Pending</span>`;
-                }
+                statusBadge = hasBiometrics 
+                    ? `<span class="badge-online" style="background:#dcfce7; color:#166534; border:1px solid #bbf7d0;">🟢 Online</span>`
+                    : `<span style="background:#fff7ed; color:#c2410c; padding:4px 10px; border-radius:12px; font-size:10px; font-weight:800; border:1px solid #fdba74;">🟡 Setup Pending</span>`;
             } else {
                 statusBadge = `<span class="badge-offline">⚫ Offline (${lastSeenText})</span>`;
             }
 
-            // --- BIOMETRICS ---
             const bioStatus = hasBiometrics 
                 ? `<span style="color:green; font-weight:bold; font-size:11px;">✔ Registered</span>` 
                 : `<span style="color:red; font-weight:bold; font-size:11px;">⚠ Missing</span>`;
@@ -4638,9 +4633,7 @@ window.loadAdminPanel = () => {
         renderTable();
     });
     
-    // 3. SLOWER REFRESH INTERVAL (Prevents overloading)
-    // We only need this to update the "Offline (X min ago)" text.
-    // The listeners above handle the actual status changes.
+    // 3. PERIODIC RE-RENDER (To keep "Time Ago" or "Offline" text accurate)
     window.adminRenderInterval = setInterval(renderTable, 10000); 
 };
 window.viewRakeRows = (rowsEncoded, stationName) => {
@@ -4844,34 +4837,24 @@ async function populateReturnSelect() {
         sel.innerHTML = "<option>Error loading.</option>";
     }
 }
-// Function to update the Master PIN in the database
 window.updateMasterPin = async () => {
     const newPin = document.getElementById("newPinInput").value.trim();
 
-    // Validate: must be exactly 4 digits
     if (!/^\d{4}$/.test(newPin)) {
-        return alert("⚠️ INVALID PIN: Please enter exactly 4 numbers.");
+        return alert("⚠️ INVALID PIN: Enter exactly 4 digits.");
     }
 
-    if (!confirm("Confirm changing the Master Bypass PIN? This affects all admin logins.")) return;
+    if (!confirm("Confirm changing the GLOBAL Master PIN? Users using '1234' will be blocked immediately.")) return;
 
     try {
-        // Update PIN under the specific admin's record so verifyOTP can find it
-        await update(ref(db, `users/${currentUser.uid}`), { pin: newPin });
+        // Save to a central "settings" node instead of a specific user
+        await set(ref(db, "system_settings/master_pin"), newPin);
         
-        alert("✅ PIN updated to: " + newPin);
+        alert("✅ GLOBAL PIN UPDATED: " + newPin);
         document.getElementById("displayCurrentPin").value = newPin;
         document.getElementById("newPinInput").value = "";
-        
-        // Log the security change
-        await push(ref(db, "logs"), {
-            user: currentUser.email,
-            type: "SECURITY_UPDATE",
-            details: "Master PIN Changed",
-            time: serverTimestamp()
-        });
     } catch(e) {
-        alert("Error: " + e.message);
+        alert("Database Error: " + e.message);
     }
 };
 window.updateMaxQty = () => {
@@ -6524,41 +6507,21 @@ window.verifyOTP = async () => {
     const input = document.getElementById("otpInput").value;
     
     try {
-        // Fetch your specific PIN from the database
-        const snap = await get(ref(db, `users/${currentUser.uid}/pin`));
-        const masterPin = snap.val() || "1234"; // Default fallback
+        // Fetch the one true PIN from the system settings node
+        const snap = await get(ref(db, "system_settings/master_pin"));
+        const systemPin = snap.exists() ? snap.val() : "1234"; // Default only if DB is empty
         
-        if (input === masterPin) {
+        if (input === systemPin) {
             updateStatus("✅ AUTHORIZED", "#00ff00");
-            
-            // Record the bypass in logs for safety auditing
-            await push(ref(db, "logs"), {
-                user: currentUser.email,
-                type: "LOGIN_BYPASS",
-                method: "Manual PIN (No Camera)",
-                time: serverTimestamp()
-            });
-
-            // If this was during a transaction (Checkout/Return)
-            if (scanMode === 'RECEIVER') {
-                receiverVerified = true;
-                stopCamera();
-                // Close modal and let the transaction proceed
-                enterApp(); 
-            } else {
-                // Standard Login flow
-                enterApp();
-            }
-            
-            // Reset UI for next time
+            await recordLogin("Manual PIN Bypass");
+            enterApp();
             document.getElementById("otpInput").value = "";
         } else {
-            alert("Security PIN Incorrect ❌");
-            updateStatus("Unauthorized Access Attempt", "red");
+            alert("❌ Access Denied: Incorrect PIN.");
+            document.getElementById("otpInput").value = "";
         }
     } catch (e) {
-        console.error(e);
-        alert("Bypass Error: " + e.message);
+        alert("Security Error: " + e.message);
     }
 };
 </script>
