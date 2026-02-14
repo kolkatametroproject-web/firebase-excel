@@ -1091,8 +1091,24 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
           <tbody id="userListBody"></tbody>
       </table>
       </div>
+
+      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-red); margin-top: 30px;">2. Master Security PIN (Bypass Code)</h4>
+      <div style="background:#fff1f2; border:1px solid #fecaca; padding:20px; border-radius:6px; margin-bottom: 20px;">
+          <p style="font-size:12px; color:#b91c1c; margin-top:0;"><strong>Security Note:</strong> This PIN is used for the "Master Bypass" when cameras are unavailable. Default is 1234.</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:15px; align-items:end;">
+              <div>
+                  <label style="font-size:11px; font-weight:bold; color:#7f1d1d;">CURRENT PIN</label>
+                  <input id="displayCurrentPin" disabled style="background:#f8fafc; font-weight:bold; letter-spacing:4px; text-align:center; color:#1e293b;" value="****">
+              </div>
+              <div>
+                  <label style="font-size:11px; font-weight:bold; color:var(--metro-blue);">SET NEW 4-DIGIT PIN</label>
+                  <input id="newPinInput" type="text" maxlength="4" placeholder="0000" style="letter-spacing:8px; text-align:center; font-weight:bold; border:2px solid #cbd5e1;">
+              </div>
+              <button onclick="updateMasterPin()" class="danger" style="height:42px; width:100%; font-size: 12px;">UPDATE SYSTEM PIN</button>
+          </div>
+      </div>
       
-      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-blue); margin-top: 30px;">2. Task Assignment</h4>
+      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-blue); margin-top: 30px;">3. Task Assignment</h4>
       <label style="font-size: 12px; font-weight: bold;">Select Personnel:</label>
       <div id="userCheckboxList" class="checkbox-list"></div>
       <div style="margin-top:15px;">
@@ -1101,7 +1117,6 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
       </div>
     </div>
 </div>
-
 <div id="adminTaskModal" class="modal-overlay hidden">
     <div class="panel" style="width:600px; max-width:95%; max-height:80vh; display:flex; flex-direction:column; padding:0; overflow:hidden; border:none;">
         <div style="background:var(--metro-blue); color:white; padding:15px 20px; display:flex; justify-content:space-between; align-items:center;">
@@ -4829,7 +4844,36 @@ async function populateReturnSelect() {
         sel.innerHTML = "<option>Error loading.</option>";
     }
 }
+// Function to update the Master PIN in the database
+window.updateMasterPin = async () => {
+    const newPin = document.getElementById("newPinInput").value.trim();
 
+    // Validate: must be exactly 4 digits
+    if (!/^\d{4}$/.test(newPin)) {
+        return alert("⚠️ INVALID PIN: Please enter exactly 4 numbers.");
+    }
+
+    if (!confirm("Confirm changing the Master Bypass PIN? This affects all admin logins.")) return;
+
+    try {
+        // Update PIN under the specific admin's record so verifyOTP can find it
+        await update(ref(db, `users/${currentUser.uid}`), { pin: newPin });
+        
+        alert("✅ PIN updated to: " + newPin);
+        document.getElementById("displayCurrentPin").value = newPin;
+        document.getElementById("newPinInput").value = "";
+        
+        // Log the security change
+        await push(ref(db, "logs"), {
+            user: currentUser.email,
+            type: "SECURITY_UPDATE",
+            details: "Master PIN Changed",
+            time: serverTimestamp()
+        });
+    } catch(e) {
+        alert("Error: " + e.message);
+    }
+};
 window.updateMaxQty = () => {
     const isCheckout = !document.getElementById("inv-checkout").classList.contains("hidden");
     const selId = isCheckout ? "checkoutSelect" : "returnSelect";
