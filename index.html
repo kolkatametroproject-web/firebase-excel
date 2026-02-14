@@ -3096,7 +3096,9 @@ async function processUpload(dataBase64, fileType, fileName) {
 }
 onAuthStateChanged(auth, (user) => {
     if (!user) { 
-        showLoginScreen(); 
+        // Use a safe check here too
+        const loginSec = document.getElementById("loginSection");
+        if (loginSec) loginSec.classList.remove("hidden");
         return; 
     }
 
@@ -3107,20 +3109,26 @@ onAuthStateChanged(auth, (user) => {
     
     onValue(userRef, (snap) => {
         const u = snap.val();
-        
-        // Helper to safely manipulate classes without crashing
-        const safeClass = (id, action, className) => {
+
+        // --- THE FIX: Create a helper to prevent "null" crashes ---
+        const updateClass = (id, action, className) => {
             const el = document.getElementById(id);
-            if (el) el.classList[action](className);
+            if (el) {
+                el.classList[action](className);
+            } else {
+                console.warn(`SafeUI: Element #${id} not found. Skipping.`);
+            }
         };
 
+        // 1. New User Detection
         if (!u || !u.name) {
-            safeClass("loginSection", "add", "hidden");
-            safeClass("appScreen", "add", "hidden");
-            safeClass("nameModal", "remove", "hidden");
+            updateClass("loginSection", "add", "hidden");
+            updateClass("appScreen", "add", "hidden");
+            updateClass("nameModal", "remove", "hidden");
             return; 
         }
 
+        // 2. Security Checks
         if (u.terminated) { 
             alert("ACCOUNT TERMINATED."); 
             signOut(auth); 
@@ -3128,32 +3136,33 @@ onAuthStateChanged(auth, (user) => {
         }
 
         if (u.banned) {
-            safeClass("header", "add", "hidden"); // Or style.display = 'none'
-            safeClass("appScreen", "add", "hidden");
-            safeClass("faceModal", "add", "hidden");
-            safeClass("bannedScreen", "remove", "hidden");
+            updateClass("header", "add", "hidden");
+            updateClass("appScreen", "add", "hidden");
+            updateClass("faceModal", "add", "hidden");
+            updateClass("bannedScreen", "remove", "hidden");
             
-            const reasonEl = document.getElementById("displayBanReason");
-            if (reasonEl) reasonEl.innerText = u.banReason || "Violation";
+            const reasonDisplay = document.getElementById("displayBanReason");
+            if (reasonDisplay) reasonDisplay.innerText = u.banReason || "Security Protocol Violation";
             return; 
         }
 
-        // Sync Data
+        // 3. Silent Data Sync
         currentUser.name = u.name;
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
         
-        const userIn = document.getElementById("userInfo");
-        if (userIn) userIn.innerText = `${u.name}`;
+        const userInfoDisplay = document.getElementById("userInfo");
+        if (userInfoDisplay) userInfoDisplay.innerText = `${u.name}`;
 
         if (isAdmin) {
-            safeClass("adminBadge", "remove", "hidden");
-            safeClass("btnAdmin", "remove", "hidden");
+            updateClass("adminBadge", "remove", "hidden");
+            updateClass("btnAdmin", "remove", "hidden");
         }
 
-        // NO FACE MODAL TRIGGER HERE - KEEP IT CLEAN
+        // CRITICAL: No Face Modal logic here. 
+        // It must only be triggered by the login() button success.
         
     }, (error) => {
-        console.error("Database Error:", error);
+        console.error("Database sync failed:", error);
         signOut(auth);
     });
 });
