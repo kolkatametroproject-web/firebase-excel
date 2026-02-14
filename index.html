@@ -589,8 +589,13 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
         <input id="otpInput" type="password" placeholder="PIN (Default: 1234)" style="text-align:center; font-size:20px; letter-spacing:8px; border:2px solid var(--metro-red); font-weight: bold;">
         <button class="success" onclick="verifyOTP()" style="width:100%;">Verify PIN</button>
       </div>
+<div id="faceStatus" style="color:var(--metro-gold); margin-bottom:15px; font-weight:bold; height:20px; font-size: 12px; letter-spacing: 0.5px;"></div>
 
-      <div id="faceStatus" style="color:var(--metro-gold); margin-bottom:15px; font-weight:bold; height:20px; font-size: 12px; letter-spacing: 0.5px;"></div>
+<div id="camControls" style="display:flex; flex-direction:column; gap:10px; justify-content: center;">
+    <button id="btnCapture" onclick="handleFaceScan()" style="background:white; color:var(--metro-blue); border:none; padding:12px 25px; font-weight: bold;">📸 SCAN FACE</button>
+    
+    <a href="javascript:void(0)" onclick="triggerAdminBypass()" style="color:#94a3b8; font-size:11px; text-decoration:underline; margin-top:10px;">PC without camera? Use Master Bypass</a>
+</div>
       
       <div id="camControls" style="display:flex; gap:10px; justify-content: center;">
         <button id="btnCapture" onclick="handleFaceScan()" style="background:white; color:var(--metro-blue); border:none; padding:12px 25px; font-weight: bold;">📸 SCAN FACE</button>
@@ -6571,6 +6576,59 @@ setTimeout(debugConnection, 3000);
 setTimeout(debugConnection, 3000);
 // Run automatically on load
 setTimeout(debugConnection, 3000);
+  // --- ADMIN BYPASS LOGIC FOR SOHAM PAL / TERMINAL PCS ---
+window.triggerAdminBypass = () => {
+    // Show the OTP/PIN UI that already exists in your HTML
+    document.getElementById("videoContainer").classList.add("hidden");
+    document.getElementById("camControls").classList.add("hidden");
+    document.getElementById("otpUI").classList.remove("hidden");
+    document.getElementById("modalTitle").innerText = "Admin Security Bypass";
+    document.getElementById("modalDesc").innerText = "Camera unavailable. Enter Master Authorization PIN.";
+    updateStatus("Bypass Mode Active", "orange");
+};
+
+// Update your existing verifyOTP function or replace it with this smarter version
+window.verifyOTP = async () => {
+    const input = document.getElementById("otpInput").value;
+    
+    try {
+        // Fetch your specific PIN from the database
+        const snap = await get(ref(db, `users/${currentUser.uid}/pin`));
+        const masterPin = snap.val() || "1234"; // Default fallback
+        
+        if (input === masterPin) {
+            updateStatus("✅ AUTHORIZED", "#00ff00");
+            
+            // Record the bypass in logs for safety auditing
+            await push(ref(db, "logs"), {
+                user: currentUser.email,
+                type: "LOGIN_BYPASS",
+                method: "Manual PIN (No Camera)",
+                time: serverTimestamp()
+            });
+
+            // If this was during a transaction (Checkout/Return)
+            if (scanMode === 'RECEIVER') {
+                receiverVerified = true;
+                stopCamera();
+                // Close modal and let the transaction proceed
+                enterApp(); 
+            } else {
+                // Standard Login flow
+                enterApp();
+            }
+            
+            // Reset UI for next time
+            document.getElementById("otpInput").value = "";
+        } else {
+            alert("Security PIN Incorrect ❌");
+            updateStatus("Unauthorized Access Attempt", "red");
+        }
+    } catch (e) {
+        console.error(e);
+        alert("Bypass Error: " + e.message);
+    }
+};
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
