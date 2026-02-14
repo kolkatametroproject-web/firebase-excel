@@ -3094,14 +3094,7 @@ async function processUpload(dataBase64, fileType, fileName) {
     // This checks if DB connection is active
     await push(ref(db, "history"), uploadData);
 }
-// ==========================================
-// 2. CRASH-PROOF AUTH LISTENER (FIXED)
-// ==========================================
-// ==========================================
-// 2. CRASH-PROOF AUTH LISTENER (AUTO-FIXES MISSING DATA)
-// ==========================================
 onAuthStateChanged(auth, (user) => {
-    // A. NOT LOGGED IN
     if (!user) { 
         showLoginScreen(); 
         return; 
@@ -3110,132 +3103,57 @@ onAuthStateChanged(auth, (user) => {
     currentUser = user;
     startPresenceSystem(user);  
 
-    // B. LOGGED IN - CHECK DATA
     const userRef = ref(db, `users/${user.uid}`);
     
-    onValue(userRef, async (snap) => {
-        let u = snap.val();
+    onValue(userRef, (snap) => {
+        const u = snap.val();
+        
+        // Helper to safely manipulate classes without crashing
+        const safeClass = (id, action, className) => {
+            const el = document.getElementById(id);
+            if (el) el.classList[action](className);
+        };
 
-        // --- FIX START: AUTO-CREATE MISSING ACCOUNTS ---
-        if (!u) {
-            console.log("⚠️ Profile missing for " + user.email + ". Auto-generating...");
-            
-            // Determine Name based on Email
-            let generatedName = "Official User";
-            const emailLower = user.email.toLowerCase();
-            
-            if(emailLower.includes("hodee")) generatedName = "HOD Electrical Dept";
-            else if(emailLower.includes("hodcseaiml")) generatedName = "HOD CSE/AIML";
-            else if(emailLower.includes("sujoy")) generatedName = "Prof. Sujoy Banerjee";
-            else if(emailLower.includes("heerok")) generatedName = "Prof. Heerok Banerjee";
-            else if(emailLower.includes("soham")) generatedName = "Prof. Arijita Das";
-            else if(emailLower.includes("hodeee")) generatedName = "HOD Electrical and Electronics Engineering Dept";
-            else if(emailLower.includes("arijita@metro.project")) generatedName = "Soham Pal";
-            else if(emailLower.includes("ahodee")) generatedName = "Assistant HOD Electrical Dept";
-            // Create the profile object
-            const newProfile = {
-                name: generatedName,
-                email: user.email,
-                banned: false,
-                faceData: null, // This will trigger the Face Setup modal
-                createdAt: serverTimestamp()
-            };
-
-            // Save to Database
-            try {
-                await set(userRef, newProfile);
-                u = newProfile; // Update local variable to proceed immediately
-            } catch (err) {
-                alert("Critical Error creating profile: " + err.message);
-                signOut(auth);
-                return;
-            }
+        if (!u || !u.name) {
+            safeClass("loginSection", "add", "hidden");
+            safeClass("appScreen", "add", "hidden");
+            safeClass("nameModal", "remove", "hidden");
+            return; 
         }
-        // --- FIX END ---
 
-        // 2. TERMINATED?
         if (u.terminated) { 
             alert("ACCOUNT TERMINATED."); 
             signOut(auth); 
             return; 
         }
 
-        // --- C. BANNED USER LOGIC ---
         if (u.banned) {
-            // 1. Hide the Main App
-            document.querySelector("header").style.display = "none";
-            document.getElementById("loginSection").classList.add("hidden");
-            document.getElementById("appScreen").classList.add("hidden");
-            document.getElementById("faceModal").classList.add("hidden");
+            safeClass("header", "add", "hidden"); // Or style.display = 'none'
+            safeClass("appScreen", "add", "hidden");
+            safeClass("faceModal", "add", "hidden");
+            safeClass("bannedScreen", "remove", "hidden");
             
-            // 2. Show the Banned Overlay
-            const banScreen = document.getElementById("bannedScreen");
-            if(banScreen) {
-                banScreen.classList.remove("hidden");
-                
-                // 3. FILL THE DATA
-                document.getElementById("displayBanReason").innerText = u.banReason || "Violation of Safety Protocols";
-                document.getElementById("displayBanAction").innerText = u.banAction || "Please contact the System Administrator.";
-                document.getElementById("displayBanRemarks").innerText = u.banRemarks || "No additional remarks.";
-
-                // Format Time
-                const deadline = u.banExpires || 0;
-                if(deadline > 0) {
-                      const dateStr = new Date(deadline).toLocaleString('en-IN', {
-                          day: '2-digit', month: 'short', year: 'numeric',
-                          hour: '2-digit', minute: '2-digit', hour12: true
-                      });
-                      document.getElementById("bannedTimeDisplay").innerText = "Expiring: " + dateStr;
-                } else {
-                      document.getElementById("bannedTimeDisplay").innerText = "⛔ PERMANENT BAN";
-                }
-            }
-            return; // STOP EXECUTION HERE
+            const reasonEl = document.getElementById("displayBanReason");
+            if (reasonEl) reasonEl.innerText = u.banReason || "Violation";
+            return; 
         }
 
-        // --- D. ACTIVE USER LOGIC ---
-        document.getElementById("bannedScreen")?.classList.add("hidden");
-        document.querySelector("header").style.display = "flex";
-        
+        // Sync Data
         currentUser.name = u.name;
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
-
-        if (!u.name) {
-            document.getElementById("nameModal").classList.remove("hidden");
-            document.getElementById("loginSection").classList.add("hidden");
-            return;
-        }
         
-        document.getElementById("userInfo").innerText = `${u.name}`;
-        document.getElementById("authContainer").classList.remove("hidden");
-        document.getElementById("loginSection").classList.add("hidden");
+        const userIn = document.getElementById("userInfo");
+        if (userIn) userIn.innerText = `${u.name}`;
 
         if (isAdmin) {
-            const badge = document.getElementById("adminBadge");
-            const btn = document.getElementById("btnAdmin");
-            if(badge) badge.classList.remove("hidden");
-            if(btn) btn.classList.remove("hidden");
-            setTimeout(loadAdminPanel, 2000);
+            safeClass("adminBadge", "remove", "hidden");
+            safeClass("btnAdmin", "remove", "hidden");
         }
 
-        if(!isTransactionAuth) {
-            const faceModal = document.getElementById("faceModal");
-            faceModal.classList.remove("hidden");
-            
-            if(!u.faceData) {
-                document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
-                document.getElementById("regProgress").classList.remove("hidden");
-                document.getElementById("btnCapture").onclick = registerNewFace;
-                initCamera(false);
-            } else {
-                document.getElementById("modalTitle").innerText = "Biometric Verification";
-                document.getElementById("regProgress").classList.add("hidden");
-                document.getElementById("btnCapture").onclick = handleFaceScan;
-                initCamera(true);
-            }
-        }
+        // NO FACE MODAL TRIGGER HERE - KEEP IT CLEAN
+        
     }, (error) => {
-        console.error(error);
+        console.error("Database Error:", error);
         signOut(auth);
     });
 });
