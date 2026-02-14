@@ -2857,19 +2857,40 @@ window.login = () => {
     const passField = document.getElementById("password");
     const btn = document.querySelector("#loginSection button");
     
-    if(!emailField.value || !passField.value) return alert("Please enter email and password.");
+    if(!emailField.value || !passField.value) return alert("Please enter credentials.");
 
-    // Visual Feedback
-    btn.innerText = "🔄 Verifying Credentials...";
+    btn.innerText = "🔄 Verifying...";
     btn.disabled = true;
 
     signInWithEmailAndPassword(auth, emailField.value, passField.value)
-    .then(() => {
-        // Success: onAuthStateChanged will handle the rest
-        console.log("Credentials accepted.");
+    .then(async (userCredential) => {
+        // --- THE FIX: Trigger Biometrics ONLY on successful credential match ---
+        const user = userCredential.user;
+        const userSnap = await get(ref(db, `users/${user.uid}`));
+        const u = userSnap.val();
+
+        if (u && u.banned) {
+            alert("Access Denied: Account Suspended.");
+            signOut(auth);
+            return;
+        }
+
+        // Show the modal ONLY now
+        document.getElementById("faceModal").classList.remove("hidden");
+        document.getElementById("loginSection").classList.add("hidden");
+        
+        if(!u || !u.faceData) {
+            document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
+            document.getElementById("btnCapture").onclick = registerNewFace;
+            initCamera(false);
+        } else {
+            document.getElementById("modalTitle").innerText = "Biometric Verification";
+            document.getElementById("btnCapture").onclick = handleFaceScan;
+            initCamera(true);
+        }
     })
     .catch(e => {
-        btn.innerText = "SECURE LOGIN";
+        btn.innerText = "VERIFY CREDENTIALS";
         btn.disabled = false;
         alert("Login Failed: " + e.message);
     });
@@ -3580,44 +3601,29 @@ function showLogin() {
 }
 window.logout = async () => {
     if(!currentUser) return;
-
-    // Visual feedback for the engineer
-    const btn = document.activeElement; 
-    if(btn) btn.innerText = "🔌 Going Offline...";
-
     try {
-        // 1. FORCE DATABASE STATUS TO OFFLINE
+        // Stop Camera first
+        stopCamera();
+
+        // Update Status
         await update(ref(db, `status/${currentUser.uid}`), {
             state: 'offline',
             last_changed: serverTimestamp()
         });
 
-        // 2. LOG THE EVENT FOR AUDIT
-        await push(ref(db, "logs"), { 
-            user: currentUser.email, 
-            type: "LOGOUT", 
-            method: "Manual Button Click", 
-            time: serverTimestamp() 
-        });
+        // Sign Out
+        await signOut(auth);
 
-        // 3. UI CLEANUP: Hide everything except the Login Section
-        // This ensures the face scan doesn't linger on the screen
+        // --- THE FIX: Force UI Reset ---
         document.getElementById("faceModal").classList.add("hidden"); 
         document.getElementById("appScreen").classList.add("hidden");
         document.getElementById("authContainer").classList.add("hidden");
         document.getElementById("loginSection").classList.remove("hidden");
-
-        // 4. STOP CAMERA & KILL SESSION
-        stopCamera();
-        await signOut(auth);
-
+        
+        window.location.reload(); // Refresh to clean all variables
     } catch (e) {
-        console.error("Logout Error", e);
-        // Fallback: Force hide and sign out if DB update fails
-        document.getElementById("faceModal").classList.add("hidden");
-        document.getElementById("appScreen").classList.add("hidden");
-        document.getElementById("loginSection").classList.remove("hidden");
         signOut(auth);
+        window.location.reload();
     }
 };
 async function recordLogin(method) {
