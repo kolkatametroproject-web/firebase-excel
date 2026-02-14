@@ -3851,6 +3851,7 @@ window.generateFinalReport = async () => {
     if(!currentPrintKey) return alert("Error: No record selected.");
 
     const includeStation = document.getElementById("chkStationDetails").checked;
+    const includeRakes = document.getElementById("chkRakeData").checked; // Get checkbox status
     let inspectorName = document.getElementById("selPrintInspector").value;
     let authName = document.getElementById("selPrintAuthority").value;
     
@@ -3866,12 +3867,50 @@ window.generateFinalReport = async () => {
 
     const inspectorTitle = getTitle(inspectorName);
     const authorityTitle = getTitle(authName);
-    const now = new Date();
-    const printTimestamp = now.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
 
     try {
+        // 1. Fetch Station Details
         const sSnap = await get(ref(db, `station_logs/${currentPrintKey}`));
         const sData = sSnap.val();
+        
+        // 2. Fetch Rake Data (The missing link)
+        let rakeHtml = "";
+        if (includeRakes) {
+            const rakeKey = sData.linkedRakeKey || currentPrintKey;
+            const rSnap = await get(ref(db, `rake_logs/${rakeKey}`));
+            
+            if (rSnap.exists()) {
+                const rakes = rSnap.val();
+                rakeHtml = `
+                    <div class="heavy-bar">RAKE CLEARANCE TABLE</div>
+                    <table style="width:100%; border-collapse:collapse; margin-top:20px; font-size:24pt !important; font-weight:900;">
+                        <thead>
+                            <tr style="border-bottom:5pt solid #000;">
+                                <th style="text-align:left; padding:10px;">RAKE ID</th>
+                                <th style="text-align:left; padding:10px;">TYPE</th>
+                                <th style="text-align:center; padding:10px;">FRONT</th>
+                                <th style="text-align:center; padding:10px;">REAR</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                Object.values(rakes).forEach(r => {
+                    rakeHtml += `
+                        <tr style="border-bottom:2pt solid #000;">
+                            <td style="padding:15px 10px;">${r.rake || '-'}</td>
+                            <td style="padding:15px 10px;">${r.type || '-'}</td>
+                            <td style="text-align:center; padding:15px 10px;">${r.f || '-'}</td>
+                            <td style="text-align:center; padding:15px 10px;">${r.r || '-'}</td>
+                        </tr>
+                    `;
+                });
+                rakeHtml += `</tbody></table>`;
+            }
+        }
+
+        const now = new Date();
+        const printTimestamp = now.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
         const reportContainer = document.getElementById("printableReportContainer");
         
         reportContainer.innerHTML = `
@@ -3918,8 +3957,18 @@ window.generateFinalReport = async () => {
             <span class="max-label">SITE:</span><span class="max-value">${sData.name.split('(')[0].trim()}</span>
             <span class="max-label">CORRIDOR:</span><span class="max-value">${sData.name.match(/\(([^)]+)\)/)?.[1] || '---'}</span>
 
-            <div class="heavy-bar">INSPECTOR REMARKS</div>
-            <div class="remark-body">${sData.remarks || 'NO REMARKS RECORDED.'}</div>
+            ${includeStation ? `
+                <div class="heavy-bar">MEASUREMENTS</div>
+                <span class="max-label">PLATFORM LENGTH:</span><span class="max-value">${sData.len || '-'} m</span>
+                <span class="max-label">YELLOW LINE DISTANCE:</span><span class="max-value">${sData.yl || '-'} cm</span>
+                <span class="max-label">LINE THICKNESS:</span><span class="max-value">${sData.th || '-'} cm</span>
+                <span class="max-label">COMPLIANCE STATUS:</span><span class="max-value">${sData.impl === 'YES' ? 'YES / COMPLIANT' : 'NO / NON-COMPLIANT'}</span>
+                
+                <div class="heavy-bar">INSPECTOR REMARKS</div>
+                <div class="remark-body">${sData.remarks || 'NO REMARKS RECORDED.'}</div>
+            ` : ''}
+
+            ${rakeHtml}
 
             <div style="margin-top: 140px;">
                 <div class="sig-box-name">${inspectorName}</div>
@@ -3939,7 +3988,7 @@ window.generateFinalReport = async () => {
         closePrintModal();
         reportContainer.classList.remove("hidden");
         window.scrollTo(0,0);
-    } catch(err) { alert("Error: " + err.message); }
+    } catch(err) { alert("Error generating rake report: " + err.message); }
 };
 window.closeReportPreview = () => {
     document.getElementById("printableReportContainer").classList.add("hidden");
