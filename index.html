@@ -4019,69 +4019,7 @@ async function startRealTimeDetection(video, canvas) {
         }
     }, 100);
 }
-window.printOnlyComment = () => {
-    const stn = document.getElementById("commentStationSelect").value;
-    const line = document.getElementById("commentLineSelect").value;
-    const commentBody = document.getElementById("commentTextInput").value;
-    const inspector = document.getElementById("selCommentInspector").value;
-    const authority = document.getElementById("selCommentAuthority").value;
 
-    if (!stn || !commentBody) return alert("Please select a station and enter your comment.");
-
-    // 1. Fill Identity & Meta Info in the top header
-    document.getElementById("rptStationName").innerText = stn;
-    document.getElementById("rptLineName").innerText = line;
-    document.getElementById("rptDate").innerText = new Date().toLocaleString('en-IN');
-    document.getElementById("rptUser").innerText = inspector;
-
-    // 2. THE NUCLEAR FIX: Select the table containers
-    const technicalBlock = document.getElementById("sectionStationDetails");
-    const rakeBlock = document.getElementById("sectionRakeData");
-    
-    // Completely remove them from visibility so the printer ignores them
-    technicalBlock.style.setProperty("display", "none", "important");
-    rakeBlock.style.setProperty("display", "none", "important");
-
-    // 3. Create a clean Comment Area if it doesn't already exist
-    let commentBox = document.getElementById("commentOnlyPrintBox");
-    if (!commentBox) {
-        commentBox = document.createElement("div");
-        commentBox.id = "commentOnlyPrintBox";
-        // Place it between the header and signature footer
-        const reportPaper = document.querySelector(".report-paper");
-        const footer = document.querySelector(".report-footer");
-        reportPaper.insertBefore(commentBox, footer);
-    }
-    
-    // 4. Set the large 30pt text for the thermal receipt
-    commentBox.innerHTML = `
-        <div style="text-align: center; padding: 60px 0; border-top: 8pt solid #000; border-bottom: 8pt solid #000; margin: 30px 0;">
-            <div style="font-family: 'Times New Roman', serif; font-size: 32pt; font-weight: 900; line-height: 1.1; color: #000; word-wrap: break-word; text-transform: uppercase;">
-                ${commentBody}
-            </div>
-        </div>
-    `;
-    commentBox.style.display = "block";
-
-    // 5. Update signatures
-    document.getElementById("rptSigInspectorName").innerText = inspector;
-    document.getElementById("rptSigAuthName").innerText = authority;
-
-    // 6. Force high-impact POS mode
-    document.getElementById("printableReportContainer").classList.remove("hidden");
-    document.body.classList.add('print-pos');
-    
-    setTimeout(() => {
-        window.print();
-        
-        // 7. Cleanup: Restore the standard tables for technical audit reports
-        commentBox.style.display = "none";
-        technicalBlock.style.display = "block";
-        rakeBlock.style.display = "block";
-        document.body.classList.remove('print-pos');
-        document.getElementById("printableReportContainer").classList.add("hidden");
-    }, 500);
-};
 function stopCamera() {
     if(detectionLoop) clearInterval(detectionLoop);
     if(stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
@@ -5980,52 +5918,6 @@ window.handleCommentLineChange = () => {
     }
 };
 
-// 30pt Receipt Logic for "Comment Only"
-window.printOnlyComment = async () => {
-    const stn = document.getElementById("commentStationSelect").value;
-    const line = document.getElementById("commentLineSelect").value;
-    const text = document.getElementById("commentTextInput").value;
-    const inspector = document.getElementById("selCommentInspector").value;
-    const authority = document.getElementById("selCommentAuthority").value;
-
-    if (!stn || !text) return alert("Select station and write comment.");
-
-    // Populate Receipt Data
-    document.getElementById("rptStationName").innerText = stn;
-    document.getElementById("rptLineName").innerText = line;
-    document.getElementById("rptDate").innerText = new Date().toLocaleString('en-IN');
-    document.getElementById("rptUser").innerText = inspector;
-    
-    // CRITICAL: Hide technical sections so ONLY the comment prints
-    document.getElementById("sectionStationDetails").style.display = "none";
-    document.getElementById("sectionRakeData").style.display = "none";
-    
-    // Inject Comment into the Remarks area of the receipt
-    const rptRem = document.getElementById("rptRem");
-    rptRem.innerText = text;
-    
-    // Temporarily show the container for remarks
-    const detailSection = document.getElementById("sectionStationDetails");
-    detailSection.style.display = "block";
-    
-    // Hide all measurement rows inside that section to show ONLY the remark
-    const rows = detailSection.querySelectorAll(".report-table tr");
-    rows.forEach(tr => {
-        if (!tr.contains(rptRem)) tr.style.display = "none";
-    });
-
-    document.getElementById("rptSigInspectorName").innerText = inspector;
-    document.getElementById("rptSigAuthName").innerText = authority;
-
-    // Trigger Print in POS Mode (30pt Center-Aligned)
-    document.getElementById("printableReportContainer").classList.remove("hidden");
-    window.printReport('POS');
-    
-    // Reset view after print
-    setTimeout(() => {
-        rows.forEach(tr => tr.style.display = "");
-    }, 1000);
-};
 window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
 // --- 1. HELPER TO OPEN BIG IMAGE ---
@@ -6337,98 +6229,81 @@ window.handleCommentLineChange = () => {
         stnSel.disabled = false;
     }
 };
-window.printCommentReceipt = async () => {
-    const stn = document.getElementById("commentStationSelect").value;
-    const line = document.getElementById("commentLineSelect").value;
-    const commentText = document.getElementById("commentTextInput").value;
+window.printOnlyComment = () => {
+
+    const station = document.getElementById("commentStationSelect").value;
+    const corridor = document.getElementById("commentLineSelect").value;
+    const comment = document.getElementById("commentTextInput").value;
     const inspector = document.getElementById("selCommentInspector").value;
     const authority = document.getElementById("selCommentAuthority").value;
 
-    if (!stn || !commentText) return alert("Select station and write comment.");
+    if (!station || !comment) {
+        alert("Please select station and enter comment.");
+        return;
+    }
 
-    // Fill Basic Identity Info
-    document.getElementById("rptStationName").innerText = stn;
-    document.getElementById("rptLineName").innerText = line;
-    document.getElementById("rptDate").innerText = new Date().toLocaleString('en-IN');
-    document.getElementById("rptUser").innerText = inspector;
-    
-    // --- CRITICAL REMOVALS ---
-    // Hide Yellow Line Compliance and Rake Data sections completely
-    document.getElementById("sectionStationDetails").style.display = "none"; 
-    document.getElementById("sectionRakeData").style.display = "none";
-    
-    // Create or use a dedicated Comment-Only div in your printable container
-    // If you don't have one, we can inject it into the Remarks area but 
-    // hide the rest of that section's measurement rows.
-    const detailSection = document.getElementById("sectionStationDetails");
-    detailSection.style.display = "block";
-    
-    // Hide every row in the technical table EXCEPT the one we will use for the comment
-    const rows = detailSection.querySelectorAll(".report-table tr");
-    rows.forEach(tr => tr.style.display = "none");
+    const now = new Date();
+    const date = now.toLocaleDateString('en-IN');
+    const time = now.toLocaleTimeString('en-IN');
 
-    // Display only the "Remarks" row (used here as the Comment body)
-    const rptRem = document.getElementById("rptRem");
-    rptRem.innerText = commentText;
-    rptRem.closest('tr').style.display = "block";
+    const printWindow = window.open('', '', 'width=800,height=700');
 
-    // Set signatures
-    document.getElementById("rptSigInspectorName").innerText = inspector;
-    document.getElementById("rptSigAuthName").innerText = authority;
+    printWindow.document.write(`
+        <html>
+        <head>
+            <title>Station Comment Receipt</title>
+            <style>
+                body { font-family: Arial; padding: 30px; }
+                h2 { text-align: center; }
+                .info { margin-bottom: 8px; }
+                .comment { margin-top: 20px; white-space: pre-wrap; }
+                .signature-section {
+                    margin-top: 80px;
+                    display: flex;
+                    justify-content: space-between;
+                }
+                .signature-block {
+                    text-align: center;
+                    width: 45%;
+                }
+                .sig-line {
+                    margin-top: 40px;
+                }
+            </style>
+        </head>
+        <body>
 
-    // Trigger 30pt Centered POS Print
-    document.getElementById("printableReportContainer").classList.remove("hidden");
-    window.printReport('POS');
-};
-  window.printCommentOnly = () => {
-    const stn = document.getElementById("commentStationSelect").value;
-    const line = document.getElementById("commentLineSelect").value;
-    const observationText = document.getElementById("commentTextInput").value;
-    const conductingOfficer = document.getElementById("selCommentInspector").value;
-    const approvingAuthority = document.getElementById("selCommentAuthority").value;
+            <h2>STATION COMMENT REPORT</h2>
 
-    if (!stn || !observationText) return alert("Select station and write observation.");
+            <div class="info"><strong>Station Name:</strong> ${station}</div>
+            <div class="info"><strong>Corridor:</strong> ${corridor}</div>
+            <div class="info"><strong>Date:</strong> ${date}</div>
+            <div class="info"><strong>Time:</strong> ${time}</div>
 
-    // Header & Meta Information
-    document.getElementById("rptStationName").innerText = stn;
-    document.getElementById("rptLineName").innerText = line;
-    document.getElementById("rptDate").innerText = new Date().toLocaleString('en-IN');
-    document.getElementById("rptUser").innerText = conductingOfficer;
-    
-    // --- FORCE REMOVAL OF YELLOW LINE & RAKE DATA SECTIONS ---
-    // This prevents technical measurement labels from appearing
-    const technicalSection = document.getElementById("sectionStationDetails");
-    const rakeSection = document.getElementById("sectionRakeData");
-    
-    technicalSection.style.display = "block"; // Show wrapper
-    rakeSection.style.display = "none";      // Hide Rake Clearance entirely
+            <hr>
 
-    // Hide all measurement rows (Length, Distance, Thickness, Status)
-    const allTableRows = technicalSection.querySelectorAll(".report-table tr");
-    allTableRows.forEach(tr => tr.style.display = "none");
+            <div class="comment">${comment}</div>
 
-    // Show only the Remarks/Comment body as the main content
-    const rptRem = document.getElementById("rptRem");
-    rptRem.innerText = observationText;
-    rptRem.closest('tr').style.display = "block"; 
-    
-    // Remove the "A. YELLOW LINE COMPLIANCE" header for this specific print
-    const ylHeader = technicalSection.querySelector(".report-section-title");
-    if(ylHeader) ylHeader.style.display = "none";
+            <div class="signature-section">
+                <div class="signature-block">
+                    <div>Inspecting Officer</div>
+                    <div class="sig-line">_____________________</div>
+                    <div>${inspector}</div>
+                </div>
 
-    // Signature Area
-    document.getElementById("rptSigInspectorName").innerText = conductingOfficer;
-    document.getElementById("rptSigAuthName").innerText = approvingAuthority;
+                <div class="signature-block">
+                    <div>Approving Authority</div>
+                    <div class="sig-line">_____________________</div>
+                    <div>${authority}</div>
+                </div>
+            </div>
 
-    // Trigger 30pt Centered Receipt
-    document.getElementById("printableReportContainer").classList.remove("hidden");
-    window.printReport('POS');
-    
-    // Reset display for standard Audit Reports after printing
-    setTimeout(() => {
-        allTableRows.forEach(tr => tr.style.display = "");
-        if(ylHeader) ylHeader.style.display = "block";
-    }, 1000);
+        </body>
+        </html>
+    `);
+
+    printWindow.document.close();
+    printWindow.print();
 };
 async function populateCommentUsers() {
     const sel = document.getElementById("selCommentInspector"); 
