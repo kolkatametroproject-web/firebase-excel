@@ -6530,142 +6530,232 @@ window.verifyOTP = async () => {
         alert("Security Error: " + e.message);
     }
 };
-  // --- BILLING SYSTEM CORE LOGIC ---
-// --- BILLING & INVOICE SYSTEM ---
-window.billCart = [];
+// --- UPDATED BILLING ENGINE WITH TWO-TABLE TEMPLATE ---
+window.billCart = []; // To store products
+window.serviceCart = []; // To store additional charges (services)
 
-window.populateBillingAssets = async () => {
-    const sel = document.getElementById("billAssetSelect");
-    if(!sel) return;
-    sel.innerHTML = "<option value=''>Loading Assets...</option>";
-    try {
-        const snap = await get(ref(db, "inventory"));
-        sel.innerHTML = "<option value=''>-- Select Item --</option>";
-        if(snap.exists()){
-            snap.forEach(c => {
-                const v = c.val();
-                const opt = document.createElement("option");
-                opt.value = c.key;
-                opt.text = v.item;
-                opt.dataset.purchase = v.purchasePrice || 0; 
-                sel.appendChild(opt);
-            });
-        }
-    } catch(e) { console.error("Billing Load Error:", e); }
-};
-
+// 1. Add Scanned or Typed Item to Product Cart
 window.addScannedItemToBill = async () => {
     const barcode = document.getElementById("billBarcodeInp").value.trim();
     const qty = parseInt(document.getElementById("billQty").value) || 1;
     const extraAmt = parseFloat(document.getElementById("billAddl").value) || 0;
-    const extraDesc = document.getElementById("billAddlDesc").value.trim() || "-";
+    const extraDesc = document.getElementById("billAddlDesc").value.trim();
 
     if(!barcode) return alert("Scan QR or Enter Tag ID.");
 
     try {
         const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode));
         const snap = await get(q);
+        
         if (!snap.exists()) return alert("Tag ID not recognized.");
 
         let itemData = null;
         snap.forEach(c => { itemData = c.val(); });
 
         const purchasePrice = parseFloat(itemData.purchasePrice) || 0;
-        const sellingRate = purchasePrice * 1.20; // 20% Profit
-        const lineTotal = (sellingRate * qty) + extraAmt;
+        const sellingRate = purchasePrice * 1.20; // Auto-calculate 20% profit
+        const lineTotal = sellingRate * qty;
 
+        // Add to Product Cart
         window.billCart.push({
-            name: itemData.item, tag: barcode, qty: qty,
-            rate: sellingRate, extra: extraAmt, extraWork: extraDesc, total: lineTotal
+            name: itemData.item,
+            tag: barcode,
+            qty: qty,
+            rate: sellingRate,
+            total: lineTotal
         });
 
-        renderBillCart();
+        // If user entered service details, add to Service Cart separately
+        if (extraAmt > 0) {
+            window.serviceCart.push({
+                description: extraDesc || "Service/Extra Work",
+                price: extraAmt,
+                qty: 1, // Default service qty
+                total: extraAmt
+            });
+        }
+
+        renderBillCarts(); // Unified render for both carts
+        
+        // Reset inputs
         document.getElementById("billBarcodeInp").value = "";
         document.getElementById("billAddl").value = 0;
         document.getElementById("billAddlDesc").value = "";
+        document.getElementById("billBarcodeInp").focus();
+
     } catch (e) { alert("Error: " + e.message); }
 };
 
-function renderBillCart() {
+// 2. Unified Render for UI Preview
+function renderBillCarts() {
     const tbody = document.getElementById("billCartBody");
-    if(!tbody) return;
     tbody.innerHTML = "";
     let grandTotal = 0;
+
+    // Show Products
     window.billCart.forEach((item, index) => {
         grandTotal += item.total;
         tbody.innerHTML += `
-            <tr>
-                <td><b>${item.name}</b><br><small>Tag: ${item.tag}</small></td>
+            <tr style="background: #fff;">
+                <td>${item.name} (ID: ${item.tag})</td>
                 <td style="text-align:center;">${item.qty}</td>
-                <td style="text-align:right;">₹ ${item.rate.toFixed(2)}</td>
-                <td style="font-size:11px;"><b>₹ ${item.extra}</b>: ${item.extraWork}</td>
-                <td style="text-align:right; font-weight:bold;">₹ ${item.total.toFixed(2)}</td>
-                <td style="text-align:center;"><button class="danger" onclick="removeFromCart(${index})">X</button></td>
+                <td style="text-align:right;">₹${item.rate.toFixed(2)}</td>
+                <td style="text-align:right;">₹${item.total.toFixed(2)}</td>
+                <td style="text-align:center;"><button class="danger" onclick="removeProduct(${index})">X</button></td>
             </tr>`;
     });
+
+    // Show Services
+    window.serviceCart.forEach((item, index) => {
+        grandTotal += item.total;
+        tbody.innerHTML += `
+            <tr style="background: #f1f5f9;">
+                <td style="color:var(--metro-red);"><b>Service:</b> ${item.description}</td>
+                <td style="text-align:center;">${item.qty}</td>
+                <td style="text-align:right;">₹${item.price.toFixed(2)}</td>
+                <td style="text-align:right;">₹${item.total.toFixed(2)}</td>
+                <td style="text-align:center;"><button class="danger" onclick="removeService(${index})">X</button></td>
+            </tr>`;
+    });
+
     document.getElementById("billGrandTotalDisp").innerText = grandTotal.toLocaleString('en-IN');
 }
 
-window.removeFromCart = (index) => {
-    window.billCart.splice(index, 1);
-    renderBillCart();
-};
+window.removeProduct = (i) => { window.billCart.splice(i, 1); renderBillCarts(); };
+window.removeService = (i) => { window.serviceCart.splice(i, 1); renderBillCarts(); };
 
+// 3. GENERATE PRINTABLE INVOICE (Using the provided template structure)
 window.generateInvoicePrint = function() {
-    if(window.billCart.length === 0) return alert("Cart is empty.");
+    if(window.billCart.length === 0 && window.serviceCart.length === 0) return alert("Cart is empty.");
     
-    const custName = document.getElementById("billCustName").value || "Valued Customer";
+    const custName = document.getElementById("billCustName").value || "Walk-in Customer";
     const custAddr = document.getElementById("billCustAddr").value || "-";
-    const grandTotal = document.getElementById("billGrandTotalDisp").innerText;
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-
+    
     const reportContainer = document.getElementById("printableReportContainer");
-    let itemsHtml = "";
-    window.billCart.forEach(item => {
-        itemsHtml += `
-            <tr style="border-bottom:2pt solid #000; font-size:26pt !important; font-weight:900;">
-                <td style="padding:15px 10px; text-align:left;">${item.name}<br><span style="font-size:18pt; color:#444;">ID: ${item.tag}</span></td>
-                <td style="text-align:center;">${item.qty}</td>
+    let productRows = "";
+    let productTotal = 0;
+    let serviceRows = "";
+    let serviceTotal = 0;
+
+    // Build Product Table Rows
+    window.billCart.forEach((item, i) => {
+        productTotal += item.total;
+        productRows += `
+            <tr>
+                <td style="text-align:center;">${i+1}</td>
+                <td>${item.name}</td>
+                <td style="text-align:center;">${item.tag}</td>
                 <td style="text-align:right;">${item.rate.toFixed(2)}</td>
-                <td style="text-align:left; font-size:20pt; padding-left:15px;">₹${item.extra} (${item.extraWork})</td>
-                <td style="text-align:right;">${item.total.toFixed(2)}</td>
+                <td style="text-align:center;">${item.qty}</td>
+                <td style="text-align:right; font-weight:bold;">${item.total.toFixed(2)}</td>
             </tr>`;
     });
 
+    // Build Additional Charges Table Rows
+    window.serviceCart.forEach((item, i) => {
+        serviceTotal += item.total;
+        serviceRows += `
+            <tr>
+                <td style="text-align:center;">${i+1}</td>
+                <td>${item.description}</td>
+                <td style="text-align:right;">${item.price.toFixed(2)}</td>
+                <td style="text-align:center;">${item.qty}</td>
+                <td style="text-align:right; font-weight:bold;">${item.total.toFixed(2)}</td>
+            </tr>`;
+    });
+
+    const grandTotal = productTotal + serviceTotal;
+
     reportContainer.innerHTML = `
         <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
-            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
-            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 30px; font-weight:bold; font-size:22px; cursor:pointer; border-radius:8px; margin-left:10px;">PRINT</button>
+            <button class="danger" onclick="closeReportPreview()">CLOSE PREVIEW</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 30px; font-weight:bold; font-size:22px; border-radius:8px; margin-left:10px;">
+                PRINT OFFICIAL INVOICE
+            </button>
         </div>
+
         <div class="report-paper a4-max-wrapper">
             <style>
-                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; border: none !important; box-shadow: none !important; margin: 0 !important; padding: 5mm !important; } }
-                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; }
-                .header-box { border-bottom: 14pt solid #000; padding-bottom: 25px; margin-bottom: 35px; text-align: center; }
-                .max-label { font-size: 38pt; text-decoration: underline; display: block; margin-top: 35px; text-align: left; }
-                .max-value { font-size: 48pt; font-weight: 900; display: block; border-bottom: 7pt solid #000; padding-bottom: 12px; text-align: left; white-space: pre-wrap; word-wrap: break-word; }
-                .heavy-bar { background: #000; color: #fff; padding: 25px; font-size: 52pt; margin: 60px 0 40px 0; text-transform: uppercase; text-align: center; }
-                .sig-box-name { margin-top: 130px; border-top: 12pt solid #000; padding-top: 25px; font-size: 56pt; font-weight: 900; text-align: left; }
+                @media print { @page { size: A4; margin: 0; } body { margin: 0; padding: 0; background: #fff !important; } .no-print { display: none !important; } }
+                .a4-max-wrapper { width: 210mm; margin: 0 auto; padding: 10mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; }
+                .bill-table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
+                .bill-table th, .bill-table td { border: 2pt solid #000; padding: 8px; font-size: 20pt; }
+                .header-box { border-bottom: 12pt solid #000; padding-bottom: 20px; margin-bottom: 30px; text-align: center; }
             </style>
+
             <div class="header-box">
-                <div style="font-size: 62pt; font-weight: 900; text-transform: uppercase;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div style="font-size: 38pt; font-weight: 900; margin-top: 15px;">INSTITUTE OF ENGINEERING AND MANAGEMENT<br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
-                <div style="font-size: 44pt; border: 8pt solid #000; margin-top: 40px; padding: 20px; font-weight: 900; display: inline-block;">OFFICIAL TAX INVOICE</div>
+                <div style="font-size: 55pt; font-weight: 900;">METRO RAILWAY PROJECT</div>
+                <div style="font-size: 32pt; font-weight: 900; margin-top: 10px;">INSTITUTE OF ENGINEERING AND MANAGEMENT<br><br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
+                <div style="font-size: 38pt; border: 6pt solid #000; margin-top: 30px; padding: 10px; font-weight: 900; display: inline-block;">TAX INVOICE</div>
             </div>
-            <span class="max-label">CUSTOMER NAME:</span><span class="max-value">${custName}</span>
-            <span class="max-label">ADDRESS / MOBILE:</span><span class="max-value">${custAddr}</span>
-            <span class="max-label">DATE:</span><span class="max-value">${dateStr}</span>
-            <div class="heavy-bar">ITEMIZED SUMMARY</div>
-            <table style="width:100%; border-collapse:collapse;">
-                <thead><tr style="border-bottom:10pt solid #000; font-size:32pt;"><th style="text-align:left;">ITEM</th><th>QTY</th><th>RATE</th><th>EXTRA WORK</th><th style="text-align:right;">TOTAL</th></tr></thead>
-                <tbody>${itemsHtml}</tbody>
+
+            <div style="font-size: 30pt; text-align: left; margin-bottom: 20px; line-height: 1.2;">
+                <b>CUSTOMER:</b> ${custName}<br>
+                <b>ADDRESS:</b> ${custAddr}<br>
+                <b>DATE:</b> ${new Date().toLocaleDateString('en-IN')}
+            </div>
+
+            <table class="bill-table">
+                <thead>
+                    <tr style="background:#000; color:#fff;">
+                        <th style="width:10%;">Sl. No</th>
+                        <th style="width:35%;">Description</th>
+                        <th style="width:15%;">Tag</th>
+                        <th style="width:15%;">Unit Price</th>
+                        <th style="width:10%;">Qty</th>
+                        <th style="width:15%;">Net Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${productRows}
+                    <tr>
+                        <td colspan="5" style="text-align:right; font-weight:900;">Total</td>
+                        <td style="text-align:right; font-weight:900;">${productTotal.toFixed(2)}</td>
+                    </tr>
+                </tbody>
             </table>
-            <div style="text-align:right; margin-top:50px; font-size:65pt !important; font-weight:900; border-top:12pt solid #000; padding-top:20px;">PAYABLE: ₹ ${grandTotal}</div>
-            <div class="sig-box-name">${currentUser.name}</div>
-            <div style="font-size: 32pt; text-align:left; font-weight:bold;">${isAdmin ? "(SYSTEM ADMINISTRATOR)" : "(CONDUCTING OFFICER)"}</div>
-            <div style="font-size: 38pt; font-weight: 900; text-align: left; text-transform: uppercase;">AUTHORIZED BILLING OFFICER</div>
+
+            <div style="font-size: 24pt; font-weight: 900; text-align: left; margin: 30px 0 10px 0; text-decoration: underline;">additional charges:</div>
+            <table class="bill-table">
+                <thead>
+                    <tr style="background:#000; color:#fff;">
+                        <th style="width:10%;">Sl. No</th>
+                        <th style="width:50%;">Description</th>
+                        <th style="width:15%;">Unit Price</th>
+                        <th style="width:10%;">Qty</th>
+                        <th style="width:15%;">Net Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${serviceRows || '<tr><td colspan="5" style="text-align:center;">No additional charges</td></tr>'}
+                    <tr>
+                        <td colspan="4" style="text-align:right; font-weight:900;">Total</td>
+                        <td style="text-align:right; font-weight:900;">${serviceTotal.toFixed(2)}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <table class="bill-table" style="margin-top: 40px;">
+                <tr>
+                    <td style="width:30%; font-weight:900; font-size: 32pt; background:#000; color:#fff;">Grand Total</td>
+                    <td style="font-weight:900; font-size: 35pt; text-align: right;">₹ ${grandTotal.toLocaleString('en-IN')}</td>
+                </tr>
+                <tr>
+                    <td colspan="2" style="font-size: 18pt; text-align: left; font-style: italic;">
+                        <b>Amount in words:</b> Rupees ${grandTotal} Only
+                    </td>
+                </tr>
+            </table>
+
+            <div style="margin-top: 100px; text-align: left;">
+                <div style="border-top: 8pt solid #000; width: 450px; font-size: 45pt; font-weight: 900;">${currentUser.name}</div>
+                <div style="font-size: 28pt; font-weight: 900; text-transform: uppercase;">
+                    ${isAdmin ? "SYSTEM ADMINISTRATOR" : "CONDUCTING OFFICER"}
+                </div>
+                <div style="font-size: 22pt; font-weight: bold; margin-top: 5px;">AUTHORIZED BILLING OFFICER</div>
+            </div>
         </div>`;
+    
     reportContainer.classList.remove("hidden");
     window.scrollTo(0, 0);
 };
