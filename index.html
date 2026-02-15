@@ -2697,18 +2697,14 @@ window.onScanSuccess = async function(decodedText) {
     closeBarcodeScanner();
     console.log("SCANNED:", decodedText, "MODE:", scanMode);
 
-    // ---------------- ADD STOCK ----------------
     if (scanMode === 'ADD') {
         document.getElementById("invBarcode").value = decodedText;
         checkBarcodeUnique(decodedText);
         return;
     }
 
-    // ---------------- CHECKOUT / RETURN ----------------
     if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-
         const isCheckout = scanMode === 'CHECKOUT';
-
         const displayId = isCheckout ? "checkout_display" : "return_display";
         const nameId    = isCheckout ? "checkout_item_name" : "return_item_name";
         const codeId    = isCheckout ? "checkout_item_code" : "return_item_code";
@@ -2719,119 +2715,27 @@ window.onScanSuccess = async function(decodedText) {
         document.getElementById(codeId).innerText = decodedText;
 
         try {
-            const q = query(
-                ref(db, "inventory"),
-                orderByChild("barcode"),
-                equalTo(decodedText)
-            );
-
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
             const snap = await get(q);
-
             if (!snap.exists()) {
-                document.getElementById(nameId).innerHTML =
-                    `<span style="color:red;">❌ Item not found</span>`;
-                alert("This barcode does not exist in inventory.");
+                document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ Item not found</span>`;
                 return;
             }
-
             let item = null;
             let itemKey = null;
-            snap.forEach(c => {
-                item = c.val();
-                itemKey = c.key;
-            });
+            snap.forEach(c => { item = c.val(); itemKey = c.key; });
 
-            const currentUserName =
-                currentUser.name || currentUser.email;
-
-            // ---------- CHECKOUT RULE ----------
-            if (isCheckout && item.status !== "In Stock") {
-                document.getElementById(nameId).innerHTML = `
-                    <span style="color:red;font-weight:bold;">⛔ ALREADY CHECKED OUT</span><br>
-                    ${item.item}<br>
-                    <small>Held by: <b>${item.holder}</b></small>
-                `;
-                document.getElementById(authBtnId).style.display = "none";
-                return;
-            }
-
-            // ---------- RETURN RULE ----------
-            if (!isCheckout) {
-
-                if (item.status === "In Stock") {
-                    document.getElementById(nameId).innerHTML = `
-                        <span style="color:red;font-weight:bold;">⛔ ALREADY RETURNED</span><br>
-                        ${item.item}
-                    `;
-                    document.getElementById(authBtnId).style.display = "none";
-                    return;
-                }
-
-                // 🚨 CORE SECURITY RULE
-                if (item.holder !== currentUserName) {
-                    document.getElementById(nameId).innerHTML = `
-                        <span style="color:red;font-weight:bold;">⛔ RETURN DENIED</span><br>
-                        ${item.item}<br>
-                        <small>
-                            Checked out by: <b>${item.holder}</b>
-                        </small>
-                    `;
-                    document.getElementById(authBtnId).style.display = "none";
-
-                    alert(
-                        "Return blocked.\n\n" +
-                        "Item was checked out by:\n" +
-                        item.holder + "\n\n" +
-                        "Only the same user can return it."
-                    );
-                    return;
-                }
-            }
-
-            // ---------- SUCCESS ----------
-            document.getElementById(nameId).innerHTML = `
-                <span style="color:${isCheckout ? '#b38600' : '#17a2b8'}; font-weight:bold;">
-                    ✔ Ready to ${isCheckout ? 'Checkout' : 'Return'}
-                </span><br>
-                <span style="font-size:1.2em">${item.item}</span>
-            `;
-
-            pendingTransactionItem = {
-                key: itemKey,
-                ...item
-            };
-
+            pendingTransactionItem = { key: itemKey, ...item };
+            document.getElementById(nameId).innerHTML = `✔ Ready: ${item.item}`;
             document.getElementById(authBtnId).style.display = "block";
-
-        } catch (err) {
-            console.error(err);
-            alert("Database error.");
-        }
+        } catch (err) { console.error(err); }
     }
 
-    // ---------------- AUDIT SEARCH ----------------
-    if (scanMode === 'AUDIT_SEARCH') {
-
-    if (!isAdmin) {
-        alert("Audit scanning is restricted to administrators.");
-        return;
+    if (scanMode === 'BILLING_SCAN') {
+        document.getElementById("billBarcodeInp").value = decodedText;
+        addScannedItemToBill();
+        return; 
     }
-
-    document.getElementById("auditSearchInput").value = decodedText;
-    fetchAuditHistory(decodedText);
-}
-
-
-    // ---------------- STOCK SEARCH ----------------
-    if (scanMode === 'SEARCH_STOCK') {
-        document.getElementById("mainStockSearch").value = decodedText;
-        filterStockTable();
-    }
-  if (scanMode === 'BILLING_SCAN') {
-    document.getElementById("billBarcodeInp").value = decodedText;
-    addScannedItemToBill();
-    return;
-}
 };
 // --- 4. EMPTY/DUMMY LOAD HISTORY (Prevents errors when clicking tab) ---
 window.loadInventoryHistory = () => {
@@ -6626,9 +6530,32 @@ window.verifyOTP = async () => {
         alert("Security Error: " + e.message);
     }
 };
-  let billCart = [];
+  // --- BILLING SYSTEM CORE LOGIC ---
+window.billCart = [];
 
-// --- AUTO-ADD VIA TAG ID OR QR ---
+// 1. Load Assets into Billing Dropdown (The missing function)
+window.populateBillingAssets = async () => {
+    const sel = document.getElementById("billAssetSelect");
+    if(!sel) return;
+    sel.innerHTML = "<option value=''>Loading Assets...</option>";
+    try {
+        const snap = await get(ref(db, "inventory"));
+        sel.innerHTML = "<option value=''>-- Select Item --</option>";
+        if(snap.exists()){
+            snap.forEach(c => {
+                const v = c.val();
+                const opt = document.createElement("option");
+                opt.value = c.key;
+                opt.text = v.item;
+                // Store the purchase price in a data attribute for the math logic
+                opt.dataset.purchase = v.purchasePrice || 0; 
+                sel.appendChild(opt);
+            });
+        }
+    } catch(e) { console.error("Billing Load Error:", e); }
+};
+
+// 2. Add Scanned or Selected Item to Bill
 window.addScannedItemToBill = async () => {
     const barcode = document.getElementById("billBarcodeInp").value.trim();
     const qty = parseInt(document.getElementById("billQty").value) || 1;
@@ -6638,7 +6565,6 @@ window.addScannedItemToBill = async () => {
     if(!barcode) return alert("Please Scan QR or Enter Tag ID.");
 
     try {
-        // Fetch specific asset from DB using the barcode column
         const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode));
         const snap = await get(q);
 
@@ -6647,14 +6573,11 @@ window.addScannedItemToBill = async () => {
         let itemData = null;
         snap.forEach(c => { itemData = c.val(); });
 
-        // Retrieve purchase price saved from Asset Tracker tab
         const purchasePrice = parseFloat(itemData.purchasePrice) || 0;
-        
-        // Calculation: (Price + 20% Profit) * Qty + Extra Work Charges
-        const sellingRate = purchasePrice * 1.20;
+        const sellingRate = purchasePrice * 1.20; // 20% Profit
         const lineTotal = (sellingRate * qty) + extraAmt;
 
-        billCart.push({
+        window.billCart.push({
             name: itemData.item,
             tag: barcode,
             qty: qty,
@@ -6665,26 +6588,23 @@ window.addScannedItemToBill = async () => {
         });
 
         renderBillCart();
-
-        // Reset inputs for next item
         document.getElementById("billBarcodeInp").value = "";
         document.getElementById("billAddl").value = 0;
         document.getElementById("billAddlDesc").value = "";
-        document.getElementById("billBarcodeInp").focus();
-
-    } catch (e) { alert("System Error: " + e.message); }
+    } catch (e) { alert("Error: " + e.message); }
 };
 
 function renderBillCart() {
     const tbody = document.getElementById("billCartBody");
+    if(!tbody) return;
     tbody.innerHTML = "";
     let grandTotal = 0;
 
-    billCart.forEach((item, index) => {
+    window.billCart.forEach((item, index) => {
         grandTotal += item.total;
         tbody.innerHTML += `
             <tr>
-                <td><b>${item.name}</b><br><small style="color:#666;">Tag: ${item.tag}</small></td>
+                <td><b>${item.name}</b><br><small>Tag: ${item.tag}</small></td>
                 <td style="text-align:center;">${item.qty}</td>
                 <td style="text-align:right;">₹ ${item.rate.toFixed(2)}</td>
                 <td style="font-size:11px;"><b>₹ ${item.extra}</b>: ${item.extraWork}</td>
@@ -6696,85 +6616,8 @@ function renderBillCart() {
 }
 
 window.removeFromCart = (index) => {
-    billCart.splice(index, 1);
+    window.billCart.splice(index, 1);
     renderBillCart();
-};
-
-// --- OFFICIAL RECEIPT PRINT ---
-window.generateInvoicePrint = function() {
-    if(billCart.length === 0) return alert("Please add products to the invoice.");
-    
-    const custName = document.getElementById("billCustName").value || "Valued Customer";
-    const custAddr = document.getElementById("billCustAddr").value || "-";
-    const grandTotal = document.getElementById("billGrandTotalDisp").innerText;
-    
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-    const printTimestamp = now.toLocaleString('en-IN');
-
-    const reportContainer = document.getElementById("printableReportContainer");
-    
-    let itemsHtml = "";
-    billCart.forEach(item => {
-        itemsHtml += `
-            <tr style="border-bottom:2pt solid #000; font-size:26pt !important; font-weight:900;">
-                <td style="padding:15px 10px; text-align:left;">
-                    ${item.name}<br>
-                    <span style="font-size:18pt; color:#444;">ID: ${item.tag}</span>
-                </td>
-                <td style="text-align:center;">${item.qty}</td>
-                <td style="text-align:right;">${item.rate.toFixed(2)}</td>
-                <td style="text-align:left; font-size:20pt; padding-left:15px;">
-                    ₹${item.extra} (${item.extraWork})
-                </td>
-                <td style="text-align:right;">${item.total.toFixed(2)}</td>
-            </tr>`;
-    });
-
-    reportContainer.innerHTML = `
-        <div class="no-print" style="text-align:center; padding:15px;"><button class="danger" onclick="closeReportPreview()">CLOSE</button> <button onclick="window.print()">PRINT RECEIPT</button></div>
-        <div class="report-paper a4-max-wrapper">
-            <style>
-                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 10mm !important; } }
-                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; text-align: center; }
-                .header-box { border-bottom: 14pt solid #000 !important; padding-bottom: 25px !important; margin-bottom: 35px !important; }
-                .title-main { font-size: 62pt !important; font-weight: 900; text-transform: uppercase !important; } 
-                .max-label { font-size: 38pt !important; text-decoration: underline !important; display: block !important; margin-top: 35px !important; text-align: left !important; }
-                .max-value { font-size: 48pt !important; font-weight: 900 !important; display: block !important; border-bottom: 7pt solid #000 !important; padding-bottom: 12px !important; text-align: left !important; white-space: pre-wrap; }
-                .heavy-bar { background: #000 !important; color: #fff !important; padding: 25px !important; font-size: 52pt !important; margin: 60px 0 40px 0 !important; text-transform: uppercase !important; -webkit-print-color-adjust: exact !important; }
-                .sig-box-name { margin-top: 130px !important; border-top: 12pt solid #000 !important; padding-top: 25px !important; font-size: 56pt !important; font-weight: 900; text-align: left !important; line-height: 1; }
-            </style>
-            <div class="header-box">
-                <div class="title-main">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div style="font-size: 40pt; border: 8pt solid #000; margin-top: 40px; padding: 20px; font-weight: 900; display: inline-block;">OFFICIAL TAX INVOICE</div>
-            </div>
-            <span class="max-label">CUSTOMER NAME:</span><span class="max-value">${custName}</span>
-            <span class="max-label">ADDRESS / MOBILE:</span><span class="max-value">${custAddr}</span>
-            <span class="max-label">DATE:</span><span class="max-value">${dateStr}</span>
-            <div class="heavy-bar">ITEMIZED SUMMARY</div>
-            <table style="width:100%; border-collapse:collapse;">
-                <thead>
-                    <tr style="border-bottom:10pt solid #000; font-size:32pt;">
-                        <th style="text-align:left;">ITEM</th>
-                        <th>QTY</th>
-                        <th>RATE</th>
-                        <th>EXTRA WORK</th>
-                        <th style="text-align:right;">TOTAL</th>
-                    </tr>
-                </thead>
-                <tbody>${itemsHtml}</tbody>
-            </table>
-            <div style="text-align:right; margin-top:50px; font-size:65pt !important; font-weight:900; border-top:12pt solid #000; padding-top:20px;">
-                PAYABLE: ₹ ${grandTotal}
-            </div>
-            <div class="sig-box-name">${currentUser.name}</div>
-            <div style="font-size: 40pt; font-weight: 900; text-align: left; text-transform: uppercase;">AUTHORIZED BILLING OFFICER</div>
-            <div style="margin-top: 50px; font-size: 14pt; text-align: center; border-top: 2pt dashed #000; padding-top: 20px; font-weight: bold;">
-                COMPUTER GENERATED RECORD | GENERATED: ${printTimestamp}
-            </div>
-        </div>`;
-    reportContainer.classList.remove("hidden");
-    window.scrollTo(0, 0);
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
