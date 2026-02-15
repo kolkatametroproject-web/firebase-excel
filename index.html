@@ -2712,15 +2712,17 @@ window.closeReportPreview = () => {
     document.body.classList.remove('print-a4', 'print-pos');
 };
 window.onScanSuccess = async function(decodedText) {
+    // 1. Force the scanner to stop and clear UI
     closeBarcodeScanner();
-    console.log("SCANNED:", decodedText, "MODE:", scanMode);
+    console.log("SCANNED TAG:", decodedText);
 
     // --- MODE: INVENTORY LIST SEARCH ---
     if (scanMode === 'SEARCH_STOCK') {
         const searchInput = document.getElementById("mainStockSearch");
         if(searchInput) {
-            searchInput.value = decodedText;
-            window.filterStockTable(); // Trigger the search logic manually
+            searchInput.value = decodedText; // Physically put data in bar
+            searchInput.dispatchEvent(new Event('input')); // Trigger any input listeners
+            window.filterStockTable(); // Manually force the table to filter
         }
         return;
     }
@@ -2729,23 +2731,29 @@ window.onScanSuccess = async function(decodedText) {
     if (scanMode === 'AUDIT_SEARCH') {
         const auditInput = document.getElementById("auditSearchInput");
         if(auditInput) {
-            auditInput.value = decodedText;
-            window.fetchAuditHistory(decodedText); // Trigger the history fetch manually
+            auditInput.value = decodedText; // Physically put data in bar
+            window.fetchAuditHistory(decodedText); // Execute history fetch immediately
         }
         return;
     }
 
     // --- MODE: ADD NEW ASSET ---
     if (scanMode === 'ADD') {
-        document.getElementById("invBarcode").value = decodedText;
-        checkBarcodeUnique(decodedText);
+        const invInput = document.getElementById("invBarcode");
+        if(invInput) {
+            invInput.value = decodedText;
+            checkBarcodeUnique(decodedText);
+        }
         return;
     }
 
     // --- MODE: BILLING SCAN ---
     if (scanMode === 'BILLING_SCAN') {
-        document.getElementById("billBarcodeInp").value = decodedText;
-        addScannedItemToBill();
+        const billInput = document.getElementById("billBarcodeInp");
+        if(billInput) {
+            billInput.value = decodedText;
+            addScannedItemToBill();
+        }
         return; 
     }
 
@@ -2758,14 +2766,14 @@ window.onScanSuccess = async function(decodedText) {
         const authBtnId = isCheckout ? "btn_checkout_verify" : "btn_return_verify";
 
         document.getElementById(displayId).classList.remove("hidden");
-        document.getElementById(nameId).innerHTML = "🔍 Checking inventory...";
+        document.getElementById(nameId).innerHTML = "🔍 Verifying Tag ID...";
         document.getElementById(codeId).innerText = decodedText;
 
         try {
             const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
             const snap = await get(q);
             if (!snap.exists()) {
-                document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ Item not found</span>`;
+                document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ Tag Not Registered</span>`;
                 return;
             }
             let item = null;
@@ -2774,12 +2782,12 @@ window.onScanSuccess = async function(decodedText) {
 
             if(item.status === "Sold Out") {
                 document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ ITEM SOLD: ${item.assignedStation}</span>`;
-                alert("Cannot process: This item has been sold out.");
+                alert("Restricted: This item is sold and cannot be checked out.");
                 return;
             }
 
             pendingTransactionItem = { key: itemKey, ...item };
-            document.getElementById(nameId).innerHTML = `✔ Ready: ${item.item}`;
+            document.getElementById(nameId).innerHTML = `✔ ${item.item}`;
             document.getElementById(authBtnId).style.display = "block";
         } catch (err) { console.error(err); }
     }
@@ -6330,18 +6338,17 @@ window.addUniqueItem = async () => {
     } catch(e) { alert("Save Error: " + e.message); }
 };
 window.filterStockTable = () => {
-    const input = document.getElementById("mainStockSearch").value.toLowerCase();
+    const input = document.getElementById("mainStockSearch").value.trim().toLowerCase();
     const rows = document.getElementsByClassName("stock-row");
 
     Array.from(rows).forEach(row => {
         const barcode = row.cells[0].innerText.toLowerCase();
         const name = row.cells[1].innerText.toLowerCase();
         const station = row.cells[3].innerText.toLowerCase();
-        // Check for hidden invoice data in the row's dataset
-        const invoice = row.dataset.invoice || "";
+        const invoice = row.getAttribute("data-invoice") ? row.getAttribute("data-invoice").toLowerCase() : "";
 
-        // If user types Invoice No, Station, or Tag, show the row
-        if (name.includes(input) || barcode.includes(input) || station.includes(input) || invoice.toLowerCase().includes(input)) {
+        // Show row if input matches Tag, Name, Station, or Invoice No.
+        if (name.includes(input) || barcode.includes(input) || station.includes(input) || invoice.includes(input)) {
             row.style.display = "";
         } else {
             row.style.display = "none";
