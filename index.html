@@ -6522,14 +6522,34 @@ window.verifyOTP = async () => {
     }
 };
 // --- UPDATED BILLING ENGINE WITH TWO-TABLE TEMPLATE ---
+// --- RETAIL BILLING SYSTEM ENGINE ---
 window.billCart = [];
 window.serviceCart = [];
 
-// Helper: Convert Numbers to Words for the Bill
+// Fix for ReferenceError: Defining globally
+window.populateBillingAssets = async () => {
+    try {
+        const snap = await get(ref(db, "inventory"));
+        const sel = document.getElementById("billAssetSelect");
+        if(sel) {
+            sel.innerHTML = "<option value=''>-- Select Item --</option>";
+            snap.forEach(c => {
+                const v = c.val();
+                const opt = document.createElement("option");
+                opt.value = v.barcode;
+                opt.text = v.item;
+                opt.dataset.purchase = v.purchasePrice || 0;
+                sel.appendChild(opt);
+            });
+        }
+    } catch(e) { console.error("Billing Load Error:", e); }
+};
+
+// Convert Total Amount to Indian Currency Words
 function numberToWords(num) {
     const a = ['', 'One ', 'Two ', 'Three ', 'Four ', 'Five ', 'Six ', 'Seven ', 'Eight ', 'Nine ', 'Ten ', 'Eleven ', 'Twelve ', 'Thirteen ', 'Fourteen ', 'Fifteen ', 'Sixteen ', 'Seventeen ', 'Eighteen ', 'Nineteen '];
     const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-    const numStr = num.toString();
+    const numStr = Math.round(num).toString();
     if (numStr.length > 9) return 'Amount too large';
     let n = ('000000000' + numStr).substr(-9).match(/^(\d{2})(\d{2})(\d{2})(\d{1})(\d{2})$/);
     if (!n) return ''; 
@@ -6553,53 +6573,59 @@ window.addScannedItemToBill = async () => {
     const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode));
     const snap = await get(q);
     
-    if (!snap.exists()) return alert("Tag ID Not Found");
+    if (!snap.exists()) return alert("Tag ID Not Recognized");
 
     let itemData = null;
     snap.forEach(c => { itemData = c.val(); });
 
-    // Math: Purchase Price + 20% Profit
-    const sellRate = (parseFloat(itemData.purchasePrice) || 0) * 1.20;
+    const sellRate = (parseFloat(itemData.purchasePrice) || 0) * 1.20; // 20% Profit
 
     window.billCart.push({
         name: itemData.item, tag: barcode, qty: qty, rate: sellRate, net: sellRate * qty
     });
 
     if (extraAmt > 0) {
-        window.serviceCart.push({ desc: extraDesc || "Service Charge", price: extraAmt, qty: 1, net: extraAmt });
+        window.serviceCart.push({ desc: extraDesc || "Extra Work", price: extraAmt, qty: 1, net: extraAmt });
     }
 
     renderBillCartUI();
     document.getElementById("billBarcodeInp").value = "";
     document.getElementById("billAddl").value = 0;
     document.getElementById("billAddlDesc").value = "";
+    document.getElementById("billBarcodeInp").focus();
 };
 
 function renderBillCartUI() {
     const tbody = document.getElementById("billCartBody");
+    if(!tbody) return;
     tbody.innerHTML = "";
     let grand = 0;
+
     window.billCart.forEach((it, i) => {
         grand += it.net;
-        tbody.innerHTML += `<tr><td>${it.name}</td><td style="text-align:center;">${it.qty}</td><td style="text-align:right;">${it.rate.toFixed(2)}</td><td>-</td><td style="text-align:right;">${it.net.toFixed(2)}</td><td style="text-align:center;"><button class="danger" onclick="window.billCart.splice(${i},1);renderBillCartUI();">X</button></td></tr>`;
+        tbody.innerHTML += `<tr><td><b>${it.name}</b><br><small>${it.tag}</small></td><td style="text-align:center;">${it.qty}</td><td style="text-align:right;">${it.rate.toFixed(2)}</td><td>-</td><td style="text-align:right;">${it.net.toFixed(2)}</td><td style="text-align:center;"><button class="danger" onclick="window.billCart.splice(${i},1);renderBillCartUI();">X</button></td></tr>`;
     });
+
     window.serviceCart.forEach((sv, i) => {
         grand += sv.net;
         tbody.innerHTML += `<tr style="background:#f0f9ff;"><td>Service: ${sv.desc}</td><td style="text-align:center;">1</td><td style="text-align:right;">${sv.price.toFixed(2)}</td><td>-</td><td style="text-align:right;">${sv.net.toFixed(2)}</td><td style="text-align:center;"><button class="danger" onclick="window.serviceCart.splice(${i},1);renderBillCartUI();">X</button></td></tr>`;
     });
+
     document.getElementById("billGrandTotalDisp").innerText = grand.toFixed(2);
 }
 
 window.generateInvoicePrint = function() {
     if(window.billCart.length === 0 && window.serviceCart.length === 0) return alert("Cart is empty");
     
-    let prodRows = "", prodTotal = 0;
+    const custName = document.getElementById("billCustName").value || 'Valued Customer';
+    const custAddr = document.getElementById("billCustAddr").value || '-';
+    let prodRows = "", prodTotal = 0, servRows = "", servTotal = 0;
+
     window.billCart.forEach((it, i) => {
         prodTotal += it.net;
         prodRows += `<tr><td style="text-align:center;">${i+1}</td><td>${it.name}</td><td style="text-align:center;">${it.tag}</td><td style="text-align:right;">${it.rate.toFixed(2)}</td><td style="text-align:center;">${it.qty}</td><td style="text-align:right; font-weight:bold;">${it.net.toFixed(2)}</td></tr>`;
     });
 
-    let servRows = "", servTotal = 0;
     window.serviceCart.forEach((sv, i) => {
         servTotal += sv.net;
         servRows += `<tr><td style="text-align:center;">${i+1}</td><td>${sv.desc}</td><td style="text-align:right;">${sv.price.toFixed(2)}</td><td style="text-align:center;">1</td><td style="text-align:right; font-weight:bold;">${sv.net.toFixed(2)}</td></tr>`;
@@ -6609,49 +6635,38 @@ window.generateInvoicePrint = function() {
     const reportContainer = document.getElementById("printableReportContainer");
     
     reportContainer.innerHTML = `
-        <div class="no-print" style="text-align:center; padding:15px;"><button class="danger" onclick="closeReportPreview()">CLOSE</button> <button onclick="window.print()">PRINT</button></div>
+        <div class="no-print" style="text-align:center; padding:15px;"><button class="danger" onclick="closeReportPreview()">CLOSE</button> <button onclick="window.print()" style="margin-left:10px;">PRINT INVOICE</button></div>
         <div class="report-paper a4-max-wrapper">
             <style>
                 @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } }
                 .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; }
                 .header-box { border-bottom: 12pt solid #000; padding-bottom: 20px; margin-bottom: 30px; text-align: center; }
-                /* FIXED: Table layout fixed prevents overlapping text */
                 .bill-table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
                 .bill-table th, .bill-table td { border: 2pt solid #000; padding: 10px; font-size: 18pt; word-wrap: break-word; overflow: hidden; text-overflow: ellipsis; }
             </style>
             <div class="header-box">
-                <div style="font-size: 55pt; font-weight: 900;">METRO RAILWAY PROJECT</div>
+                <div style="font-size: 55pt; font-weight: 900; text-transform: uppercase;">METRO RAILWAY PROJECT</div>
                 <div style="font-size: 30pt; font-weight: 900; margin-top: 10px;">INSTITUTE OF ENGINEERING AND MANAGEMENT<br><br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
                 <div style="font-size: 38pt; border: 6pt solid #000; margin-top: 30px; padding: 10px; font-weight: 900; display: inline-block;">TAX INVOICE</div>
             </div>
-            <div style="font-size: 24pt; text-align: left; margin-bottom: 20px;">
-                <b>CUSTOMER:</b> ${document.getElementById("billCustName").value || 'Walk-in'}<br>
-                <b>ADDRESS:</b> ${document.getElementById("billCustAddr").value || '-'}<br>
+            <div style="font-size: 24pt; text-align: left; margin-bottom: 20px; line-height: 1.2;">
+                <b>CUSTOMER:</b> ${custName}<br>
+                <b>ADDRESS:</b> ${custAddr}<br>
                 <b>DATE:</b> ${new Date().toLocaleDateString('en-IN')}
             </div>
-
             <table class="bill-table">
                 <thead><tr style="background:#000; color:#fff;"><th>Sl. No</th><th>Description</th><th>Tag</th><th>Unit Price</th><th>Qty</th><th>Net Amount</th></tr></thead>
-                <tbody>
-                    ${prodRows}
-                    <tr><td colspan="5" style="text-align:right; font-weight:900;">Product Total</td><td style="text-align:right; font-weight:900;">₹ ${prodTotal.toFixed(2)}</td></tr>
-                </tbody>
+                <tbody>${prodRows}<tr><td colspan="5" style="text-align:right; font-weight:900;">Product Total</td><td style="text-align:right; font-weight:900;">₹ ${prodTotal.toFixed(2)}</td></tr></tbody>
             </table>
-
             <div style="font-size: 20pt; font-weight: 900; text-align: left; margin: 30px 0 10px 0; text-decoration: underline;">ADDITIONAL CHARGES:</div>
             <table class="bill-table">
                 <thead><tr style="background:#000; color:#fff;"><th style="width:10%">Sl. No</th><th style="width:50%">Description</th><th style="width:15%">Unit Price</th><th style="width:10%">Qty</th><th style="width:15%">Net Amount</th></tr></thead>
-                <tbody>
-                    ${servRows || '<tr><td colspan="5" style="text-align:center;">No services</td></tr>'}
-                    <tr><td colspan="4" style="text-align:right; font-weight:900;">Service Total</td><td style="text-align:right; font-weight:900;">₹ ${servTotal.toFixed(2)}</td></tr>
-                </tbody>
+                <tbody>${servRows || '<tr><td colspan="5" style="text-align:center;">None</td></tr>'}<tr><td colspan="4" style="text-align:right; font-weight:900;">Service Total</td><td style="text-align:right; font-weight:900;">₹ ${servTotal.toFixed(2)}</td></tr></tbody>
             </table>
-
             <table class="bill-table" style="margin-top: 30px;">
                 <tr style="background:#000; color:#fff;"><td style="font-weight:900; font-size: 24pt; width:30%">Grand Total</td><td style="text-align: right; font-weight:900; font-size: 28pt;">₹ ${grand.toLocaleString('en-IN')}</td></tr>
-                <tr><td colspan="2" style="font-style: italic; font-size: 16pt;"><b>Amount in words:</b> ${numberToWords(Math.round(grand))}</td></tr>
+                <tr><td colspan="2" style="font-style: italic; font-size: 16pt;"><b>Amount in words:</b> ${numberToWords(grand)}</td></tr>
             </table>
-
             <div style="margin-top: 80px; text-align: left;">
                 <div style="border-top: 6pt solid #000; width: 400px; font-size: 40pt; font-weight: 900;">${currentUser.name}</div>
                 <div style="font-size: 20pt; font-weight: bold; margin-top: 5px; text-transform: uppercase;">AUTHORIZED BILLING OFFICER</div>
