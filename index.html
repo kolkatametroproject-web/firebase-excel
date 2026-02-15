@@ -6198,87 +6198,102 @@ function loadInventory() {
 }
   // --- RE-STOCK FUNCTION: BRING BACK SOLD ITEMS WITHIN 7 DAYS ---
 window.revertSale = async (key, itemName) => {
-    // 1. Fetch current data to get the Invoice Number before wiping it
+    // 1. Get current data for reference
     const snap = await get(ref(db, `inventory/${key}`));
     const v = snap.val();
     const oldInvoice = v.invoiceNo || "N/A";
     const oldStation = v.assignedStation || "Unknown Site";
 
-    if(!confirm(`UNDO SALE & GENERATE RETURN NOTE?\n\nItem: ${itemName}\nOriginal Invoice: ${oldInvoice}\n\nThis item will return to 'In Stock' and the invoice link will be removed.`)) return;
+    // 2. PROMPT FOR REASON
+    const returnReason = prompt(`REASON FOR RETURN?\nItem: ${itemName}\nOriginal Invoice: ${oldInvoice}\n\nPlease enter the specific reason:`);
+    
+    if(!returnReason) return alert("Operation Cancelled: A reason is required to process returns.");
+
+    if(!confirm(`RESTORE TO INVENTORY?\nReason: ${returnReason}\n\nProceed to wipe Invoice data and generate Return Note?`)) return;
 
     try {
-        // 2. WIPE Invoice/Station data and reset to In Stock
+        // 3. WIPE Invoice/Station data and reset to In Stock
         await update(ref(db, `inventory/${key}`), {
             status: "In Stock",
             holder: "Store",
             location: "D2 Building - Heerok Sir Lab [Returned]",
             soldAt: null,
-            invoiceNo: null,       // Wipes Invoice No. so it won't show in table
-            assignedStation: null  // Wipes Station so it won't show in table
+            invoiceNo: null,       // Wipes Invoice link
+            assignedStation: null  // Wipes Station link
         });
 
-        // 3. Log the restoration
+        // 4. Log the restoration with the reason
         await push(ref(db, "logs"), {
             type: "ITEM_RESTOCKED",
             item: itemName,
             originalInvoice: oldInvoice,
+            reason: returnReason,
             time: serverTimestamp(),
-            by: currentUser.name
+            by: currentUser.name || currentUser.email
         });
 
-        alert("✅ Item Restored. Generating Return Note...");
+        alert("✅ Item Restored. Generating Official Return Note...");
 
-        // 4. AUTOMATIC RETURN PRINTOUT GENERATION
-        generateReturnPrintout(itemName, v.barcode, oldInvoice, oldStation);
+        // 5. Trigger updated Return Note Printout
+        generateReturnPrintout(itemName, v.barcode, oldInvoice, oldStation, returnReason);
 
     } catch(e) {
-        alert("Operation Failed: " + e.message);
+        alert("Restoration Failed: " + e.message);
     }
 };
-
 // Helper function to generate the Return Note
-function generateReturnPrintout(name, tag, inv, site) {
+function generateReturnPrintout(name, tag, inv, site, reason) {
     const reportContainer = document.getElementById("printableReportContainer");
     const now = new Date();
+    const issuerName = (currentUser.name || 'System Auditor').toUpperCase();
     
     reportContainer.innerHTML = `
         <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
-            <h3 style="color:red;">OFFICIAL RETURN NOTE GENERATED</h3>
+            <h3 style="color:red; margin:0 0 10px 0;">OFFICIAL RETURN NOTE PREVIEW</h3>
             <button class="danger" onclick="closeReportPreview()">CLOSE</button>
-            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold; margin-left:10px;">PRINT RETURN RECEIPT</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold; margin-left:10px; cursor:pointer; border-radius:8px;">
+                <i class="fas fa-print"></i> PRINT RETURN RECEIPT
+            </button>
         </div>
         <div class="report-paper a4-max-wrapper">
             <style>
-                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 8mm !important; } }
-                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 8mm; background: white; font-family: "Times New Roman", serif; color: #000; text-align: center; box-sizing: border-box; }
-                .header-box { border-bottom: 12pt solid #000; padding-bottom: 20px; margin-bottom: 30px; }
-                .max-label { font-size: 30pt; text-decoration: underline; display: block; margin-top: 25px; text-align: left; font-weight: bold; }
-                .max-value { font-size: 40pt; font-weight: 900; display: block; border-bottom: 6pt solid #000; padding-bottom: 8px; text-align: left; }
+                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 10mm !important; } }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; background: white; font-family: "Times New Roman", serif; color: #000; text-align: center; box-sizing: border-box; }
+                .header-box { border-bottom: 14pt solid #000; padding-bottom: 25px; margin-bottom: 35px; }
+                .max-label { font-size: 32pt; text-decoration: underline; display: block; margin-top: 35px; text-align: left; font-weight: bold; }
+                .max-value { font-size: 44pt; font-weight: 900; display: block; border-bottom: 7pt solid #000; padding-bottom: 12px; text-align: left; word-wrap: break-word; }
+                .heavy-bar { background: #000; color: #fff; padding: 25px; font-size: 50pt; margin-top: 40px; text-transform: uppercase; -webkit-print-color-adjust: exact; font-weight: 900; }
             </style>
             <div class="header-box">
-                <div style="font-size: 50pt; font-weight: 900; text-transform: uppercase;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div style="font-size: 35pt; border: 8pt solid #000; margin-top: 20px; padding: 10px; font-weight: 900; display: inline-block; background: #000; color: #fff;">GOODS RETURN NOTE</div>
+                <div style="font-size: 60pt; font-weight: 900; text-transform: uppercase;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+                <div style="font-size: 40pt; border: 10pt solid #000; margin-top: 30px; padding: 20px; font-weight: 900; display: inline-block; background: #000; color: #fff;">GOODS RETURN NOTE</div>
             </div>
             
-            <div style="text-align:right; font-size: 24pt; font-weight: 900; margin-bottom: 20px;">REF INVOICE: ${inv}</div>
+            <div style="text-align:right; font-size: 30pt; font-weight: 900; margin-bottom: 20px;">REF INVOICE: <span style="font-family: monospace;">${inv}</span></div>
 
-            <span class="max-label">RETURNED FROM STATION:</span>
+            <span class="max-label">RETURNED FROM SITE:</span>
             <span class="max-value" style="background:#fee2e2;">${site.toUpperCase()}</span>
 
             <span class="max-label">ITEM DESCRIPTION:</span>
             <span class="max-value">${name.toUpperCase()}</span>
 
-            <span class="max-label">ASSET TAG ID:</span>
+            <span class="max-label">ASSET TAG (QR):</span>
             <span class="max-value" style="font-family: monospace;">${tag}</span>
 
-            <span class="max-label">RETURN DATE:</span>
-            <span class="max-value">${now.toLocaleDateString('en-IN')} ${now.toLocaleTimeString()}</span>
+            <span class="max-label">RETURN REASON / OBSERVATION:</span>
+            <span class="max-value" style="font-style: italic;">${reason.toUpperCase()}</span>
 
-            <div style="margin-top: 100px; padding: 20px; border: 5pt dashed #000; font-size: 28pt; font-weight: 900;">
-                CERTIFIED: ITEM RECEIVED IN GOOD CONDITION AND RESTORED TO MASTER INVENTORY.
+            <span class="max-label">DATE & TIME OF ENTRY:</span>
+            <span class="max-value">${now.toLocaleDateString('en-IN')} | ${now.toLocaleTimeString()}</span>
+
+            <div style="margin-top: 130px; border-top: 12pt solid #000; width: 60%; text-align: left;">
+                <div style="font-size: 50pt; font-weight: 900;">${issuerName}</div>
+                <div style="font-size: 36pt; font-weight: 900;">STORE IN-CHARGE / SIGNATORY</div>
             </div>
-
-            <div style="margin-top: 150px; border-top: 8pt solid #000; width: 50%; font-size: 40pt; font-weight: 900; text-align: left;">STORE IN-CHARGE SIG.</div>
+            
+            <div style="margin-top: 60px; font-size: 16pt; text-align: center; border-top: 4pt dashed #000; padding-top: 20px; font-weight: bold;">
+                CERTIFIED: ITEM RESTORED TO MASTER INVENTORY DATABASE
+            </div>
         </div>`;
 
     reportContainer.classList.remove("hidden");
