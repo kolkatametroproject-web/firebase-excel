@@ -763,49 +763,40 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
     </div>
 
 <div id="inv-add" class="panel hidden" style="border-top: 4px solid var(--success-green);">
-    <h3 style="color:var(--success-green);"><i class="fas fa-plus-circle"></i> Register New Asset</h3>
-    <p style="font-size:12px; color:#64748b; margin-bottom: 20px;">
-        <strong>Protocol:</strong> Every physical asset must be serialized. Scan unique barcode to verify database availability.
-    </p>
-      
-    <div style="display:grid; grid-template-columns: 2fr 1fr; gap:15px; margin-bottom:15px;">
+    <h3 id="invFormTitle" style="color:var(--success-green);"><i class="fas fa-plus-circle"></i> Register New Asset</h3>
+    <input type="hidden" id="editItemKey"> <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:15px; margin-bottom:15px;">
         <div style="display:flex; gap:5px;">
-            <input id="invBarcode" placeholder="Scan Unique Asset Tag / Barcode" onchange="checkBarcodeUnique(this.value)">
-            <button onclick="openBarcodeScanner('ADD')" class="secondary" style="width:60px; padding:0;"><i class="fas fa-qrcode"></i></button>
+            <input id="invBarcode" placeholder="Scan/Type Tag ID" onchange="checkBarcodeUnique(this.value)">
+            <button onclick="openBarcodeScanner('ADD')" class="secondary" style="width:45px; padding:0;"><i class="fas fa-qrcode"></i></button>
         </div>
-        <input id="invName" placeholder="Asset Name (e.g. Hilti Drill X4)">
+        <input id="invName" placeholder="Asset Name (e.g. Raspberry Pi)">
+        <input type="number" id="invRegPrice" placeholder="Purchase Price (₹)">
     </div>
       
-    <div id="barcodeError" class="hidden" style="background:#fee2e2; color:#991b1b; padding:12px; border-radius:4px; margin-bottom:15px; font-weight: bold; border: 1px solid #fecaca;">
-        <i class="fas fa-ban"></i> Error: Duplicate Barcode Detected.
+    <div id="barcodeError" class="hidden" style="background:#fee2e2; color:#991b1b; padding:10px; border-radius:4px; margin-bottom:15px;">
+        <i class="fas fa-ban"></i> Error: Tag ID already exists.
     </div>
 
-    <div style="text-align:left; background:#f8fafc; padding:20px; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:20px;">
-        
-        <label style="font-size:11px; font-weight:bold; color:#64748b; text-transform: uppercase;">Storage Facility</label>
-        <select id="addLocSelect" onchange="toggleAddOtherInput()" style="margin-bottom:10px;">
+    <div style="display:grid; grid-template-columns: 1.5fr 1fr 1fr; gap:15px; margin-bottom:15px;">
+        <select id="addLocSelect">
             <option value="D2 Building - Heerok Sir Lab">D2 Building - Heerok Sir Lab</option>
+            <option value="Soham Pal Bag">Soham Pal Bag</option>
             <option value="Other">Other (Specify...)</option>
         </select>
-
-        <div id="divAddOtherLoc" class="hidden">
-            <input id="addLocOther" placeholder="Specify Facility Name" style="background:white;">
-        </div>
-
-        <label style="font-size:11px; font-weight:bold; color:#64748b; text-transform: uppercase; margin-top: 10px; display: block;">Storage Unit / Rack</label>
-        <input id="addLocSpot" placeholder="e.g. Cabinet A, Shelf 2">
-    </div>
-
-    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
+        <input id="addLocSpot" placeholder="Unit/Rack (e.g. Shelf 1)">
         <select id="invCondition">
             <option value="New">Condition: New</option>
             <option value="Good" selected>Condition: Good</option>
-            <option value="Fair">Condition: Fair</option>
             <option value="Damaged">Condition: Damaged</option>
         </select>
-        <button id="btnAddStock" onclick="addUniqueItem()" class="success">REGISTER ASSET</button>
     </div>
-</div><div id="inv-checkout" class="panel hidden" style="border-top: 4px solid #d97706;">
+
+    <div style="display:flex; gap:10px;">
+        <button id="btnAddStock" onclick="addUniqueItem()" class="success" style="flex:2;">SAVE ASSET DATA</button>
+        <button id="btnCancelEdit" onclick="resetInvForm()" class="secondary hidden" style="flex:1;">CANCEL EDIT</button>
+    </div>
+</div>
+  <div id="inv-checkout" class="panel hidden" style="border-top: 4px solid #d97706;">
     <h3 style="color:#d97706;"><i class="fas fa-sign-out-alt"></i> Asset Checkout Protocol</h3>
     <p style="text-align:center; color:#64748b; font-size:13px; margin-bottom: 25px;">
         Scan asset barcode to initiate checkout sequence.
@@ -6141,144 +6132,126 @@ function renderRow(k, v, i) {
             </td>
         </tr>`;
 }
+// --- LOAD INVENTORY (STABLE VERSION) ---
 function loadInventory() {
     const b = document.getElementById("inventoryBody");
     const summaryEl = document.getElementById("stockSummaryText");
-    
-    b.innerHTML = "<tr><td colspan='8' style='text-align:center;'>Loading live stock...</td></tr>";
+    if(!b) return;
 
     onValue(ref(db, "inventory"), snap => {
         b.innerHTML = "";
-        let totalItems = 0;
-        let inStockCount = 0;
+        let total = 0, available = 0;
 
         if(!snap.exists()) {
-             b.innerHTML = "<tr><td colspan='8' style='text-align:center;'>No inventory found.</td></tr>";
-             if(summaryEl) summaryEl.innerText = "Total Items: 0";
-             return;
+            b.innerHTML = "<tr><td colspan='8' style='text-align:center;'>Empty Stock</td></tr>";
+            return;
         }
 
         snap.forEach(c => {
-            const v = c.val();
-            const k = c.key;
-            
-            totalItems++;
-            if(v.status !== "Checked Out") inStockCount++;
+            const v = c.val(), k = c.key;
+            total++;
+            if(v.status !== "Checked Out") available++;
 
-            let holderDisplay = v.status === "Checked Out" ? `<span style="color:#b38600; font-weight:bold;">👤 ${v.holder}</span>` : "-";
-            let statusBadge = v.status === "Checked Out" 
-                ? `<span style="color:#856404; font-weight:bold; background:#fff3cd; padding:2px 6px; border-radius:4px;">📤 Out</span>`
-                : `<span style="color:green; font-weight:bold; background:#d4edda; padding:2px 6px; border-radius:4px;">In Stock</span>`;
+            const loc = v.status === "Checked Out" ? "Out with User" : (v.location || "Not Set");
+            const statusStyle = v.status === "In Stock" ? "background:#dcfce7; color:#166534;" : "background:#fee2e2; color:#991b1b;";
 
-            const barcode = v.barcode || "--";
-            const usage = v.usageCount || 0;
-            const locDisplay = v.status === "Checked Out" ? "📤 (With User)" : (v.location || "Not Set");
-
-            // RENDER ROW WITHOUT REGISTRAR
-            const row = `
+            b.innerHTML += `
             <tr class="stock-row">
-                <td style="font-family:monospace; color:var(--metro-blue); font-weight:bold;">${barcode}</td>
-                <td class="search-name" style="font-weight:bold;">${v.item}</td>
-                <td style="text-align:center; font-weight:bold;">${usage}</td>
-                <td>${holderDisplay}</td>
-                <td style="font-size:12px; color:var(--metro-blue); font-weight:800;">${locDisplay}</td>
-                <td>
-                    <div style="display:flex; align-items:center; gap:5px;">
-                        <span style="font-size:10px; color:#64748b;">₹</span>
-                        <input type="number" value="${v.purchasePrice || 0}" 
-                            style="width:85px; border:1px solid #cbd5e1; padding:4px; border-radius:4px; font-weight:bold; background:#fff;" 
-                            onchange="update(ref(getDatabase(), 'inventory/${k}'), {purchasePrice: parseFloat(this.value)})">
-                    </div>
+                <td style="font-family:monospace; font-weight:bold;">${v.barcode || '--'}</td>
+                <td style="font-weight:bold;">${v.item}</td>
+                <td style="text-align:center;">${v.usageCount || 0}</td>
+                <td>${v.status === 'Checked Out' ? '👤 '+v.holder : '-'}</td>
+                <td style="font-size:11px; color:var(--metro-blue); font-weight:bold;">${loc}</td>
+                <td style="text-align:right; font-weight:900; color:green;">₹ ${parseFloat(v.purchasePrice || 0).toFixed(2)}</td>
+                <td style="text-align:center;">
+                    <span style="${statusStyle} padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">${v.status}</span>
                 </td>
-                <td>${statusBadge}</td>
-                <td>
-                    ${isAdmin ? `<button class="danger" onclick="delInv('${k}')" style="padding:2px 5px; font-size:10px;">Remove</button>` : ''}
+                <td style="text-align:center;">
+                    <button class="warning" onclick="editExistingItem('${k}')" style="padding:2px 6px; font-size:10px;">EDIT</button>
+                    ${isAdmin ? `<button class="danger" onclick="delInv('${k}')" style="padding:2px 6px; font-size:10px; margin-left:4px;">DEL</button>` : ''}
                 </td>
             </tr>`;
-            
-            b.innerHTML += row;
         });
-
-        if(summaryEl) {
-            summaryEl.innerHTML = `Total Items: ${totalItems} | <span style="color:green;">Available: ${inStockCount}</span>`;
-        }
+        if(summaryEl) summaryEl.innerHTML = `Total: ${total} | <span style="color:green;">Available: ${available}</span>`;
     });
 }
-window.addUniqueItem = async () => {
-    // 1. Get Basic Data
-    const item = document.getElementById("invName").value;
-    const cond = document.getElementById("invCondition").value;
-    const barcode = document.getElementById("invBarcode").value;
 
-    if(!item || !barcode) return alert("Product Name and Barcode are required.");
-
-    // 2. Get Location Data
-    const locSelect = document.getElementById("addLocSelect");
-    const locOther = document.getElementById("addLocOther");
-    const locSpot = document.getElementById("addLocSpot");
-
-    if(!locSelect || !locSpot) {
-        return alert("Error: Location inputs not found in HTML. Please check code.");
-    }
-
-    let mainPlace = locSelect.value;
-    
-    if(mainPlace === "Other") {
-        const otherText = locOther.value.trim();
-        if(!otherText) return alert("Please specify the 'Other' location name.");
-        mainPlace = otherText;
-    }
-
-    const spotText = locSpot.value.trim();
-    if(!spotText) return alert("Please specify the Exact Spot (e.g., Cabinet, Almirah).");
-
-    const finalLocation = `${mainPlace} [${spotText}]`;
-
-    // 4. Check Uniqueness
-    const invRef = ref(db, "inventory");
-    const q = query(invRef, orderByChild("barcode"), equalTo(barcode));
-    const snap = await get(q);
-
-    if(snap.exists()) return alert("CRITICAL ERROR: Barcode already exists.");
-
-    // 5. Save to Inventory
-    await push(ref(db, "inventory"), {
-        barcode: barcode,
-        item: item,
-        condition: cond,
-        status: "In Stock",
-        holder: "Store",
-        location: finalLocation, 
-        usageCount: 0, 
-        addedBy: currentUser.name || currentUser.email, 
-        dateAdded: serverTimestamp()
-    });
-
-    // 6. Log the Action
-    await push(ref(db, "logs"), {
-        type: "STOCK_ADD",
-        item: item,
-        barcode: barcode,
-        qty: 1,
-        location: finalLocation,
-        takenBy: currentUser.name,
-        approvedBy: "Self",
-        time: serverTimestamp()
-    });
-
-    alert("✅ Item Added to: " + finalLocation);
-    
-    // 7. Reset Form
-    document.getElementById("invBarcode").value = "";
-    document.getElementById("invName").value = "";
-    document.getElementById("addLocOther").value = "";
-    document.getElementById("addLocSpot").value = "";
-    document.getElementById("addLocSelect").value = "D2 Building - Heerok Sir Lab"; 
-    document.getElementById("divAddOtherLoc").classList.add("hidden");
-    
-    document.getElementById("invBarcode").focus();
+// --- OPEN FORM FOR NEW ASSET ---
+window.openNewAssetForm = () => {
+    resetInvForm();
+    toggleInvMode('add');
 };
 
+// --- PREPARE FORM FOR EDITING ---
+window.editExistingItem = async (key) => {
+    const snap = await get(ref(db, `inventory/${key}`));
+    const d = snap.val();
+
+    toggleInvMode('add');
+    
+    document.getElementById("editItemKey").value = key;
+    document.getElementById("invBarcode").value = d.barcode || "";
+    document.getElementById("invName").value = d.item || "";
+    document.getElementById("invRegPrice").value = d.purchasePrice || 0;
+    
+    // Clean location parsing (removes bracketed spot for inputs)
+    const locParts = (d.location || "").split(" [");
+    document.getElementById("addLocSelect").value = locParts[0] || "Other";
+    document.getElementById("addLocSpot").value = locParts[1] ? locParts[1].replace("]", "") : "";
+
+    document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-edit'></i> Update Asset Information";
+    document.getElementById("btnAddStock").innerText = "CONFIRM CHANGES";
+    document.getElementById("btnCancelEdit").classList.remove("hidden");
+    window.scrollTo(0, 0);
+};
+
+// --- RESET FORM UI ---
+window.resetInvForm = () => {
+    document.getElementById("editItemKey").value = "";
+    document.getElementById("invBarcode").value = "";
+    document.getElementById("invName").value = "";
+    document.getElementById("invRegPrice").value = "";
+    document.getElementById("addLocSpot").value = "";
+    document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-plus-circle'></i> Register New Asset";
+    document.getElementById("btnAddStock").innerText = "SAVE ASSET RECORD";
+    document.getElementById("btnCancelEdit").classList.add("hidden");
+};
+
+// --- SAVE / UPDATE LOGIC ---
+window.addUniqueItem = async () => {
+    const key = document.getElementById("editItemKey").value;
+    const barcode = document.getElementById("invBarcode").value.trim();
+    const name = document.getElementById("invName").value.trim();
+    const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
+    const loc = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
+
+    if(!name || !barcode) return alert("Tag ID and Asset Name are required.");
+
+    const itemData = {
+        barcode: barcode,
+        item: name,
+        purchasePrice: price,
+        location: loc,
+        updatedAt: serverTimestamp()
+    };
+
+    try {
+        if(key) {
+            // MODE: UPDATE
+            await update(ref(db, `inventory/${key}`), itemData);
+            alert("✅ Record Updated.");
+        } else {
+            // MODE: NEW
+            itemData.status = "In Stock";
+            itemData.holder = "Store";
+            itemData.usageCount = 0;
+            await push(ref(db, "inventory"), itemData);
+            alert("✅ New Asset Added.");
+        }
+        resetInvForm();
+        toggleInvMode('list');
+    } catch(e) { alert("Save Error: " + e.message); }
+};
 window.filterStockTable = () => {
     const input = document.getElementById("mainStockSearch").value.toLowerCase();
     const rows = document.getElementsByClassName("stock-row");
