@@ -2756,6 +2756,13 @@ window.onScanSuccess = async function(decodedText) {
             let item = null;
             let itemKey = null;
             snap.forEach(c => { item = c.val(); itemKey = c.key; });
+            let itemData = snap.val();
+    
+    if(itemData.status === "Sold Out") {
+        document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ CANNOT PROCESS: ITEM SOLD</span>`;
+        alert("This item has been sold out and cannot be used for tasks.");
+        return;
+    }
 
             pendingTransactionItem = { key: itemKey, ...item };
             document.getElementById(nameId).innerHTML = `✔ Ready: ${item.item}`;
@@ -6076,14 +6083,18 @@ function renderRow(k, v, i) {
         </tr>`;
 }
 // --- LOAD INVENTORY (STABLE VERSION) ---
+// --- COMPLETE INVENTORY LOADER: LOCKS SOLD ITEMS & 7-DAY RETURN ---
 function loadInventory() {
     const b = document.getElementById("inventoryBody");
     const summaryEl = document.getElementById("stockSummaryText");
     if(!b) return;
 
+    // Real-time listener for Inventory changes
     onValue(ref(db, "inventory"), snap => {
         b.innerHTML = "";
         let total = 0, available = 0;
+        const NOW = Date.now();
+        const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000; // 604,800,000 ms
 
         if(!snap.exists()) {
             b.innerHTML = "<tr><td colspan='8' style='text-align:center;'>Empty Stock</td></tr>";
@@ -6093,32 +6104,78 @@ function loadInventory() {
         snap.forEach(c => {
             const v = c.val(), k = c.key;
             total++;
-            if(v.status !== "Checked Out") available++;
+            
+            const isSold = v.status === "Sold Out";
+            if(!isSold && v.status !== "Checked Out") available++;
 
-            const loc = v.status === "Checked Out" ? "Out with User" : (v.location || "Not Set");
-            const statusStyle = v.status === "In Stock" ? "background:#dcfce7; color:#166534;" : "background:#fee2e2; color:#991b1b;";
+            // 7-Day Logic: Only allow re-stock if within 7 days of sale
+            const canRevert = isSold && v.soldAt && (NOW - v.soldAt < SEVEN_DAYS);
+            
+            // Status CSS Styling
+            let statusStyle = "background:#dcfce7; color:#166534;"; // Default In-Stock
+            if(v.status === "Checked Out") statusStyle = "background:#fef3c7; color:#d97706;";
+            if(isSold) statusStyle = "background:#000; color:#fff; border: 1px solid #333;";
 
+            // Action Locking: Disable Edit/Delete for Sold items
+            const editBtn = isSold ? 
+                `<button disabled style="opacity:0.3; cursor:not-allowed; padding:2px 6px; font-size:10px;">EDIT</button>` : 
+                `<button class="warning" onclick="editExistingItem('${k}')" style="padding:2px 6px; font-size:10px;">EDIT</button>`;
+
+            // Re-stock Button: Visible only within 7 days
+            const bringBackBtn = canRevert ? 
+                `<button class="success" onclick="revertSale('${k}', '${v.item}')" style="padding:2px 6px; font-size:10px; margin-left:4px; background:#15803d; color:white;">RE-STOCK</button>` : "";
+
+            const deleteBtn = (isAdmin && !isSold) ? 
+                `<button class="danger" onclick="delInv('${k}')" style="padding:2px 6px; font-size:10px; margin-left:4px;">DEL</button>` : "";
+
+            // Render Row
             b.innerHTML += `
-            <tr class="stock-row">
+            <tr class="stock-row" style="${isSold ? 'background:#f1f5f9; color:#94a3b8;' : ''}">
                 <td style="font-family:monospace; font-weight:bold;">${v.barcode || '--'}</td>
-                <td style="font-weight:bold;">${v.item}</td>
+                <td style="font-weight:bold;">${v.item} ${isSold ? '⚠️' : ''}</td>
                 <td style="text-align:center;">${v.usageCount || 0}</td>
-                <td>${v.status === 'Checked Out' ? '👤 '+v.holder : '-'}</td>
-                <td style="font-size:11px; color:var(--metro-blue); font-weight:bold;">${loc}</td>
+                <td>${v.holder || '-'}</td>
+                <td style="font-size:11px; font-weight:bold;">${v.location || '-'}</td>
                 <td style="text-align:right; font-weight:900; color:green;">₹ ${parseFloat(v.purchasePrice || 0).toFixed(2)}</td>
                 <td style="text-align:center;">
                     <span style="${statusStyle} padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">${v.status}</span>
                 </td>
-                <td style="text-align:center;">
-                    <button class="warning" onclick="editExistingItem('${k}')" style="padding:2px 6px; font-size:10px;">EDIT</button>
-                    ${isAdmin ? `<button class="danger" onclick="delInv('${k}')" style="padding:2px 6px; font-size:10px; margin-left:4px;">DEL</button>` : ''}
+                <td style="text-align:center; white-space:nowrap;">
+                    ${editBtn}
+                    ${bringBackBtn}
+                    ${deleteBtn}
                 </td>
             </tr>`;
         });
-        if(summaryEl) summaryEl.innerHTML = `Total: ${total} | <span style="color:green;">Available: ${available}</span>`;
+        if(summaryEl) summaryEl.innerHTML = `Total Stock: ${total} | <span style="color:green;">Avail: ${available}</span>`;
     });
 }
+  // --- RE-STOCK FUNCTION: BRING BACK SOLD ITEMS WITHIN 7 DAYS ---
+window.revertSale = async (key, itemName) => {
+    if(!confirm(`UNDO SALE FOR: ${itemName}?\n\nThis will remove the 'Sold Out' status and return the item to the Store Inventory.`)) return;
 
+    try {
+        await update(ref(db, `inventory/${key}`), {
+            status: "In Stock",
+            holder: "Store",
+            location: "D2 Building - Heerok Sir Lab [Returned]",
+            soldAt: null // Clears the sale clock
+        });
+
+        // Add to global logs
+        await push(ref(db, "logs"), {
+            type: "RESTORE_ITEM",
+            item: itemName,
+            time: serverTimestamp(),
+            by: currentUser.name || currentUser.email,
+            remarks: "Sale reversed within 7-day grace period."
+        });
+
+        alert("✅ Item successfully returned to Stock.");
+    } catch(e) {
+        alert("Restoration Failed: " + e.message);
+    }
+};
 // --- OPEN FORM FOR NEW ASSET ---
 window.openNewAssetForm = () => {
     resetInvForm();
@@ -6604,38 +6661,85 @@ function numberToWords(num) {
     str += (n[5] != 0) ? ((str != '') ? 'and ' : '') + (a[Number(n[5])] || b[n[5][0]] + ' ' + a[n[5][1]]) : '';
     return str + 'Rupees Only';
 }
-
 window.addScannedItemToBill = async () => {
     const barcode = document.getElementById("billBarcodeInp").value.trim();
-    const qty = parseInt(document.getElementById("billQty").value) || 1;
-    const extraAmt = parseFloat(document.getElementById("billAddl").value) || 0;
-    const extraDesc = document.getElementById("billAddlDesc").value.trim();
+    const qty = 1; // RULE: One QR/Barcode = One Unique Item
 
-    if(!barcode) return alert("Scan or Enter Tag ID");
+    if(!barcode) return alert("Please Scan Asset Tag ID");
 
-    const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode));
-    const snap = await get(q);
-    
-    if (!snap.exists()) return alert("Tag ID Not Recognized");
+    try {
+        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode));
+        const snap = await get(q);
+        
+        if (!snap.exists()) return alert("ERROR: Tag ID not found in Master Inventory.");
 
-    let itemData = null;
-    snap.forEach(c => { itemData = c.val(); });
+        let itemKey = null;
+        let itemData = null;
+        snap.forEach(c => { itemKey = c.key; itemData = c.val(); });
 
-    const sellRate = (parseFloat(itemData.purchasePrice) || 0) * 1.20; // 20% Profit
+        // 1. Check if Item is already Sold
+        if(itemData.status === "Sold Out") {
+            return alert(`STOP: This specific item (Tag: ${barcode}) was already sold on ${new Date(itemData.soldAt).toLocaleDateString()}.`);
+        }
 
-    window.billCart.push({
-        name: itemData.item, tag: barcode, qty: qty, rate: sellRate, net: sellRate * qty
+        // 2. Pricing Logic (Cost + 20% Profit)
+        const sellRate = (parseFloat(itemData.purchasePrice) || 0) * 1.20; 
+
+        // 3. Add to Cart with the Database Key for later updating
+        window.billCart.push({
+            name: itemData.item, 
+            tag: barcode, 
+            dbKey: itemKey, 
+            qty: 1, 
+            rate: sellRate, 
+            net: sellRate
+        });
+
+        renderBillCartUI();
+        document.getElementById("billBarcodeInp").value = "";
+        document.getElementById("billBarcodeInp").focus();
+        
+    } catch (e) {
+        alert("System Error: " + e.message);
+    }
+};
+
+window.finalizeSaleRecords = async () => {
+    if(window.billCart.length === 0) return;
+
+    const updates = {};
+    const saleTime = Date.now(); // Used for the 7-day return policy
+
+    window.billCart.forEach(it => {
+        if(it.dbKey) {
+            // Update the specific product entry to Sold Out
+            updates[`inventory/${it.dbKey}/status`] = "Sold Out";
+            updates[`inventory/${it.dbKey}/soldAt`] = saleTime;
+            updates[`inventory/${it.dbKey}/holder`] = "Customer / Dispatched";
+            updates[`inventory/${it.dbKey}/location`] = "SOLD - OUT OF SYSTEM";
+        }
     });
 
-    if (extraAmt > 0) {
-        window.serviceCart.push({ desc: extraDesc || "Extra Work", price: extraAmt, qty: 1, net: extraAmt });
-    }
+    try {
+        await update(ref(db), updates);
+        
+        // Log the sale event globally
+        await push(ref(db, "logs"), {
+            type: "SALE_FINALIZED",
+            itemsCount: window.billCart.length,
+            time: serverTimestamp(),
+            by: currentUser.name || currentUser.email
+        });
 
-    renderBillCartUI();
-    document.getElementById("billBarcodeInp").value = "";
-    document.getElementById("billAddl").value = 0;
-    document.getElementById("billAddlDesc").value = "";
-    document.getElementById("billBarcodeInp").focus();
+        // Clear local carts
+        window.billCart = [];
+        window.serviceCart = [];
+        renderBillCartUI();
+        alert("✅ Inventory Updated: Items marked as Sold Out.");
+    } catch (e) {
+        console.error("Sale Finalization Error:", e);
+        alert("Critical: Failed to update inventory records.");
+    }
 };
 function renderBillCartUI() {
     const tbody = document.getElementById("billCartBody");
@@ -6711,7 +6815,11 @@ window.removeFromCart = (type, index) => {
 // Updated Print Function with increased Font Sizes
 window.generateInvoicePrint = function() {
     if(window.billCart.length === 0 && window.serviceCart.length === 0) return alert("Cart is empty");
-    
+    if(confirm("Generate Official Invoice? Items will be marked SOLD OUT in Inventory.")) {
+        finalizeSaleRecords(); // Updates DB to Sold Out
+    } else {
+        return;
+    }
     const custName = document.getElementById("billCustName").value || 'Valued Customer';
     const custAddr = document.getElementById("billCustAddr").value || '-';
     let billRows = "", billTotal = 0;
