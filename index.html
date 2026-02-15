@@ -6872,7 +6872,7 @@ window.addScannedItemToBill = async () => {
 window.finalizeSaleRecords = async (targetStation) => {
     if(window.billCart.length === 0) return null;
 
-    // Generate Unique Invoice Number
+    // Unique Invoice ID using current timestamp
     const invoiceNo = "MRPSP-INV-" + Date.now(); 
     const clientType = document.getElementById("billClientType").value;
     const recipient = (clientType === "METRO") ? "KOLKATA METRO RAILWAY" : (document.getElementById("billCustName").value || "UNSPECIFIED");
@@ -6900,11 +6900,9 @@ window.finalizeSaleRecords = async (targetStation) => {
             assignedStation: targetStation,
             billedTo: recipient,
             time: saleTime,
-            by: currentUser.name
+            by: currentUser.name || currentUser.email
         });
 
-        // IMPORTANT: WE DO NOT CLEAR THE CART HERE. 
-        // We clear it only AFTER the print function is done.
         return invoiceNo;
     } catch (e) {
         alert("Critical DB Error: " + e.message);
@@ -6989,26 +6987,28 @@ window.generateInvoicePrint = async function() {
     }
 
     const clientType = document.getElementById("billClientType").value;
-    let targetStation = (clientType === "METRO") ? document.getElementById("billMetroStation").value : document.getElementById("billManualStation").value;
     let recipientName = (clientType === "METRO") ? "KOLKATA METRO RAILWAY" : document.getElementById("billCustName").value;
-    const custAddr = document.getElementById("billCustAddr").value || '-';
+    let targetStation = (clientType === "METRO") ? document.getElementById("billMetroStation").value : document.getElementById("billManualStation").value;
+    
+    // Hide address strictly for Metro
+    const custAddr = (clientType === "METRO") ? "" : document.getElementById("billCustAddr").value.trim();
 
     if(!targetStation) return alert("Please select a target station.");
 
-    // --- STEP 1: Update Database and get the Invoice No ---
+    // Update DB and get Invoice No
     const invoiceNo = await finalizeSaleRecords(targetStation);
-    if(!invoiceNo) return; // Stop if DB update failed
+    if(!invoiceNo) return;
 
-    // --- STEP 2: Generate the Table (Font size reduced by 4pt as requested) ---
     let billRows = "";
-    let billTotal = 0;
+    let billTotal = 0; // Strictly sum of NET amounts
+    
     const combined = [
         ...window.billCart.map(it => ({name: it.name, tag: it.tag, rate: it.rate, qty: it.qty, net: it.net})),
         ...window.serviceCart.map(sv => ({name: sv.desc, tag: 'SERVICE', rate: sv.price, qty: 1, net: sv.net}))
     ];
 
     combined.forEach(it => {
-        billTotal += it.net;
+        billTotal += it.net; // Grand Total calculation
         billRows += `
             <tr style="border-bottom: 5pt solid #000;">
                 <td style="padding: 15px 10px; font-size: 32pt; font-weight: 900; text-align: left;">
@@ -7021,7 +7021,6 @@ window.generateInvoicePrint = async function() {
             </tr>`;
     });
 
-    // --- STEP 3: Render and Show ---
     const reportContainer = document.getElementById("printableReportContainer");
     reportContainer.innerHTML = `
         <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
@@ -7033,13 +7032,12 @@ window.generateInvoicePrint = async function() {
                 @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 10mm !important; } }
                 .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; }
                 .header-box { border-bottom: 14pt solid #000; padding-bottom: 25px; margin-bottom: 35px; text-align: center; }
-                .title-main { font-size: 58pt; font-weight: 900; text-transform: uppercase; }
                 .max-label { font-size: 32pt; text-decoration: underline; display: block; margin-top: 35px; text-align: left; font-weight: bold; }
                 .max-value { font-size: 44pt; font-weight: 900; display: block; border-bottom: 7pt solid #000; padding-bottom: 12px; text-align: left; }
                 .heavy-bar { background: #000 !important; color: #fff !important; padding: 25px !important; font-size: 50pt !important; margin-top: 40px; text-transform: uppercase; -webkit-print-color-adjust: exact; text-align: center; }
             </style>
             <div class="header-box">
-                <div class="title-main">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+                <div style="font-size: 50pt; font-weight: 900;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
                 <div style="font-size: 42pt; border: 10pt solid #000; margin-top: 30px; padding: 20px; font-weight: 900; display: inline-block;">OFFICIAL TAX INVOICE</div>
             </div>
             
@@ -7049,7 +7047,9 @@ window.generateInvoicePrint = async function() {
 
             <span class="max-label">TO:</span><span class="max-value">${recipientName.toUpperCase()}</span>
             <span class="max-label">TARGET SITE:</span><span class="max-value" style="background:#eee;">${targetStation.toUpperCase()}</span>
-            <span class="max-label">ADDRESS:</span><span class="max-value">${custAddr.toUpperCase()}</span>
+            
+            ${custAddr ? `<span class="max-label">ADDRESS:</span><span class="max-value">${custAddr.toUpperCase()}</span>` : ''}
+            
             <span class="max-label">INVOICE DATE:</span><span class="max-value">${new Date().toLocaleDateString('en-IN')}</span>
             
             <div class="heavy-bar">BILL PARTICULARS</div>
@@ -7057,11 +7057,23 @@ window.generateInvoicePrint = async function() {
                 <thead><tr style="border-bottom: 8pt solid #000;"><th style="text-align:left; font-size: 28pt;">DESCRIPTION</th><th style="text-align:right; font-size: 28pt;">RATE</th><th style="text-align:center; font-size: 28pt;">QTY</th><th style="text-align:right; font-size: 28pt;">TOTAL</th></tr></thead>
                 <tbody>${billRows}</tbody>
             </table>
-            <div class="heavy-bar" style="display: flex; justify-content: space-between;"><span>GRAND TOTAL:</span><span>₹ ${billTotal.toLocaleString('en-IN')}</span></div>
-            <div style="margin-top: 150px; border-top: 10pt solid #000; width: 60%; font-size: 40pt; font-weight: 900; text-align: left;">AUTHORIZED SIGNATORY</div>
+
+            <div class="heavy-bar" style="display: flex; justify-content: space-between; margin-top: 10px;">
+                <span>GRAND TOTAL:</span>
+                <span>₹ ${billTotal.toLocaleString('en-IN')}</span>
+            </div>
+
+            <div style="margin-top: 150px; border-top: 10pt solid #000; width: 60%; text-align: left;">
+                <div style="font-size: 44pt; font-weight: 900;">${(currentUser.name || 'System Issuer').toUpperCase()}</div>
+                <div style="font-size: 32pt; font-weight: 900;">AUTHORIZED SIGNATORY</div>
+            </div>
+            
+            <div style="margin-top: 50px; font-size: 14pt; text-align: center; border-top: 3pt dashed #000; padding-top: 15px; font-weight: bold;">
+                SYSTEM GENERATED INVOICE | PRINTED ON: ${new Date().toLocaleString('en-IN')}
+            </div>
         </div>`;
 
-    // --- STEP 4: Clear the Cart now that the UI is drawn ---
+    // Clear cart after UI is drawn
     window.billCart = [];
     window.serviceCart = [];
     renderBillCartUI();
