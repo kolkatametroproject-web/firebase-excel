@@ -652,6 +652,9 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
     <button class="nav-btn" onclick="switchTab('directives')" id="btnDirectives">
     <i class="fas fa-file-signature"></i> Directives & Permissions
 </button>
+    <button class="nav-btn" onclick="switchTab('billing')" id="btnBilling">
+    <i class="fas fa-file-invoice-dollar"></i> Customer Billing
+</button>
     <span id="adminBadge" class="hidden" style="margin-left:auto; background:var(--metro-red); color:white; padding:6px 12px; border-radius:20px; font-size:10px; font-weight:bold; display:flex; align-items:center; letter-spacing: 0.5px;">
         <i class="fas fa-shield-alt" style="margin-right:5px;"></i> AUDITOR
     </span>
@@ -1433,6 +1436,37 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
                 </thead>
                 <tbody id="modalRakeBody"></tbody>
             </table>
+        </div>
+    </div>
+</div>
+  <div id="tab-billing" class="hidden">
+    <div class="panel">
+        <h3><i class="fas fa-file-invoice"></i> Generate Customer Invoice</h3>
+        <div style="background:#f1f5f9; padding:20px; border-radius:6px; border:1px solid #cbd5e1;">
+            <div class="purchase-grid">
+                <div><label style="font-size:11px; font-weight:bold;">Customer Name</label><input id="billCustName" placeholder="Client Name"></div>
+                <div><label style="font-size:11px; font-weight:bold;">Contact Number</label><input id="billCustPhone" placeholder="Phone"></div>
+                <div><label style="font-size:11px; font-weight:bold;">Address</label><input id="billCustAddr" placeholder="Full Address"></div>
+            </div>
+
+            <label style="font-weight:bold; font-size: 11px; margin-top:15px; display:block;">Select Product from Assets:</label>
+            <select id="billAssetSelect" onchange="pullAssetPrice()" style="margin-top:5px; border:2px solid var(--metro-blue);">
+                <option value="">-- Select Product --</option>
+            </select>
+
+            <div class="purchase-grid" style="margin-top:15px;">
+                <div><label style="font-size:11px; font-weight:bold;">Purchase Price (₹)</label><input type="number" id="billBasePrice" oninput="calcBillTotal()"></div>
+                <div><label style="font-size:11px; font-weight:bold;">Profit (20% Fixed)</label><input id="billProfit" disabled style="background:#e2e8f0;"></div>
+                <div><label style="font-size:11px; font-weight:bold;">Addl. Charges (Max 10)</label><input type="number" id="billAddl" value="0" oninput="calcBillTotal()"></div>
+            </div>
+
+            <div style="text-align:right; margin-top:20px; padding:15px; background:white; border-radius:8px; border:2px solid var(--metro-gold);">
+                <span style="font-weight:bold; color:var(--metro-blue); font-size:1.2rem;">GRAND TOTAL: ₹ <span id="billGrandTotal">0.00</span></span>
+            </div>
+
+            <button type="button" class="success" onclick="generateInvoicePrint()" style="margin-top:20px; width:100%; padding:15px; font-weight:bold;">
+                <i class="fas fa-print"></i> GENERATE OFFICIAL BILL
+            </button>
         </div>
     </div>
 </div>
@@ -5836,7 +5870,7 @@ window.unbanUser = async (uid, name) => {
     }
 };
 window.switchTab = (t) => {
-    const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport', 'funds', 'purchase', 'comments', 'directives'];
+    const allTabs = ['newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 'dataView', 'printReport', 'funds', 'purchase', 'comments', 'directives','billing'];
     allTabs.forEach(x => {
         const el = document.getElementById(`tab-${x}`);
         if(el) el.classList.add("hidden");
@@ -5852,6 +5886,7 @@ window.switchTab = (t) => {
     else if (t === 'dataView') loadStationData();
     else if (t === 'comments') populateCommentUsers();
     else if (t === 'directives') populateDirectiveUsers(); // New trigger
+    else if (t === 'billing') populateBillingAssets();
 };
 
 // Paste these two new functions below the switchTab function:
@@ -6131,7 +6166,12 @@ function loadInventory() {
                 <td style="font-size:12px; color:#555;">${addedBy}</td>
                 <td style="text-align:center; font-weight:bold;">${usage}</td>
                 <td>${holderDisplay}</td>
-                <td style="font-size:12px; font-weight:bold; color:var(--metro-blue);">${locDisplay}</td> <td>${statusBadge}</td>
+                <td style="font-size:12px; font-weight:bold;">
+    ₹ <input type="number" value="${v.purchasePrice || 0}" 
+        style="width:70px; border:1px solid #ddd; padding:2px;" 
+        onchange="update(ref(db, 'inventory/${k}'), {purchasePrice: this.value})">
+</td>
+<td>${statusBadge}</td>
                 <td>
                     ${isAdmin ? `<button class="danger" onclick="delInv('${k}')" style="padding:2px 5px; font-size:10px;">Remove</button>` : ''}
                 </td>
@@ -6589,6 +6629,93 @@ window.verifyOTP = async () => {
     } catch (e) {
         alert("Security Error: " + e.message);
     }
+};
+  // 1. Load Assets into Billing Dropdown
+async function populateBillingAssets() {
+    const sel = document.getElementById("billAssetSelect");
+    sel.innerHTML = "<option value=''>Loading Assets...</option>";
+    const snap = await get(ref(db, "inventory"));
+    sel.innerHTML = "<option value=''>-- Select Product --</option>";
+    if(snap.exists()){
+        snap.forEach(c => {
+            const v = c.val();
+            const opt = document.createElement("option");
+            opt.value = c.key;
+            opt.text = v.item;
+            opt.dataset.price = v.purchasePrice || 0; // Fetches price if exists
+            sel.appendChild(opt);
+        });
+    }
+}
+
+// 2. Auto-calculation Logic
+window.pullAssetPrice = () => {
+    const sel = document.getElementById("billAssetSelect");
+    const opt = sel.options[sel.selectedIndex];
+    if(opt.dataset.price) {
+        document.getElementById("billBasePrice").value = opt.dataset.price;
+        calcBillTotal();
+    }
+};
+
+window.calcBillTotal = () => {
+    const base = parseFloat(document.getElementById("billBasePrice").value) || 0;
+    const addl = parseFloat(document.getElementById("billAddl").value) || 0;
+    
+    const profit = base * 0.20;
+    const total = base + profit + addl;
+    
+    document.getElementById("billProfit").value = profit.toFixed(2);
+    document.getElementById("billGrandTotal").innerText = total.toLocaleString('en-IN');
+};
+
+// 3. Print Function for Billing
+window.generateInvoicePrint = async function() {
+    const name = document.getElementById("billCustName").value;
+    const product = document.getElementById("billAssetSelect").options[document.getElementById("billAssetSelect").selectedIndex].text;
+    const total = document.getElementById("billGrandTotal").innerText;
+    const base = document.getElementById("billBasePrice").value;
+    const assetKey = document.getElementById("billAssetSelect").value;
+
+    if(!name || assetKey === "") return alert("Enter Customer and Select Product");
+
+    // SAVE PRICE BACK TO ASSET (For next time use)
+    if(assetKey) {
+        update(ref(db, `inventory/${assetKey}`), { purchasePrice: base });
+    }
+
+    const reportContainer = document.getElementById("printableReportContainer");
+    reportContainer.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:15px;"><button class="danger" onclick="closeReportPreview()">CLOSE</button> <button onclick="window.print()">PRINT BILL</button></div>
+        <div class="report-paper a4-max-wrapper">
+            <style>
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; padding: 15mm; background: white; font-family: "Times New Roman", serif; color: #000; text-align: left; }
+                .bill-head { border-bottom: 8pt solid #000; padding-bottom: 10px; margin-bottom: 20px; text-align: center; }
+                .bill-row { display: flex; justify-content: space-between; border-bottom: 2pt solid #eee; padding: 10px 0; font-size: 28pt; }
+            </style>
+            <div class="bill-head">
+                <div style="font-size: 50pt; font-weight: 900;">METRO SAFETY PROJECT</div>
+                <div style="font-size: 20pt;">OFFICIAL TAX INVOICE</div>
+            </div>
+            <div style="font-size: 30pt; margin-bottom: 40px;">
+                <b>CUSTOMER:</b> ${name}<br>
+                <b>ADDR:</b> ${document.getElementById("billCustAddr").value}<br>
+                <b>DATE:</b> ${new Date().toLocaleDateString()}
+            </div>
+            <div class="heavy-bar">ITEM DESCRIPTION</div>
+            <div class="bill-row"><span>Product:</span> <b>${product}</b></div>
+            <div class="bill-row"><span>Unit Price:</span> <b>₹ ${base}</b></div>
+            <div class="bill-row"><span>Profit (20%):</span> <b>₹ ${document.getElementById("billProfit").value}</b></div>
+            <div class="bill-row"><span>Addl. Charges:</span> <b>₹ ${document.getElementById("billAddl").value}</b></div>
+            <div style="margin-top: 30px; font-size: 45pt; font-weight: 900; text-align: right; border-top: 5pt solid #000;">
+                GRAND TOTAL: ₹ ${total}
+            </div>
+            <div style="margin-top: 100px; border-top: 5pt solid #000; width: 300px; font-size: 24pt;">
+                <b>${currentUser.name}</b><br>
+                ISSUED BY (Authorized Signatory)
+            </div>
+        </div>`;
+    reportContainer.classList.remove("hidden");
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
