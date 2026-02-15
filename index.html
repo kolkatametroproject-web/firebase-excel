@@ -6198,30 +6198,92 @@ function loadInventory() {
 }
   // --- RE-STOCK FUNCTION: BRING BACK SOLD ITEMS WITHIN 7 DAYS ---
 window.revertSale = async (key, itemName) => {
-    if(!confirm(`UNDO SALE FOR: ${itemName}?\n\nThis will remove the 'Sold Out' status and return the item to the Store Inventory.`)) return;
+    // 1. Fetch current data to get the Invoice Number before wiping it
+    const snap = await get(ref(db, `inventory/${key}`));
+    const v = snap.val();
+    const oldInvoice = v.invoiceNo || "N/A";
+    const oldStation = v.assignedStation || "Unknown Site";
+
+    if(!confirm(`UNDO SALE & GENERATE RETURN NOTE?\n\nItem: ${itemName}\nOriginal Invoice: ${oldInvoice}\n\nThis item will return to 'In Stock' and the invoice link will be removed.`)) return;
 
     try {
+        // 2. WIPE Invoice/Station data and reset to In Stock
         await update(ref(db, `inventory/${key}`), {
             status: "In Stock",
             holder: "Store",
             location: "D2 Building - Heerok Sir Lab [Returned]",
-            soldAt: null // Clears the sale clock
+            soldAt: null,
+            invoiceNo: null,       // Wipes Invoice No. so it won't show in table
+            assignedStation: null  // Wipes Station so it won't show in table
         });
 
-        // Add to global logs
+        // 3. Log the restoration
         await push(ref(db, "logs"), {
-            type: "RESTORE_ITEM",
+            type: "ITEM_RESTOCKED",
             item: itemName,
+            originalInvoice: oldInvoice,
             time: serverTimestamp(),
-            by: currentUser.name || currentUser.email,
-            remarks: "Sale reversed within 7-day grace period."
+            by: currentUser.name
         });
 
-        alert("✅ Item successfully returned to Stock.");
+        alert("✅ Item Restored. Generating Return Note...");
+
+        // 4. AUTOMATIC RETURN PRINTOUT GENERATION
+        generateReturnPrintout(itemName, v.barcode, oldInvoice, oldStation);
+
     } catch(e) {
-        alert("Restoration Failed: " + e.message);
+        alert("Operation Failed: " + e.message);
     }
 };
+
+// Helper function to generate the Return Note
+function generateReturnPrintout(name, tag, inv, site) {
+    const reportContainer = document.getElementById("printableReportContainer");
+    const now = new Date();
+    
+    reportContainer.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
+            <h3 style="color:red;">OFFICIAL RETURN NOTE GENERATED</h3>
+            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold; margin-left:10px;">PRINT RETURN RECEIPT</button>
+        </div>
+        <div class="report-paper a4-max-wrapper">
+            <style>
+                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 8mm !important; } }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 8mm; background: white; font-family: "Times New Roman", serif; color: #000; text-align: center; box-sizing: border-box; }
+                .header-box { border-bottom: 12pt solid #000; padding-bottom: 20px; margin-bottom: 30px; }
+                .max-label { font-size: 30pt; text-decoration: underline; display: block; margin-top: 25px; text-align: left; font-weight: bold; }
+                .max-value { font-size: 40pt; font-weight: 900; display: block; border-bottom: 6pt solid #000; padding-bottom: 8px; text-align: left; }
+            </style>
+            <div class="header-box">
+                <div style="font-size: 50pt; font-weight: 900; text-transform: uppercase;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+                <div style="font-size: 35pt; border: 8pt solid #000; margin-top: 20px; padding: 10px; font-weight: 900; display: inline-block; background: #000; color: #fff;">GOODS RETURN NOTE</div>
+            </div>
+            
+            <div style="text-align:right; font-size: 24pt; font-weight: 900; margin-bottom: 20px;">REF INVOICE: ${inv}</div>
+
+            <span class="max-label">RETURNED FROM STATION:</span>
+            <span class="max-value" style="background:#fee2e2;">${site.toUpperCase()}</span>
+
+            <span class="max-label">ITEM DESCRIPTION:</span>
+            <span class="max-value">${name.toUpperCase()}</span>
+
+            <span class="max-label">ASSET TAG ID:</span>
+            <span class="max-value" style="font-family: monospace;">${tag}</span>
+
+            <span class="max-label">RETURN DATE:</span>
+            <span class="max-value">${now.toLocaleDateString('en-IN')} ${now.toLocaleTimeString()}</span>
+
+            <div style="margin-top: 100px; padding: 20px; border: 5pt dashed #000; font-size: 28pt; font-weight: 900;">
+                CERTIFIED: ITEM RECEIVED IN GOOD CONDITION AND RESTORED TO MASTER INVENTORY.
+            </div>
+
+            <div style="margin-top: 150px; border-top: 8pt solid #000; width: 50%; font-size: 40pt; font-weight: 900; text-align: left;">STORE IN-CHARGE SIG.</div>
+        </div>`;
+
+    reportContainer.classList.remove("hidden");
+    window.scrollTo(0, 0);
+}
 // --- OPEN FORM FOR NEW ASSET ---
 window.openNewAssetForm = () => {
     resetInvForm();
@@ -6766,29 +6828,32 @@ function numberToWords(num) {
 }
 window.addScannedItemToBill = async () => {
     const barcode = document.getElementById("billBarcodeInp").value.trim();
-    const qty = 1; // RULE: One QR/Barcode = One Unique Item
+    if(!barcode) return alert("Scan Asset Tag");
 
-    if(!barcode) return alert("Please Scan Asset Tag ID");
+    // 1. Check if the tag is already in the current cart (Prevent duplicate scanning in one session)
+    const isAlreadyInCart = window.billCart.some(item => item.tag === barcode);
+    if(isAlreadyInCart) return alert("This item is already added to the current Invoice.");
 
     try {
         const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode));
         const snap = await get(q);
         
-        if (!snap.exists()) return alert("ERROR: Tag ID not found in Master Inventory.");
+        if (!snap.exists()) return alert("Tag ID Not Found in Inventory.");
 
-        let itemKey = null;
-        let itemData = null;
+        let itemKey, itemData;
         snap.forEach(c => { itemKey = c.key; itemData = c.val(); });
 
-        // 1. Check if Item is already Sold
+        // 2. STRICT VALIDATION: If item is SOLD or CHECKED OUT, it cannot be assigned again
         if(itemData.status === "Sold Out") {
-            return alert(`STOP: This specific item (Tag: ${barcode}) was already sold on ${new Date(itemData.soldAt).toLocaleDateString()}.`);
+            return alert(`DENIED: Item ${itemData.item} is already SOLD to ${itemData.assignedStation}.\nInvoice: ${itemData.invoiceNo}`);
+        }
+        
+        if(itemData.status === "Checked Out") {
+            return alert(`DENIED: Item is currently Checked Out by ${itemData.holder}. Return it to stock first.`);
         }
 
-        // 2. Pricing Logic (Cost + 20% Profit)
+        // 3. Process to Cart
         const sellRate = (parseFloat(itemData.purchasePrice) || 0) * 1.20; 
-
-        // 3. Add to Cart with the Database Key for later updating
         window.billCart.push({
             name: itemData.item, 
             tag: barcode, 
@@ -6802,9 +6867,7 @@ window.addScannedItemToBill = async () => {
         document.getElementById("billBarcodeInp").value = "";
         document.getElementById("billBarcodeInp").focus();
         
-    } catch (e) {
-        alert("System Error: " + e.message);
-    }
+    } catch (e) { console.error(e); }
 };
 window.finalizeSaleRecords = async (targetStation) => {
     if(window.billCart.length === 0) return;
@@ -6927,52 +6990,110 @@ window.removeFromCart = (type, index) => {
 };
 // Updated Print Function with increased Font Sizes
 window.generateInvoicePrint = async function() {
-    if(window.billCart.length === 0 && window.serviceCart.length === 0) return alert("Cart empty");
-    
+    // 1. Validation: Prevent empty invoice
+    if(window.billCart.length === 0 && window.serviceCart.length === 0) {
+        return alert("STOP: The cart is empty. Please scan assets or add services first.");
+    }
+
+    // 2. Identify Recipient and Target Station
     const clientType = document.getElementById("billClientType").value;
-    let targetStation = (clientType === "METRO") ? document.getElementById("billMetroStation").value : document.getElementById("billManualStation").value;
-    let recipientName = (clientType === "METRO") ? "KOLKATA METRO" : document.getElementById("billCustName").value;
-    const custAddr = document.getElementById("billCustAddr").value || '-';
+    let recipientName = "";
+    let targetStation = "";
 
-    if(!targetStation) return alert("Select target station");
+    if (clientType === "METRO") {
+        // Automatically set recipient for Metro clients
+        recipientName = "KOLKATA METRO RAILWAY"; 
+        targetStation = document.getElementById("billMetroStation").value;
+        if (!targetStation) return alert("Please select a Metro Corridor and Station from the list.");
+    } else {
+        // Manual entry for other clients
+        recipientName = document.getElementById("billCustName").value.trim() || "Private Client";
+        targetStation = document.getElementById("billManualStation").value.trim();
+        if (!targetStation) return alert("Please enter the Target Site/Organization name.");
+    }
 
-    const invoiceNo = await finalizeSaleRecords(targetStation);
+    const custAddr = document.getElementById("billCustAddr").value.trim() || '-';
 
+    // 3. Final Confirmation & Database Sync
+    // This calls finalizeSaleRecords to lock items as 'Sold Out' and generate the Invoice No.
+    let invoiceNo = "";
+    if(confirm(`FINALIZING SALE:\n\nTo: ${recipientName}\nSite: ${targetStation}\n\nProceed to lock items and generate invoice?`)) {
+        invoiceNo = await finalizeSaleRecords(targetStation); 
+    } else {
+        return;
+    }
+
+    // 4. Prepare Table Rows for Print
     let billRows = "";
     let billTotal = 0;
-    const combined = [...window.billCart, ...window.serviceCart.map(sv => ({name: sv.desc, tag: 'SERVICE', rate: sv.price, qty: 1, net: sv.net}))];
 
-    combined.forEach(it => {
+    // Combine Assets and Services into one list for the print table
+    const combinedItems = [
+        ...window.billCart.map(it => ({ name: it.name, tag: it.tag, rate: it.rate, qty: it.qty, net: it.net })),
+        ...window.serviceCart.map(sv => ({ name: sv.desc, tag: 'SERVICE', rate: sv.price, qty: 1, net: sv.net }))
+    ];
+
+    combinedItems.forEach((it) => {
         billTotal += it.net;
         billRows += `
-            <tr style="border-bottom: 4pt solid #000;">
-                <td style="padding: 12px; font-size: 36pt; font-weight: 900;">${it.name.toUpperCase()}<br><span style="font-size: 22pt;">(${it.tag})</span></td>
-                <td style="text-align:right; padding: 12px; font-size: 36pt;">${it.rate.toFixed(0)}</td>
-                <td style="text-align:center; padding: 12px; font-size: 36pt;">${it.qty}</td>
-                <td style="text-align:right; padding: 12px; font-weight: 900; font-size: 36pt;">${it.net.toFixed(0)}</td>
+            <tr style="border-bottom: 5pt solid #000;">
+                <td style="padding: 15px 10px; word-wrap: break-word; font-size: 36pt; font-weight: 900;">
+                    ${it.name.toUpperCase()}<br>
+                    <span style="font-size: 24pt; color: #333;">(TAG: ${it.tag})</span>
+                </td>
+                <td style="text-align:right; padding: 15px 10px; font-size: 36pt;">${it.rate.toFixed(0)}</td>
+                <td style="text-align:center; padding: 15px 10px; font-size: 36pt;">${it.qty}</td>
+                <td style="text-align:right; padding: 15px 10px; font-weight: 900; font-size: 36pt;">${it.net.toFixed(0)}</td>
             </tr>`;
     });
 
+    // 5. Generate and Render Print Preview
     const reportContainer = document.getElementById("printableReportContainer");
+    
     reportContainer.innerHTML = `
         <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
-            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
-            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold; font-size:20px; cursor:pointer; margin-left:10px;">PRINT</button>
+            <h3 style="margin:0 0 10px 0;">Official Tax Invoice Preview</h3>
+            <button class="danger" onclick="closeReportPreview()" style="margin-right:10px; padding: 10px 20px;">CANCEL</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold; font-size:22px; cursor:pointer; border-radius:8px;">
+                <i class="fas fa-print"></i> PRINT OFFICIAL INVOICE
+            </button>
         </div>
+
         <div class="report-paper a4-max-wrapper">
             <style>
-                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 8mm !important; } }
-                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 8mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; text-align: center; }
-                .header-box { border-bottom: 12pt solid #000; padding-bottom: 20px; margin-bottom: 30px; }
-                .max-label { font-size: 30pt; text-decoration: underline; display: block; margin-top: 25px; text-align: left; font-weight: bold; }
-                .max-value { font-size: 40pt; font-weight: 900; display: block; border-bottom: 6pt solid #000; padding-bottom: 8px; text-align: left; }
+                @media print {
+                    @page { size: A4; margin: 0; }
+                    body { margin: 0; padding: 0; background: #fff !important; }
+                    .no-print { display: none !important; }
+                    .a4-max-wrapper { width: 100% !important; border: none !important; box-shadow: none !important; margin: 0 !important; padding: 8mm !important; }
+                }
+                .a4-max-wrapper {
+                    width: 210mm; min-height: 297mm; margin: 0 auto !important; padding: 8mm !important;
+                    background: white !important; font-family: "Times New Roman", Times, serif !important;
+                    color: #000 !important; line-height: 1.1 !important; box-sizing: border-box; text-align: center !important;
+                }
+                .header-box { border-bottom: 14pt solid #000 !important; padding-bottom: 25px !important; margin-bottom: 35px !important; }
+                .title-main { font-size: 60pt !important; font-weight: 900; text-transform: uppercase !important; } 
+                .title-sub { font-size: 36pt !important; font-weight: 900; line-height: 1.2 !important; margin-top: 15px !important; }
+                .max-label { font-size: 32pt !important; text-decoration: underline !important; display: block !important; margin-top: 35px !important; text-align: left !important; font-weight: bold; }
+                .max-value { font-size: 44pt !important; font-weight: 900 !important; display: block !important; word-wrap: break-word !important; border-bottom: 7pt solid #000 !important; padding-bottom: 12px !important; text-align: left !important; }
+                .heavy-bar { background: #000 !important; color: #fff !important; padding: 20px !important; font-size: 50pt !important; margin: 50px 0 30px 0 !important; text-transform: uppercase !important; -webkit-print-color-adjust: exact !important; }
+                
+                .bill-table { width: 100%; border-collapse: collapse; margin-top: 20px; table-layout: fixed; }
+                .bill-table th { text-align: left; padding: 10px; font-size: 32pt !important; text-decoration: underline !important; font-weight: 900; }
+                
+                .sig-box-name { margin-top: 130px !important; border-top: 12pt solid #000 !important; padding-top: 25px !important; font-size: 56pt !important; font-weight: 900; text-align: left !important; line-height: 1; }
+                .sig-box-desc { font-size: 40pt !important; font-weight: 900; text-transform: uppercase !important; margin-bottom: 100px !important; text-align: left !important; }
+                .footer-stamp { margin-top: 50px; font-size: 16pt !important; text-align: center; border-top: 3pt dashed #000; padding-top: 20px; font-weight: bold; }
             </style>
+
             <div class="header-box">
-                <div style="font-size: 50pt; font-weight: 900; text-transform: uppercase;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div style="font-size: 32pt; border: 8pt solid #000; margin-top: 20px; padding: 10px; font-weight: 900; display: inline-block;">OFFICIAL TAX INVOICE</div>
+                <div class="title-main">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+                <div class="title-sub">INSTITUTE OF ENGINEERING AND MANAGEMENT<br><br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
+                <div style="font-size: 44pt; border: 10pt solid #000; margin-top: 40px; padding: 20px; font-weight: 900; display: inline-block; text-transform: uppercase;">Official Tax Invoice</div>
             </div>
-            
-            <div style="text-align:right; font-size: 28pt; font-weight: 900; margin-bottom: 20px;">
+
+            <div style="text-align:right; font-size: 30pt; font-weight: 900; margin-bottom: 20px;">
                 INVOICE NO: <span style="font-family: monospace;">${invoiceNo}</span>
             </div>
 
@@ -6980,7 +7101,7 @@ window.generateInvoicePrint = async function() {
             <span class="max-value">${recipientName.toUpperCase()}</span>
 
             <span class="max-label">TARGET STATION / SITE:</span>
-            <span class="max-value" style="background:#eee;">${targetStation.toUpperCase()}</span>
+            <span class="max-value" style="background: #eee;">${targetStation.toUpperCase()}</span>
 
             <span class="max-label">ADDRESS / CONTACT:</span>
             <span class="max-value">${custAddr.toUpperCase()}</span>
@@ -6988,17 +7109,42 @@ window.generateInvoicePrint = async function() {
             <span class="max-label">DATE:</span>
             <span class="max-value">${new Date().toLocaleDateString('en-IN')}</span>
 
-            <div style="background:#000; color:#fff; padding:15px; font-size: 40pt; margin-top: 30px; text-transform: uppercase; font-weight: 900;">BILL PARTICULARS</div>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
-                <thead><tr style="border-bottom: 8pt solid #000;"><th style="text-align:left; font-size: 30pt;">DESCRIPTION</th><th style="text-align:right; font-size: 30pt;">RATE</th><th style="text-align:center; font-size: 30pt;">QTY</th><th style="text-align:right; font-size: 30pt;">TOTAL</th></tr></thead>
-                <tbody>${billRows}</tbody>
+            <div class="heavy-bar">BILL PARTICULARS</div>
+            
+            <table class="bill-table">
+                <thead>
+                    <tr style="border-bottom: 8pt solid #000;">
+                        <th style="width: 45%;">DESCRIPTION</th>
+                        <th style="text-align:right; width: 20%;">RATE</th>
+                        <th style="text-align:center; width: 10%;">QTY</th>
+                        <th style="text-align:right; width: 25%;">TOTAL</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${billRows}
+                </tbody>
             </table>
-            <div style="background:#000; color:#fff; display: flex; justify-content: space-between; padding: 15px; margin-top: 10px; font-size: 40pt; font-weight: 900;">
-                <span>GRAND TOTAL:</span><span>₹ ${billTotal.toLocaleString('en-IN')}</span>
+
+            <div class="heavy-bar" style="display: flex; justify-content: space-between; margin-top: 20px;">
+                <span>GRAND TOTAL:</span>
+                <span>₹ ${billTotal.toLocaleString('en-IN')}</span>
             </div>
-            <div style="margin-top: 100px; border-top: 8pt solid #000; width: 50%; font-size: 40pt; font-weight: 900; text-align: left;">AUTHORIZED SIGNATORY</div>
+            
+            <div style="font-size: 28pt; font-weight: 900; text-align: left; margin-top: 20px; font-style: italic;">
+                Words: ${numberToWords(billTotal)}
+            </div>
+
+            <div style="margin-top: 150px;">
+                <div class="sig-box-name">${currentUser.name || 'SYSTEM AUDITOR'}</div>
+                <div class="sig-box-desc">AUTHORIZED SIGNATORY</div>
+            </div>
+            
+            <div class="footer-stamp">
+                SYSTEM GENERATED INVOICE | PRINTED ON: ${new Date().toLocaleString('en-IN')}
+            </div>
         </div>`;
 
+    // 6. Show Preview Modal
     reportContainer.classList.remove("hidden");
     window.scrollTo(0, 0);
 };
