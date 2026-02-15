@@ -1435,7 +1435,6 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
         <h3 style="border-bottom: 2px solid var(--metro-gold); padding-bottom: 10px;">
             <i class="fas fa-cash-register"></i> OFFICIAL BILLING & INVOICE GENERATOR
         </h3>
-        
         <div style="background:#f1f5f9; padding:20px; border-radius:6px; margin-bottom:20px; display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:20px; border-left: 5px solid var(--metro-blue);">
     <div>
         <label style="font-size:11px; font-weight:900; color:var(--metro-blue); text-transform:uppercase;">Customer Name</label>
@@ -1452,17 +1451,33 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
             <option value="OTHER">Other Organization / Private</option>
         </select>
     </div>
-    <div id="divBillStationDropdown">
-        <label style="font-size:11px; font-weight:900; color:var(--metro-blue); text-transform:uppercase;">Target Metro Station</label>
-        <select id="billMetroStation" style="margin-top:5px; height:45px; border:1px solid #cbd5e1; width:100%;">
+
+    <div id="divBillMetroGroup" style="display: contents;">
+        <div>
+            <label style="font-size:11px; font-weight:900; color:var(--metro-blue); text-transform:uppercase;">Select Corridor</label>
+            <select id="billLineSelect" onchange="handleBillLineChange()" style="margin-top:5px; height:45px; border:1px solid #cbd5e1; width:100%;">
+                <option value="">-- Select Line --</option>
+                <option value="Blue Line">Blue Line</option>
+                <option value="Green Line">Green Line</option>
+                <option value="Purple Line">Purple Line</option>
+                <option value="Yellow Line">Yellow Line</option>
+                <option value="Orange Line">Orange Line</option>
+                <option value="Pink Line">Pink Line</option>
             </select>
+        </div>
+        <div>
+            <label style="font-size:11px; font-weight:900; color:var(--metro-blue); text-transform:uppercase;">Target Metro Station</label>
+            <select id="billMetroStation" disabled style="margin-top:5px; height:45px; border:1px solid #cbd5e1; width:100%; background:#f1f5f9;">
+                <option value="">-- Select Station --</option>
+            </select>
+        </div>
     </div>
+
     <div id="divBillStationManual" class="hidden">
         <label style="font-size:11px; font-weight:900; color:var(--metro-blue); text-transform:uppercase;">Target Site (Manual)</label>
         <input id="billManualStation" placeholder="Enter Site Name" style="margin-top:5px; height:45px;">
     </div>
-</div>
-
+</div>        
         <div style="background: var(--metro-blue); padding: 25px; border-radius: 8px 8px 0 0; color: white; margin-bottom: 2px; border-bottom: 4px solid var(--metro-gold);">
             <h4 style="margin: 0 0 20px 0; color: var(--metro-gold); font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; display: flex; align-items: center; gap: 10px;">
                 <i class="fas fa-microchip" style="font-size: 18px;"></i> A. PRIMARY ASSET REGISTRATION
@@ -6643,15 +6658,39 @@ window.billCart = [];
 window.serviceCart = [];
 window.toggleBillStationSource = () => {
     const type = document.getElementById("billClientType").value;
-    if(type === "METRO") {
-        document.getElementById("divBillStationDropdown").classList.remove("hidden");
-        document.getElementById("divBillStationManual").classList.add("hidden");
+    const metroGroup = document.getElementById("divBillMetroGroup");
+    const manualGroup = document.getElementById("divBillStationManual");
+
+    if (type === "METRO") {
+        metroGroup.style.display = "contents";
+        manualGroup.classList.add("hidden");
     } else {
-        document.getElementById("divBillStationDropdown").classList.add("hidden");
-        document.getElementById("divBillStationManual").classList.remove("hidden");
+        metroGroup.style.display = "none";
+        manualGroup.classList.remove("hidden");
     }
 };
 
+window.handleBillLineChange = () => {
+    const lineSel = document.getElementById("billLineSelect");
+    const stnSel = document.getElementById("billMetroStation");
+    
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    stnSel.disabled = true;
+    stnSel.style.background = "#f1f5f9";
+
+    const selectedLine = lineSel.value;
+    
+    if (selectedLine && METRO_STATIONS[selectedLine]) {
+        METRO_STATIONS[selectedLine].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = `${stn} (${selectedLine})`;
+            opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
+        stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+    }
+};
 // Function to populate the billing dropdown with ALL stations
 function populateAllMetroStations() {
     const sel = document.getElementById("billMetroStation");
@@ -6864,153 +6903,79 @@ window.removeFromCart = (type, index) => {
 };
 // Updated Print Function with increased Font Sizes
 window.generateInvoicePrint = function() {
-    // 1. Validation: Prevent empty invoice
     if(window.billCart.length === 0 && window.serviceCart.length === 0) {
-        return alert("STOP: The cart is empty. Please scan assets or add services first.");
+        return alert("Cart is empty. Scan items first.");
     }
 
-    // 2. Fetch Customer Details
-    const custName = document.getElementById("billCustName").value.trim() || 'Official Metro Procurement';
+    const custName = document.getElementById("billCustName").value.trim() || 'Procurement Officer';
     const custAddr = document.getElementById("billCustAddr").value.trim() || '-';
     
-    // 3. Dynamic Station Identification
     const clientType = document.getElementById("billClientType").value;
     let targetStation = "";
 
     if (clientType === "METRO") {
         targetStation = document.getElementById("billMetroStation").value;
-        if (!targetStation) return alert("Please select a Metro Station from the list.");
+        if (!targetStation) return alert("Please select a Corridor and Station.");
     } else {
         targetStation = document.getElementById("billManualStation").value.trim();
-        if (!targetStation) return alert("Please enter the Manual Site/Organization name.");
+        if (!targetStation) return alert("Please enter the Manual Site name.");
     }
 
-    // 4. Final Confirmation & Database Sync
-    // This locks the items as 'Sold Out' in the system before generating paper record
-    if(confirm(`FINALIZING SALE:\n\nTarget: ${targetStation}\n\nItems will be marked as SOLD OUT in Inventory. Proceed?`)) {
-        finalizeSaleRecords(); 
+    if(confirm(`Lock items as SOLD for ${targetStation}?`)) {
+        // Ensure this internal function is called to mark DB as 'Sold Out'
+        finalizeSaleRecords(targetStation); 
     } else {
         return;
     }
 
-    // 5. Prepare Table Content for Print
     let billRows = "";
     let billTotal = 0;
-
-    // Combine Assets and Services into one sequential list for the table
-    const combinedItems = [
-        ...window.billCart.map(it => ({ name: it.name, tag: it.tag, rate: it.rate, qty: it.qty, net: it.net })),
-        ...window.serviceCart.map(sv => ({ name: sv.desc, tag: 'SERVICE', rate: sv.price, qty: 1, net: sv.net }))
-    ];
+    const combinedItems = [...window.billCart, ...window.serviceCart.map(sv => ({name: sv.desc, tag: 'SERVICE', rate: sv.price, qty: 1, net: sv.net}))];
 
     combinedItems.forEach((it) => {
         billTotal += it.net;
         billRows += `
             <tr style="border-bottom: 5pt solid #000;">
-                <td style="padding: 15px 10px; word-wrap: break-word; font-size: 38pt; font-weight: 900;">
-                    ${it.name.toUpperCase()}<br>
-                    <span style="font-size: 26pt; color: #333;">(ID: ${it.tag})</span>
-                </td>
+                <td style="padding: 15px 10px; font-size: 38pt; font-weight: 900;">${it.name.toUpperCase()}<br><span style="font-size: 24pt;">(Tag: ${it.tag})</span></td>
                 <td style="text-align:right; padding: 15px 10px; font-size: 38pt;">${it.rate.toFixed(0)}</td>
                 <td style="text-align:center; padding: 15px 10px; font-size: 38pt;">${it.qty}</td>
                 <td style="text-align:right; padding: 15px 10px; font-weight: 900; font-size: 38pt;">${it.net.toFixed(0)}</td>
             </tr>`;
     });
 
-    // 6. Generate and Render A4 Preview Container
     const reportContainer = document.getElementById("printableReportContainer");
-    
     reportContainer.innerHTML = `
         <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
-            <h3 style="margin:0 0 10px 0;">Official Tax Invoice Preview (A4 Format)</h3>
-            <button class="danger" onclick="closeReportPreview()" style="margin-right:10px; padding: 10px 20px;">CANCEL</button>
-            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 30px; font-weight:bold; font-size:22px; cursor:pointer; border-radius:8px;">
-                <i class="fas fa-print"></i> PRINT INVOICE
-            </button>
+            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 30px; font-weight:bold; font-size:22px; cursor:pointer; margin-left:10px;">PRINT OFFICIAL INVOICE</button>
         </div>
-
         <div class="report-paper a4-max-wrapper">
             <style>
-                @media print {
-                    @page { size: A4; margin: 0; }
-                    body { margin: 0; padding: 0; background: #fff !important; }
-                    .no-print { display: none !important; }
-                    .a4-max-wrapper { width: 100% !important; border: none !important; box-shadow: none !important; margin: 0 !important; padding: 8mm !important; }
-                }
-                .a4-max-wrapper {
-                    width: 210mm; min-height: 297mm; margin: 0 auto !important; padding: 8mm !important;
-                    background: white !important; font-family: "Times New Roman", Times, serif !important;
-                    color: #000 !important; line-height: 1.1 !important; box-sizing: border-box; text-align: center !important;
-                }
-                .header-box { border-bottom: 14pt solid #000 !important; padding-bottom: 25px !important; margin-bottom: 35px !important; }
-                .title-main { font-size: 58pt !important; font-weight: 900; text-transform: uppercase !important; } 
-                .title-sub { font-size: 34pt !important; font-weight: 900; line-height: 1.2 !important; margin-top: 15px !important; }
-                .max-label { font-size: 34pt !important; text-decoration: underline !important; display: block !important; margin-top: 35px !important; text-align: left !important; font-weight: bold; }
-                .max-value { font-size: 44pt !important; font-weight: 900 !important; display: block !important; word-wrap: break-word !important; border-bottom: 7pt solid #000 !important; padding-bottom: 12px !important; text-align: left !important; }
-                .heavy-bar { background: #000 !important; color: #fff !important; padding: 25px !important; font-size: 50pt !important; margin: 60px 0 40px 0 !important; text-transform: uppercase !important; -webkit-print-color-adjust: exact !important; }
-                
-                .bill-table { width: 100%; border-collapse: collapse; margin-top: 20px; table-layout: fixed; }
-                .bill-table th { text-align: left; padding: 10px; font-size: 34pt !important; text-decoration: underline !important; font-weight: 900; }
-                
-                .sig-box-name { margin-top: 130px !important; border-top: 12pt solid #000 !important; padding-top: 25px !important; font-size: 56pt !important; font-weight: 900; text-align: left !important; line-height: 1; }
-                .sig-box-desc { font-size: 40pt !important; font-weight: 900; text-transform: uppercase !important; margin-bottom: 100px !important; text-align: left !important; }
-                .footer-stamp { margin-top: 50px; font-size: 16pt !important; text-align: center; border-top: 3pt dashed #000; padding-top: 20px; font-weight: bold; }
+                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 10mm !important; } }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; }
+                .header-box { border-bottom: 14pt solid #000; padding-bottom: 25px; margin-bottom: 35px; text-align: center; }
+                .title-main { font-size: 58pt; font-weight: 900; text-transform: uppercase; }
+                .max-label { font-size: 34pt; text-decoration: underline; display: block; margin-top: 35px; text-align: left; font-weight: bold; }
+                .max-value { font-size: 44pt; font-weight: 900; display: block; border-bottom: 7pt solid #000; padding-bottom: 12px; text-align: left; }
+                .heavy-bar { background: #000; color: #fff; padding: 25px; font-size: 50pt; margin-top: 40px; text-transform: uppercase; -webkit-print-color-adjust: exact; text-align: center; }
+                .bill-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
             </style>
-
             <div class="header-box">
                 <div class="title-main">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div class="title-sub">INSTITUTE OF ENGINEERING AND MANAGEMENT<br><br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
-                <div style="font-size: 42pt; border: 10pt solid #000; margin-top: 40px; padding: 20px; font-weight: 900; display: inline-block; text-transform: uppercase;">Official Tax Invoice</div>
+                <div style="font-size: 42pt; border: 10pt solid #000; margin-top: 30px; padding: 20px; font-weight: 900; display: inline-block;">OFFICIAL TAX INVOICE</div>
             </div>
-
-            <span class="max-label">CUSTOMER / CLIENT:</span>
-            <span class="max-value">${custName.toUpperCase()}</span>
-
-            <span class="max-label">TARGET SITE / STATION:</span>
-            <span class="max-value" style="background: #eee;">${targetStation.toUpperCase()}</span>
-
-            <span class="max-label">ADDRESS / CONTACT:</span>
-            <span class="max-value">${custAddr.toUpperCase()}</span>
-
-            <span class="max-label">INVOICE DATE:</span>
-            <span class="max-value">${new Date().toLocaleDateString('en-IN')}</span>
-
+            <span class="max-label">CUSTOMER:</span><span class="max-value">${custName.toUpperCase()}</span>
+            <span class="max-label">TARGET SITE:</span><span class="max-value" style="background:#eee;">${targetStation.toUpperCase()}</span>
+            <span class="max-label">INVOICE DATE:</span><span class="max-value">${new Date().toLocaleDateString('en-IN')} ${new Date().toLocaleTimeString()}</span>
             <div class="heavy-bar">BILL PARTICULARS</div>
-            
             <table class="bill-table">
-                <thead>
-                    <tr style="border-bottom: 8pt solid #000;">
-                        <th style="width: 45%;">DESCRIPTION</th>
-                        <th style="text-align:right; width: 20%;">RATE</th>
-                        <th style="text-align:center; width: 10%;">QTY</th>
-                        <th style="text-align:right; width: 25%;">TOTAL</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${billRows}
-                </tbody>
+                <thead><tr style="border-bottom: 8pt solid #000;"><th style="text-align:left; font-size: 30pt;">DESCRIPTION</th><th style="text-align:right; font-size: 30pt;">RATE</th><th style="text-align:center; font-size: 30pt;">QTY</th><th style="text-align:right; font-size: 30pt;">TOTAL</th></tr></thead>
+                <tbody>${billRows}</tbody>
             </table>
-
-            <div class="heavy-bar" style="display: flex; justify-content: space-between; margin-top: 20px;">
-                <span>GRAND TOTAL:</span>
-                <span>₹ ${billTotal.toLocaleString('en-IN')}</span>
-            </div>
-            
-            <div style="font-size: 32pt; font-weight: 900; text-align: left; margin-top: 20px; font-style: italic;">
-                Words: ${numberToWords(billTotal)}
-            </div>
-
-            <div style="margin-top: 150px;">
-                <div class="sig-box-name">${currentUser.name || 'System Auditor'}</div>
-                <div class="sig-box-desc">AUTHORIZED SIGNATORY</div>
-            </div>
-            
-            <div class="footer-stamp">
-                COMPUTER GENERATED INVOICE | PRINTED ON: ${new Date().toLocaleString('en-IN')}
-            </div>
+            <div class="heavy-bar" style="display: flex; justify-content: space-between;"><span>GRAND TOTAL:</span><span>₹ ${billTotal.toLocaleString('en-IN')}</span></div>
+            <div style="margin-top: 150px; border-top: 10pt solid #000; width: 60%; font-size: 40pt; font-weight: 900; text-align: left;">AUTHORIZED SIGNATORY</div>
         </div>`;
 
-    // 7. Show the modal
     reportContainer.classList.remove("hidden");
     window.scrollTo(0, 0);
 };
