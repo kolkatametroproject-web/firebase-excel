@@ -2563,102 +2563,57 @@ window.closeAuditModal = () => document.getElementById("auditResultModal").class
 window.fetchAuditHistory = async (barcode) => {
     if (!barcode) return;
 
-    // Open popup
     const modal = document.getElementById("auditResultModal");
     const container = document.getElementById("auditTimelineContainer");
-    document.getElementById("auditModalBarcode").innerText = "Barcode: " + barcode;
-    modal.classList.remove("hidden");
+    
+    if(modal) modal.classList.remove("hidden");
+    document.getElementById("auditModalBarcode").innerText = "Tag ID: " + barcode;
 
-    container.innerHTML = `<div style="text-align:center; padding:20px;">Loading...</div>`;
+    if(container) container.innerHTML = `<div style="text-align:center; padding:20px;"><i class="fas fa-sync fa-spin"></i> Retrieving Secure Records...</div>`;
 
     try {
-        // FIX: Removed 'query' and 'orderByChild' which require database indexing.
-        // Instead, we fetch the logs reference directly and filter in the loop below.
         const snap = await get(ref(db, "logs"));
-
         if (!snap.exists()) {
-            container.innerHTML = `<div style="text-align:center;color:#777;">No history found</div>`;
+            container.innerHTML = `<div style="text-align:center;color:#777;">No history found in database</div>`;
             return;
         }
 
-        // 1. Collect only checkout & return matching the specific BARCODE
         let raw = [];
         snap.forEach(c => {
             const v = c.val();
-            // We add the barcode check here explicitly
-            if (v.barcode === barcode && (v.type === "CHECKOUT" || v.type === "RETURN")) {
+            // Filter logs by the specific barcode scanned
+            if (v.barcode === barcode) {
                 raw.push(v);
             }
         });
 
         if (raw.length === 0) {
-            container.innerHTML = `<div style="text-align:center;color:#777;">No history found for this item</div>`;
+            container.innerHTML = `<div style="text-align:center;color:#777;padding:20px;">No movement history for Tag: <b>${barcode}</b></div>`;
             return;
         }
 
-        // 2. sort old → new
-        raw.sort((a, b) => a.time - b.time);
+        // Sort: Newest movement first
+        raw.sort((a, b) => (b.time || 0) - (a.time || 0));
 
-        // 3. pair checkout + return
-        let records = [];
-        let open = null;
-
-        raw.forEach(l => {
-            if (l.type === "CHECKOUT") {
-                open = {
-                    user: l.takenBy,
-                    checkout: l.time,
-                    return: null
-                };
-                records.push(open);
-            }
-
-            if (l.type === "RETURN" && open) {
-                open.return = l.time;
-                open = null;
-            }
-        });
-
-        // 4. last 20 only (latest first)
-        records = records.slice(-20).reverse();
-
-        // 5. render popup cards
         container.innerHTML = "";
+        raw.forEach(l => {
+            let cardClass = "add";
+            if(l.type === "CHECKOUT") cardClass = "checkout";
+            if(l.type === "RETURN" || l.type === "ITEM_RESTOCKED") cardClass = "return";
 
-        records.forEach(r => {
-            const co = new Date(r.checkout).toLocaleString("en-IN", {
-                timeZone: "Asia/Kolkata",
-                day: "2-digit",
-                month: "short",
-                year: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: true
-            });
-
-            const ro = r.return
-                ? new Date(r.return).toLocaleString("en-IN", {
-                    timeZone: "Asia/Kolkata",
-                    day: "2-digit",
-                    month: "short",
-                    year: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    hour12: true
-                })
-                : "Still Holding";
+            const timeStr = new Date(l.time).toLocaleString('en-IN');
 
             container.innerHTML += `
-                <div class="history-card ${r.return ? 'return' : 'checkout'}">
+                <div class="history-card ${cardClass}">
                     <div class="hc-header">
-                        <span class="hc-user">👤 ${r.user}</span>
-                        <span style="font-size:11px;color:#666;">
-                            ${r.return ? 'RETURNED' : 'OUT'}
-                        </span>
+                        <span class="hc-user">👤 ${l.takenBy || l.by || 'System'}</span>
+                        <span style="font-size:10px; font-weight:bold; text-transform:uppercase;">${l.type}</span>
                     </div>
                     <div class="hc-meta">
-                        📤 Checkout: <b>${co}</b><br>
-                        📥 Return: <b>${ro}</b>
+                        <b>Date:</b> ${timeStr}<br>
+                        <b>Site:</b> ${l.assignedStation || l.location || 'N/A'}<br>
+                        ${l.reason ? `<b>Reason:</b> ${l.reason}` : ''}
+                        ${l.invoice ? `<b>Invoice:</b> ${l.invoice}` : ''}
                     </div>
                 </div>
             `;
@@ -2666,7 +2621,7 @@ window.fetchAuditHistory = async (barcode) => {
 
     } catch (e) {
         console.error(e);
-        container.innerHTML = `<div style="color:red;text-align:center;">Error loading data: ${e.message}</div>`;
+        if(container) container.innerHTML = `<div style="color:red;text-align:center;">Sync Error: ${e.message}</div>`;
     }
 };
 // --- 3. HELPER TO CLOSE MODAL ---
@@ -2760,12 +2715,41 @@ window.onScanSuccess = async function(decodedText) {
     closeBarcodeScanner();
     console.log("SCANNED:", decodedText, "MODE:", scanMode);
 
+    // --- MODE: INVENTORY LIST SEARCH ---
+    if (scanMode === 'SEARCH_STOCK') {
+        const searchInput = document.getElementById("mainStockSearch");
+        if(searchInput) {
+            searchInput.value = decodedText;
+            window.filterStockTable(); // Trigger the search logic manually
+        }
+        return;
+    }
+
+    // --- MODE: AUDIT TRAIL SEARCH ---
+    if (scanMode === 'AUDIT_SEARCH') {
+        const auditInput = document.getElementById("auditSearchInput");
+        if(auditInput) {
+            auditInput.value = decodedText;
+            window.fetchAuditHistory(decodedText); // Trigger the history fetch manually
+        }
+        return;
+    }
+
+    // --- MODE: ADD NEW ASSET ---
     if (scanMode === 'ADD') {
         document.getElementById("invBarcode").value = decodedText;
         checkBarcodeUnique(decodedText);
         return;
     }
 
+    // --- MODE: BILLING SCAN ---
+    if (scanMode === 'BILLING_SCAN') {
+        document.getElementById("billBarcodeInp").value = decodedText;
+        addScannedItemToBill();
+        return; 
+    }
+
+    // --- MODE: CHECKOUT / RETURN ---
     if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
         const isCheckout = scanMode === 'CHECKOUT';
         const displayId = isCheckout ? "checkout_display" : "return_display";
@@ -2787,24 +2771,17 @@ window.onScanSuccess = async function(decodedText) {
             let item = null;
             let itemKey = null;
             snap.forEach(c => { item = c.val(); itemKey = c.key; });
-            let itemData = snap.val();
-    
-    if(itemData.status === "Sold Out") {
-        document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ CANNOT PROCESS: ITEM SOLD</span>`;
-        alert("This item has been sold out and cannot be used for tasks.");
-        return;
-    }
+
+            if(item.status === "Sold Out") {
+                document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ ITEM SOLD: ${item.assignedStation}</span>`;
+                alert("Cannot process: This item has been sold out.");
+                return;
+            }
 
             pendingTransactionItem = { key: itemKey, ...item };
             document.getElementById(nameId).innerHTML = `✔ Ready: ${item.item}`;
             document.getElementById(authBtnId).style.display = "block";
         } catch (err) { console.error(err); }
-    }
-
-    if (scanMode === 'BILLING_SCAN') {
-        document.getElementById("billBarcodeInp").value = decodedText;
-        addScannedItemToBill();
-        return; 
     }
 };
 // --- 4. EMPTY/DUMMY LOAD HISTORY (Prevents errors when clicking tab) ---
