@@ -1436,31 +1436,37 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
         </div>
     </div>
 </div>
- <div id="tab-billing" class="hidden">
+<div id="tab-billing" class="hidden">
     <div class="panel">
-        <h3><i class="fas fa-cash-register"></i> Retail Billing Console</h3>
+        <h3><i class="fas fa-cash-register"></i> Official Retail Billing Console</h3>
         
-        <div style="background:#f8fafc; padding:15px; border-radius:6px; border:1px solid #e2e8f0; margin-bottom:20px; display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:15px;">
+        <div style="background:#f8fafc; padding:15px; border-radius:6px; border:1px solid #e2e8f0; margin-bottom:20px; display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:15px;">
             <div><label style="font-size:11px; font-weight:bold;">Customer Name</label><input id="billCustName" placeholder="Full Name"></div>
-            <div><label style="font-size:11px; font-weight:bold;">Contact/Mobile</label><input id="billCustPhone" placeholder="Optional"></div>
-            <div><label style="font-size:11px; font-weight:bold;">Billing Address</label><input id="billCustAddr" placeholder="Address"></div>
+            <div><label style="font-size:11px; font-weight:bold;">Billing Address / Mobile</label><input id="billCustAddr" placeholder="Address & Contact"></div>
         </div>
 
         <div style="background:var(--metro-blue); padding:15px; border-radius:8px; color:white; margin-bottom:20px;">
-            <div style="display:grid; grid-template-columns: 2fr 1fr 1fr auto; gap:10px; align-items:end;">
+            <div style="display:grid; grid-template-columns: 1.5fr 1fr 1fr 1.5fr auto; gap:10px; align-items:end;">
                 <div>
-                    <label style="font-size:11px; font-weight:bold; color:var(--metro-gold);">SELECT ASSET</label>
-                    <select id="billAssetSelect" style="margin:0;"></select>
+                    <label style="font-size:11px; font-weight:bold; color:var(--metro-gold);">1. ASSET TAG / SCAN QR</label>
+                    <div style="display:flex; gap:5px;">
+                        <input id="billBarcodeInp" placeholder="Scan or Type Tag..." style="margin:0;">
+                        <button onclick="openBarcodeScanner('BILLING_SCAN')" class="secondary" style="padding:0 10px; width:45px;"><i class="fas fa-qrcode"></i></button>
+                    </div>
                 </div>
                 <div>
-                    <label style="font-size:11px; font-weight:bold; color:var(--metro-gold);">QUANTITY</label>
+                    <label style="font-size:11px; font-weight:bold; color:var(--metro-gold);">2. QUANTITY</label>
                     <input type="number" id="billQty" value="1" style="margin:0;">
                 </div>
                 <div>
-                    <label style="font-size:11px; font-weight:bold; color:var(--metro-gold);">ADDL. CHARGE (₹)</label>
-                    <input type="number" id="billAddl" value="0" style="margin:0;">
+                    <label style="font-size:11px; font-weight:bold; color:var(--metro-gold);">3. EXTRA WORK (₹)</label>
+                    <input type="number" id="billAddl" value="0" style="margin:0;" placeholder="Amt">
                 </div>
-                <button onclick="addToBillCart()" class="success" style="height:42px; border:none; padding:0 20px; font-weight:800;">+ ADD ITEM</button>
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--metro-gold);">4. WORK TYPE (Calibration/Testing)</label>
+                    <input id="billAddlDesc" placeholder="e.g. Calibration" style="margin:0;">
+                </div>
+                <button onclick="addScannedItemToBill()" class="success" style="height:42px; border:none; padding:0 15px; font-weight:800;">+ ADD</button>
             </div>
         </div>
 
@@ -1469,10 +1475,11 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
             <table>
                 <thead>
                     <tr style="background:#f1f5f9;">
-                        <th>Product Description</th>
+                        <th>Product Details</th>
                         <th style="text-align:center;">Qty</th>
                         <th style="text-align:right;">Sell Rate (₹)</th>
-                        <th style="text-align:right;">Total (₹)</th>
+                        <th style="text-align:left;">Extra Work Details</th>
+                        <th style="text-align:right;">Subtotal (₹)</th>
                         <th style="text-align:center;">Action</th>
                     </tr>
                 </thead>
@@ -1485,7 +1492,7 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
         </div>
 
         <button type="button" class="info" onclick="generateInvoicePrint()" style="margin-top:20px; width:100%; padding:18px; font-weight:900; font-size:16px;">
-            <i class="fas fa-print"></i> GENERATE OFFICIAL SALES INVOICE
+            <i class="fas fa-print"></i> GENERATE OFFICIAL RECEIPT
         </button>
     </div>
 </div>
@@ -6643,47 +6650,51 @@ window.verifyOTP = async () => {
 };
   let billCart = [];
 
-async function populateBillingAssets() {
-    const sel = document.getElementById("billAssetSelect");
-    if(!sel) return;
-    const snap = await get(ref(db, "inventory"));
-    sel.innerHTML = "<option value=''>-- Select Item --</option>";
-    if(snap.exists()){
-        snap.forEach(c => {
-            const v = c.val();
-            const opt = document.createElement("option");
-            opt.value = c.key;
-            opt.text = v.item;
-            opt.dataset.purchase = v.purchasePrice || 0; 
-            sel.appendChild(opt);
-        });
-    }
-}
-
-window.addToBillCart = () => {
-    const sel = document.getElementById("billAssetSelect");
-    const opt = sel.options[sel.selectedIndex];
+// --- AUTO-ADD VIA TAG ID OR QR ---
+window.addScannedItemToBill = async () => {
+    const barcode = document.getElementById("billBarcodeInp").value.trim();
     const qty = parseInt(document.getElementById("billQty").value) || 1;
-    const addl = parseFloat(document.getElementById("billAddl").value) || 0;
+    const extraAmt = parseFloat(document.getElementById("billAddl").value) || 0;
+    const extraDesc = document.getElementById("billAddlDesc").value.trim() || "-";
 
-    if(!sel.value) return alert("Select a product first.");
+    if(!barcode) return alert("Please Scan QR or Enter Tag ID.");
 
-    const purchasePrice = parseFloat(opt.dataset.purchase);
-    // Logic: Purchase Price + 20% Profit + Additional Charge
-    const sellingRate = (purchasePrice * 1.20) + addl;
-    const lineTotal = sellingRate * qty;
+    try {
+        // Fetch specific asset from DB using the barcode column
+        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode));
+        const snap = await get(q);
 
-    billCart.push({
-        id: sel.value,
-        name: opt.text,
-        qty: qty,
-        rate: sellingRate,
-        total: lineTotal
-    });
+        if (!snap.exists()) return alert("Error: Asset Tag ID not recognized.");
 
-    renderBillCart();
-    document.getElementById("billQty").value = 1;
-    document.getElementById("billAddl").value = 0;
+        let itemData = null;
+        snap.forEach(c => { itemData = c.val(); });
+
+        // Retrieve purchase price saved from Asset Tracker tab
+        const purchasePrice = parseFloat(itemData.purchasePrice) || 0;
+        
+        // Calculation: (Price + 20% Profit) * Qty + Extra Work Charges
+        const sellingRate = purchasePrice * 1.20;
+        const lineTotal = (sellingRate * qty) + extraAmt;
+
+        billCart.push({
+            name: itemData.item,
+            tag: barcode,
+            qty: qty,
+            rate: sellingRate, 
+            extra: extraAmt,
+            extraWork: extraDesc,
+            total: lineTotal
+        });
+
+        renderBillCart();
+
+        // Reset inputs for next item
+        document.getElementById("billBarcodeInp").value = "";
+        document.getElementById("billAddl").value = 0;
+        document.getElementById("billAddlDesc").value = "";
+        document.getElementById("billBarcodeInp").focus();
+
+    } catch (e) { alert("System Error: " + e.message); }
 };
 
 function renderBillCart() {
@@ -6695,13 +6706,12 @@ function renderBillCart() {
         grandTotal += item.total;
         tbody.innerHTML += `
             <tr>
-                <td style="font-weight:bold;">${item.name}</td>
+                <td><b>${item.name}</b><br><small style="color:#666;">Tag: ${item.tag}</small></td>
                 <td style="text-align:center;">${item.qty}</td>
                 <td style="text-align:right;">₹ ${item.rate.toFixed(2)}</td>
+                <td style="font-size:11px;"><b>₹ ${item.extra}</b>: ${item.extraWork}</td>
                 <td style="text-align:right; font-weight:bold;">₹ ${item.total.toFixed(2)}</td>
-                <td style="text-align:center;">
-                    <button class="danger" onclick="removeFromCart(${index})" style="padding:2px 8px;">X</button>
-                </td>
+                <td style="text-align:center;"><button class="danger" onclick="removeFromCart(${index})">X</button></td>
             </tr>`;
     });
     document.getElementById("billGrandTotalDisp").innerText = grandTotal.toLocaleString('en-IN');
@@ -6712,86 +6722,90 @@ window.removeFromCart = (index) => {
     renderBillCart();
 };
 
+// --- OFFICIAL RECEIPT PRINT ---
 window.generateInvoicePrint = function() {
-    if(billCart.length === 0) return alert("Your cart is empty.");
-    const custName = document.getElementById("billCustName").value || "Walk-in Customer";
-    const custAddr = document.getElementById("billCustAddr").value || "N/A";
-    const custMob = document.getElementById("billCustPhone").value || "";
+    if(billCart.length === 0) return alert("Please add products to the invoice.");
+    
+    const custName = document.getElementById("billCustName").value || "Valued Customer";
+    const custAddr = document.getElementById("billCustAddr").value || "-";
     const grandTotal = document.getElementById("billGrandTotalDisp").innerText;
     
     const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
     const printTimestamp = now.toLocaleString('en-IN');
 
     const reportContainer = document.getElementById("printableReportContainer");
+    
     let itemsHtml = "";
     billCart.forEach(item => {
         itemsHtml += `
-            <tr style="border-bottom:3pt solid #000; font-size:32pt !important; font-weight:900;">
-                <td style="padding:15px 10px; text-align:left;">${item.name}</td>
-                <td style="padding:15px 10px; text-align:center;">${item.qty}</td>
-                <td style="padding:15px 10px; text-align:right;">${item.rate.toFixed(2)}</td>
-                <td style="padding:15px 10px; text-align:right;">${item.total.toFixed(2)}</td>
+            <tr style="border-bottom:2pt solid #000; font-size:26pt !important; font-weight:900;">
+                <td style="padding:15px 10px; text-align:left;">
+                    ${item.name}<br>
+                    <span style="font-size:18pt; color:#444;">ID: ${item.tag}</span>
+                </td>
+                <td style="text-align:center;">${item.qty}</td>
+                <td style="text-align:right;">${item.rate.toFixed(2)}</td>
+                <td style="text-align:left; font-size:20pt; padding-left:15px;">
+                    ₹${item.extra} (${item.extraWork})
+                </td>
+                <td style="text-align:right;">${item.total.toFixed(2)}</td>
             </tr>`;
     });
 
     reportContainer.innerHTML = `
-        <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
-            <button class="danger" onclick="closeReportPreview()">CLOSE PREVIEW</button>
-            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 30px; font-weight:bold; font-size:22px; margin-left:10px;">PRINT INVOICE</button>
-        </div>
-
+        <div class="no-print" style="text-align:center; padding:15px;"><button class="danger" onclick="closeReportPreview()">CLOSE</button> <button onclick="window.print()">PRINT RECEIPT</button></div>
         <div class="report-paper a4-max-wrapper">
             <style>
                 @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 10mm !important; } }
                 .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; text-align: center; }
-                .header-box { border-bottom: 15pt solid #000; padding-bottom: 20px; margin-bottom: 35px; }
-                .title-main { font-size: 65pt; font-weight: 900; text-transform: uppercase; }
-                .max-label { font-size: 38pt; text-decoration: underline; display: block; margin-top: 35px; text-align: left; }
-                .max-value { font-size: 48pt; font-weight: 900; display: block; border-bottom: 7pt solid #000; padding-bottom: 10px; text-align: left; line-height: 1.1; white-space: pre-wrap; word-wrap: break-word; }
-                .heavy-bar { background: #000; color: #fff; padding: 25px; font-size: 55pt; margin: 60px 0 40px 0; text-transform: uppercase; -webkit-print-color-adjust: exact; }
-                .sig-box-name { margin-top: 150px; border-top: 12pt solid #000; padding-top: 25px; font-size: 58pt; font-weight: 900; text-align: left; }
+                .header-box { border-bottom: 14pt solid #000 !important; padding-bottom: 25px !important; margin-bottom: 35px !important; }
+                .title-main { font-size: 62pt !important; font-weight: 900; text-transform: uppercase !important; } 
+                .max-label { font-size: 38pt !important; text-decoration: underline !important; display: block !important; margin-top: 35px !important; text-align: left !important; }
+                .max-value { font-size: 48pt !important; font-weight: 900 !important; display: block !important; border-bottom: 7pt solid #000 !important; padding-bottom: 12px !important; text-align: left !important; white-space: pre-wrap; }
+                .heavy-bar { background: #000 !important; color: #fff !important; padding: 25px !important; font-size: 52pt !important; margin: 60px 0 40px 0 !important; text-transform: uppercase !important; -webkit-print-color-adjust: exact !important; }
+                .sig-box-name { margin-top: 130px !important; border-top: 12pt solid #000 !important; padding-top: 25px !important; font-size: 56pt !important; font-weight: 900; text-align: left !important; line-height: 1; }
             </style>
-
             <div class="header-box">
                 <div class="title-main">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div style="font-size: 40pt; border: 8pt solid #000; margin-top: 40px; padding: 20px; font-weight: 900; display: inline-block;">OFFICIAL RETAIL INVOICE</div>
+                <div style="font-size: 40pt; border: 8pt solid #000; margin-top: 40px; padding: 20px; font-weight: 900; display: inline-block;">OFFICIAL TAX INVOICE</div>
             </div>
-
             <span class="max-label">CUSTOMER NAME:</span><span class="max-value">${custName}</span>
-            <span class="max-label">ADDRESS / CONTACT:</span><span class="max-value">${custAddr} ${custMob}</span>
-            <span class="max-label">DATE:</span><span class="max-value">${now.toLocaleDateString('en-IN')}</span>
-
-            <div class="heavy-bar">PURCHASED ITEMS</div>
-            <table style="width:100%; border-collapse:collapse; margin-top:20px;">
+            <span class="max-label">ADDRESS / MOBILE:</span><span class="max-value">${custAddr}</span>
+            <span class="max-label">DATE:</span><span class="max-value">${dateStr}</span>
+            <div class="heavy-bar">ITEMIZED SUMMARY</div>
+            <table style="width:100%; border-collapse:collapse;">
                 <thead>
-                    <tr style="border-bottom:10pt solid #000; font-size:34pt !important; font-weight:bold;">
-                        <th style="text-align:left; padding:10px;">ITEM</th>
+                    <tr style="border-bottom:10pt solid #000; font-size:32pt;">
+                        <th style="text-align:left;">ITEM</th>
                         <th>QTY</th>
-                        <th style="text-align:right;">RATE</th>
+                        <th>RATE</th>
+                        <th>EXTRA WORK</th>
                         <th style="text-align:right;">TOTAL</th>
                     </tr>
                 </thead>
                 <tbody>${itemsHtml}</tbody>
             </table>
-
-            <div style="text-align:right; margin-top:50px; font-size:75pt !important; font-weight:900; border-top:15pt solid #000; padding-top:20px;">
+            <div style="text-align:right; margin-top:50px; font-size:65pt !important; font-weight:900; border-top:12pt solid #000; padding-top:20px;">
                 PAYABLE: ₹ ${grandTotal}
             </div>
-
             <div class="sig-box-name">${currentUser.name}</div>
-            <div style="font-size: 32pt; text-align:left; font-weight:bold; margin-bottom:10px;">
-                ${isAdmin ? "(SYSTEM ADMINISTRATOR)" : "(CONDUCTING OFFICER)"}
-            </div>
-            <div class="sig-box-desc">AUTHORIZED SIGNATORY</div>
-            
-            <div style="margin-top: 60px; font-size: 14pt; border-top: 2pt dashed #000; padding-top: 20px; font-weight: bold;">
-                COMPUTER GENERATED INVOICE | GENERATED: ${printTimestamp}
+            <div style="font-size: 40pt; font-weight: 900; text-align: left; text-transform: uppercase;">AUTHORIZED BILLING OFFICER</div>
+            <div style="margin-top: 50px; font-size: 14pt; text-align: center; border-top: 2pt dashed #000; padding-top: 20px; font-weight: bold;">
+                COMPUTER GENERATED RECORD | GENERATED: ${printTimestamp}
             </div>
         </div>`;
-
     reportContainer.classList.remove("hidden");
     window.scrollTo(0, 0);
 };
+
+// Integration with your Global QR Scanner
+// Ensure this logic is added inside your onScanSuccess function:
+if (scanMode === 'BILLING_SCAN') {
+    document.getElementById("billBarcodeInp").value = decodedText;
+    addScannedItemToBill();
+    return;
+}
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
