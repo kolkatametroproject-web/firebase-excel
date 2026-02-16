@@ -1716,6 +1716,7 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
     <button onclick="toggleWarMode('setup')" class="secondary"><i class="fas fa-tools"></i> Warranty Setup</button>
     <button onclick="toggleWarMode('sales')" class="info" style="background:#6366f1; border:none;"><i class="fas fa-receipt"></i> Sales History</button>
     <button onclick="toggleWarMode('claim')" class="warning"><i class="fas fa-qrcode"></i> Scan & Claim</button>
+    <button onclick="toggleWarMode('recovery')" class="danger" style="background:#be123c;"><i class="fas fa-undo-alt"></i> Asset Recovery</button>
     <button onclick="toggleWarMode('active')" class="success"><i class="fas fa-clipboard-list"></i> Active Coverage</button>
 </div>
 
@@ -1861,6 +1862,20 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
             <tbody id="warActiveTableBody"></tbody>
         </table>
     </div>
+</div>
+    <div id="war-recovery" class="panel hidden" style="border-top: 5px solid #be123c;">
+    <h3 style="color:#be123c;"><i class="fas fa-box-open"></i> Bulk/Fast Asset Recovery (Sold -> In-Stock)</h3>
+    <div style="background:#fff1f2; padding:20px; border-radius:8px; margin-bottom:20px;">
+        <label style="font-weight:bold; font-size:12px;">STEP 1: ENTER GLOBAL RETURN REASON</label>
+        <input id="recoveryReason" placeholder="e.g. Project Cancelled, Calibration Required, Defective Replacement" style="border:2px solid #be123c;">
+        
+        <p style="text-align:center; margin-top:20px;">
+            <button onclick="openBarcodeScanner('ASSET_RECOVERY')" class="danger" style="padding:15px 40px; font-size:16px; width:100%; max-width:400px;">
+                <i class="fas fa-qrcode"></i> SCAN TO RETURN TO STOCK
+            </button>
+        </p>
+    </div>
+    <div id="recoveryStatus" style="text-align:center; font-weight:bold; font-size:14px; color:#15803d;"></div>
 </div>
 </div>
 </section>
@@ -6263,12 +6278,9 @@ function loadInventory() {
     const summaryEl = document.getElementById("stockSummaryText");
     if(!b) return;
 
-    // Real-time listener for Inventory changes
     onValue(ref(db, "inventory"), snap => {
         b.innerHTML = "";
         let total = 0, available = 0;
-        const NOW = Date.now();
-        const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000; // 604,800,000 ms
 
         if(!snap.exists()) {
             b.innerHTML = "<tr><td colspan='8' style='text-align:center; padding:20px;'>Empty Stock / Database Syncing...</td></tr>";
@@ -6283,32 +6295,24 @@ function loadInventory() {
             const isSold = v.status === "Sold Out";
             if(!isSold && v.status !== "Checked Out") available++;
 
-            // 1. RE-STOCK LOGIC: Check if sale is within 7-day window for warranty/revert
-            const canRevert = isSold && v.soldAt && (NOW - v.soldAt < SEVEN_DAYS);
-            
-            // 2. STATUS UI STYLING
-            let statusStyle = "background:#dcfce7; color:#166534;"; // Default: In Stock
+            // STATUS UI STYLING
+            let statusStyle = "background:#dcfce7; color:#166534;"; 
             if(v.status === "Checked Out") statusStyle = "background:#fef3c7; color:#d97706;";
             if(isSold) statusStyle = "background:#000; color:#fff; border: 1px solid #333;";
 
-            // 3. ACTION LOCKING: Lock Edit/Delete for Sold items
+            // --- RE-STOCK OPTION DELETED FROM HERE ---
+            // Only Edit (if not sold) and Delete (if admin) remain.
             const editBtn = isSold ? 
                 `<button disabled style="opacity:0.3; cursor:not-allowed; padding:2px 6px; font-size:10px;">EDIT</button>` : 
                 `<button class="warning" onclick="editExistingItem('${k}')" style="padding:2px 6px; font-size:10px;">EDIT</button>`;
 
-            // 4. RE-STOCK BUTTON: Visible only if item was sold < 7 days ago
-            const bringBackBtn = canRevert ? 
-                `<button class="success" onclick="revertSale('${k}', '${v.item}')" style="padding:2px 6px; font-size:10px; margin-left:4px; background:#15803d; color:white;">RE-STOCK</button>` : "";
-
             const deleteBtn = (isAdmin && !isSold) ? 
                 `<button class="danger" onclick="delInv('${k}')" style="padding:2px 6px; font-size:10px; margin-left:4px;">DEL</button>` : "";
 
-            // 5. DATA LABELS (Station, Invoice, and Sold Date)
             const soldDateStr = v.soldAt ? new Date(v.soldAt).toLocaleDateString('en-IN') : "-";
             const invoiceLabel = v.invoiceNo ? `<div style="font-size:9px; color:#64748b; font-family:monospace; margin-top:2px;">📜 ID: ${v.invoiceNo}</div>` : "";
             const stationLabel = v.assignedStation ? `<div style="color:#B91C1C; font-weight:bold; font-size:10px; margin-top:2px;">📍 ${v.assignedStation}</div>` : "";
 
-            // 6. RENDER ROW
             b.innerHTML += `
             <tr class="stock-row" data-invoice="${v.invoiceNo || ''}" style="${isSold ? 'background:#f1f5f9; color:#64748b;' : ''}">
                 <td style="font-family:monospace; font-weight:bold;">${v.barcode || '--'}</td>
@@ -6328,13 +6332,11 @@ function loadInventory() {
                 </td>
                 <td style="text-align:center; white-space:nowrap;">
                     ${editBtn}
-                    ${bringBackBtn}
                     ${deleteBtn}
                 </td>
             </tr>`;
         });
 
-        // Update top summary text
         if(summaryEl) {
             summaryEl.innerHTML = `Total Assets: ${total} | <span style="color:green; font-weight:bold;">Ready for Use: ${available}</span>`;
         }
@@ -7266,12 +7268,11 @@ function calculateWarranty(saleDateTs, durationMonths, manualStartDate = null) {
 
 // 2. Navigation Controller
 window.toggleWarMode = (mode) => {
-    const panels = ['dash', 'setup', 'sales', 'claim', 'active'];
+    const panels = ['dash', 'setup', 'sales', 'claim', 'active', 'recovery']; // Added recovery
     panels.forEach(m => {
         const el = document.getElementById(`war-${m}`);
         if(el) el.classList.add('hidden');
     });
-    
     const target = document.getElementById(`war-${mode}`);
     if(target) target.classList.remove('hidden');
 
@@ -7416,16 +7417,88 @@ items.forEach(it => {
 // 5. Scan Success Handler
 const oldOnScanSuccess = window.onScanSuccess;
 window.onScanSuccess = async function(decodedText) {
+    // 1. Immediately stop scanner and clear UI to prevent ghost scans
+    closeBarcodeScanner();
+    console.log("SCANNED TAG:", decodedText);
+
+    // --- MODE: ASSET RECOVERY (FAST SCAN RETURN TO STOCK) ---
+    if (scanMode === 'ASSET_RECOVERY') {
+        const reason = document.getElementById("recoveryReason").value.trim();
+        const statusDiv = document.getElementById("recoveryStatus");
+        
+        // Validation: Ensure reason is set before scan
+        if(!reason) {
+            alert("⚠️ STOP: Please enter a Return Reason BEFORE scanning.");
+            return;
+        }
+
+        statusDiv.innerHTML = `<i class="fas fa-sync fa-spin"></i> Recovering Tag: ${decodedText}...`;
+        statusDiv.style.color = "var(--metro-blue)";
+
+        try {
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
+            const snap = await get(q);
+
+            if (!snap.exists()) {
+                statusDiv.innerHTML = "❌ Error: Tag ID not registered in database.";
+                statusDiv.style.color = "var(--metro-red)";
+                return;
+            }
+
+            let key, item;
+            snap.forEach(c => { key = c.key; item = c.val(); });
+
+            // Restriction: Only recover items that are currently "Sold Out"
+            if (item.status !== "Sold Out") {
+                statusDiv.innerHTML = `❌ Error: ${item.item} is already in stock.`;
+                statusDiv.style.color = "var(--metro-red)";
+                return;
+            }
+
+            // High-Speed Database Update (Strip Sale Data)
+            await update(ref(db, `inventory/${key}`), {
+                status: "In Stock",
+                holder: "Store",
+                location: "Recovered via Scan [" + reason + "]",
+                soldAt: null,
+                invoiceNo: null,
+                assignedStation: null,
+                // We keep protectionActivated: true if it was set so dashboard count stays stable
+            });
+
+            // Log the recovery for audit trails
+            await push(ref(db, "logs"), {
+                type: "ITEM_RECOVERED",
+                item: item.item,
+                barcode: decodedText,
+                reason: reason,
+                time: serverTimestamp(),
+                by: currentUser.name || currentUser.email
+            });
+
+            statusDiv.innerHTML = `✅ SUCCESS: ${item.item} is now back in Stock.`;
+            statusDiv.style.color = "var(--success-green)";
+            
+            // Refresh counts
+            if (typeof refreshWarDash === "function") refreshWarDash();
+            
+        } catch (e) {
+            console.error(e);
+            statusDiv.innerHTML = "❌ System Error: " + e.message;
+        }
+        return; // End execution for this mode
+    }
+
+    // --- MODE: WARRANTY CLAIM ENGINE ---
     if(scanMode === 'WARRANTY_CLAIM') {
-        closeBarcodeScanner();
         const display = document.getElementById("claimDisplay");
         if(display) display.classList.remove("hidden");
         
         const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
         const snap = await get(q);
+        const statusBox = document.getElementById("claimStatusBox");
         
         if(!snap.exists()) {
-            const statusBox = document.getElementById("claimStatusBox");
             if(statusBox) statusBox.innerHTML = `<span style="color:red;">❌ TAG ID NOT REGISTERED</span>`;
             return;
         }
@@ -7438,7 +7511,6 @@ window.onScanSuccess = async function(decodedText) {
         document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
         document.getElementById("claimDate").innerText = war ? war.start : "NOT DEPLOYED";
         
-        const statusBox = document.getElementById("claimStatusBox");
         if(item.status !== "Sold Out") {
             statusBox.innerHTML = `<span style="color:#d97706;">❌ ITEM NOT YET DEPLOYED</span>`;
             document.getElementById("btnFinalClaim").disabled = true;
@@ -7458,9 +7530,10 @@ window.onScanSuccess = async function(decodedText) {
         }
         return;
     }
+
+    // --- FALLBACK TO OTHER MODES (Inventory Search, Billing, etc) ---
     if(typeof oldOnScanSuccess === "function") oldOnScanSuccess(decodedText);
 };
-
 // 6. Support Loaders (Dashboard, Setup, Active List, Sales)
 async function refreshWarDash() {
     try {
