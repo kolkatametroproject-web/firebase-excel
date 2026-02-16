@@ -1955,34 +1955,41 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
     </div>
 
     <div id="techDiagnosisArea" class="hidden" style="margin-top:25px; border:1px solid #ddd; border-radius:8px; overflow:hidden; background:white;">
-        <div style="background:#232f3e; color:white; padding:15px; font-weight:bold; display:flex; justify-content:space-between;">
-            <span>DIAGNOSTIC LOCK: <span id="techTicketIdDisplay">#---</span></span>
-            <span id="techOriginalInvoice" style="font-family:monospace; color:#febd69;">REF INV: ---</span>
-        </div>
-        
-        <div style="padding:20px; display:grid; grid-template-columns: 1fr 1fr; gap:20px; background:#fffaf0;">
-            <div>
-                <label style="font-size:10px; font-weight:bold; color:#666;">ASSET & PURCHASE DATA</label>
-                <div id="techAssetData" style="font-size:16px; font-weight:900;">--</div>
-                <div id="techPurchasePrice" style="color:green; font-weight:bold;">--</div>
-            </div>
-            <div style="text-align:right;">
-                <label style="font-size:10px; font-weight:bold; color:#666;">REPORTED FAILURE</label>
-                <div id="techIssueData" style="font-size:14px; color:#b91c1c; font-style:italic; font-weight:bold;">--</div>
-            </div>
-        </div>
+    <div style="background:#232f3e; color:white; padding:15px; font-weight:bold; display:flex; justify-content:space-between;">
+        <span>DIAGNOSTIC LOCK: <span id="techTicketIdDisplay">#---</span></span>
+        <span id="techOriginalInvoice" style="font-family:monospace; color:#febd69;">REF INV: ---</span>
+    </div>
+    
+    <div style="padding:20px; background:#fffaf0; border-bottom:1px solid #eee;">
+        <label style="font-size:10px; font-weight:bold; color:#666;">STEP 1: IDENTITY VERIFICATION</label>
+        <input id="techNameInput" placeholder="Enter Technician Full Name" style="border:2px solid #ff9900; font-weight:bold; margin-top:5px;">
+    </div>
 
-        <div style="padding:20px; border-top:1px solid #eee;">
-            <label style="font-weight:bold; display:block; margin-bottom:10px;">TECHNICIAN RESOLUTION COMMAND:</label>
-            <select id="techActionSelect" style="border:2px solid #ff9900; font-weight:bold;">
-                <option value="REPAIR_COMPLETE">🔧 Item Repaired & Reinstalled</option>
-                <option value="REPLACE_PRODUCT">🔄 Beyond Repair: Request Replacement</option>
-                <option value="VOID_WARRANTY">⚠️ Void: Physical Damage Detected</option>
-            </select>
-            <textarea id="techCommandNotes" rows="3" placeholder="Enter technical observations..."></textarea>
-            <button class="success" onclick="submitTechResolution()" style="width:100%; padding:15px; background:#131a22;">SEND FOR ADMIN VERIFICATION</button>
+    <div style="padding:20px; display:grid; grid-template-columns: 1fr 1fr; gap:20px;">
+        <div>
+            <label style="font-size:10px; font-weight:bold; color:#666;">FAILED COMPONENT</label>
+            <input id="techFailedComponent" placeholder="e.g. IR Sensor, Microcontroller" style="margin-top:5px;">
+        </div>
+        <div>
+            <label style="font-size:10px; font-weight:bold; color:#666;">COMPONENT SERIAL / BATCH</label>
+            <input id="techComponentSerial" placeholder="Part ID Number" style="margin-top:5px;">
         </div>
     </div>
+
+    <div style="padding:20px; border-top:1px solid #eee;">
+        <label style="font-weight:bold; display:block; margin-bottom:10px;">STEP 2: RESOLUTION COMMAND</label>
+        <select id="techActionSelect" style="border:2px solid #ff9900; font-weight:bold;">
+            <option value="REPAIR_COMPLETE">🔧 Item Repaired & Reinstalled</option>
+            <option value="REPLACE_PRODUCT">🔄 Beyond Repair: Request Replacement</option>
+            <option value="VOID_WARRANTY">⚠️ Void: Physical Damage Detected</option>
+        </select>
+        <textarea id="techCommandNotes" rows="3" placeholder="Detailed technical observations..."></textarea>
+        
+        <button class="success" onclick="submitTechResolution()" style="width:100%; padding:15px; background:#131a22; font-weight:900; letter-spacing:1px;">
+            LOCK DIAGNOSIS & SEND TO ADMIN
+        </button>
+    </div>
+</div>
 </div>
 </div>
 </section>
@@ -8667,34 +8674,36 @@ window.onScanSuccess = async function(decodedText) {
 // --- SUPPORTING TECHNICIAN FUNCTIONS ---
 window.submitTechResolution = async () => {
     const ticketId = document.getElementById("techTicketIdDisplay").innerText.replace("#", "");
+    const techName = document.getElementById("techNameInput").value.trim();
+    const component = document.getElementById("techFailedComponent").value.trim();
+    const serial = document.getElementById("techComponentSerial").value.trim();
     const action = document.getElementById("techActionSelect").value;
-    const notes = document.getElementById("techCommandNotes").value;
-    
-    // NEW: Detailed Assessment Fields (Add these IDs to your HTML textareas/inputs)
-    const faultComponent = prompt("Which specific component failed? (e.g., IR Sensor, Power Regulator)");
-    const condition = prompt("Physical Condition? (e.g., Burn marks, Water damage, Normal wear)");
-    
-    if(!faultComponent || !condition || !notes) {
-        return alert("⚠️ SECURE PROTOCOL: All diagnostic fields must be filled for audit purposes.");
+    const notes = document.getElementById("techCommandNotes").value.trim();
+
+    if(!techName || !component || !notes) {
+        return alert("⚠️ SECURE ERROR: Technician Name, Failed Component, and Diagnostic Notes are MANDATORY.");
     }
 
-    if(!confirm("PROCEED WITH SUBMISSION?\n\nThis will lock your diagnosis and notify the System Administrator for final verification.")) return;
+    if(!confirm(`FINAL CONFIRMATION AS TECHNICIAN:\n\nName: ${techName}\nFailed Part: ${component}\nAction: ${action}\n\nDo you certify this diagnosis is accurate?`)) return;
 
+    // Find the real key from the short ID
     const snap = await get(ref(db, "warranty_claims"));
     let realKey = "";
     snap.forEach(c => { if(c.key.substring(1,10).toUpperCase() === ticketId) realKey = c.key; });
 
+    if(!realKey) return alert("Ticket ID Error.");
+
     await update(ref(db, `warranty_claims/${realKey}`), {
         status: "Verification Pending",
+        techName: techName,
+        failedComponent: component,
+        componentSerial: serial,
         techAction: action,
         techNotes: notes,
-        componentFailed: faultComponent,
-        physicalCondition: condition,
-        diagTime: serverTimestamp(),
-        technician: currentUser.name
+        diagTime: serverTimestamp()
     });
 
-    alert("✅ DIAGNOSIS LOGGED. Awaiting Admin final verification.");
+    alert("✅ DIAGNOSIS LOGGED. Ticket is now locked for Admin Audit.");
     document.getElementById("techDiagnosisArea").classList.add("hidden");
     toggleWarMode('claims-list');
 };
@@ -8729,37 +8738,38 @@ async function renderTechArea(ticketKey, claim) {
 }
 window.adminVerifyClaim = async (ticketKey, decision) => {
     const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
+    if(!snap.exists()) return;
     const data = snap.val();
 
-    // 1. SHOW OVERSIGHT SUMMARY
-    const summary = `
-        ADMIN OVERSIGHT SUMMARY:
-        ------------------------
-        Ticket: #${ticketKey.substring(1,10).toUpperCase()}
-        Asset: ${data.item}
-        Technician: ${data.technician}
+    // 1. Audit Summary View
+    const auditSummary = `
+        OFFICIAL AUDIT REPORT:
+        -------------------------
+        TECHNICIAN: ${data.techName}
+        FAULTY PART: ${data.failedComponent}
+        PART SERIAL: ${data.componentSerial || 'N/A'}
         
-        TECH DIAGNOSIS: ${data.techNotes}
-        FAILED COMPONENT: ${data.componentFailed}
-        CONDITION: ${data.physicalCondition}
-        
-        TECH RECOMMENDATION: ${data.techAction}
+        TECH FINDINGS: ${data.techNotes}
+        TECH COMMAND: ${data.techAction}
     `;
 
-    if(!confirm(summary + "\n\nDO YOU AUTHORIZE THIS RESOLUTION?")) return;
+    // 2. First confirmation: Authorizing the diagnosis
+    if(!confirm(auditSummary + "\n\nAUTHORIZE THIS TECHNICIAN REPORT?")) return;
 
     if(decision === 'REPLACE') {
-        if(confirm("FINAL CONFIRMATION: Generate Replacement Invoice and mark Original Asset as 'Decommissioned'?")) {
-            await generateReplacementBill(ticketKey); // Calls your existing bill generator
+        // 3. Second confirmation: Authorizing replacement costs/invoice
+        if(confirm("CRITICAL STEP: This will issue a Replacement Invoice and close the ticket. Proceed?")) {
+            await generateReplacementBill(ticketKey); 
+            alert("✅ Replacement Finalized.");
         }
-    } else {
-        if(confirm("FINAL CONFIRMATION: VOID this warranty? (This will permanently lock the claim)")) {
+    } else if(decision === 'VOID') {
+        if(confirm("CRITICAL STEP: This will permanently VOID this asset warranty. Are you absolutely sure?")) {
             await update(ref(db, `warranty_claims/${ticketKey}`), { 
                 status: "Voided", 
-                adminRemarks: "Voided after audit: Physical damage/Misuse.",
+                adminAuthorizer: currentUser.name,
                 resolutionDate: serverTimestamp() 
             });
-            alert("Claim Voided.");
+            alert("❌ Claim Permanently Voided.");
         }
     }
 };
