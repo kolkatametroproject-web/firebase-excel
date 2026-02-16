@@ -8508,54 +8508,69 @@ window.submitTechResolution = async () => {
     reportContainer.classList.remove("hidden");
     window.scrollTo(0, 0);
 };
-  // Function to toggle between Scanner and Manual Input
-// A. Toggle Manual Entry UI
+// Toggle between Scan Prompt and Manual Input Box
 window.toggleTechManualEntry = (showManual) => {
-    const prompt = document.getElementById("techScanPrompt");
-    const manual = document.getElementById("techManualEntry");
+    const scanPrompt = document.getElementById("techScanPrompt");
+    const manualBox = document.getElementById("techManualEntry");
+    
     if(showManual) {
-        prompt.classList.add("hidden");
-        manual.classList.remove("hidden");
+        scanPrompt.classList.add("hidden");
+        manualBox.classList.remove("hidden");
         document.getElementById("inpTechManualId").focus();
     } else {
-        prompt.classList.remove("hidden");
-        manual.classList.add("hidden");
+        scanPrompt.classList.remove("hidden");
+        manualBox.classList.add("hidden");
     }
 };
 
-// B. Process Manual Entry
+// Handle the "Fetch Details" button click
 window.processTechManualEntry = async () => {
     const manualId = document.getElementById("inpTechManualId").value.trim();
-    if(!manualId) return alert("Please enter the unique Ticket ID.");
+    if(!manualId) return alert("Please enter a valid Ticket ID.");
+
+    // Set mode so onScanSuccess knows how to handle the input
     scanMode = 'TECH_TICKET_SCAN';
+    
+    // We treat the manual ID exactly like a scanned QR code
     await onScanSuccess(manualId);
+    
+    // Cleanup
     document.getElementById("inpTechManualId").value = "";
     toggleTechManualEntry(false);
 };
-
 // C. Update onScanSuccess to correctly display # and handle manual ID
-// Locate your current window.onScanSuccess and ensure this section matches:
 if(scanMode === 'TECH_TICKET_SCAN') {
     try {
+        // Remove the # if they typed it manually
+        const cleanId = decodedText.replace("#", "").toUpperCase();
+        
+        // Try direct key fetch first
         const snap = await get(ref(db, `warranty_claims/${decodedText}`));
-        if(!snap.exists()) {
-            // If the code scanned is the SHORT ID (e.g. #ABCDEFG), we must find the real key
+        
+        if(snap.exists()) {
+            renderTechArea(decodedText, snap.val());
+        } else {
+            // Search all claims for the Short ID match
             const allClaims = await get(ref(db, "warranty_claims"));
             let foundKey = null;
             let claimData = null;
+            
             allClaims.forEach(c => {
-                if(c.key.substring(1, 10).toUpperCase() === decodedText.replace("#", "").toUpperCase()) {
+                if(c.key.substring(1, 10).toUpperCase() === cleanId) {
                     foundKey = c.key;
                     claimData = c.val();
                 }
             });
-            
-            if(!foundKey) return alert("❌ INVALID ID: Ticket not found.");
-            renderTechArea(foundKey, claimData);
-        } else {
-            renderTechArea(decodedText, snap.val());
+
+            if(foundKey) {
+                renderTechArea(foundKey, claimData);
+            } else {
+                alert("❌ Ticket ID not found in system.");
+            }
         }
-    } catch (err) { alert("Error: " + err.message); }
+    } catch (err) {
+        alert("System Error: " + err.message);
+    }
     return;
 }
 
