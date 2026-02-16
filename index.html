@@ -8225,9 +8225,21 @@ window.finalizeRecoveryCart = async () => {
             const isResolved = (v.status === "Resolved");
             
             // Progress Logic
-            let progress = "15%"; let step = 1;
-            if(v.status === "In Progress" || v.status === "Verification Pending") { progress = "60%"; step = 2; }
-            if(isResolved) { progress = "100%"; step = 3; }
+            let step = 1;
+let statusColor = "#ff9900"; // Default Orange
+
+if(v.status === "In Progress" || v.status === "Verification Pending") { 
+    progress = "60%"; step = 2; 
+}
+
+if(v.status === "Resolved") { 
+    progress = "100%"; step = 3; 
+}
+
+if(v.status === "Rejected" || v.status === "Voided") { 
+    progress = "100%"; step = 3; 
+    statusColor = "#b91c1c"; // Red for Rejection
+}
 
             // Visual Gray-out for Resolved
             const rowStyle = isResolved ? 
@@ -8246,16 +8258,13 @@ window.finalizeRecoveryCart = async () => {
 
 if(isAdmin && !isResolved) {
     if(v.status === "Verification Pending") {
-        // ADMIN SEEING THE TECH REPORT
         actionBtns += `
-            <button class="warning" onclick="adminVerifyClaim('${ticketKey}', 'REPLACE')" style="background:#e67e22; color:white; font-weight:bold;">
-                Verify & Replace
-            </button>
-            <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'VOID')" style="background:#b91c1c; color:white; margin-left:5px;">
-                Void Claim
-            </button>`;
-    } else {
-        actionBtns += `<button class="secondary" disabled>Awaiting Tech</button>`;
+            <div style="display:flex; gap:5px; margin-top:5px;">
+                <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'REPLACE')" style="font-size:10px; padding:5px;">✅ Replace</button>
+                <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'REJECT')" style="font-size:10px; padding:5px; background:#d97706; border:none;">❌ Reject</button>
+                <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'VOID')" style="font-size:10px; padding:5px;">🚫 Void</button>
+            </div>
+        `;
     }
 }
 
@@ -8646,38 +8655,64 @@ async function renderTechArea(ticketKey, claim) {
 }
 window.adminVerifyClaim = async (ticketKey, decision) => {
     const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
-    if(!snap.exists()) return;
+    if(!snap.exists()) return alert("Ticket not found.");
     const data = snap.val();
 
-    // 1. Audit Summary View
+    // 1. OVERSIGHT SUMMARY FOR ADMIN
     const auditSummary = `
-        OFFICIAL AUDIT REPORT:
-        -------------------------
-        TECHNICIAN: ${data.techName}
-        FAULTY PART: ${data.failedComponent}
-        PART SERIAL: ${data.componentSerial || 'N/A'}
-        
-        TECH FINDINGS: ${data.techNotes}
-        TECH COMMAND: ${data.techAction}
+        ADMIN OVERSIGHT REPORT
+        ----------------------
+        TECHNICIAN: ${data.techName || 'Unknown'}
+        PART: ${data.failedComponent || 'N/A'}
+        TECH NOTES: ${data.techNotes || 'N/A'}
+        TECH ACTION: ${data.techAction}
     `;
 
-    // 2. First confirmation: Authorizing the diagnosis
-    if(!confirm(auditSummary + "\n\nAUTHORIZE THIS TECHNICIAN REPORT?")) return;
+    // 2. REJECTION LOGIC
+    if(decision === 'REJECT') {
+        const rejectReason = prompt(auditSummary + "\n\nREJECTION PROTOCOL:\nEnter official reason for rejecting this replacement:");
+        if(!rejectReason) return alert("Rejection cancelled. Reason is mandatory.");
 
-    if(decision === 'REPLACE') {
-        // 3. Second confirmation: Authorizing replacement costs/invoice
-        if(confirm("CRITICAL STEP: This will issue a Replacement Invoice and close the ticket. Proceed?")) {
-            await generateReplacementBill(ticketKey); 
-            alert("✅ Replacement Finalized.");
+        if(confirm("CONFIRM REJECTION?\nThis ticket will be closed without a replacement.")) {
+            await update(ref(db, `warranty_claims/${ticketKey}`), { 
+                status: "Rejected", 
+                adminRemarks: rejectReason,
+                adminAuthorizer: currentUser.name,
+                resolutionDate: serverTimestamp() 
+            });
+            
+            // Log to System Audit Trail
+            await push(ref(db, "logs"), {
+                type: "WARRANTY_REJECTED",
+                item: data.item,
+                reason: rejectReason,
+                time: serverTimestamp(),
+                by: currentUser.name
+            });
+
+            alert("❌ Replacement Request Rejected and Logged.");
         }
-    } else if(decision === 'VOID') {
-        if(confirm("CRITICAL STEP: This will permanently VOID this asset warranty. Are you absolutely sure?")) {
+        return;
+    }
+
+    // 3. REPLACEMENT LOGIC
+    if(decision === 'REPLACE') {
+        if(!confirm(auditSummary + "\n\nAUTHORIZE REPLACEMENT?")) return;
+        if(confirm("FINAL CHECK: Issue replacement bill now?")) {
+            await generateReplacementBill(ticketKey); 
+            alert("✅ Replacement Authorized.");
+        }
+    } 
+
+    // 4. VOID LOGIC
+    else if(decision === 'VOID') {
+        if(confirm("CRITICAL: Permanently VOID this asset warranty?")) {
             await update(ref(db, `warranty_claims/${ticketKey}`), { 
                 status: "Voided", 
                 adminAuthorizer: currentUser.name,
                 resolutionDate: serverTimestamp() 
             });
-            alert("❌ Claim Permanently Voided.");
+            alert("🚫 Warranty Voided.");
         }
     }
 };
