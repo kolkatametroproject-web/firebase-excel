@@ -408,85 +408,27 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
     font-size: 14px;
 }
 @media print {
-    /* 1. HIDE ALL SYSTEM UI */
-    body * { visibility: hidden !important; height: 0 !important; }
-    #printableReportContainer, #printableReportContainer * { visibility: visible !important; height: auto !important; }
+    /* 1. HIDE EVERYTHING ON THE PAGE */
+    body * { visibility: hidden !important; height: 0 !important; overflow: hidden !important; }
 
-    /* 2. PHYSICAL RECEIPT SETTINGS FOR CONTINUOUS ROLL */
-    @page { margin: 0; size: auto; }
-    
-    body.print-pos {
-        width: 58mm !important;
-        background: #fff !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        /* FORCE 30PT TIMES NEW ROMAN */
-        font-family: "Times New Roman", Times, serif !important;
-        font-size: 30pt !important;
-        font-weight: 900 !important;
-        color: #000 !important;
-        line-height: 1.1 !important;
-        text-align: center !important;
+    /* 2. ONLY SHOW THE REPORT CONTAINER AND ITS CHILDREN */
+    #printableReportContainer, #printableReportContainer * { 
+        visibility: visible !important; 
+        height: auto !important; 
     }
 
+    /* 3. POSITION THE REPORT AT THE VERY TOP LEFT */
     #printableReportContainer {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
-    }
-
-    .report-paper {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
         width: 100% !important;
-        padding: 0 !important;
-        box-shadow: none !important;
-        border: none !important;
-    }
-
-    /* 3. ELIMINATE GAPS AND SIDE WASTE */
-    /* This forces labels and values to stack vertically so they can be 30pt without wrapping */
-    .report-header h2,
-    .report-meta div, 
-    .report-table td, 
-    .report-table th, 
-    .report-section-title,
-    #sectionStationDetails td,
-    .report-footer div,
-    .report-table tr {
-        display: block !important; 
-        width: 100% !important;
-        font-size: 30pt !important;
-        padding: 10px 0 !important; /* Spacing between vertical items */
         margin: 0 !important;
-        text-align: center !important;
-        word-wrap: break-word !important;
-        border: none !important;
+        padding: 0 !important;
     }
 
-    /* 4. SOLID BLACK SECTIONS */
-    .report-header h2 {
-        font-size: 32pt !important; 
-        border-bottom: 6pt solid #000 !important; /* Thick burn for thermal head */
-        margin-bottom: 20px !important;
-    }
-
-    .report-section-title {
-        background: #000 !important;
-        color: #fff !important;
-        padding: 15px 0 !important;
-        margin: 25px 0 !important;
-        -webkit-print-color-adjust: exact;
-    }
-
-    /* 5. HEAVY SEPARATOR LINES */
-    /* Replaces the thin lines that caused "dots" with solid thick bars */
-    .report-meta, .report-table tr {
-        border-bottom: 5pt solid #000 !important;
-        margin-bottom: 20px !important;
-    }
-
-    /* 6. HIDE ELEMENTS THAT CAUSE CLUTTER */
-    i, .no-print, .step-dots, .badge-online, .badge-offline { display: none !important; }
+    /* 4. HIDE UI BUTTONS INSIDE THE CONTAINER */
+    .no-print { display: none !important; }
 }
 /* PRINTER PAGE SETTINGS */
 @page {
@@ -7569,27 +7511,124 @@ async function loadWarSales() {
     const tbody = document.getElementById("warSalesTableBody");
     const snap = await get(ref(db, "inventory"));
     const salesGroup = {}; 
+    
     snap.forEach(c => {
         const v = c.val();
         if(v.invoiceNo) {
             if(!salesGroup[v.invoiceNo]) {
-                salesGroup[v.invoiceNo] = { site: v.assignedStation, date: v.soldAt, items: [] };
+                salesGroup[v.invoiceNo] = { 
+                    site: v.assignedStation, 
+                    date: v.soldAt, 
+                    items: [],
+                    billedTo: v.holder || "METRO" 
+                };
             }
             salesGroup[v.invoiceNo].items.push(v.item);
         }
     });
+
     tbody.innerHTML = "";
     Object.entries(salesGroup).forEach(([inv, data]) => {
         tbody.innerHTML += `<tr>
-            <td style="font-family:monospace; font-weight:bold; color:#0284c7; cursor:pointer;" onclick="printCustomerCopy('${inv}')">${inv}</td>
+            <td style="font-family:monospace; font-weight:bold; color:#0284c7;">${inv}</td>
             <td style="font-weight:bold;">${data.site}</td>
-            <td>${new Date(data.date).toLocaleDateString()}</td>
+            <td>${new Date(data.date).toLocaleDateString('en-IN')}</td>
             <td style="font-size:11px;">${data.items.join(", ")}</td>
-            <td style="text-align:center;"><button onclick="printCustomerCopy('${inv}')" class="info"><i class="fas fa-print"></i></button></td>
+            <td style="text-align:center; white-space:nowrap;">
+                <button onclick="printCustomerCopy('${inv}')" class="info" title="Warranty Copy"><i class="fas fa-shield-alt"></i></button>
+                <button onclick="reissueInvoice('${inv}', ${data.date})" class="success" style="background:#15803d; margin-left:5px;" title="Reissue Bill">
+                    <i class="fas fa-file-invoice"></i> REISSUE
+                </button>
+            </td>
         </tr>`;
     });
 }
+window.reissueInvoice = async (invoiceNo, saleDateTs) => {
+    const NOW = Date.now();
+    const TWO_MONTHS_MS = 60 * 24 * 60 * 60 * 1000; // Approx 60 days
 
+    // 1. Check Date Constraint
+    if (NOW - saleDateTs > TWO_MONTHS_MS) {
+        return alert("⛔ ACCESS DENIED: This invoice was issued more than 2 months ago. Original bills cannot be reissued after 60 days for security reasons.");
+    }
+
+    if (!confirm("Confirm Reissue of Official Tax Invoice?")) return;
+
+    try {
+        const snap = await get(ref(db, "inventory"));
+        const items = [];
+        let site = "";
+        let billedTo = "";
+
+        snap.forEach(c => {
+            const v = c.val();
+            if(v.invoiceNo === invoiceNo) {
+                site = v.assignedStation;
+                billedTo = v.holder || "KOLKATA METRO RAILWAY";
+                const sellRate = (parseFloat(v.purchasePrice) || 0) * 1.20;
+                items.push({ name: v.item, tag: v.barcode, rate: sellRate, qty: 1, net: sellRate });
+            }
+        });
+
+        // 2. Reuse the Invoice Print Template but add "REISSUE" watermark
+        const reportContainer = document.getElementById("printableReportContainer");
+        let billRows = "";
+        let billTotal = 0;
+
+        items.forEach(it => {
+            billTotal += it.net;
+            billRows += `
+                <tr style="border-bottom: 5pt solid #000;">
+                    <td style="padding: 15px 10px; font-size: 32pt; font-weight: 900; text-align: left;">
+                        ${it.name.toUpperCase()}<br>
+                        <span style="font-size: 20pt; color: #333;">(TAG: ${it.tag})</span>
+                    </td>
+                    <td style="text-align:right; padding: 15px 10px; font-size: 32pt;">${it.rate.toFixed(0)}</td>
+                    <td style="text-align:center; padding: 15px 10px; font-size: 32pt;">${it.qty}</td>
+                    <td style="text-align:right; padding: 15px 10px; font-weight: 900; font-size: 32pt;">${Math.round(it.net)}</td>
+                </tr>`;
+        });
+
+        reportContainer.innerHTML = `
+            <div class="no-print" style="text-align:center; padding:15px; background:#fff1f2; border-bottom:2px solid #e11d48;">
+                <h3 style="color:#be123c; margin:0;">⚠️ DUPLICATE REISSUE PREVIEW</h3>
+                <button class="danger" onclick="closeReportPreview()">CANCEL</button>
+                <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold; margin-left:10px;">PRINT REISSUE BILL</button>
+            </div>
+            <div class="report-paper a4-max-wrapper" style="position:relative;">
+                <div style="position:absolute; top:40%; left:10%; font-size:100pt; color:rgba(0,0,0,0.05); transform:rotate(-45deg); font-weight:900; pointer-events:none; z-index:0;">DUPLICATE REISSUE</div>
+                
+                <div class="header-box" style="text-align:center; border-bottom:14pt solid #000; padding-bottom:25px; margin-bottom:35px;">
+                    <div style="font-size: 55pt; font-weight: 900;">METRO RAILWAY</div>
+                    <div style="font-size: 38pt; border: 10pt solid #000; margin-top: 30px; padding: 10px; font-weight: 900; display: inline-block;">OFFICIAL TAX INVOICE (REISSUE)</div>
+                </div>
+
+                <div style="text-align:right; font-size: 28pt; font-weight: 900; margin-bottom: 20px;">INVOICE NO: ${invoiceNo}</div>
+                <div style="text-align:left; font-size: 28pt; font-weight: 900;">REISSUE DATE: ${new Date().toLocaleDateString('en-IN')}</div>
+                <div style="text-align:left; font-size: 24pt; font-weight: bold; margin-top:10px;">ORIGINAL DATE: ${new Date(saleDateTs).toLocaleDateString('en-IN')}</div>
+                
+                <div style="background:#000; color:#fff; padding:20px; font-size:35pt; font-weight:900; margin-top:30px; text-align:center;">BILL PARTICULARS</div>
+                <table style="width:100%; border-collapse:collapse; margin-top:20px;">
+                    <thead><tr style="border-bottom:8pt solid #000;"><th style="text-align:left; font-size:28pt;">DESCRIPTION</th><th style="text-align:right; font-size:28pt;">RATE</th><th style="text-align:center; font-size:28pt;">QTY</th><th style="text-align:right; font-size:28pt;">TOTAL</th></tr></thead>
+                    <tbody>${billRows}</tbody>
+                </table>
+                <div style="background:#000; color:#fff; display:flex; justify-content:space-between; padding:25px; margin-top:10px;">
+                    <span style="font-size:50pt; font-weight:900;">GRAND TOTAL:</span>
+                    <span style="font-size:50pt; font-weight:900;">₹ ${Math.round(billTotal).toLocaleString('en-IN')}</span>
+                </div>
+                <div style="margin-top:130px; border-top:12pt solid #000; width:50%; text-align:left;">
+                    <div style="font-size:40pt; font-weight:900;">${currentUser.name.toUpperCase()}</div>
+                    <div style="font-size:28pt; font-weight:900;">AUTHORIZED SIGNATORY</div>
+                </div>
+            </div>`;
+
+        reportContainer.classList.remove("hidden");
+        window.scrollTo(0, 0);
+
+    } catch (e) {
+        alert("Reissue Error: " + e.message);
+    }
+};
 async function loadActiveWarranty() {
     const tbody = document.getElementById("warActiveTableBody");
     const snap = await get(ref(db, "inventory"));
