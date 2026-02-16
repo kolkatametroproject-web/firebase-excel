@@ -1798,11 +1798,8 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
                 </select>
             </div>
             <div>
-                <label style="font-size:11px; font-weight:bold; color:var(--metro-red);">4. SELECT SIGNATORY</label>
-                <select id="selWarPrintAuthority" style="border: 2px solid var(--metro-red); font-weight: bold;">
-                    <option value="Soham Pal (Principal Investigator)">Soham Pal (PI)</option>
-                    <option value="Prof. Heerok Banerjee (Co-Principal Investigator)">Prof. Heerok Banerjee (Co-PI)</option>
-                </select>
+                <label style="font-size:11px; font-weight:bold; color:var(--metro-red);">4. WARRANTY START DATE</label>
+                <input type="date" id="warStartDate" style="border: 2px solid var(--metro-red); font-weight: bold; height:45px; padding:10px;">
             </div>
             <button class="success" onclick="saveWarrantyConfig()" style="height:45px; font-weight: 900;">UPDATE SYSTEM</button>
         </div>
@@ -7256,8 +7253,7 @@ window.saveWarrantyConfig = async () => {
     const tag = document.getElementById("warSetupTag").value.trim();
     const duration = parseInt(document.getElementById("warDuration").value);
     const unit = document.getElementById("warUnit").value;
-    // New Date Input Reference (Ensure your HTML ID matches this)
-    const startDateInput = document.getElementById("warStartDate").value; 
+    const startDateVal = document.getElementById("warStartDate").value; // Date Picker Value
 
     if(!tag || isNaN(duration)) {
         return alert("⚠️ Error: Please enter a valid Tag ID and Tenure Value.");
@@ -7273,10 +7269,10 @@ window.saveWarrantyConfig = async () => {
         
         await update(ref(db, `inventory/${key}`), {
             warrantyMonths: unit === "Years" ? duration * 12 : duration,
-            manualWarDate: startDateInput || null // Saves the manual start date
+            manualWarDate: startDateVal || null // Save the specific start date
         });
         
-        alert(`✅ SUCCESS: Warranty activated from ${startDateInput || 'Sale Date'} for ${tag}`);
+        alert(`✅ SUCCESS: Warranty parameters updated for ${tag}`);
         loadWarSetup();
     } catch (e) {
         alert("System Error: " + e.message);
@@ -7433,21 +7429,37 @@ async function refreshWarDash() {
 
 async function loadWarSetup() {
     const tbody = document.getElementById("warSetupTableBody");
-    const snap = await get(ref(ref(db, "inventory")));
-    tbody.innerHTML = "";
-    snap.forEach(c => {
-        const v = c.val();
-        const displayDate = v.manualWarDate ? new Date(v.manualWarDate).toLocaleDateString('en-IN') : (v.soldAt ? new Date(v.soldAt).toLocaleDateString('en-IN') : "NOT SET");
-        tbody.innerHTML += `<tr>
-            <td style="font-family:monospace; font-weight:bold;">${v.barcode}</td>
-            <td>${v.item}</td>
-            <td style="font-size:11px;">${displayDate}</td>
-            <td style="font-weight:bold; color:var(--metro-blue);">${v.warrantyMonths ? v.warrantyMonths + ' Months' : 'NOT SET'}</td>
-            <td><button class="info" onclick="document.getElementById('warSetupTag').value='${v.barcode}'">Select</button></td>
-        </tr>`;
-    });
-}
+    if(!tbody) return;
 
+    try {
+        // Corrected single ref() call
+        const snap = await get(ref(db, "inventory")); 
+        tbody.innerHTML = "";
+        
+        if(!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No inventory records found.</td></tr>";
+            return;
+        }
+
+        snap.forEach(c => {
+            const v = c.val();
+            // Show manual start date if exists, else show sale date
+            const displayDate = v.manualWarDate ? 
+                new Date(v.manualWarDate).toLocaleDateString('en-IN') : 
+                (v.soldAt ? new Date(v.soldAt).toLocaleDateString('en-IN') : "NOT SET");
+
+            tbody.innerHTML += `<tr>
+                <td style="font-family:monospace; font-weight:bold;">${v.barcode || '--'}</td>
+                <td>${v.item || '--'}</td>
+                <td style="font-size:11px;">${displayDate}</td>
+                <td style="font-weight:bold; color:var(--metro-blue);">${v.warrantyMonths ? v.warrantyMonths + ' Months' : 'NOT SET'}</td>
+                <td><button class="info" onclick="document.getElementById('warSetupTag').value='${v.barcode}'">Select</button></td>
+            </tr>`;
+        });
+    } catch (e) {
+        console.error("Critical Load Error:", e);
+    }
+}
 async function loadWarSales() {
     const tbody = document.getElementById("warSalesTableBody");
     const snap = await get(ref(db, "inventory"));
