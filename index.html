@@ -8391,187 +8391,9 @@ window.generateClaimTicketPrint = (ticketKey, data) => {
     reportContainer.classList.remove("hidden");
     window.scrollTo(0, 0);
 };
-  // A. Update Scan Handler for Tech Mode
-const previousOnScanSuccess = window.onScanSuccess;
-window.onScanSuccess = async function(decodedText) {
-    // 1. Immediately stop scanner and clear UI
-    closeBarcodeScanner();
-    console.log("Processing Scan/Entry:", decodedText);
+  
 
-    // --- MODE: TECHNICIAN DIAGNOSTIC (QR or Manual ID) ---
-    if (scanMode === 'TECH_TICKET_SCAN') {
-        try {
-            // Remove the # if they typed it manually to get the raw ID
-            const cleanId = decodedText.replace("#", "").trim().toUpperCase();
-            
-            // Try direct key fetch first (if they scanned the long DB Key)
-            const snap = await get(ref(db, `warranty_claims/${decodedText}`));
-            
-            if (snap.exists()) {
-                await renderTechArea(decodedText, snap.val());
-            } else {
-                // Search all claims for the Short ID match (#OLAIIXL style)
-                const allClaims = await get(ref(db, "warranty_claims"));
-                let foundKey = null;
-                let claimData = null;
-                
-                allClaims.forEach(c => {
-                    const shortIdFromDb = c.key.substring(1, 10).toUpperCase();
-                    if (shortIdFromDb === cleanId) {
-                        foundKey = c.key;
-                        claimData = c.val();
-                    }
-                });
 
-                if (foundKey) {
-                    await renderTechArea(foundKey, claimData);
-                } else {
-                    alert("❌ Ticket ID not found in system.");
-                }
-            }
-        } catch (err) {
-            console.error(err);
-            alert("System Error: " + err.message);
-        }
-        return; // Valid return inside function
-    }
-
-    // --- MODE: INVENTORY LIST SEARCH ---
-    if (scanMode === 'SEARCH_STOCK') {
-        const searchInput = document.getElementById("mainStockSearch");
-        if(searchInput) {
-            searchInput.value = decodedText;
-            window.filterStockTable();
-        }
-        return;
-    }
-
-    // --- MODE: AUDIT TRAIL SEARCH ---
-    if (scanMode === 'AUDIT_SEARCH') {
-        const auditInput = document.getElementById("auditSearchInput");
-        if(auditInput) {
-            auditInput.value = decodedText;
-            window.fetchAuditHistory(decodedText);
-        }
-        return;
-    }
-
-    // --- MODE: ADD NEW ASSET ---
-    if (scanMode === 'ADD') {
-        const invInput = document.getElementById("invBarcode");
-        if(invInput) {
-            invInput.value = decodedText;
-            checkBarcodeUnique(decodedText);
-        }
-        return;
-    }
-
-    // --- MODE: BILLING SCAN ---
-    if (scanMode === 'BILLING_SCAN') {
-        const billInput = document.getElementById("billBarcodeInp");
-        if(billInput) {
-            billInput.value = decodedText;
-            addScannedItemToBill();
-        }
-        return; 
-    }
-
-    // --- MODE: ASSET RECOVERY ---
-    if (scanMode === 'ASSET_RECOVERY') {
-        addToRecoveryCart(decodedText);
-        return;
-    }
-
-    // --- MODE: WARRANTY CLAIM (Customer Side) ---
-    if (scanMode === 'WARRANTY_CLAIM') {
-        const display = document.getElementById("claimDisplay");
-        if(display) display.classList.remove("hidden");
-        
-        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
-        const snap = await get(q);
-        const statusBox = document.getElementById("claimStatusBox");
-        
-        if(!snap.exists()) {
-            if(statusBox) statusBox.innerHTML = `<span style="color:red;">❌ TAG ID NOT REGISTERED</span>`;
-            return;
-        }
-
-        let item; snap.forEach(c => item = c.val());
-        const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
-        
-        document.getElementById("claimItemName").innerText = item.item;
-        document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
-        document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
-        document.getElementById("claimDate").innerText = war ? war.start : "NOT DEPLOYED";
-        
-        if(item.status !== "Sold Out") {
-            statusBox.innerHTML = `<span style="color:#d97706;">❌ ITEM NOT YET DEPLOYED</span>`;
-            document.getElementById("btnFinalClaim").disabled = true;
-        } else if (!war) {
-             statusBox.innerHTML = `<span style="color:#d97706;">⚠️ WARRANTY NOT SET UP</span>`;
-             document.getElementById("btnFinalClaim").disabled = true;
-        } else if (war.expired) {
-            statusBox.innerHTML = `<div style="color:#b91c1c;">🚫 COVERAGE EXPIRED ON: ${war.expiry}</div>`;
-            document.getElementById("btnFinalClaim").disabled = true;
-        } else {
-            statusBox.innerHTML = `
-                <div style="background:#f0fdf4; border: 2px solid #15803d; padding:15px; border-radius:10px; color:#15803d;">
-                    <span style="font-size:32px; font-weight:900;">${war.daysLeft} DAYS LEFT</span><br>
-                    <small>Valid Until: ${war.expiry}</small>
-                </div>`;
-            document.getElementById("btnFinalClaim").disabled = false;
-        }
-        return;
-    }
-
-    // --- MODE: CHECKOUT / RETURN ---
-    if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        const isCheckout = scanMode === 'CHECKOUT';
-        const displayId = isCheckout ? "checkout_display" : "return_display";
-        const nameId    = isCheckout ? "checkout_item_name" : "return_item_name";
-        const codeId    = isCheckout ? "checkout_item_code" : "return_item_code";
-        const authBtnId = isCheckout ? "btn_checkout_verify" : "btn_return_verify";
-
-        document.getElementById(displayId).classList.remove("hidden");
-        document.getElementById(nameId).innerHTML = "🔍 Verifying...";
-        document.getElementById(codeId).innerText = decodedText;
-
-        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
-        const snap = await get(q);
-        if (!snap.exists()) {
-            document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ Tag Not Found</span>`;
-            return;
-        }
-        let itm, k; snap.forEach(c => { itm = c.val(); k = c.key; });
-        pendingTransactionItem = { key: k, ...itm };
-        document.getElementById(nameId).innerHTML = `✔ ${itm.item}`;
-        return;
-    }
-};
-
-// B. Submit Technician Command
-window.submitTechResolution = async () => {
-    const ticketId = document.getElementById("techTicketIdDisplay").innerText.replace("#", "");
-    const action = document.getElementById("techActionSelect").value;
-    const notes = document.getElementById("techCommandNotes").value;
-    
-    // Find the real Firebase key for this ticket
-    const snap = await get(ref(db, "warranty_claims"));
-    let realKey = "";
-    snap.forEach(c => { if(c.key.substring(1,8).toUpperCase() === ticketId) realKey = c.key; });
-
-    if(!realKey) return alert("Error finding ticket.");
-
-    await update(ref(db, `warranty_claims/${realKey}`), {
-        status: "Verification Pending",
-        techAction: action,
-        techNotes: notes
-    });
-
-    alert("✅ COMMAND SENT. Ticket is now awaiting Admin Verification.");
-    document.getElementById("techDiagnosisArea").classList.add("hidden");
-    toggleWarMode('claims-list');
-};
   window.generateReplacementBill = async (ticketKey) => {
     const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
     if (!snap.exists()) return alert("Error: Ticket data not found.");
@@ -8745,25 +8567,26 @@ async function renderTechArea(ticketKey, claim) {
 
 // Update to existing onScanSuccess (Ensure it handles Manual IDs)
 const oldTechOnScanSuccess = window.onScanSuccess;
-// --- Master Scan Success Handler ---
-// This handles EVERYTHING: Tech Tickets, Billing, Inventory, and Recovery
+// ==========================================
+// 🛠️ MASTER SCAN SUCCESS HANDLER
+// ==========================================
 window.onScanSuccess = async function(decodedText) {
-    // 1. Close scanner immediately to prevent ghost scans
+    // 1. Immediately stop scanner and clear UI to prevent ghost scans
     closeBarcodeScanner();
     console.log("System Processing Entry:", decodedText);
 
-    // 2. MODE: TECHNICIAN DIAGNOSTIC (QR or Manual ID)
+    // --- MODE: TECHNICIAN DIAGNOSTIC (QR or Manual ID) ---
     if (scanMode === 'TECH_TICKET_SCAN') {
         try {
             const cleanId = decodedText.replace("#", "").trim().toUpperCase();
             
-            // Check if it's a full Firebase Key
+            // Try direct key fetch first
             const snap = await get(ref(db, `warranty_claims/${decodedText}`));
             
             if (snap.exists()) {
                 await renderTechArea(decodedText, snap.val());
             } else {
-                // It's likely a Short ID (e.g. OLAIIXL), search the database for it
+                // Search all claims for the Short ID match
                 const allClaims = await get(ref(db, "warranty_claims"));
                 let foundKey = null;
                 let claimData = null;
@@ -8786,16 +8609,16 @@ window.onScanSuccess = async function(decodedText) {
             console.error("Tech Scan Error:", err);
             alert("System Error: " + err.message);
         }
-        return; // Valid return inside function
+        return; 
     }
 
-    // 3. MODE: ASSET RECOVERY (Batch Return to Stock)
+    // --- MODE: ASSET RECOVERY ---
     if (scanMode === 'ASSET_RECOVERY') {
         addToRecoveryCart(decodedText);
         return;
     }
 
-    // 4. MODE: INVENTORY LIST SEARCH
+    // --- MODE: INVENTORY LIST SEARCH ---
     if (scanMode === 'SEARCH_STOCK') {
         const searchInput = document.getElementById("mainStockSearch");
         if(searchInput) {
@@ -8805,7 +8628,27 @@ window.onScanSuccess = async function(decodedText) {
         return;
     }
 
-    // 5. MODE: BILLING SCAN
+    // --- MODE: AUDIT TRAIL SEARCH ---
+    if (scanMode === 'AUDIT_SEARCH') {
+        const auditInput = document.getElementById("auditSearchInput");
+        if(auditInput) {
+            auditInput.value = decodedText;
+            window.fetchAuditHistory(decodedText);
+        }
+        return;
+    }
+
+    // --- MODE: ADD NEW ASSET ---
+    if (scanMode === 'ADD') {
+        const invInput = document.getElementById("invBarcode");
+        if(invInput) {
+            invInput.value = decodedText;
+            checkBarcodeUnique(decodedText);
+        }
+        return;
+    }
+
+    // --- MODE: BILLING SCAN ---
     if (scanMode === 'BILLING_SCAN') {
         const billInput = document.getElementById("billBarcodeInp");
         if(billInput) {
@@ -8815,7 +8658,7 @@ window.onScanSuccess = async function(decodedText) {
         return; 
     }
 
-    // 6. MODE: CHECKOUT / RETURN (Standard movement)
+    // --- MODE: CHECKOUT / RETURN ---
     if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
         const isCheckout = (scanMode === 'CHECKOUT');
         const displayId = isCheckout ? "checkout_display" : "return_display";
@@ -8840,7 +8683,7 @@ window.onScanSuccess = async function(decodedText) {
         return;
     }
 
-    // 7. MODE: WARRANTY CLAIM (Customer Side)
+    // --- MODE: WARRANTY CLAIM (Customer Side) ---
     if (scanMode === 'WARRANTY_CLAIM') {
         const display = document.getElementById("claimDisplay");
         if(display) display.classList.remove("hidden");
@@ -8882,6 +8725,59 @@ window.onScanSuccess = async function(decodedText) {
         return;
     }
 };
+
+// --- SUPPORTING TECHNICIAN FUNCTIONS ---
+
+window.submitTechResolution = async () => {
+    const ticketId = document.getElementById("techTicketIdDisplay").innerText.replace("#", "");
+    const action = document.getElementById("techActionSelect").value;
+    const notes = document.getElementById("techCommandNotes").value;
+    
+    const snap = await get(ref(db, "warranty_claims"));
+    let realKey = "";
+    snap.forEach(c => { if(c.key.substring(1,10).toUpperCase() === ticketId) realKey = c.key; });
+
+    if(!realKey) return alert("Error finding ticket.");
+
+    await update(ref(db, `warranty_claims/${realKey}`), {
+        status: "Verification Pending",
+        techAction: action,
+        techNotes: notes
+    });
+
+    alert("✅ COMMAND SENT. Ticket is now awaiting Admin Verification.");
+    document.getElementById("techDiagnosisArea").classList.add("hidden");
+    toggleWarMode('claims-list');
+};
+
+async function renderTechArea(ticketKey, claim) {
+    const diagArea = document.getElementById("techDiagnosisArea");
+    if(!diagArea) return;
+
+    diagArea.classList.remove("hidden");
+    const shortId = ticketKey.substring(1, 10).toUpperCase();
+    document.getElementById("techTicketIdDisplay").innerText = "#" + shortId;
+    document.getElementById("techIssueData").innerText = claim.issue || "No description.";
+    document.getElementById("techOriginalInvoice").innerText = "REF INV: " + (claim.invoiceNo || "N/A");
+    
+    const invSnap = await get(ref(db, "inventory"));
+    let found = false;
+    invSnap.forEach(c => {
+        const item = c.val();
+        if(item.invoiceNo === claim.invoiceNo) {
+            document.getElementById("techAssetData").innerText = item.item;
+            document.getElementById("techPurchasePrice").innerText = "Original Value: ₹ " + parseFloat(item.purchasePrice || 0).toLocaleString('en-IN');
+            found = true;
+        }
+    });
+
+    if(!found) {
+        document.getElementById("techAssetData").innerText = "Asset Details Unavailable";
+        document.getElementById("techPurchasePrice").innerText = "₹ 0.00";
+    }
+
+    await update(ref(db, `warranty_claims/${ticketKey}`), { status: "In Progress" });
+}
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
