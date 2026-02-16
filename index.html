@@ -7319,8 +7319,11 @@ window.saveWarrantyConfig = async () => {
     const unit = document.getElementById("warUnit").value;
     const startDateVal = document.getElementById("warStartDate").value;
 
+    // Check if user specifically entered 0
+    const isNoWarranty = (duration === 0);
+
     if(!tag || isNaN(duration)) {
-        return alert("⚠️ Error: Please enter a valid Tag ID and Tenure Value.");
+        return alert("⚠️ Error: Please enter a valid Tag ID and Tenure Value (use 0 for No Warranty).");
     }
 
     try {
@@ -7335,14 +7338,18 @@ window.saveWarrantyConfig = async () => {
         await update(ref(db, `inventory/${key}`), {
             warrantyMonths: finalMonths,
             manualWarDate: startDateVal || null,
-            noWarranty: finalMonths === 0 // Flag for the print template
+            noWarranty: isNoWarranty // This flag marks it as No Warranty
         });
         
-        alert(finalMonths === 0 ? "✅ Item saved with NO WARRANTY." : "✅ Warranty parameters updated successfully.");
+        if(isNoWarranty) {
+            alert("✅ Marked as NO WARRANTY product. (Protected count will not increase)");
+        } else {
+            alert("✅ Warranty Activated. Protected Asset count updated.");
+        }
         
-        // REFRESH DATA IMMEDIATELY
-        loadWarSetup(); // Updates the table list
-        refreshWarDash(); // Updates the Dashboard counters
+        // Refresh UI
+        loadWarSetup();
+        refreshWarDash(); // This triggers the counter update
         
     } catch (e) {
         alert("System Error: " + e.message);
@@ -7503,11 +7510,12 @@ async function refreshWarDash() {
                 const v = c.val();
                 total++;
 
-                // LOGIC: Asset is "Protected" if it is Sold AND has an active warranty tenure > 0
-                if (v.status === "Sold Out" && v.warrantyMonths && v.warrantyMonths > 0) {
-                    const war = calculateWarranty(v.soldAt, v.warrantyMonths, v.manualWarDate);
-                    
-                    // Only count if the calculated expiry date has not passed
+                // NEW LOGIC: 
+                // 1. Must have warrantyMonths > 0
+                // 2. Must not have the 'noWarranty' flag
+                // 3. (Optional) You can keep the expiry check if you only want to count ACTIVE ones
+                if (v.warrantyMonths && v.warrantyMonths > 0 && !v.noWarranty) {
+                    const war = calculateWarranty(v.soldAt || Date.now(), v.warrantyMonths, v.manualWarDate);
                     if (war && !war.expired) {
                         protectedCount++;
                     }
@@ -7515,7 +7523,6 @@ async function refreshWarDash() {
             });
         }
         
-        // Update the UI Counters
         document.getElementById("warTotalAssets").innerText = total;
         document.getElementById("warProtected").innerText = protectedCount;
     } catch (e) {
