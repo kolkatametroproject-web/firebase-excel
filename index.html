@@ -8470,6 +8470,77 @@ window.submitTechResolution = async () => {
     reportContainer.classList.remove("hidden");
     window.scrollTo(0, 0);
 };
+  // Function to toggle between Scanner and Manual Input
+window.toggleTechManualEntry = (showManual) => {
+    if(showManual) {
+        document.getElementById("techScanPrompt").classList.add("hidden");
+        document.getElementById("techManualEntry").classList.remove("hidden");
+        document.getElementById("inpTechManualId").focus();
+    } else {
+        document.getElementById("techScanPrompt").classList.remove("hidden");
+        document.getElementById("techManualEntry").classList.add("hidden");
+    }
+};
+
+// Function to process manual ID entry
+window.processTechManualEntry = async () => {
+    const manualId = document.getElementById("inpTechManualId").value.trim();
+    if(!manualId) return alert("Please enter the unique Ticket ID.");
+
+    // Trigger the same logic used for QR scan success
+    scanMode = 'TECH_TICKET_SCAN';
+    await onScanSuccess(manualId);
+    
+    // Clear the input after fetching
+    document.getElementById("inpTechManualId").value = "";
+    toggleTechManualEntry(false);
+};
+
+// Update to existing onScanSuccess (Ensure it handles Manual IDs)
+const oldTechOnScanSuccess = window.onScanSuccess;
+window.onScanSuccess = async function(decodedText) {
+    closeBarcodeScanner();
+    
+    if(scanMode === 'TECH_TICKET_SCAN') {
+        try {
+            // Fetch the specific claim using the ID (works for both Scanned QR and Typed ID)
+            const snap = await get(ref(db, `warranty_claims/${decodedText}`));
+            
+            if(!snap.exists()) {
+                return alert("❌ INVALID ID: This ticket does not exist in our secure records.");
+            }
+            
+            const claim = snap.val();
+            
+            // Populate UI with retrieved data
+            document.getElementById("techDiagnosisArea").classList.remove("hidden");
+            document.getElementById("techTicketIdDisplay").innerText = "#" + decodedText.substring(1,8).toUpperCase();
+            document.getElementById("techIssueData").innerText = claim.issue;
+            document.getElementById("techOriginalInvoice").innerText = "REF INV: " + claim.invoiceNo;
+            
+            // Cross-reference with Inventory to find purchase price/name
+            const invSnap = await get(ref(db, "inventory"));
+            invSnap.forEach(c => {
+                const item = c.val();
+                if(item.invoiceNo === claim.invoiceNo) {
+                    document.getElementById("techAssetData").innerText = item.item;
+                    document.getElementById("techPurchasePrice").innerText = "Original Unit Value: ₹ " + parseFloat(item.purchasePrice || 0).toLocaleString('en-IN');
+                }
+            });
+
+            // Auto-update status to In Progress
+            await update(ref(db, `warranty_claims/${decodedText}`), { status: "In Progress" });
+            
+        } catch (err) {
+            console.error(err);
+            alert("Connection Error: Unable to verify Ticket ID.");
+        }
+        return;
+    }
+    
+    // Pass control to other scan modes if not in Tech Mode
+    if(typeof oldTechOnScanSuccess === "function") oldTechOnScanSuccess(decodedText);
+};
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
