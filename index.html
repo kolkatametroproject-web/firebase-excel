@@ -7118,7 +7118,7 @@ window.removeFromCart = (type, index) => {
 // Updated Print Function with increased Font Sizes
 window.generateInvoicePrint = async function() {
     if(window.billCart.length === 0 && window.serviceCart.length === 0) {
-        return alert("Cart is empty. Scan items first.");
+        return alert("Cart is empty. Scan items or add services first.");
     }
 
     const clientType = document.getElementById("billClientType").value;
@@ -7128,24 +7128,39 @@ window.generateInvoicePrint = async function() {
 
     if(!targetStation) return alert("Please select a target station.");
 
+    // Finalize sale for assets (marks them as Sold Out in DB)
     const invoiceNo = await finalizeSaleRecords(targetStation);
     if(!invoiceNo) return;
 
     let billRows = "";
     let billTotal = 0; 
-    const combined = [
-        ...window.billCart.map(it => ({name: it.name, tag: it.tag, rate: it.rate, qty: it.qty, net: it.net})),
-        ...window.serviceCart.map(sv => ({name: sv.desc, tag: 'SERVICE', rate: sv.price, qty: 1, net: sv.net}))
+
+    // --- CRITICAL FIX: COMBINE BOTH CARTS FOR PRINTING ---
+    const combinedItems = [
+        ...window.billCart.map(it => ({
+            name: it.name.toUpperCase(), 
+            tag: it.tag, 
+            rate: it.rate, 
+            qty: it.qty, 
+            net: it.net
+        })),
+        ...window.serviceCart.map(sv => ({
+            name: "SERVICE: " + sv.desc.toUpperCase(), 
+            tag: "N/A", 
+            rate: sv.price, 
+            qty: 1, 
+            net: sv.net
+        }))
     ];
 
-    combined.forEach(it => {
-        const roundedNet = Math.round(it.net); 
+    combinedItems.forEach(it => {
+        const roundedNet = Math.round(it.net);
         billTotal += roundedNet; 
         billRows += `
             <tr style="border-bottom: 5pt solid #000;">
                 <td style="padding: 15px 10px; font-size: 32pt; font-weight: 900; text-align: left;">
-                    ${it.name.toUpperCase()}<br>
-                    <span style="font-size: 20pt; color: #333;">(TAG: ${it.tag})</span>
+                    ${it.name}<br>
+                    <span style="font-size: 20pt; color: #333;">(TAG/REF: ${it.tag})</span>
                 </td>
                 <td style="text-align:right; padding: 15px 10px; font-size: 32pt;">${it.rate.toFixed(0)}</td>
                 <td style="text-align:center; padding: 15px 10px; font-size: 32pt;">${it.qty}</td>
@@ -7196,8 +7211,13 @@ window.generateInvoicePrint = async function() {
                 <div style="font-size: 34pt; font-weight: 900;">AUTHORIZED SIGNATORY</div>
             </div>
         </div>`;
-    window.billCart = []; window.serviceCart = []; renderBillCartUI();
-    reportContainer.classList.remove("hidden"); window.scrollTo(0, 0);
+
+    // Reset carts after successful print generation
+    window.billCart = []; 
+    window.serviceCart = []; 
+    renderBillCartUI();
+    reportContainer.classList.remove("hidden"); 
+    window.scrollTo(0, 0);
 };
 // Dedicated function for Service Block insertion
 window.addServiceOnlyToBill = () => {
