@@ -7411,39 +7411,49 @@ window.onScanSuccess = async function(decodedText) {
 
 // 6. Support Loaders (Dashboard, Setup, Active List, Sales)
 async function refreshWarDash() {
-    const snap = await get(ref(db, "inventory"));
-    let total = 0, protectedCount = 0;
-    if(snap.exists()){
-        snap.forEach(c => {
-            const v = c.val();
-            total++;
-            if(v.status === "Sold Out" && v.warrantyMonths) {
-                const war = calculateWarranty(v.soldAt, v.warrantyMonths, v.manualWarDate);
-                if(war && !war.expired) protectedCount++;
-            }
-        });
+    try {
+        const snap = await get(ref(db, "inventory"));
+        let total = 0, protectedCount = 0;
+
+        if (snap.exists()) {
+            snap.forEach(c => {
+                const v = c.val();
+                total++;
+                // Check if item is sold AND has a warranty duration set
+                if (v.status === "Sold Out" && v.warrantyMonths) {
+                    // Logic: Use manual date if it exists, otherwise fall back to soldAt
+                    const war = calculateWarranty(v.soldAt, v.warrantyMonths, v.manualWarDate);
+                    if (war && !war.expired) {
+                        protectedCount++;
+                    }
+                }
+            });
+        }
+        
+        document.getElementById("warTotalAssets").innerText = total;
+        document.getElementById("warProtected").innerText = protectedCount;
+    } catch (e) {
+        console.error("Dashboard Sync Error:", e);
     }
-    document.getElementById("warTotalAssets").innerText = total;
-    document.getElementById("warProtected").innerText = protectedCount;
 }
 
 async function loadWarSetup() {
     const tbody = document.getElementById("warSetupTableBody");
-    if(!tbody) return;
+    if (!tbody) return;
 
     try {
-        // Corrected single ref() call
+        // FIXED: Only one ref() call is allowed
         const snap = await get(ref(db, "inventory")); 
         tbody.innerHTML = "";
-        
-        if(!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No inventory records found.</td></tr>";
+
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No records.</td></tr>";
             return;
         }
 
         snap.forEach(c => {
             const v = c.val();
-            // Show manual start date if exists, else show sale date
+            // Display manual date if set, otherwise original sale date
             const displayDate = v.manualWarDate ? 
                 new Date(v.manualWarDate).toLocaleDateString('en-IN') : 
                 (v.soldAt ? new Date(v.soldAt).toLocaleDateString('en-IN') : "NOT SET");
@@ -7457,7 +7467,7 @@ async function loadWarSetup() {
             </tr>`;
         });
     } catch (e) {
-        console.error("Critical Load Error:", e);
+        console.error("Load Setup Error:", e);
     }
 }
 async function loadWarSales() {
