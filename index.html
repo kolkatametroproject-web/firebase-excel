@@ -2955,40 +2955,62 @@ window.closeReportPreview = () => {
     // 3. Remove print classes from body
     document.body.classList.remove('print-a4', 'print-pos');
 };
+// --- UNIFIED SCAN SUCCESS HANDLER ---
 window.onScanSuccess = async function(decodedText) {
-    // 1. Force the scanner to stop and clear UI
     closeBarcodeScanner();
-    console.log("SCANNED TAG:", decodedText);
-    // --- MODE: INVENTORY LIST SEARCH ---
-if (scanMode === 'SEARCH_STOCK') {
-    const searchInput = document.getElementById("mainStockSearch");
-    if(searchInput) {
-        searchInput.value = decodedText; // Set the scanned text
-        window.filterStockTable();       // MANUALLY trigger the filter logic
-    }
-    return;
-}
-// --- MODE: AUDIT TRAIL SEARCH ---
-if (scanMode === 'AUDIT_SEARCH') {
-    const auditInput = document.getElementById("auditSearchInput");
-    if(auditInput) {
-        auditInput.value = decodedText;           // Set the scanned text
-        window.fetchAuditHistory(decodedText);    // MANUALLY trigger the DB fetch
-    }
-    return;
-}
+    console.log("Processing Scan/Entry:", decodedText);
 
-    // --- MODE: ADD NEW ASSET ---
-    if (scanMode === 'ADD') {
-        const invInput = document.getElementById("invBarcode");
-        if(invInput) {
-            invInput.value = decodedText;
-            checkBarcodeUnique(decodedText);
+    // 1. MODE: TECHNICIAN DIAGNOSTIC
+    if (scanMode === 'TECH_TICKET_SCAN') {
+        try {
+            const cleanId = decodedText.replace("#", "").trim().toUpperCase();
+            const snap = await get(ref(db, `warranty_claims/${decodedText}`));
+            
+            if (snap.exists()) {
+                await renderTechArea(decodedText, snap.val());
+            } else {
+                const allClaims = await get(ref(db, "warranty_claims"));
+                let foundKey = null;
+                let claimData = null;
+                
+                allClaims.forEach(c => {
+                    const shortIdFromDb = c.key.substring(1, 10).toUpperCase();
+                    if (shortIdFromDb === cleanId) {
+                        foundKey = c.key;
+                        claimData = c.val();
+                    }
+                });
+
+                if (foundKey) {
+                    await renderTechArea(foundKey, claimData);
+                } else {
+                    alert("❌ Ticket ID not found in system.");
+                }
+            }
+        } catch (err) {
+            console.error(err);
+            alert("System Error: " + err.message);
+        }
+        return; 
+    }
+
+    // 2. MODE: ASSET RECOVERY
+    if (scanMode === 'ASSET_RECOVERY') {
+        addToRecoveryCart(decodedText);
+        return;
+    }
+
+    // 3. MODE: INVENTORY LIST SEARCH
+    if (scanMode === 'SEARCH_STOCK') {
+        const searchInput = document.getElementById("mainStockSearch");
+        if(searchInput) {
+            searchInput.value = decodedText;
+            window.filterStockTable();
         }
         return;
     }
 
-    // --- MODE: BILLING SCAN ---
+    // 4. MODE: BILLING SCAN
     if (scanMode === 'BILLING_SCAN') {
         const billInput = document.getElementById("billBarcodeInp");
         if(billInput) {
@@ -2998,39 +3020,27 @@ if (scanMode === 'AUDIT_SEARCH') {
         return; 
     }
 
-    // --- MODE: CHECKOUT / RETURN ---
+    // 5. MODE: CHECKOUT / RETURN
     if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
         const isCheckout = scanMode === 'CHECKOUT';
         const displayId = isCheckout ? "checkout_display" : "return_display";
         const nameId    = isCheckout ? "checkout_item_name" : "return_item_name";
         const codeId    = isCheckout ? "checkout_item_code" : "return_item_code";
-        const authBtnId = isCheckout ? "btn_checkout_verify" : "btn_return_verify";
 
         document.getElementById(displayId).classList.remove("hidden");
-        document.getElementById(nameId).innerHTML = "🔍 Verifying Tag ID...";
+        document.getElementById(nameId).innerHTML = "🔍 Verifying...";
         document.getElementById(codeId).innerText = decodedText;
 
-        try {
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
-            const snap = await get(q);
-            if (!snap.exists()) {
-                document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ Tag Not Registered</span>`;
-                return;
-            }
-            let item = null;
-            let itemKey = null;
-            snap.forEach(c => { item = c.val(); itemKey = c.key; });
-
-            if(item.status === "Sold Out") {
-                document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ ITEM SOLD: ${item.assignedStation}</span>`;
-                alert("Restricted: This item is sold and cannot be checked out.");
-                return;
-            }
-
-            pendingTransactionItem = { key: itemKey, ...item };
-            document.getElementById(nameId).innerHTML = `✔ ${item.item}`;
-            document.getElementById(authBtnId).style.display = "block";
-        } catch (err) { console.error(err); }
+        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
+        const snap = await get(q);
+        if (!snap.exists()) {
+            document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ Tag Not Found</span>`;
+            return;
+        }
+        let itm, k; snap.forEach(c => { itm = c.val(); k = c.key; });
+        pendingTransactionItem = { key: k, ...itm };
+        document.getElementById(nameId).innerHTML = `✔ ${itm.item}`;
+        return;
     }
 };
 // --- 4. EMPTY/DUMMY LOAD HISTORY (Prevents errors when clicking tab) ---
