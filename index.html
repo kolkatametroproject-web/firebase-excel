@@ -8880,99 +8880,51 @@ window.onScanSuccess = async function(decodedText) {
         console.error("Scanner Error:", err);
     }
 };
-  // --- NEW: MANUAL OVERRIDE HANDLER ---
-window.handleManualTechVerify = (mode, value) => {
-    if(!value) return;
-    scanMode = (mode === 'TICKET') ? 'TECH_TICKET_SCAN' : 'TECH_PRODUCT_VERIFY';
-    onScanSuccess(value);
-};
-
-// --- UPDATED SCAN SUCCESS (Ensures UI unlocks for manual entry too) ---
-// Find your existing onScanSuccess and ensure these lines are inside:
-
-if (scanMode === 'TECH_TICKET_SCAN') {
-    const cleanId = decodedText.trim().replace("#", "").toUpperCase();
-    const allClaims = await get(ref(db, "warranty_claims"));
-    let found = false;
-
-    allClaims.forEach(c => {
-        const shortId = c.key.substring(1, 10).toUpperCase();
-        if (shortId === cleanId || c.key === decodedText.trim()) {
-            techVerifiedTicket = c.val();
-            techVerifiedTicketKey = c.key;
-            found = true;
-        }
-    });
-
-    if (found) {
-        document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
-        document.getElementById("btnScanProduct").disabled = false;
-        document.getElementById("manualProductInp").disabled = false; // UNLOCK MANUAL BOX
-        document.getElementById("techStepTitle").innerText = "TICKET LOADED. VERIFY PHYSICAL PRODUCT.";
-    } else {
-        alert("Invalid Ticket ID.");
-    }
-} 
-
-else if (scanMode === 'TECH_PRODUCT_VERIFY') {
-    if (!techVerifiedTicket) return alert("Scan Job Ticket first.");
-    
-    const tagInput = decodedText.trim();
-    const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tagInput));
-    const snap = await get(q);
-
-    let match = false;
-    if (snap.exists()) {
-        snap.forEach(c => {
-            // Check if the scanned physical item name matches the one reported in the ticket
-            if (c.val().item === techVerifiedTicket.item) {
-                match = true;
-            }
-        });
-    }
-
-    if (match) {
-        document.getElementById("productVerifiedLabel").classList.remove("hidden");
-        document.getElementById("techMismatchArea").classList.add("hidden");
-        document.getElementById("techStepTitle").innerText = "IDENTITY CONFIRMED.";
-        document.getElementById("techStepTitle").style.color = "green";
-        renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
-    } else {
-        document.getElementById("techMismatchArea").classList.remove("hidden");
-        document.getElementById("techStepTitle").innerText = "ACCESS DENIED: TAG MISMATCH";
-        document.getElementById("techStepTitle").style.color = "red";
-    }
-}
-  // --- ENSURE MODULE FUNCTIONS ARE GLOBAL ---
-window.handleManualTechVerify = (type) => {
+// --- ENSURE MODULE FUNCTIONS ARE GLOBAL FOR HTML BUTTONS ---
+window.handleManualTechVerify = async (type) => {
     const ticketVal = document.getElementById("manualTicketInp").value.trim();
     const productVal = document.getElementById("manualProductInp").value.trim();
     
     if (type === 'TICKET') {
         if(!ticketVal) return alert("Enter Ticket ID");
         scanMode = 'TECH_TICKET_SCAN';
-        window.onScanSuccess(ticketVal);
+        await window.onScanSuccess(ticketVal); // Passes the manual text to the master handler
     } else {
         if(!productVal) return alert("Enter Asset Tag ID");
         scanMode = 'TECH_PRODUCT_VERIFY';
-        window.onScanSuccess(productVal);
+        await window.onScanSuccess(productVal);
     }
 };
 
 window.resetTechVerification = () => {
+    // 1. Clear Logic Variables
     techVerifiedTicket = null;
     techVerifiedTicketKey = null;
+
+    // 2. Reset UI Elements
+    const idsToHide = [
+        "ticketVerifiedLabel", "productVerifiedLabel", 
+        "techMismatchArea", "techDiagnosisArea"
+    ];
+    idsToHide.forEach(id => {
+        const el = document.getElementById(id);
+        if(el) el.classList.add("hidden");
+    });
+
+    // 3. Reset Buttons & Inputs
     document.getElementById("btnScanProduct").disabled = true;
     document.getElementById("manualProductInp").disabled = true;
     document.getElementById("btnManualProduct").disabled = true;
-    document.getElementById("ticketVerifiedLabel").classList.add("hidden");
-    document.getElementById("productVerifiedLabel").classList.add("hidden");
-    document.getElementById("techMismatchArea").classList.add("hidden");
-    document.getElementById("techDiagnosisArea").classList.add("hidden");
-    document.getElementById("techStepTitle").innerText = "Security Protocol: Physical Product Verification";
-    document.getElementById("techStepTitle").style.color = "#232f3e";
     document.getElementById("manualTicketInp").value = "";
     document.getElementById("manualProductInp").value = "";
+
+    // 4. Reset Header Text
+    const title = document.getElementById("techStepTitle");
+    if(title) {
+        title.innerText = "Security Protocol: Physical Product Verification";
+        title.style.color = "#232f3e";
+    }
+
     alert("Diagnostic Protocol Reset.");
 };
 </script>
