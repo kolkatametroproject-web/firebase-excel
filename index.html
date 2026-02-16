@@ -8206,17 +8206,16 @@ window.finalizeRecoveryCart = async () => {
         tbody.innerHTML = "";
         
         if(!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#64748b;'>No active claims found.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'>No active claims found.</td></tr>";
             return;
         }
 
-        // --- INNOVATIVE SORTING: NEWEST FIRST ---
         const claimsArray = [];
         snap.forEach(c => {
             claimsArray.push({ key: c.key, ...c.val() });
         });
 
-        // Sort by timestamp (filedAt) in descending order
+        // Sort by newest first
         claimsArray.sort((a, b) => (b.filedAt || 0) - (a.filedAt || 0));
 
         claimsArray.forEach(v => {
@@ -8224,49 +8223,44 @@ window.finalizeRecoveryCart = async () => {
             const displayId = ticketKey.substring(1, 10).toUpperCase();
             const isResolved = (v.status === "Resolved");
             
-            // Progress Logic
+            // --- CRITICAL FIX: DEFINE VARIABLES BEFORE USE ---
+            let progress = "15%"; 
             let step = 1;
-let statusColor = "#ff9900"; // Default Orange
+            let statusColor = "#ff9900"; // Default Amazon Orange
 
-if(v.status === "In Progress" || v.status === "Verification Pending") { 
-    progress = "60%"; step = 2; 
-}
+            if (v.status === "In Progress" || v.status === "Verification Pending") { 
+                progress = "60%"; 
+                step = 2; 
+            } else if (v.status === "Resolved") { 
+                progress = "100%"; 
+                step = 3; 
+                statusColor = "#15803d"; // Success Green
+            } else if (v.status === "Rejected" || v.status === "Voided") {
+                progress = "100%";
+                step = 3;
+                statusColor = "#b91c1c"; // Alert Red
+            }
 
-if(v.status === "Resolved") { 
-    progress = "100%"; step = 3; 
-}
-
-if(v.status === "Rejected" || v.status === "Voided") { 
-    progress = "100%"; step = 3; 
-    statusColor = "#b91c1c"; // Red for Rejection
-}
-
-            // Visual Gray-out for Resolved
-            const rowStyle = isResolved ? 
-                "opacity: 0.55; filter: grayscale(1); background: #f8fafc; pointer-events: none;" : 
-                "background: #ffffff;";
+            // Visual Gray-out for closed tickets
+            const rowStyle = (isResolved || v.status === "Rejected" || v.status === "Voided") ? 
+                "opacity: 0.7; background: #f8fafc;" : "background: #ffffff;";
 
             const dataString = JSON.stringify(v).replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
-            // Action Buttons
             let actionBtns = `
                 <button class="info" onclick="generateClaimTicketPrint('${ticketKey}', JSON.parse('${dataString}'))" style="background:#febd69; color:#131a22; border:none; border-radius:4px; padding: 6px 15px; font-weight: bold; cursor:pointer;">
                     Receipt
                 </button>`;
 
-            // Replace the Admin Action Button logic inside loadWarrantyClaims with this:
-
-if(isAdmin && !isResolved) {
-    if(v.status === "Verification Pending") {
-        actionBtns += `
-            <div style="display:flex; gap:5px; margin-top:5px;">
-                <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'REPLACE')" style="font-size:10px; padding:5px;">✅ Replace</button>
-                <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'REJECT')" style="font-size:10px; padding:5px; background:#d97706; border:none;">❌ Reject</button>
-                <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'VOID')" style="font-size:10px; padding:5px;">🚫 Void</button>
-            </div>
-        `;
-    }
-}
+            if(isAdmin && !isResolved && v.status !== "Rejected" && v.status !== "Voided") {
+                if(v.status === "Verification Pending") {
+                    actionBtns += `
+                        <div style="display:flex; gap:5px; margin-top:5px;">
+                            <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'REPLACE')">Verify & Replace</button>
+                            <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'REJECT')" style="background:#d97706; border:none;">Reject</button>
+                        </div>`;
+                }
+            }
 
             tbody.innerHTML += `
                 <tr style="${rowStyle} border-bottom: 3px solid #f1f5f9;">
@@ -8274,36 +8268,35 @@ if(isAdmin && !isResolved) {
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                             <div>
                                 <span style="font-weight: 900; color: #232f3e; font-size: 16px;">TICKET ID: #${displayId}</span>
-                                <div style="font-size: 12px; color: #565959; margin-top: 4px;">Created: ${new Date(v.filedAt).toLocaleString('en-IN')}</div>
+                                <div style="font-size: 12px; color: #565959; margin-top: 4px;">Status: <b>${v.status.toUpperCase()}</b></div>
                             </div>
                             <div style="display: flex; align-items: center; gap: 10px;">
-                                ${isResolved ? '<span style="color:#000; font-weight:900; font-size:12px;">✅ CLOSED</span>' : ''}
                                 ${actionBtns}
                             </div>
                         </div>
 
                         <div style="position: relative; height: 6px; background: #e7e9ec; border-radius: 3px; margin: 35px 20px 15px 20px;">
-                            <div style="position: absolute; top: 0; left: 0; height: 100%; width: ${progress}; background: #ff9900; transition: width 0.8s ease;"></div>
+                            <div style="position: absolute; top: 0; left: 0; height: 100%; width: ${progress}; background: ${statusColor}; transition: width 0.8s ease;"></div>
                             <div style="display: flex; justify-content: space-between; position: absolute; width: 100%; top: -12px;">
                                 <div style="text-align: center; width: 100px;">
-                                    <div style="width:24px; height:24px; background:${step>=1?'#ff9900':'#fff'}; border:3px solid #ff9900; border-radius:50%; margin: 0 auto;"></div>
+                                    <div style="width:24px; height:24px; background:${step>=1?statusColor:'#fff'}; border:3px solid ${statusColor}; border-radius:50%; margin: 0 auto;"></div>
                                     <div style="font-size: 11px; font-weight: 800; margin-top: 8px;">FILED</div>
                                 </div>
                                 <div style="text-align: center; width: 100px;">
-                                    <div style="width:24px; height:24px; background:${step>=2?'#ff9900':'#fff'}; border:3px solid #ff9900; border-radius:50%; margin: 0 auto;"></div>
+                                    <div style="width:24px; height:24px; background:${step>=2?statusColor:'#fff'}; border:3px solid ${statusColor}; border-radius:50%; margin: 0 auto;"></div>
                                     <div style="font-size: 11px; font-weight: 800; margin-top: 8px;">DIAGNOSIS</div>
                                 </div>
                                 <div style="text-align: center; width: 100px;">
-                                    <div style="width:24px; height:24px; background:${step>=3?'#ff9900':'#fff'}; border:3px solid #ff9900; border-radius:50%; margin: 0 auto;"></div>
-                                    <div style="font-size: 11px; font-weight: 800; margin-top: 8px;">RESOLVED</div>
+                                    <div style="width:24px; height:24px; background:${step>=3?statusColor:'#fff'}; border:3px solid ${statusColor}; border-radius:50%; margin: 0 auto;"></div>
+                                    <div style="font-size: 11px; font-weight: 800; margin-top: 8px;">CLOSE</div>
                                 </div>
                             </div>
                         </div>
 
-                        <div style="margin-top: 55px; font-size: 13px; background: #f3f3f3; padding: 15px; border-radius: 6px; border-left: 5px solid #ff9900;">
-                            <strong style="font-size:14px;">${v.item}</strong> deployed at <strong>${v.site}</strong><br>
+                        <div style="margin-top: 55px; font-size: 13px; background: #f3f3f3; padding: 15px; border-radius: 6px; border-left: 5px solid ${statusColor};">
+                            <strong style="font-size:14px;">${v.item}</strong> | Technicial: <b>${v.techName || 'Pending'}</b><br>
                             <div style="margin-top:5px; color:#b91c1c; font-style:italic; font-weight: 900;">"Fault: ${v.issue}"</div>
-                            ${v.techNotes ? `<div style="margin-top:8px; color:#232f3e; font-weight:bold; border-top:1px solid #ddd; padding-top:5px;">Resolution Note: ${v.techNotes}</div>` : ''}
+                            ${v.adminRemarks ? `<div style="margin-top:8px; color:#232f3e; font-weight:bold; border-top:1px solid #ddd; padding-top:5px;">Admin Note: ${v.adminRemarks}</div>` : ''}
                         </div>
                     </td>
                 </tr>`;
