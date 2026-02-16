@@ -1932,15 +1932,57 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
 </div>
     <div id="war-tech-terminal" class="panel hidden" style="border-top: 5px solid #ff9900;">
     <h3 style="color:#232f3e;"><i class="fas fa-screwdriver-wrench"></i> Technician Diagnostic Terminal</h3>
+    
     <div style="text-align:center; padding:20px; background:#f3f3f3; border-radius:12px; border: 2px dashed #ccc;">
-        <p>Scan the **QR Code** on the printed Ticket to begin diagnosis.</p>
-        <button onclick="openBarcodeScanner('TECH_TICKET_SCAN')" class="warning" style="background:#ff9900; color:#000; padding:15px 40px; font-weight:bold;">
-            <i class="fas fa-qrcode"></i> SCAN TICKET QR
-        </button>
+        <div id="techScanPrompt">
+            <p style="font-weight: bold;">Scan the **QR Code** on the printed Ticket to begin diagnosis.</p>
+            <button onclick="openBarcodeScanner('TECH_TICKET_SCAN')" class="warning" style="background:#ff9900; color:#000; padding:15px 40px; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">
+                <i class="fas fa-qrcode"></i> SCAN TICKET QR
+            </button>
+            <div style="margin-top:15px;">
+                <a href="javascript:void(0)" onclick="toggleTechManualEntry(true)" style="color:#0066c0; font-size:12px; text-decoration:underline;">Scan failed? Enter ID Manually</a>
+            </div>
+        </div>
+
+        <div id="techManualEntry" class="hidden" style="background:white; padding:20px; border-radius:8px; border:1px solid #ddd; max-width:400px; margin:0 auto;">
+            <label style="display:block; font-weight:bold; margin-bottom:10px; color:#232f3e;">Enter Secure Ticket ID:</label>
+            <input id="inpTechManualId" placeholder="Paste ID from Ticket (e.g. -OJ...)" style="text-align:center; border:2px solid #ff9900;">
+            <div style="display:flex; gap:10px; margin-top:10px;">
+                <button class="secondary" onclick="toggleTechManualEntry(false)" style="flex:1;">Cancel</button>
+                <button class="info" onclick="processTechManualEntry()" style="flex:2; background:#232f3e;">Fetch Details</button>
+            </div>
+        </div>
     </div>
 
     <div id="techDiagnosisArea" class="hidden" style="margin-top:25px; border:1px solid #ddd; border-radius:8px; overflow:hidden; background:white;">
+        <div style="background:#232f3e; color:white; padding:15px; font-weight:bold; display:flex; justify-content:space-between;">
+            <span>DIAGNOSTIC LOCK: <span id="techTicketIdDisplay">#---</span></span>
+            <span id="techOriginalInvoice" style="font-family:monospace; color:#febd69;">REF INV: ---</span>
         </div>
+        
+        <div style="padding:20px; display:grid; grid-template-columns: 1fr 1fr; gap:20px; background:#fffaf0;">
+            <div>
+                <label style="font-size:10px; font-weight:bold; color:#666;">ASSET & PURCHASE DATA</label>
+                <div id="techAssetData" style="font-size:16px; font-weight:900;">--</div>
+                <div id="techPurchasePrice" style="color:green; font-weight:bold;">--</div>
+            </div>
+            <div style="text-align:right;">
+                <label style="font-size:10px; font-weight:bold; color:#666;">REPORTED FAILURE</label>
+                <div id="techIssueData" style="font-size:14px; color:#b91c1c; font-style:italic; font-weight:bold;">--</div>
+            </div>
+        </div>
+
+        <div style="padding:20px; border-top:1px solid #eee;">
+            <label style="font-weight:bold; display:block; margin-bottom:10px;">TECHNICIAN RESOLUTION COMMAND:</label>
+            <select id="techActionSelect" style="border:2px solid #ff9900; font-weight:bold;">
+                <option value="REPAIR_COMPLETE">🔧 Item Repaired & Reinstalled</option>
+                <option value="REPLACE_PRODUCT">🔄 Beyond Repair: Request Replacement</option>
+                <option value="VOID_WARRANTY">⚠️ Void: Physical Damage Detected</option>
+            </select>
+            <textarea id="techCommandNotes" rows="3" placeholder="Enter technical observations..."></textarea>
+            <button class="success" onclick="submitTechResolution()" style="width:100%; padding:15px; background:#131a22;">SEND FOR ADMIN VERIFICATION</button>
+        </div>
+    </div>
 </div>
 </div>
 </section>
@@ -8467,30 +8509,74 @@ window.submitTechResolution = async () => {
     window.scrollTo(0, 0);
 };
   // Function to toggle between Scanner and Manual Input
+// A. Toggle Manual Entry UI
 window.toggleTechManualEntry = (showManual) => {
+    const prompt = document.getElementById("techScanPrompt");
+    const manual = document.getElementById("techManualEntry");
     if(showManual) {
-        document.getElementById("techScanPrompt").classList.add("hidden");
-        document.getElementById("techManualEntry").classList.remove("hidden");
+        prompt.classList.add("hidden");
+        manual.classList.remove("hidden");
         document.getElementById("inpTechManualId").focus();
     } else {
-        document.getElementById("techScanPrompt").classList.remove("hidden");
-        document.getElementById("techManualEntry").classList.add("hidden");
+        prompt.classList.remove("hidden");
+        manual.classList.add("hidden");
     }
 };
 
-// Function to process manual ID entry
+// B. Process Manual Entry
 window.processTechManualEntry = async () => {
     const manualId = document.getElementById("inpTechManualId").value.trim();
     if(!manualId) return alert("Please enter the unique Ticket ID.");
-
-    // Trigger the same logic used for QR scan success
     scanMode = 'TECH_TICKET_SCAN';
     await onScanSuccess(manualId);
-    
-    // Clear the input after fetching
     document.getElementById("inpTechManualId").value = "";
     toggleTechManualEntry(false);
 };
+
+// C. Update onScanSuccess to correctly display # and handle manual ID
+// Locate your current window.onScanSuccess and ensure this section matches:
+if(scanMode === 'TECH_TICKET_SCAN') {
+    try {
+        const snap = await get(ref(db, `warranty_claims/${decodedText}`));
+        if(!snap.exists()) {
+            // If the code scanned is the SHORT ID (e.g. #ABCDEFG), we must find the real key
+            const allClaims = await get(ref(db, "warranty_claims"));
+            let foundKey = null;
+            let claimData = null;
+            allClaims.forEach(c => {
+                if(c.key.substring(1, 10).toUpperCase() === decodedText.replace("#", "").toUpperCase()) {
+                    foundKey = c.key;
+                    claimData = c.val();
+                }
+            });
+            
+            if(!foundKey) return alert("❌ INVALID ID: Ticket not found.");
+            renderTechArea(foundKey, claimData);
+        } else {
+            renderTechArea(decodedText, snap.val());
+        }
+    } catch (err) { alert("Error: " + err.message); }
+    return;
+}
+
+// D. Supporting Helper for the Diagnosis UI
+async function renderTechArea(ticketKey, claim) {
+    document.getElementById("techDiagnosisArea").classList.remove("hidden");
+    // RESTORE THE # SYMBOL HERE
+    document.getElementById("techTicketIdDisplay").innerText = "#" + ticketKey.substring(1, 10).toUpperCase();
+    document.getElementById("techIssueData").innerText = claim.issue;
+    document.getElementById("techOriginalInvoice").innerText = "REF INV: " + claim.invoiceNo;
+    
+    const invSnap = await get(ref(db, "inventory"));
+    invSnap.forEach(c => {
+        const item = c.val();
+        if(item.invoiceNo === claim.invoiceNo) {
+            document.getElementById("techAssetData").innerText = item.item;
+            document.getElementById("techPurchasePrice").innerText = "Original Value: ₹ " + parseFloat(item.purchasePrice || 0).toLocaleString('en-IN');
+        }
+    });
+    await update(ref(db, `warranty_claims/${ticketKey}`), { status: "In Progress" });
+}
 
 // Update to existing onScanSuccess (Ensure it handles Manual IDs)
 const oldTechOnScanSuccess = window.onScanSuccess;
@@ -8498,41 +8584,28 @@ window.onScanSuccess = async function(decodedText) {
     closeBarcodeScanner();
     
     if(scanMode === 'TECH_TICKET_SCAN') {
-        try {
-            // Fetch the specific claim using the ID (works for both Scanned QR and Typed ID)
-            const snap = await get(ref(db, `warranty_claims/${decodedText}`));
-            
-            if(!snap.exists()) {
-                return alert("❌ INVALID ID: This ticket does not exist in our secure records.");
-            }
-            
-            const claim = snap.val();
-            
-            // Populate UI with retrieved data
-            document.getElementById("techDiagnosisArea").classList.remove("hidden");
-            document.getElementById("techTicketIdDisplay").innerText = "#" + decodedText.substring(1,8).toUpperCase();
-            document.getElementById("techIssueData").innerText = claim.issue;
-            document.getElementById("techOriginalInvoice").innerText = "REF INV: " + claim.invoiceNo;
-            
-            // Cross-reference with Inventory to find purchase price/name
-            const invSnap = await get(ref(db, "inventory"));
-            invSnap.forEach(c => {
-                const item = c.val();
-                if(item.invoiceNo === claim.invoiceNo) {
-                    document.getElementById("techAssetData").innerText = item.item;
-                    document.getElementById("techPurchasePrice").innerText = "Original Unit Value: ₹ " + parseFloat(item.purchasePrice || 0).toLocaleString('en-IN');
+    try {
+        const snap = await get(ref(db, `warranty_claims/${decodedText}`));
+        if(!snap.exists()) {
+            // If the code scanned is the SHORT ID (e.g. #ABCDEFG), we must find the real key
+            const allClaims = await get(ref(db, "warranty_claims"));
+            let foundKey = null;
+            let claimData = null;
+            allClaims.forEach(c => {
+                if(c.key.substring(1, 10).toUpperCase() === decodedText.replace("#", "").toUpperCase()) {
+                    foundKey = c.key;
+                    claimData = c.val();
                 }
             });
-
-            // Auto-update status to In Progress
-            await update(ref(db, `warranty_claims/${decodedText}`), { status: "In Progress" });
             
-        } catch (err) {
-            console.error(err);
-            alert("Connection Error: Unable to verify Ticket ID.");
+            if(!foundKey) return alert("❌ INVALID ID: Ticket not found.");
+            renderTechArea(foundKey, claimData);
+        } else {
+            renderTechArea(decodedText, snap.val());
         }
-        return;
-    }
+    } catch (err) { alert("Error: " + err.message); }
+    return;
+}
     
     // Pass control to other scan modes if not in Tech Mode
     if(typeof oldTechOnScanSuccess === "function") oldTechOnScanSuccess(decodedText);
