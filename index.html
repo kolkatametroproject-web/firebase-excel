@@ -1750,11 +1750,12 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
 </div>
   <div id="tab-warranty" class="hidden">
     <div style="margin-bottom:20px; display:flex; gap:10px; flex-wrap:wrap; padding: 10px; background: #e2e8f0; border-radius: 6px;">
-        <button onclick="toggleWarMode('dash')" class="info"><i class="fas fa-chart-line"></i> Dashboard</button>
-        <button onclick="toggleWarMode('setup')" class="secondary"><i class="fas fa-tools"></i> Warranty Setup</button>
-        <button onclick="toggleWarMode('claim')" class="warning"><i class="fas fa-qrcode"></i> Scan & Claim</button>
-        <button onclick="toggleWarMode('active')" class="success"><i class="fas fa-clipboard-list"></i> Active Coverage</button>
-    </div>
+    <button onclick="toggleWarMode('dash')" class="info"><i class="fas fa-chart-line"></i> Dashboard</button>
+    <button onclick="toggleWarMode('setup')" class="secondary"><i class="fas fa-tools"></i> Warranty Setup</button>
+    <button onclick="toggleWarMode('sales')" class="info" style="background:#6366f1; border:none;"><i class="fas fa-receipt"></i> Sales History</button>
+    <button onclick="toggleWarMode('claim')" class="warning"><i class="fas fa-qrcode"></i> Scan & Claim</button>
+    <button onclick="toggleWarMode('active')" class="success"><i class="fas fa-clipboard-list"></i> Active Coverage</button>
+</div>
 
     <div id="war-dash" class="panel">
         <h3 style="color:var(--metro-blue); border-bottom: 2px solid var(--metro-gold);"><i class="fas fa-tachometer-alt"></i> Warranty Overview</h3>
@@ -1854,6 +1855,37 @@ canvas.sig-canvas { border: 2px solid #cbd5e1; background: #fff; cursor: crossha
             </table>
         </div>
     </div>
+    <div id="war-sales" class="panel hidden">
+    <h3><i class="fas fa-history"></i> Logged Sales & Dispatches</h3>
+    <p style="font-size:11px; color:#666;">Click on an Invoice Number to generate a Customer Warranty Support Copy.</p>
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr><th>Invoice #</th><th>Sold To (Station)</th><th>Sale Date</th><th>Items</th><th>Action</th></tr>
+            </thead>
+            <tbody id="warSalesTableBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<div id="war-active" class="panel hidden">
+    <h3><i class="fas fa-shield-check"></i> Master Protection List</h3>
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Tag</th>
+                    <th>Item</th>
+                    <th>Starts From</th>
+                    <th>Expiry Date</th>
+                    <th>Days Left</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="warActiveTableBody"></tbody>
+        </table>
+    </div>
+</div>
 </div>
 </section>
 <script type="module">
@@ -7162,39 +7194,77 @@ window.addServiceOnlyToBill = () => {
     document.getElementById("billAddlDesc").value = "";
     alert("✅ Service Applied.");
 };
-// --- WARRANTY ENGINE ---
+// --- ENHANCED WARRANTY ENGINE ---
+
+// 1. Navigation & State Controller
 window.toggleWarMode = (mode) => {
-    ['dash', 'setup', 'claim', 'active'].forEach(m => document.getElementById(`war-${m}`).classList.add('hidden'));
-    document.getElementById(`war-${mode}`).classList.remove('hidden');
-    if(mode === 'setup') loadWarSetup();
-    if(mode === 'active') loadActiveWarranty();
+    // Hide all sub-panels
+    ['dash', 'setup', 'claim', 'active', 'sales'].forEach(m => {
+        const el = document.getElementById(`war-${m}`);
+        if(el) el.classList.add('hidden');
+    });
+    
+    // Show target panel
+    const target = document.getElementById(`war-${mode}`);
+    if(target) target.classList.remove('hidden');
+
+    // Trigger specific loaders
     if(mode === 'dash') refreshWarDash();
+    if(mode === 'setup') loadWarSetup();
+    if(mode === 'sales') loadWarSales();
+    if(mode === 'active') loadActiveWarranty();
 };
 
+// 2. Core Date Utility: Warranty Calculator
+function calculateWarranty(saleDateTs, durationMonths) {
+    if(!saleDateTs || !durationMonths) return null;
+    
+    const startDate = new Date(saleDateTs);
+    const expiryDate = new Date(saleDateTs);
+    expiryDate.setMonth(expiryDate.getMonth() + parseInt(durationMonths));
+    
+    const today = new Date();
+    const diffTime = expiryDate - today;
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    return {
+        start: startDate.toLocaleDateString('en-IN'),
+        expiry: expiryDate.toLocaleDateString('en-IN'),
+        daysLeft: diffDays > 0 ? diffDays : 0,
+        expired: diffDays <= 0
+    };
+}
+
+// 3. Dashboard Data Loader
 async function refreshWarDash() {
     const snap = await get(ref(db, "inventory"));
     let total = 0, protectedCount = 0;
     if(snap.exists()){
         snap.forEach(c => {
+            const v = c.val();
             total++;
-            if(c.val().warrantyExpiry) protectedCount++;
+            if(v.status === "Sold Out" && v.warrantyMonths) {
+                const war = calculateWarranty(v.soldAt, v.warrantyMonths);
+                if(war && !war.expired) protectedCount++;
+            }
         });
     }
     document.getElementById("warTotalAssets").innerText = total;
     document.getElementById("warProtected").innerText = protectedCount;
 }
 
+// 4. Set Warranty Period for Specific Asset
 window.saveWarrantyConfig = async () => {
     const tag = document.getElementById("warSetupTag").value.trim();
     const duration = parseInt(document.getElementById("warDuration").value);
     const unit = document.getElementById("warUnit").value;
 
-    if(!tag || isNaN(duration)) return alert("Fill Tag and Duration");
+    if(!tag || isNaN(duration)) return alert("⚠️ Please provide Tag ID and Duration.");
 
     const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
     const snap = await get(q);
     
-    if(!snap.exists()) return alert("Tag not found in Inventory.");
+    if(!snap.exists()) return alert("❌ Error: Tag not found in master inventory.");
     
     let key; snap.forEach(c => key = c.key);
     
@@ -7202,10 +7272,12 @@ window.saveWarrantyConfig = async () => {
         warrantyMonths: unit === "Years" ? duration * 12 : duration
     });
     
-    alert("✅ Warranty Configured for " + tag);
+    alert(`✅ Warranty successfully set to ${duration} ${unit} for ${tag}`);
+    document.getElementById("warDuration").value = "";
     loadWarSetup();
 };
 
+// 5. Load Setup Table (Select Asset to Configure)
 async function loadWarSetup() {
     const tbody = document.getElementById("warSetupTableBody");
     const snap = await get(ref(db, "inventory"));
@@ -7213,15 +7285,149 @@ async function loadWarSetup() {
     snap.forEach(c => {
         const v = c.val();
         tbody.innerHTML += `<tr>
-            <td>${v.barcode}</td>
+            <td style="font-family:monospace; font-weight:bold;">${v.barcode}</td>
             <td>${v.item}</td>
-            <td>${v.warrantyMonths ? v.warrantyMonths + ' Months' : 'Not Set'}</td>
+            <td style="font-weight:bold; color:var(--metro-blue);">${v.warrantyMonths ? v.warrantyMonths + ' Months' : 'Not Configured'}</td>
             <td><button class="info" onclick="document.getElementById('warSetupTag').value='${v.barcode}'">Select</button></td>
         </tr>`;
     });
 }
 
-// Update Scan Success for Warranty Claim
+// 6. Load Active Coverage (List of Deployments with Countdown)
+async function loadActiveWarranty() {
+    const tbody = document.getElementById("warActiveTableBody");
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Calculating...</td></tr>";
+    const snap = await get(ref(db, "inventory"));
+    tbody.innerHTML = "";
+    
+    snap.forEach(c => {
+        const v = c.val();
+        if(v.status === "Sold Out" && v.warrantyMonths) {
+            const war = calculateWarranty(v.soldAt, v.warrantyMonths);
+            const statusBadge = war.expired ? 
+                '<span style="background:#fee2e2; color:#b91c1c; padding:3px 8px; border-radius:12px; font-weight:bold; font-size:10px;">EXPIRED</span>' : 
+                '<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:12px; font-weight:bold; font-size:10px;">ACTIVE</span>';
+
+            tbody.innerHTML += `
+                <tr>
+                    <td style="font-family:monospace; font-weight:bold;">${v.barcode}</td>
+                    <td>${v.item}</td>
+                    <td>${war.start}</td>
+                    <td style="font-weight:bold; color:#b91c1c;">${war.expiry}</td>
+                    <td style="text-align:center; font-weight:900;">${war.daysLeft} Days</td>
+                    <td>${statusBadge}</td>
+                </tr>`;
+        }
+    });
+}
+
+// 7. Load Sales History (To Trigger Print)
+async function loadWarSales() {
+    const tbody = document.getElementById("warSalesTableBody");
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Syncing Dispatch Data...</td></tr>";
+    
+    const snap = await get(ref(db, "inventory"));
+    const salesGroup = {}; 
+
+    snap.forEach(c => {
+        const v = c.val();
+        if(v.invoiceNo) {
+            if(!salesGroup[v.invoiceNo]) {
+                salesGroup[v.invoiceNo] = { site: v.assignedStation, date: v.soldAt, items: [] };
+            }
+            salesGroup[v.invoiceNo].items.push(v.item);
+        }
+    });
+
+    tbody.innerHTML = "";
+    Object.entries(salesGroup).forEach(([inv, data]) => {
+        tbody.innerHTML += `
+            <tr>
+                <td style="font-family:monospace; font-weight:bold; color:#0284c7; cursor:pointer;" onclick="printCustomerCopy('${inv}')">${inv}</td>
+                <td style="font-weight:bold;">${data.site}</td>
+                <td>${new Date(data.date).toLocaleDateString()}</td>
+                <td style="font-size:11px; color:#64748b;">${data.items.join(", ")}</td>
+                <td style="text-align:center;"><button onclick="printCustomerCopy('${inv}')" class="info"><i class="fas fa-print"></i></button></td>
+            </tr>`;
+    });
+}
+
+// 8. OFFICIAL CUSTOMER WARRANTY COPY PRINT (A4 Support Template)
+window.printCustomerCopy = async (invoiceNo) => {
+    const snap = await get(ref(db, "inventory"));
+    const items = [];
+    let site = "", saleDate = "";
+
+    snap.forEach(c => {
+        const v = c.val();
+        if(v.invoiceNo === invoiceNo) {
+            const war = calculateWarranty(v.soldAt, v.warrantyMonths);
+            site = v.assignedStation;
+            saleDate = new Date(v.soldAt).toLocaleDateString('en-IN');
+            items.push({
+                name: v.item,
+                tag: v.barcode,
+                duration: v.warrantyMonths + " Months",
+                expiry: war ? war.expiry : "VALIDATE WITH PI"
+            });
+        }
+    });
+
+    const reportContainer = document.getElementById("printableReportContainer");
+    let rowsHtml = "";
+    items.forEach(it => {
+        rowsHtml += `
+            <tr style="border-bottom: 5pt solid #000;">
+                <td style="padding: 20px 10px; font-size: 32pt; font-weight: 900; text-align: left; line-height:1.1;">
+                    ${it.name.toUpperCase()}<br>
+                    <span style="font-size: 20pt; color: #444;">ASSET TAG ID: ${it.tag}</span>
+                </td>
+                <td style="text-align:center; padding: 20px 10px; font-size: 32pt;">${it.duration}</td>
+                <td style="text-align:right; padding: 20px 10px; font-weight: 900; font-size: 32pt; color: #b91c1c;">${it.expiry}</td>
+            </tr>`;
+    });
+
+    reportContainer.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
+            <button class="danger" onclick="closeReportPreview()">CANCEL</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 50px; font-weight:bold; font-size:20px; cursor:pointer; border-radius:8px;">
+                <i class="fas fa-print"></i> PRINT CUSTOMER WARRANTY DOCUMENT
+            </button>
+        </div>
+        <div class="report-paper a4-max-wrapper" style="font-family: 'Times New Roman', serif !important; -webkit-print-color-adjust: exact;">
+            <style>
+                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 15mm !important; margin: 0 !important; border: none !important; } }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 12mm; background: white; color: #000; box-sizing: border-box; }
+                .header-main { font-size: 58pt; font-weight: 900; text-align: center; text-transform: uppercase; line-height: 1; }
+                .max-label { font-size: 32pt; text-decoration: underline; display: block; margin-top: 30px; text-align: left; font-weight: bold; }
+                .max-value { font-size: 44pt; font-weight: 900; display: block; border-bottom: 8pt solid #000; padding-bottom: 8px; text-align: left; }
+                .heavy-bar { background: #000 !important; color: #fff !important; padding: 25px; font-size: 50pt; margin-top: 50px; text-transform: uppercase; text-align: center; font-weight: 900; }
+            </style>
+            <div style="border-bottom: 16pt solid #000; padding-bottom: 30px; margin-bottom: 40px; text-align: center;">
+                <div class="header-main">METRO RAILWAY<br>PLATFORM SAFETY</div>
+                <div style="font-size: 28pt; font-weight: 900; margin-top: 15px;">WARRANTY & DISPATCH SUPPORT COPY</div>
+            </div>
+            <div style="text-align:right; font-size: 28pt; font-weight: 900; margin-bottom: 25px;">REF INVOICE: ${invoiceNo}</div>
+            <span class="max-label">DISPATCHED TO SITE:</span><span class="max-value">${site.toUpperCase()}</span>
+            <span class="max-label">DATE OF COMMENCEMENT:</span><span class="max-value">${saleDate}</span>
+            <div class="heavy-bar">WARRANTY PROTECTION DETAILS</div>
+            <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+                <thead><tr style="border-bottom: 10pt solid #000;"><th style="text-align:left; font-size: 26pt;">DESCRIPTION</th><th style="font-size: 26pt;">TENURE</th><th style="text-align:right; font-size: 26pt;">VALID UNTIL</th></tr></thead>
+                <tbody>${rowsHtml}</tbody>
+            </table>
+            <div style="margin-top: 80px; font-size: 18pt; font-style: italic; text-align: center; border: 4pt solid #000; padding: 20px; font-weight:bold;">
+                NOTE: PROTECTION COVERAGE COMMENCES FROM THE DATE OF DEPLOYMENT RECORDED IN MASTER DATABASE.
+            </div>
+            <div style="margin-top: 150px; border-top: 12pt solid #000; width: 60%; text-align: left;">
+                <div style="font-size: 48pt; font-weight: 900;">${(currentUser.name || 'PI OFFICE').toUpperCase()}</div>
+                <div style="font-size: 32pt; font-weight: 900; text-transform: uppercase;">AUTHORIZED SIGNATORY</div>
+            </div>
+        </div>`;
+    reportContainer.classList.remove("hidden");
+    window.scrollTo(0, 0);
+};
+
+// 9. Scan and Claim Handler
 const oldOnScanSuccess = window.onScanSuccess;
 window.onScanSuccess = async function(decodedText) {
     if(scanMode === 'WARRANTY_CLAIM') {
@@ -7233,36 +7439,41 @@ window.onScanSuccess = async function(decodedText) {
         const snap = await get(q);
         
         if(!snap.exists()) {
-            document.getElementById("claimItemName").innerText = "NOT FOUND";
+            document.getElementById("claimItemName").innerText = "TAG NOT REGISTERED";
             return;
         }
 
         let itemKey, item; snap.forEach(c => { itemKey = c.key; item = c.val(); });
         
+        const war = calculateWarranty(item.soldAt, item.warrantyMonths);
         document.getElementById("claimItemName").innerText = item.item;
-        document.getElementById("claimInv").innerText = item.invoiceNo || "N/A (Not Sold Yet)";
-        document.getElementById("claimSite").innerText = item.assignedStation || "In Store";
-        document.getElementById("claimDate").innerText = item.soldAt ? new Date(item.soldAt).toLocaleDateString() : "N/A";
+        document.getElementById("claimInv").innerText = item.invoiceNo || "N/A (NOT DISPATCHED)";
+        document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
+        document.getElementById("claimDate").innerText = item.soldAt ? new Date(item.soldAt).toLocaleDateString('en-IN') : "N/A";
         
         const statusBox = document.getElementById("claimStatusBox");
         if(item.status !== "Sold Out") {
-            statusBox.innerText = "❌ INELIGIBLE: Item not yet deployed.";
-            statusBox.style.color = "orange";
+            statusBox.innerHTML = `<span style="color:#d97706;">❌ INELIGIBLE: Item not yet deployed.</span>`;
+            document.getElementById("btnFinalClaim").disabled = true;
+        } else if (!war) {
+             statusBox.innerHTML = `<span style="color:#d97706;">⚠️ ERROR: Warranty not configured for this item.</span>`;
+             document.getElementById("btnFinalClaim").disabled = true;
+        } else if (war.expired) {
+            statusBox.innerHTML = `<span style="color:#b91c1c;">🚫 COVERAGE EXPIRED ON: ${war.expiry}</span>`;
             document.getElementById("btnFinalClaim").disabled = true;
         } else {
-            statusBox.innerText = "✅ RECORD VERIFIED: COVERAGE ACTIVE";
-            statusBox.style.color = "green";
+            statusBox.innerHTML = `<span style="color:#15803d;">✅ ELIGIBLE: COVERAGE ACTIVE (${war.daysLeft} Days Left)</span>`;
             document.getElementById("btnFinalClaim").disabled = false;
         }
-        window.currentClaimItem = { key: itemKey, ...item };
+        window.currentClaimItem = { key: itemKey, ...item, ...war };
         return;
     }
-    oldOnScanSuccess(decodedText);
+    if(typeof oldOnScanSuccess === "function") oldOnScanSuccess(decodedText);
 };
 
 window.submitWarrantyClaim = async () => {
     const issue = document.getElementById("claimIssue").value;
-    if(!issue) return alert("Enter issue description");
+    if(!issue) return alert("⚠️ Please describe the hardware issue.");
 
     const claimData = {
         item: window.currentClaimItem.item,
@@ -7270,13 +7481,15 @@ window.submitWarrantyClaim = async () => {
         invoice: window.currentClaimItem.invoiceNo,
         site: window.currentClaimItem.assignedStation,
         issue: issue,
+        expiryDate: window.currentClaimItem.expiry,
         reportedBy: currentUser.name,
         time: serverTimestamp(),
-        status: "Pending Investigation"
+        status: "Claim Logged"
     };
 
     await push(ref(db, "warranty_claims"), claimData);
-    alert("✅ Warranty Claim Filed Successfully.");
+    alert("✅ Claim Recorded Successfully.");
+    document.getElementById("claimIssue").value = "";
     toggleWarMode('dash');
 };
 </script>
