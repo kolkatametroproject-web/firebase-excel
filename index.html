@@ -8516,205 +8516,81 @@ const oldTechOnScanSuccess = window.onScanSuccess;
 // 🛠️ MASTER SCAN SUCCESS HANDLER
 // ==========================================
 window.onScanSuccess = async function(decodedText) {
-    // 1. Immediately stop scanner and clear UI to prevent ghost scans
     closeBarcodeScanner();
-    console.log("System Processing Entry:", decodedText);
+    const cleanInput = decodedText.trim();
+    console.log(`[MRPSP Security] Processing ${scanMode}: ${cleanInput}`);
 
-    // --- MODE: TECHNICIAN DIAGNOSTIC (QR or Manual ID) ---
-    if (scanMode === 'TECH_TICKET_SCAN') {
-        try {
-            const cleanId = decodedText.replace("#", "").trim().toUpperCase();
-            
-            // Try direct key fetch first
-            const snap = await get(ref(db, `warranty_claims/${decodedText}`));
-            
-            if (snap.exists()) {
-                await renderTechArea(decodedText, snap.val());
-            } else {
-                // Search all claims for the Short ID match
-                const allClaims = await get(ref(db, "warranty_claims"));
-                let foundKey = null;
-                let claimData = null;
-                
-                allClaims.forEach(c => {
-                    const shortIdFromDb = c.key.substring(1, 10).toUpperCase();
-                    if (shortIdFromDb === cleanId) {
-                        foundKey = c.key;
-                        claimData = c.val();
-                    }
-                });
+    try {
+        if (scanMode === 'TECH_TICKET_SCAN') {
+            const cleanId = cleanInput.replace("#", "").toUpperCase();
+            const allClaims = await get(ref(db, "warranty_claims"));
+            let foundKey = null;
+            let claimData = null;
 
-                if (foundKey) {
-                    await renderTechArea(foundKey, claimData);
-                } else {
-                    alert("❌ Ticket ID not found in system.");
+            allClaims.forEach(c => {
+                const shortId = c.key.substring(1, 10).toUpperCase();
+                if (shortId === cleanId || c.key === cleanInput) {
+                    foundKey = c.key;
+                    claimData = c.val();
                 }
+            });
+
+            if (foundKey) {
+                await renderTechArea(foundKey, claimData);
+            } else {
+                alert("❌ ACCESS DENIED: Ticket ID not recognized in database.");
             }
-        } catch (err) {
-            console.error("Tech Scan Error:", err);
-            alert("System Error: " + err.message);
+        } 
+        else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
+            const snap = await get(q);
+            if (snap.exists()) {
+                let itm, k; snap.forEach(c => { itm = c.val(); k = c.key; });
+                pendingTransactionItem = { key: k, ...itm };
+                const isOut = (scanMode === 'CHECKOUT');
+                document.getElementById(isOut ? "checkout_display" : "return_display").classList.remove("hidden");
+                document.getElementById(isOut ? "checkout_item_name" : "return_item_name").innerText = `✔ ${itm.item}`;
+            } else alert("❌ Tag not registered.");
         }
-        return; 
-    }
-
-    // --- MODE: ASSET RECOVERY ---
-    if (scanMode === 'ASSET_RECOVERY') {
-        addToRecoveryCart(decodedText);
-        return;
-    }
-
-    // --- MODE: INVENTORY LIST SEARCH ---
-    if (scanMode === 'SEARCH_STOCK') {
-        const searchInput = document.getElementById("mainStockSearch");
-        if(searchInput) {
-            searchInput.value = decodedText;
-            window.filterStockTable();
+        else if (scanMode === 'ASSET_RECOVERY') {
+            addToRecoveryCart(cleanInput);
         }
-        return;
-    }
-
-    // --- MODE: AUDIT TRAIL SEARCH ---
-    if (scanMode === 'AUDIT_SEARCH') {
-        const auditInput = document.getElementById("auditSearchInput");
-        if(auditInput) {
-            auditInput.value = decodedText;
-            window.fetchAuditHistory(decodedText);
-        }
-        return;
-    }
-
-    // --- MODE: ADD NEW ASSET ---
-    if (scanMode === 'ADD') {
-        const invInput = document.getElementById("invBarcode");
-        if(invInput) {
-            invInput.value = decodedText;
-            checkBarcodeUnique(decodedText);
-        }
-        return;
-    }
-
-    // --- MODE: BILLING SCAN ---
-    if (scanMode === 'BILLING_SCAN') {
-        const billInput = document.getElementById("billBarcodeInp");
-        if(billInput) {
-            billInput.value = decodedText;
+        else if (scanMode === 'BILLING_SCAN') {
+            document.getElementById("billBarcodeInp").value = cleanInput;
             addScannedItemToBill();
         }
-        return; 
-    }
-
-    // --- MODE: CHECKOUT / RETURN ---
-    if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-        const isCheckout = (scanMode === 'CHECKOUT');
-        const displayId = isCheckout ? "checkout_display" : "return_display";
-        const nameId    = isCheckout ? "checkout_item_name" : "return_item_name";
-        const codeId    = isCheckout ? "checkout_item_code" : "return_item_code";
-
-        document.getElementById(displayId).classList.remove("hidden");
-        document.getElementById(nameId).innerHTML = "🔍 Verifying Tag ID...";
-        document.getElementById(codeId).innerText = decodedText;
-
-        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
-        const snap = await get(q);
-        
-        if (!snap.exists()) {
-            document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ Tag Not Registered</span>`;
-            return;
-        }
-        
-        let itm, k; snap.forEach(c => { itm = c.val(); k = c.key; });
-        pendingTransactionItem = { key: k, ...itm };
-        document.getElementById(nameId).innerHTML = `✔ ${itm.item}`;
-        return;
-    }
-
-    // --- MODE: WARRANTY CLAIM (Customer Side) ---
-    if (scanMode === 'WARRANTY_CLAIM') {
-        const display = document.getElementById("claimDisplay");
-        if(display) display.classList.remove("hidden");
-        
-        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
-        const snap = await get(q);
-        const statusBox = document.getElementById("claimStatusBox");
-        
-        if(!snap.exists()) {
-            if(statusBox) statusBox.innerHTML = `<span style="color:red;">❌ TAG ID NOT REGISTERED</span>`;
-            return;
-        }
-
-        let item; snap.forEach(c => item = c.val());
-        const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
-        
-        document.getElementById("claimItemName").innerText = item.item;
-        document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
-        document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
-        document.getElementById("claimDate").innerText = war ? war.start : "NOT DEPLOYED";
-        
-        if(item.status !== "Sold Out") {
-            statusBox.innerHTML = `<span style="color:#d97706;">❌ ITEM NOT YET DEPLOYED</span>`;
-            document.getElementById("btnFinalClaim").disabled = true;
-        } else if (!war) {
-             statusBox.innerHTML = `<span style="color:#d97706;">⚠️ WARRANTY NOT SET UP</span>`;
-             document.getElementById("btnFinalClaim").disabled = true;
-        } else if (war.expired) {
-            statusBox.innerHTML = `<div style="color:#b91c1c;">🚫 COVERAGE EXPIRED ON: ${war.expiry}</div>`;
-            document.getElementById("btnFinalClaim").disabled = true;
-        } else {
-            statusBox.innerHTML = `
-                <div style="background:#f0fdf4; border: 2px solid #15803d; padding:15px; border-radius:10px; color:#15803d;">
-                    <span style="font-size:32px; font-weight:900;">${war.daysLeft} DAYS LEFT</span><br>
-                    <small>Valid Until: ${war.expiry}</small>
-                </div>`;
-            document.getElementById("btnFinalClaim").disabled = false;
-        }
-        return;
+    } catch (err) {
+        console.error("Scan Logic Failure:", err);
     }
 };
 
 // --- SUPPORTING TECHNICIAN FUNCTIONS ---
 window.submitTechResolution = async () => {
-    // 1. Fetch elements safely
-    const idEl = document.getElementById("techTicketIdDisplay");
-    const nameEl = document.getElementById("techNameInput");
-    const compEl = document.getElementById("techFailedComponent");
-    const serialEl = document.getElementById("techComponentSerial");
-    const actionEl = document.getElementById("techActionSelect");
-    const notesEl = document.getElementById("techCommandNotes");
+    const ticketId = document.getElementById("techTicketIdDisplay").innerText.replace("#", "");
+    const techName = document.getElementById("techNameInput").value.trim();
+    const notes = document.getElementById("techCommandNotes").value.trim();
+    const component = document.getElementById("techFailedComponent").value.trim();
 
-    // 2. NULL GUARD: Prevent crash if elements aren't rendered
-    if (!idEl || !nameEl || !compEl || !notesEl) {
-        alert("System Error: Form components not found. Please refresh.");
-        return;
-    }
+    if(!techName) return alert("⚠️ SECURITY BREACH: Technician Name is required to lock diagnosis.");
+    if(!notes || !component) return alert("⚠️ Missing diagnostic data.");
 
-    const ticketId = idEl.innerText.replace("#", "");
-    const techName = nameEl.value.trim();
-    const component = compEl.value.trim();
-    const notes = notesEl.value.trim();
+    if(!confirm(`I, ${techName}, certify that this diagnosis is accurate and ready for Admin Audit?`)) return;
 
-    if(!techName || !component || !notes) {
-        return alert("⚠️ MANDATORY: Technician Name, Failed Part, and Notes are required.");
-    }
-
-    if(!confirm(`I, ${techName}, certify that this ${actionEl.value} diagnosis is correct.`)) return;
-
+    // Retrieve full key
     const snap = await get(ref(db, "warranty_claims"));
     let realKey = "";
     snap.forEach(c => { if(c.key.toUpperCase().includes(ticketId)) realKey = c.key; });
 
-    if(!realKey) return alert("Database Reference Error.");
-
     await update(ref(db, `warranty_claims/${realKey}`), {
         status: "Verification Pending",
-        techName: techName,
-        failedComponent: component,
-        componentSerial: serialEl.value || "N/A",
-        techAction: actionEl.value,
+        techName: techName, // SAVED NAME
         techNotes: notes,
+        failedComponent: component,
+        techAction: document.getElementById("techActionSelect").value,
         diagTime: serverTimestamp()
     });
 
-    alert("✅ Sent to Admin for final approval.");
+    alert("✅ Sent for Admin Oversight.");
     document.getElementById("techDiagnosisArea").classList.add("hidden");
     toggleWarMode('claims-list');
 };
@@ -8724,28 +8600,49 @@ async function renderTechArea(ticketKey, claim) {
     if(!diagArea) return;
 
     diagArea.classList.remove("hidden");
+    
+    // 1. Set Ticket ID
     const shortId = ticketKey.substring(1, 10).toUpperCase();
     document.getElementById("techTicketIdDisplay").innerText = "#" + shortId;
-    document.getElementById("techIssueData").innerText = claim.issue || "No description.";
-    document.getElementById("techOriginalInvoice").innerText = "REF INV: " + (claim.invoiceNo || "N/A");
     
-    const invSnap = await get(ref(db, "inventory"));
-    let found = false;
-    invSnap.forEach(c => {
-        const item = c.val();
-        if(item.invoiceNo === claim.invoiceNo) {
-            document.getElementById("techAssetData").innerText = item.item;
-            document.getElementById("techPurchasePrice").innerText = "Original Value: ₹ " + parseFloat(item.purchasePrice || 0).toLocaleString('en-IN');
-            found = true;
-        }
-    });
+    // 2. Set Reported Issue
+    document.getElementById("techIssueData").innerText = claim.issue || "No description provided.";
+    
+    // 3. Fallback: Set Invoice from Claim Data immediately so it's not "---"
+    const refInv = claim.invoiceNo || "N/A";
+    document.getElementById("techOriginalInvoice").innerText = "REF INV: " + refInv;
+    
+    // 4. Detailed Asset Search
+    const techAssetData = document.getElementById("techAssetData");
+    const techPurchasePrice = document.getElementById("techPurchasePrice");
 
-    if(!found) {
-        document.getElementById("techAssetData").innerText = "Asset Details Unavailable";
-        document.getElementById("techPurchasePrice").innerText = "₹ 0.00";
+    try {
+        const invSnap = await get(ref(db, "inventory"));
+        let assetFound = false;
+
+        invSnap.forEach(c => {
+            const item = c.val();
+            // Match by Invoice Number
+            if(item.invoiceNo === claim.invoiceNo) {
+                techAssetData.innerText = item.item.toUpperCase();
+                techPurchasePrice.innerText = "Original Value: ₹ " + parseFloat(item.purchasePrice || 0).toLocaleString('en-IN');
+                assetFound = true;
+            }
+        });
+
+        if(!assetFound) {
+            techAssetData.innerText = claim.item ? claim.item.toUpperCase() : "Asset Details Offline";
+            techPurchasePrice.innerText = "Value sync pending...";
+        }
+    } catch (e) {
+        console.error("Asset Sync Error:", e);
     }
 
+    // 5. Auto-Update Status to 'In Progress'
     await update(ref(db, `warranty_claims/${ticketKey}`), { status: "In Progress" });
+    
+    // 6. Focus on Name Input
+    document.getElementById("techNameInput").focus();
 }
 window.adminVerifyClaim = async (ticketKey, decision) => {
     const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
