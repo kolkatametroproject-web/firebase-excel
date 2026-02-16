@@ -8673,37 +8673,48 @@ window.onScanSuccess = async function(decodedText) {
 
 // --- SUPPORTING TECHNICIAN FUNCTIONS ---
 window.submitTechResolution = async () => {
-    const ticketId = document.getElementById("techTicketIdDisplay").innerText.replace("#", "");
-    const techName = document.getElementById("techNameInput").value.trim();
-    const component = document.getElementById("techFailedComponent").value.trim();
-    const serial = document.getElementById("techComponentSerial").value.trim();
-    const action = document.getElementById("techActionSelect").value;
-    const notes = document.getElementById("techCommandNotes").value.trim();
+    // 1. Fetch elements safely
+    const idEl = document.getElementById("techTicketIdDisplay");
+    const nameEl = document.getElementById("techNameInput");
+    const compEl = document.getElementById("techFailedComponent");
+    const serialEl = document.getElementById("techComponentSerial");
+    const actionEl = document.getElementById("techActionSelect");
+    const notesEl = document.getElementById("techCommandNotes");
 
-    if(!techName || !component || !notes) {
-        return alert("⚠️ SECURE ERROR: Technician Name, Failed Component, and Diagnostic Notes are MANDATORY.");
+    // 2. NULL GUARD: Prevent crash if elements aren't rendered
+    if (!idEl || !nameEl || !compEl || !notesEl) {
+        alert("System Error: Form components not found. Please refresh.");
+        return;
     }
 
-    if(!confirm(`FINAL CONFIRMATION AS TECHNICIAN:\n\nName: ${techName}\nFailed Part: ${component}\nAction: ${action}\n\nDo you certify this diagnosis is accurate?`)) return;
+    const ticketId = idEl.innerText.replace("#", "");
+    const techName = nameEl.value.trim();
+    const component = compEl.value.trim();
+    const notes = notesEl.value.trim();
 
-    // Find the real key from the short ID
+    if(!techName || !component || !notes) {
+        return alert("⚠️ MANDATORY: Technician Name, Failed Part, and Notes are required.");
+    }
+
+    if(!confirm(`I, ${techName}, certify that this ${actionEl.value} diagnosis is correct.`)) return;
+
     const snap = await get(ref(db, "warranty_claims"));
     let realKey = "";
-    snap.forEach(c => { if(c.key.substring(1,10).toUpperCase() === ticketId) realKey = c.key; });
+    snap.forEach(c => { if(c.key.toUpperCase().includes(ticketId)) realKey = c.key; });
 
-    if(!realKey) return alert("Ticket ID Error.");
+    if(!realKey) return alert("Database Reference Error.");
 
     await update(ref(db, `warranty_claims/${realKey}`), {
         status: "Verification Pending",
         techName: techName,
         failedComponent: component,
-        componentSerial: serial,
-        techAction: action,
+        componentSerial: serialEl.value || "N/A",
+        techAction: actionEl.value,
         techNotes: notes,
         diagTime: serverTimestamp()
     });
 
-    alert("✅ DIAGNOSIS LOGGED. Ticket is now locked for Admin Audit.");
+    alert("✅ Sent to Admin for final approval.");
     document.getElementById("techDiagnosisArea").classList.add("hidden");
     toggleWarMode('claims-list');
 };
