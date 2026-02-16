@@ -8801,13 +8801,17 @@ window.onScanSuccess = async function(decodedText) {
         } 
 
         // --- MODE: TECHNICIAN PRODUCT VERIFICATION ---
+        // --- MODE: TECHNICIAN PRODUCT VERIFICATION (WITH AUTO-REJECT) ---
         else if (scanMode === 'TECH_PRODUCT_VERIFY') {
             if (!techVerifiedTicket) return alert("Error: Load Ticket First.");
+            
             const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
             const snap = await get(q);
             let match = false;
+            
             if (snap.exists()) {
                 snap.forEach(c => {
+                    // Verification: Does the scanned Tag belong to the item name on the Ticket?
                     if (c.val().item === techVerifiedTicket.item) match = true;
                 });
             }
@@ -8816,10 +8820,36 @@ window.onScanSuccess = async function(decodedText) {
                 document.getElementById("productVerifiedLabel").classList.remove("hidden");
                 document.getElementById("techMismatchArea").classList.add("hidden");
                 document.getElementById("techStepTitle").innerText = "IDENTITY CONFIRMED.";
+                document.getElementById("techStepTitle").style.color = "green";
                 renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
             } else {
+                // --- SECURITY BREACH / MISMATCH LOGIC ---
+                document.getElementById("techStepTitle").innerText = "SECURITY ALERT: ASSET MISMATCH";
+                document.getElementById("techStepTitle").style.color = "red";
                 document.getElementById("techMismatchArea").classList.remove("hidden");
-                document.getElementById("techStepTitle").innerText = "ACCESS DENIED: TAG MISMATCH";
+                
+                // 1. AUTOMATICALLY REJECT THE CLAIM IN DB
+                await update(ref(db, `warranty_claims/${techVerifiedTicketKey}`), {
+                    status: "Rejected",
+                    adminRemarks: "AUTO-REJECT: Physical asset mismatch during technician verification.",
+                    resolutionDate: serverTimestamp()
+                });
+
+                // 2. LOG THE ATTEMPT FOR AUDIT
+                await push(ref(db, "logs"), {
+                    type: "SECURITY_ALARM",
+                    details: `Warranty mismatch attempt on Ticket #${techVerifiedTicketKey.substring(1,10)}`,
+                    expectedItem: techVerifiedTicket.item,
+                    scannedTag: cleanInput,
+                    user: currentUser.email,
+                    time: serverTimestamp()
+                });
+
+                alert("⛔ SECURITY ALERT: Scanned Tag does not match this Ticket!\n\nThe claim has been automatically REJECTED and logged for investigation.");
+                
+                // 3. LOCK THE INTERFACE
+                document.getElementById("btnScanProduct").disabled = true;
+                document.getElementById("manualProductInp").disabled = true;
             }
         }
 
