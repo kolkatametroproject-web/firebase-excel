@@ -8763,49 +8763,121 @@ window.resetTechVerification = () => {
 
 // --- UPDATED SCAN SUCCESS HANDLER ---
 const techOriginalScanHandler = window.onScanSuccess;
+// ==========================================
+// 🛠️ UNIFIED MASTER SCAN SUCCESS HANDLER
+// ==========================================
 window.onScanSuccess = async function(decodedText) {
+    if (!decodedText) return;
+    
+    // 1. Immediately stop scanner to prevent ghost/double scans
     closeBarcodeScanner();
     const cleanInput = decodedText.trim();
+    console.log(`[MRPSP Security] Processing Mode: ${scanMode} | Input: ${cleanInput}`);
 
-    if (scanMode === 'TECH_TICKET_SCAN') {
-        // ... (Verification logic from previous step to find techVerifiedTicket) ...
-        // On success:
-        document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
-        document.getElementById("btnScanProduct").disabled = false;
-        document.getElementById("techStepTitle").innerText = "TICKET LOADED. SCAN PRODUCT NOW.";
-    }
+    try {
+        // --- MODE: TECHNICIAN DIAGNOSTIC TICKET ---
+        if (scanMode === 'TECH_TICKET_SCAN') {
+            const cleanId = cleanInput.replace("#", "").toUpperCase();
+            const allClaims = await get(ref(db, "warranty_claims"));
+            let found = false;
 
-    else if (scanMode === 'TECH_PRODUCT_VERIFY') {
-        if (!techVerifiedTicket) return;
+            allClaims.forEach(c => {
+                const shortId = c.key.substring(1, 10).toUpperCase();
+                if (shortId === cleanId || c.key === cleanInput) {
+                    techVerifiedTicket = c.val();
+                    techVerifiedTicketKey = c.key;
+                    found = true;
+                }
+            });
 
-        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
-        const snap = await get(q);
+            if (found) {
+                document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
+                document.getElementById("btnScanProduct").disabled = false;
+                document.getElementById("manualProductInp").disabled = false;
+                document.getElementById("techStepTitle").innerText = "TICKET LOADED. VERIFY PHYSICAL PRODUCT.";
+            } else {
+                alert("❌ Invalid Ticket ID.");
+            }
+        } 
 
-        let matchFound = false;
-        if (snap.exists()) {
-            let matchedItem; snap.forEach(c => matchedItem = c.val());
-            
-            // Check if Item Name AND Invoice match the ticket
-            if (matchedItem.item === techVerifiedTicket.item) {
-                matchFound = true;
+        // --- MODE: TECHNICIAN PRODUCT VERIFICATION ---
+        else if (scanMode === 'TECH_PRODUCT_VERIFY') {
+            if (!techVerifiedTicket) return alert("Error: Load Ticket First.");
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
+            const snap = await get(q);
+            let match = false;
+            if (snap.exists()) {
+                snap.forEach(c => {
+                    if (c.val().item === techVerifiedTicket.item) match = true;
+                });
+            }
+
+            if (match) {
+                document.getElementById("productVerifiedLabel").classList.remove("hidden");
+                document.getElementById("techMismatchArea").classList.add("hidden");
+                document.getElementById("techStepTitle").innerText = "IDENTITY CONFIRMED.";
+                renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
+            } else {
+                document.getElementById("techMismatchArea").classList.remove("hidden");
+                document.getElementById("techStepTitle").innerText = "ACCESS DENIED: TAG MISMATCH";
             }
         }
 
-        if (matchFound) {
-            document.getElementById("productVerifiedLabel").classList.remove("hidden");
-            document.getElementById("techMismatchArea").classList.add("hidden");
-            renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
-        } else {
-            // MISMATCH LOGIC
-            document.getElementById("techStepTitle").innerText = "ACCESS DENIED: TAG MISMATCH";
-            document.getElementById("techStepTitle").style.color = "red";
-            document.getElementById("techMismatchArea").classList.remove("hidden");
-            alert("⛔ SECURITY ALERT: Scanned Tag does not match this Ticket!");
+        // --- MODE: ASSET RECOVERY ---
+        else if (scanMode === 'ASSET_RECOVERY') {
+            addToRecoveryCart(cleanInput);
         }
-    }
-    
-    else {
-        await techOriginalScanHandler(decodedText);
+
+        // --- MODE: WARRANTY CLAIM (CUSTOMER) ---
+        else if (scanMode === 'WARRANTY_CLAIM') {
+            const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
+            const snap = await get(qWar);
+            const display = document.getElementById("claimDisplay");
+            const statusBox = document.getElementById("claimStatusBox");
+
+            if (display) display.classList.remove("hidden");
+            if (!snap.exists()) {
+                if (statusBox) statusBox.innerHTML = `<span style="color:red;">❌ TAG NOT REGISTERED</span>`;
+                return;
+            }
+
+            let item; snap.forEach(c => item = c.val());
+            const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
+            
+            document.getElementById("claimItemName").innerText = item.item;
+            document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
+            document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
+
+            if (item.status !== "Sold Out") {
+                statusBox.innerHTML = `<span style="color:orange;">❌ ITEM NOT DEPLOYED</span>`;
+            } else if (!war) {
+                statusBox.innerHTML = `<span>⚠️ WARRANTY NOT SET UP</span>`;
+            } else if (war.expired) {
+                statusBox.innerHTML = `<div style="color:red;">🚫 EXPIRED: ${war.expiry}</div>`;
+            } else {
+                statusBox.innerHTML = `<div style="color:green; font-size:24px;">✅ ${war.daysLeft} DAYS LEFT</div>`;
+            }
+        }
+
+        // --- MODE: INVENTORY LIST SEARCH ---
+        else if (scanMode === 'SEARCH_STOCK') {
+            const searchInput = document.getElementById("mainStockSearch");
+            if(searchInput) {
+                searchInput.value = cleanInput;
+                filterStockTable();
+            }
+        }
+
+        // --- MODE: BILLING ---
+        else if (scanMode === 'BILLING_SCAN') {
+            const billInput = document.getElementById("billBarcodeInp");
+            if(billInput) {
+                billInput.value = cleanInput;
+                addScannedItemToBill();
+            }
+        }
+    } catch (err) {
+        console.error("Scanner Error:", err);
     }
 };
   // --- NEW: MANUAL OVERRIDE HANDLER ---
