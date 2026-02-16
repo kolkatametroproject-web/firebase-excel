@@ -7322,41 +7322,35 @@ window.toggleWarMode = (mode) => {
 // 3. Updated Save Logic: Stores Manual Start Date instead of Signatory
 window.saveWarrantyConfig = async () => {
     const tag = document.getElementById("warSetupTag").value.trim();
-    const duration = parseInt(document.getElementById("warDuration").value);
+    const type = document.getElementById("warProductType").value;
+    let duration = parseInt(document.getElementById("warDuration").value) || 0;
     const unit = document.getElementById("warUnit").value;
     const startDateVal = document.getElementById("warStartDate").value;
 
-    // Check if user specifically entered 0
-    const isNoWarranty = (duration === 0);
-
-    if(!tag || isNaN(duration)) {
-        return alert("⚠️ Error: Please enter a valid Tag ID and Tenure Value (use 0 for No Warranty).");
-    }
+    if(!tag) return alert("Please enter Asset Tag ID.");
 
     try {
         const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
         const snap = await get(q);
-        
         if(!snap.exists()) return alert("❌ Error: Tag ID not found.");
         
         let key; snap.forEach(c => key = c.key);
-        const finalMonths = unit === "Years" ? duration * 12 : duration;
+        
+        const finalMonths = (type === "WARRANTY" && unit === "Years") ? duration * 12 : duration;
 
+        // Save to Database
         await update(ref(db, `inventory/${key}`), {
             warrantyMonths: finalMonths,
             manualWarDate: startDateVal || null,
-            noWarranty: isNoWarranty // This flag marks it as No Warranty
+            noWarranty: (type === "NON-WARRANTY"),
+            protectionActivated: true // This is the trigger for the dashboard
         });
         
-        if(isNoWarranty) {
-            alert("✅ Marked as NO WARRANTY product. (Protected count will not increase)");
-        } else {
-            alert("✅ Warranty Activated. Protected Asset count updated.");
-        }
+        alert(`✅ ${type} Configuration Saved.`);
         
-        // Refresh UI
-        loadWarSetup();
-        refreshWarDash(); // This triggers the counter update
+        // --- CRITICAL: REFRESH ALL UI COMPONENTS ---
+        loadWarSetup();     // Updates the table in the current tab
+        refreshWarDash();   // Updates the Dashboard counters at the top
         
     } catch (e) {
         alert("System Error: " + e.message);
@@ -7517,16 +7511,20 @@ async function refreshWarDash() {
                 const v = c.val();
                 total++;
 
-                // LOGIC: If protection was activated (either warranty or non-warranty setup)
-                // increment the protected count.
+                // COUNT IF: Protection flag is true (set during Warranty Setup)
                 if (v.protectionActivated === true) {
                     protectedCount++;
                 }
             });
         }
         
-        document.getElementById("warTotalAssets").innerText = total;
-        document.getElementById("warProtected").innerText = protectedCount;
+        // Update the visual labels
+        const totalEl = document.getElementById("warTotalAssets");
+        const protectedEl = document.getElementById("warProtected");
+        
+        if(totalEl) totalEl.innerText = total;
+        if(protectedEl) protectedEl.innerText = protectedCount;
+        
     } catch (e) {
         console.error("Dashboard Sync Error:", e);
     }
@@ -7537,7 +7535,6 @@ async function loadWarSetup() {
     if (!tbody) return;
 
     try {
-        // FIXED: Only one ref() call is allowed
         const snap = await get(ref(db, "inventory")); 
         tbody.innerHTML = "";
 
@@ -7548,16 +7545,19 @@ async function loadWarSetup() {
 
         snap.forEach(c => {
             const v = c.val();
-            // Display manual date if set, otherwise original sale date
             const displayDate = v.manualWarDate ? 
                 new Date(v.manualWarDate).toLocaleDateString('en-IN') : 
                 (v.soldAt ? new Date(v.soldAt).toLocaleDateString('en-IN') : "NOT SET");
+
+            // LOGIC: Check if it was marked as Non-Warranty
+            let tenureText = v.warrantyMonths ? v.warrantyMonths + ' Months' : 'NOT SET';
+            if (v.noWarranty) tenureText = '<span style="color:red; font-weight:900;">NON-WARRANTY</span>';
 
             tbody.innerHTML += `<tr>
                 <td style="font-family:monospace; font-weight:bold;">${v.barcode || '--'}</td>
                 <td>${v.item || '--'}</td>
                 <td style="font-size:11px;">${displayDate}</td>
-                <td style="font-weight:bold; color:var(--metro-blue);">${v.warrantyMonths ? v.warrantyMonths + ' Months' : 'NOT SET'}</td>
+                <td style="font-weight:bold; color:var(--metro-blue);">${tenureText}</td>
                 <td><button class="info" onclick="document.getElementById('warSetupTag').value='${v.barcode}'">Select</button></td>
             </tr>`;
         });
