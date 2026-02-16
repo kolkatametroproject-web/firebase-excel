@@ -7227,24 +7227,24 @@ window.removeFromCart = (type, index) => {
 };
 // Updated Print Function with increased Font Sizes
 window.generateInvoicePrint = async function() {
-    // 1. Check if both are empty
+    // 1. Validation
     if(window.billCart.length === 0 && window.serviceCart.length === 0) {
         return alert("⚠️ ERROR: Cannot generate empty bill. Please scan an asset or add a service charge.");
     }
 
     const clientType = document.getElementById("billClientType").value;
-    let targetStation = (clientType === "METRO") ? document.getElementById("billMetroStation").value : document.getElementById("billManualStation").value;
+    let targetStation = (clientType === "METRO") ? document.getElementById("billMetroStation").value : document.getElementById("billCustName").value;
 
-    if(!targetStation) return alert("Please select a target station.");
+    if(!targetStation) return alert("Please select a target station or enter Customer Name.");
 
-    // 2. Finalize (Now works for Service-only too)
+    // 2. Finalize Database Records
     const invoiceNo = await finalizeSaleRecords(targetStation);
     if(!invoiceNo) return;
 
     let billRows = "";
     let billTotal = 0; 
 
-    // 3. Combine Assets and Services
+    // 3. Combine Assets and Services for the Table
     const combinedItems = [
         ...window.billCart.map(it => ({name: it.name.toUpperCase(), tag: it.tag, rate: it.rate, qty: it.qty, net: it.net})),
         ...window.serviceCart.map(sv => ({name: "SERVICE: " + sv.desc.toUpperCase(), tag: "SERVICE", rate: sv.price, qty: 1, net: sv.net}))
@@ -7255,23 +7255,89 @@ window.generateInvoicePrint = async function() {
         billTotal += roundedNet; 
         billRows += `
             <tr style="border-bottom: 5pt solid #000;">
-                <td style="padding: 15px 10px; font-size: 32pt; font-weight: 900; text-align: left;">
+                <td style="padding: 20px 10px; font-size: 32pt; font-weight: 900; text-align: left;">
                     ${it.name}<br>
-                    <span style="font-size: 20pt; color: #333;">(REF: ${it.tag})</span>
+                    <span style="font-size: 20pt; color: #333;">(REF ID: ${it.tag})</span>
                 </td>
-                <td style="text-align:right; padding: 15px 10px; font-size: 32pt;">${it.rate.toFixed(0)}</td>
-                <td style="text-align:center; padding: 15px 10px; font-size: 32pt;">${it.qty}</td>
-                <td style="text-align:right; padding: 15px 10px; font-weight: 900; font-size: 32pt;">${roundedNet}</td>
+                <td style="text-align:right; padding: 20px 10px; font-size: 32pt;">${it.rate.toFixed(0)}</td>
+                <td style="text-align:center; padding: 20px 10px; font-size: 32pt;">${it.qty}</td>
+                <td style="text-align:right; padding: 20px 10px; font-weight: 900; font-size: 32pt;">${roundedNet}</td>
             </tr>`;
     });
 
-    // ... Rest of the print template code remains same ...
-    // (Ensure you call closeReportPreview() and reset carts at the end)
-    
+    // 4. Inject into Report Container
     const reportContainer = document.getElementById("printableReportContainer");
-    // (Injecting the HTML template here as per your established design)
-    // ... [Template Code] ...
+    const now = new Date();
     
+    reportContainer.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:20px; background:#f8fafc; border-bottom:1px solid #ddd;">
+            <h2 style="color:var(--metro-blue);">Official Invoice Preview</h2>
+            <button class="danger" onclick="closeReportPreview()">CANCEL & CLOSE</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 50px; font-weight:bold; font-size:24px; cursor:pointer; border-radius:8px; margin-left:15px;">
+                <i class="fas fa-print"></i> PRINT INVOICE
+            </button>
+        </div>
+
+        <div class="report-paper a4-max-wrapper" style="background:white; color:black; font-family:'Times New Roman', serif;">
+            <style>
+                @media print { 
+                    @page { size: A4; margin: 0; } 
+                    .no-print { display: none !important; } 
+                    .a4-max-wrapper { width: 210mm !important; padding: 15mm !important; } 
+                }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 15mm; box-sizing: border-box; }
+                .header-line { border-bottom: 15pt solid #000; padding-bottom: 20px; margin-bottom: 30px; text-align: center; }
+                .bill-title { font-size: 60pt; font-weight: 900; text-transform: uppercase; }
+                .meta-row { font-size: 35pt; font-weight: 900; border-bottom: 8pt solid #000; padding: 15pt 0; text-align: left; }
+                .total-bar { background: #000; color: #fff; padding: 25px; font-size: 55pt; font-weight: 900; display: flex; justify-content: space-between; margin-top: 20px; -webkit-print-color-adjust: exact; }
+            </style>
+
+            <div class="header-line">
+                <div class="bill-title">METRO RAILWAY</div>
+                <div style="font-size: 32pt; font-weight: 900; margin-top: 10px;">PLATFORM SAFETY PROJECT</div>
+                <div style="font-size: 45pt; border: 10pt solid #000; margin-top: 30px; padding: 10px; display: inline-block; font-weight: 900;">TAX INVOICE</div>
+            </div>
+
+            <div style="text-align:right; font-size: 30pt; font-weight: 900; margin-bottom: 30px;">INV NO: ${invoiceNo}</div>
+            
+            <div class="meta-row"><b>DATE:</b> ${now.toLocaleDateString('en-IN')}</div>
+            <div class="meta-row"><b>BILLED TO:</b> ${targetStation.toUpperCase()}</div>
+            <div class="meta-row"><b>ISSUED BY:</b> ${currentUser.name.toUpperCase()}</div>
+
+            <table style="width: 100%; border-collapse: collapse; margin-top: 40px; border: 8pt solid #000;">
+                <thead>
+                    <tr style="background: #000; color: #fff; -webkit-print-color-adjust: exact;">
+                        <th style="padding: 15px; font-size: 28pt; text-align: left;">PARTICULARS</th>
+                        <th style="padding: 15px; font-size: 28pt;">RATE</th>
+                        <th style="padding: 15px; font-size: 28pt;">QTY</th>
+                        <th style="padding: 15px; font-size: 28pt;">TOTAL</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${billRows}
+                </tbody>
+            </table>
+
+            <div class="total-bar">
+                <span>GRAND TOTAL:</span>
+                <span>₹ ${billTotal.toLocaleString('en-IN')}</span>
+            </div>
+            
+            <div style="text-align:left; font-size: 24pt; font-style: italic; margin-top: 15px; font-weight: bold;">
+                Amount in words: ${numberToWords(billTotal)}
+            </div>
+
+            <div style="margin-top: 150px; border-top: 12pt solid #000; width: 60%; text-align: left;">
+                <div style="font-size: 45pt; font-weight: 900;">${currentUser.name.toUpperCase()}</div>
+                <div style="font-size: 30pt; font-weight: 900;">AUTHORIZED SIGNATORY (MRPSP)</div>
+            </div>
+
+            <div style="margin-top: 80px; border-top: 4pt dashed #000; padding-top: 20px; font-size: 18pt; text-align: center; font-weight: bold;">
+                COMPUTER GENERATED INVOICE - SYSTEM AUTHENTICATED
+            </div>
+        </div>`;
+
+    // 5. Reset App UI
     window.billCart = []; 
     window.serviceCart = []; 
     renderBillCartUI();
