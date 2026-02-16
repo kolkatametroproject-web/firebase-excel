@@ -7205,22 +7205,24 @@ window.addServiceOnlyToBill = () => {
     alert("✅ Service Applied.");
 };
 // =========================================================
-// 🛡️ FINAL COMPLETE WARRANTY & DISPATCH ENGINE
+// 🛡️ UPDATED WARRANTY ENGINE: DATE-BASED ACTIVATION
 // =========================================================
 
-// 1. Core Logic: Universal Warranty & Remaining Day Counter
-function calculateWarranty(saleDateTs, durationMonths) {
-    if(!saleDateTs || !durationMonths) return null;
+// 1. Core Logic: Prioritizes Manual Start Date over Sale Date
+function calculateWarranty(saleDateTs, durationMonths, manualStartDate = null) {
+    // Use manual date if provided, otherwise fallback to sale date
+    const baseDate = manualStartDate ? new Date(manualStartDate) : (saleDateTs ? new Date(saleDateTs) : null);
     
-    const startDate = new Date(saleDateTs);
-    const expiryDate = new Date(saleDateTs);
+    if(!baseDate || !durationMonths) return null;
+    
+    const startDate = new Date(baseDate);
+    const expiryDate = new Date(baseDate);
     expiryDate.setMonth(expiryDate.getMonth() + parseInt(durationMonths));
     
     const today = new Date();
     const diffTime = expiryDate - today;
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     
-    // Total Tenure in Days for the Print Receipt
     const totalTenureDays = Math.ceil((expiryDate - startDate) / (1000 * 60 * 60 * 24));
     
     return {
@@ -7232,7 +7234,7 @@ function calculateWarranty(saleDateTs, durationMonths) {
     };
 }
 
-// 2. Navigation Controller (Fixed Button Connections)
+// 2. Navigation Controller
 window.toggleWarMode = (mode) => {
     const panels = ['dash', 'setup', 'sales', 'claim', 'active'];
     panels.forEach(m => {
@@ -7249,12 +7251,13 @@ window.toggleWarMode = (mode) => {
     if(mode === 'active') loadActiveWarranty();
 };
 
-// 3. Update System Button Logic (Fixed)
+// 3. Updated Save Logic: Stores Manual Start Date instead of Signatory
 window.saveWarrantyConfig = async () => {
     const tag = document.getElementById("warSetupTag").value.trim();
     const duration = parseInt(document.getElementById("warDuration").value);
     const unit = document.getElementById("warUnit").value;
-    const signatory = document.getElementById("selWarPrintAuthority").value;
+    // New Date Input Reference (Ensure your HTML ID matches this)
+    const startDateInput = document.getElementById("warStartDate").value; 
 
     if(!tag || isNaN(duration)) {
         return alert("⚠️ Error: Please enter a valid Tag ID and Tenure Value.");
@@ -7270,21 +7273,18 @@ window.saveWarrantyConfig = async () => {
         
         await update(ref(db, `inventory/${key}`), {
             warrantyMonths: unit === "Years" ? duration * 12 : duration,
-            defaultSignatory: signatory 
+            manualWarDate: startDateInput || null // Saves the manual start date
         });
         
-        alert(`✅ SUCCESS: Warranty parameters updated for ${tag}`);
+        alert(`✅ SUCCESS: Warranty activated from ${startDateInput || 'Sale Date'} for ${tag}`);
         loadWarSetup();
     } catch (e) {
         alert("System Error: " + e.message);
     }
 };
 
-// 4. Official Warranty Print Layout (Fixed Signature & Date Positions)
+// 4. Official Warranty Print Layout (REMOVED SIGNATURE)
 window.printCustomerCopy = async (invoiceNo) => {
-    const authorityElement = document.getElementById("selWarPrintAuthority");
-    const selectedAuthority = authorityElement ? authorityElement.value : "AUTHORIZED SIGNATORY";
-
     const snap = await get(ref(db, "inventory"));
     const items = [];
     let site = "", saleDate = "";
@@ -7292,9 +7292,11 @@ window.printCustomerCopy = async (invoiceNo) => {
     snap.forEach(c => {
         const v = c.val();
         if(v.invoiceNo === invoiceNo) {
-            const war = calculateWarranty(v.soldAt, v.warrantyMonths);
+            // Calculate using manual date if it exists in DB
+            const war = calculateWarranty(v.soldAt, v.warrantyMonths, v.manualWarDate);
             site = v.assignedStation;
-            saleDate = new Date(v.soldAt).toLocaleDateString('en-IN');
+            saleDate = war ? war.start : new Date(v.soldAt).toLocaleDateString('en-IN');
+            
             items.push({
                 name: v.item,
                 tag: v.barcode,
@@ -7325,7 +7327,7 @@ window.printCustomerCopy = async (invoiceNo) => {
                 <i class="fas fa-print"></i> PRINT OFFICIAL WARRANTY COPY
             </button>
         </div>
-        <div class="report-paper a4-max-wrapper" style="font-family: 'Times New Roman', serif !important; -webkit-print-color-adjust: exact;">
+        <div class="report-paper a4-max-wrapper" style="font-family: 'Times New Roman', serif !important;">
             <style>
                 @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 15mm !important; margin: 0 !important; border: none !important; } }
                 .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 12mm; background: white; color: #000; box-sizing: border-box; }
@@ -7333,9 +7335,6 @@ window.printCustomerCopy = async (invoiceNo) => {
                 .max-label { font-size: 32pt; text-decoration: underline; display: block; margin-top: 30px; text-align: left; font-weight: bold; }
                 .max-value { font-size: 46pt; font-weight: 900; display: block; border-bottom: 8pt solid #000; padding-bottom: 8px; text-align: left; }
                 .heavy-bar { background: #000 !important; color: #fff !important; padding: 25px; font-size: 48pt; margin-top: 50px; text-transform: uppercase; text-align: center; font-weight: 900; }
-                .footer-container { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 150px; width: 100%; }
-                .footer-box { width: 45%; text-align: left; }
-                .footer-box.right { text-align: right; }
             </style>
             <div style="border-bottom: 16pt solid #000; padding-bottom: 30px; margin-bottom: 40px; text-align: center;">
                 <div class="header-main">METRO RAILWAY</div>
@@ -7350,29 +7349,23 @@ window.printCustomerCopy = async (invoiceNo) => {
                 <tbody>${rowsHtml}</tbody>
             </table>
             
-            <div class="footer-container">
-                <div class="footer-box">
+            <div style="margin-top: 100px; display: flex; justify-content: flex-start;">
+                <div style="width: 100%;">
                     <div style="font-size: 24pt; text-decoration: underline; font-weight: bold; margin-bottom: 10px;">WARRANTY COMMENCEMENT:</div>
-                    <div style="font-size: 42pt; font-weight: 900; border: 4pt solid #000; padding: 10px; display: inline-block;">${saleDate}</div>
-                    <div style="font-size: 16pt; margin-top: 10px; font-weight: bold; text-transform: uppercase;">VALID COVERAGE START DATE</div>
-                </div>
-                <div class="footer-box right">
-                    <div style="border-top: 10pt solid #000; padding-top: 20px;">
-                        <div style="font-size: 42pt; font-weight: 900;">${selectedAuthority.split('(')[0].trim().toUpperCase()}</div>
-                        <div style="font-size: 24pt; font-weight: 900; text-transform: uppercase;">AUTHORIZED SIGNATORY</div>
-                    </div>
+                    <div style="font-size: 50pt; font-weight: 900; border: 6pt solid #000; padding: 15px 30px; display: inline-block;">${saleDate}</div>
+                    <div style="font-size: 18pt; margin-top: 10px; font-weight: bold; text-transform: uppercase;">OFFICIAL SYSTEM VALIDATED START DATE</div>
                 </div>
             </div>
 
-            <div style="margin-top: 80px; font-size: 16pt; text-align: center; border-top: 3pt dashed #000; padding-top: 20px; font-weight:bold; text-transform:uppercase;">
-                [DOCUMENT AUTHENTICATED VIA MASTER DATABASE]
+            <div style="margin-top: 150px; font-size: 16pt; text-align: center; border-top: 3pt dashed #000; padding-top: 20px; font-weight:bold; text-transform:uppercase;">
+                [DOCUMENT AUTHENTICATED VIA MASTER DATABASE - NO PHYSICAL SIGNATURE REQUIRED]
             </div>
         </div>`;
     reportContainer.classList.remove("hidden");
     window.scrollTo(0, 0);
 };
 
-// 5. Scan Success Handler (Showing Remaining Days)
+// 5. Scan Success Handler
 const oldOnScanSuccess = window.onScanSuccess;
 window.onScanSuccess = async function(decodedText) {
     if(scanMode === 'WARRANTY_CLAIM') {
@@ -7390,7 +7383,7 @@ window.onScanSuccess = async function(decodedText) {
         }
 
         let item; snap.forEach(c => item = c.val());
-        const war = calculateWarranty(item.soldAt, item.warrantyMonths);
+        const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
         
         document.getElementById("claimItemName").innerText = item.item;
         document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
@@ -7429,7 +7422,7 @@ async function refreshWarDash() {
             const v = c.val();
             total++;
             if(v.status === "Sold Out" && v.warrantyMonths) {
-                const war = calculateWarranty(v.soldAt, v.warrantyMonths);
+                const war = calculateWarranty(v.soldAt, v.warrantyMonths, v.manualWarDate);
                 if(war && !war.expired) protectedCount++;
             }
         });
@@ -7440,15 +7433,15 @@ async function refreshWarDash() {
 
 async function loadWarSetup() {
     const tbody = document.getElementById("warSetupTableBody");
-    const snap = await get(ref(db, "inventory"));
+    const snap = await get(ref(ref(db, "inventory")));
     tbody.innerHTML = "";
     snap.forEach(c => {
         const v = c.val();
-        const saleDate = v.soldAt ? new Date(v.soldAt).toLocaleDateString('en-IN') : "NOT SOLD";
+        const displayDate = v.manualWarDate ? new Date(v.manualWarDate).toLocaleDateString('en-IN') : (v.soldAt ? new Date(v.soldAt).toLocaleDateString('en-IN') : "NOT SET");
         tbody.innerHTML += `<tr>
             <td style="font-family:monospace; font-weight:bold;">${v.barcode}</td>
             <td>${v.item}</td>
-            <td style="font-size:11px;">${saleDate}</td>
+            <td style="font-size:11px;">${displayDate}</td>
             <td style="font-weight:bold; color:var(--metro-blue);">${v.warrantyMonths ? v.warrantyMonths + ' Months' : 'NOT SET'}</td>
             <td><button class="info" onclick="document.getElementById('warSetupTag').value='${v.barcode}'">Select</button></td>
         </tr>`;
@@ -7487,7 +7480,7 @@ async function loadActiveWarranty() {
     snap.forEach(c => {
         const v = c.val();
         if(v.status === "Sold Out" && v.warrantyMonths) {
-            const war = calculateWarranty(v.soldAt, v.warrantyMonths);
+            const war = calculateWarranty(v.soldAt, v.warrantyMonths, v.manualWarDate);
             const statusBadge = war.expired ? '<span class="badge-offline">EXPIRED</span>' : '<span class="badge-online">ACTIVE</span>';
             tbody.innerHTML += `<tr>
                 <td style="font-family:monospace; font-weight:bold;">${v.barcode}</td>
