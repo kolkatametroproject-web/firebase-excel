@@ -1717,6 +1717,7 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
     <button onclick="toggleWarMode('setup')" class="secondary"><i class="fas fa-tools"></i> Warranty Setup</button>
     <button onclick="toggleWarMode('sales')" class="info" style="background:#6366f1; border:none;"><i class="fas fa-receipt"></i> Sales History</button>
     <button onclick="toggleWarMode('claim')" class="warning"><i class="fas fa-qrcode"></i> Scan & Claim</button>
+    <button onclick="toggleWarMode('claims-list')" class="secondary" style="background:#4b5563;"><i class="fas fa-ticket-alt"></i> Claims Log</button>
     <button onclick="toggleWarMode('recovery')" class="danger" style="background:#be123c;"><i class="fas fa-undo-alt"></i> Asset Recovery</button>
     <button onclick="toggleWarMode('active')" class="success"><i class="fas fa-clipboard-list"></i> Active Coverage</button>
 </div>
@@ -1788,8 +1789,14 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
 
     <div id="war-claim" class="panel hidden" style="border-top: 5px solid var(--metro-red);">
     <h3 style="color:var(--metro-red);"><i class="fas fa-magnifying-glass"></i> Verification & Claim Engine</h3>
-    <div style="text-align:center; padding:30px; background:#fff1f2; border: 2px dashed #f87171; border-radius:12px;">
-        <p>Scan Product Tag to fetch Sales History & Warranty Status</p>
+    
+    <div style="text-align:center; padding:20px; background:#fff1f2; border: 2px dashed #f87171; border-radius:12px;">
+        <div style="margin-bottom:15px;">
+            <label style="display:block; font-weight:bold; margin-bottom:5px;">Manual Tag Entry (If Scan Fails):</label>
+            <input id="manualClaimTag" placeholder="Enter Tag ID..." style="max-width:300px; display:inline-block; margin-right:10px;">
+            <button class="info" onclick="handleManualClaimSearch()">Verify Tag</button>
+        </div>
+        <p style="margin:10px 0; font-weight:bold;">- OR -</p>
         <button onclick="openBarcodeScanner('WARRANTY_CLAIM')" class="danger" style="padding:15px 40px; font-size:16px;">
             <i class="fas fa-qrcode"></i> INITIATE SCAN
         </button>
@@ -8115,37 +8122,120 @@ window.finalizeRecoveryCart = async () => {
     const tbody = document.getElementById("warClaimsTableBody");
     if(!tbody) return;
 
-    // Listen to the warranty_claims node in real-time
+    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Synchronizing Tickets...</td></tr>";
+
+    // Start real-time listener for the warranty_claims node
     onValue(ref(db, "warranty_claims"), (snap) => {
         tbody.innerHTML = "";
         
         if(!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No active tickets found.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#64748b;'>No active warranty claims found in the database.</td></tr>";
             return;
         }
 
         snap.forEach(c => {
             const v = c.val();
-            const ticketId = c.key.substring(1, 8).toUpperCase(); // Generating a short display ID from the Firebase key
+            const ticketKey = c.key;
+            // Generate a clean display ID (e.g., #T-A1B2C3D)
+            const displayId = ticketKey.substring(1, 8).toUpperCase();
             
-            let statusStyle = "background:#fef3c7; color:#d97706;"; // Pending
-            if(v.status === "Resolved") statusStyle = "background:#dcfce7; color:#166534;";
+            // Status Styling
+            let statusBadge = "";
+            if(v.status === "Resolved") {
+                statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 10px; border-radius:12px; font-size:10px; font-weight:800;">RESOLVED</span>`;
+            } else if(v.status === "In Progress") {
+                statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:12px; font-size:10px; font-weight:800;">IN PROGRESS</span>`;
+            } else {
+                statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 10px; border-radius:12px; font-size:10px; font-weight:800;">PENDING</span>`;
+            }
 
+            // Date Formatting
+            const dateStr = v.filedAt ? new Date(v.filedAt).toLocaleDateString('en-IN') : "N/A";
+
+            // Prepare Data String for the Print Button
+            const dataString = JSON.stringify(v).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+
+            // Construct Row
             tbody.innerHTML += `
-                <tr>
-                    <td style="font-family:monospace; font-weight:bold;">#${ticketId}</td>
-                    <td style="font-weight:bold;">${v.item}</td>
-                    <td>${v.site}</td>
-                    <td style="font-size:11px; max-width:200px; word-wrap:break-word;">${v.issue}</td>
-                    <td>${v.filedBy}</td>
-                    <td style="text-align:center;">
-                        <span style="${statusStyle} padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">
-                            ${v.status.toUpperCase()}
-                        </span>
+                <tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="font-family:monospace; font-weight:bold; color:var(--metro-blue);">#${displayId}</td>
+                    <td style="font-size:11px;">${dateStr}</td>
+                    <td style="font-weight:bold;">${v.item}<br><small style="color:#64748b;">Inv: ${v.invoiceNo || 'N/A'}</small></td>
+                    <td style="color:#B91C1C; font-weight:bold; font-size:11px;">${v.site}</td>
+                    <td style="font-size:11px; max-width:180px; word-wrap:break-word;">${v.issue}</td>
+                    <td style="text-align:center;">${statusBadge}</td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        <button class="info" onclick="generateClaimTicketPrint('${ticketKey}', JSON.parse('${dataString}'))" style="padding:4px 8px; font-size:10px;">
+                            <i class="fas fa-print"></i>
+                        </button>
+                        ${isAdmin ? `
+                            <button class="success" onclick="updateClaimStatus('${ticketKey}', 'Resolved')" style="padding:4px 8px; font-size:10px; margin-left:2px;">
+                                <i class="fas fa-check"></i>
+                            </button>
+                        ` : ''}
                     </td>
                 </tr>`;
         });
     });
+};
+
+// Supporting function to update Ticket Status (Admin Only)
+window.updateClaimStatus = async (key, newStatus) => {
+    if(!confirm(`Mark Ticket as ${newStatus}?`)) return;
+    try {
+        await update(ref(db, `warranty_claims/${key}`), { status: newStatus });
+        alert("✅ Status Updated.");
+    } catch(e) { alert("Update Error: " + e.message); }
+};
+// Function for Manual Entry Verification
+window.handleManualClaimSearch = () => {
+    const tag = document.getElementById('manualClaimTag').value.trim();
+    if(!tag) return alert("Please enter a Tag ID.");
+    scanMode = 'WARRANTY_CLAIM';
+    onScanSuccess(tag); // Reuse your existing scan success logic
+};
+
+// Function to print the Ticket
+window.generateClaimTicketPrint = (ticketKey, data) => {
+    const reportContainer = document.getElementById("printableReportContainer");
+    const ticketId = ticketKey.substring(1, 10).toUpperCase();
+
+    reportContainer.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
+            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:10px 40px; font-weight:bold; margin-left:10px;">PRINT TICKET</button>
+        </div>
+        <div class="report-paper a4-max-wrapper" style="font-family: 'Times New Roman', serif;">
+            <div style="border-bottom: 5pt solid #000; padding-bottom:10px; margin-bottom:20px; text-align:center;">
+                <h1 style="font-size:35pt; margin:0;">METRO RAILWAY SAFETY PROJECT</h1>
+                <h2 style="font-size:20pt; margin:5px 0;">OFFICIAL WARRANTY CLAIM TICKET</h2>
+            </div>
+            
+            <div style="font-size:25pt; font-weight:bold; background:#000; color:#fff; padding:10px; text-align:center; margin-bottom:20px;">
+                TICKET ID: #${ticketId}
+            </div>
+
+            <table style="width:100%; font-size:18pt; border-collapse:collapse;">
+                <tr><td style="padding:10px; border-bottom:1pt solid #ddd;"><b>Asset Name:</b></td><td style="padding:10px; border-bottom:1pt solid #ddd;">${data.item}</td></tr>
+                <tr><td style="padding:10px; border-bottom:1pt solid #ddd;"><b>Location/Site:</b></td><td style="padding:10px; border-bottom:1pt solid #ddd;">${data.site}</td></tr>
+                <tr><td style="padding:10px; border-bottom:1pt solid #ddd;"><b>Invoice Ref:</b></td><td style="padding:10px; border-bottom:1pt solid #ddd;">${data.invoiceNo}</td></tr>
+                <tr><td style="padding:10px; border-bottom:1pt solid #ddd;"><b>Filed By:</b></td><td style="padding:10px; border-bottom:1pt solid #ddd;">${data.filedBy}</td></tr>
+                <tr><td style="padding:10px; border-bottom:1pt solid #ddd;"><b>Date Filed:</b></td><td style="padding:10px; border-bottom:1pt solid #ddd;">${new Date(data.filedAt).toLocaleString()}</td></tr>
+            </table>
+
+            <div style="margin-top:30px;">
+                <h3>ISSUE DESCRIPTION:</h3>
+                <div style="border:2pt solid #000; padding:15px; font-size:16pt; min-height:100px;">
+                    ${data.issue}
+                </div>
+            </div>
+
+            <div style="margin-top:50px; text-align:center; font-style:italic;">
+                This is a system-generated support request. Please attach this ticket to the hardware during recovery.
+            </div>
+        </div>
+    `;
+    reportContainer.classList.remove("hidden");
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
