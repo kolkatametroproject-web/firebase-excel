@@ -8561,20 +8561,41 @@ if(scanMode === 'TECH_TICKET_SCAN') {
 
 // D. Supporting Helper for the Diagnosis UI
 async function renderTechArea(ticketKey, claim) {
+    // 1. Show the diagnostic panel
     document.getElementById("techDiagnosisArea").classList.remove("hidden");
-    // RESTORE THE # SYMBOL HERE
-    document.getElementById("techTicketIdDisplay").innerText = "#" + ticketKey.substring(1, 10).toUpperCase();
-    document.getElementById("techIssueData").innerText = claim.issue;
-    document.getElementById("techOriginalInvoice").innerText = "REF INV: " + claim.invoiceNo;
     
-    const invSnap = await get(ref(db, "inventory"));
-    invSnap.forEach(c => {
-        const item = c.val();
-        if(item.invoiceNo === claim.invoiceNo) {
-            document.getElementById("techAssetData").innerText = item.item;
-            document.getElementById("techPurchasePrice").innerText = "Original Value: ₹ " + parseFloat(item.purchasePrice || 0).toLocaleString('en-IN');
+    // 2. RESTORE THE # SYMBOL explicitly
+    const shortId = ticketKey.substring(1, 10).toUpperCase();
+    document.getElementById("techTicketIdDisplay").innerText = "#" + shortId;
+    
+    // 3. Populate basic claim info
+    document.getElementById("techIssueData").innerText = claim.issue || "No issue description provided.";
+    document.getElementById("techOriginalInvoice").innerText = "REF INV: " + (claim.invoiceNo || "N/A");
+    
+    // 4. Fetch Original Purchase Data from Inventory
+    try {
+        const invSnap = await get(ref(db, "inventory"));
+        let itemFound = false;
+        
+        invSnap.forEach(c => {
+            const item = c.val();
+            // Match based on the invoice number saved in the claim
+            if(item.invoiceNo === claim.invoiceNo) {
+                document.getElementById("techAssetData").innerText = item.item;
+                document.getElementById("techPurchasePrice").innerText = "Original Purchase Value: ₹ " + parseFloat(item.purchasePrice || 0).toLocaleString('en-IN');
+                itemFound = true;
+            }
+        });
+
+        if(!itemFound) {
+            document.getElementById("techAssetData").innerText = "Asset record not found in Inventory";
+            document.getElementById("techPurchasePrice").innerText = "₹ 0.00";
         }
-    });
+    } catch (e) {
+        console.error("Inventory fetch error:", e);
+    }
+
+    // 5. Auto-update status to "In Progress" in Database
     await update(ref(db, `warranty_claims/${ticketKey}`), { status: "In Progress" });
 }
 
