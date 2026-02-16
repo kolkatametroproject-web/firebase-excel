@@ -7317,7 +7317,7 @@ window.saveWarrantyConfig = async () => {
     const tag = document.getElementById("warSetupTag").value.trim();
     const duration = parseInt(document.getElementById("warDuration").value);
     const unit = document.getElementById("warUnit").value;
-    const startDateVal = document.getElementById("warStartDate").value; // Date Picker Value
+    const startDateVal = document.getElementById("warStartDate").value;
 
     if(!tag || isNaN(duration)) {
         return alert("⚠️ Error: Please enter a valid Tag ID and Tenure Value.");
@@ -7327,17 +7327,21 @@ window.saveWarrantyConfig = async () => {
         const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
         const snap = await get(q);
         
-        if(!snap.exists()) return alert("❌ Error: Tag ID not found in inventory.");
+        if(!snap.exists()) return alert("❌ Error: Tag ID not found.");
         
         let key; snap.forEach(c => key = c.key);
         
+        const finalMonths = unit === "Years" ? duration * 12 : duration;
+
         await update(ref(db, `inventory/${key}`), {
-            warrantyMonths: unit === "Years" ? duration * 12 : duration,
-            manualWarDate: startDateVal || null // Save the specific start date
+            warrantyMonths: finalMonths,
+            manualWarDate: startDateVal || null,
+            noWarranty: finalMonths === 0 // Flag for the print template
         });
         
-        alert(`✅ SUCCESS: Warranty parameters updated for ${tag}`);
+        alert(finalMonths === 0 ? "✅ Item saved with NO WARRANTY." : "✅ Warranty updated.");
         loadWarSetup();
+        refreshWarDash(); // FORCE dashboard to update immediately after save
     } catch (e) {
         alert("System Error: " + e.message);
     }
@@ -7369,16 +7373,29 @@ window.printCustomerCopy = async (invoiceNo) => {
     const reportContainer = document.getElementById("printableReportContainer");
     let rowsHtml = "";
     items.forEach(it => {
-        rowsHtml += `
-            <tr style="border-bottom: 6pt solid #000;">
-                <td style="padding: 25px 10px; font-size: 30pt; font-weight: 900; text-align: left; line-height:1.1;">
-                    ${it.name.toUpperCase()}<br>
-                    <span style="font-size: 18pt; color: #444;">ID TAG: ${it.tag}</span>
-                </td>
-                <td style="text-align:center; padding: 25px 10px; font-size: 30pt; font-weight: 900;">${it.totalDays} DAYS</td>
-                <td style="text-align:right; padding: 25px 10px; font-weight: 900; font-size: 30pt; color: #b91c1c;">${it.expiry}</td>
-            </tr>`;
-    });
+    // Check if tenure is 0
+    const tenureDisplay = it.totalDays === 0 ? 
+        `<span style="color:red;">NO WARRANTY</span>` : 
+        `${it.totalDays} DAYS`;
+
+    const expiryDisplay = it.totalDays === 0 ? 
+        `N/A` : 
+        it.expiry;
+
+    rowsHtml += `
+        <tr style="border-bottom: 6pt solid #000;">
+            <td style="padding: 25px 10px; font-size: 30pt; font-weight: 900; text-align: left;">
+                ${it.name.toUpperCase()}<br>
+                <span style="font-size: 18pt; color: #444;">ID TAG: ${it.tag}</span>
+            </td>
+            <td style="text-align:center; padding: 25px 10px; font-size: 30pt; font-weight: 900;">
+                ${tenureDisplay}
+            </td>
+            <td style="text-align:right; padding: 25px 10px; font-weight: 900; font-size: 30pt;">
+                ${expiryDisplay}
+            </td>
+        </tr>`;
+});
 
     reportContainer.innerHTML = `
         <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
@@ -7483,10 +7500,10 @@ async function refreshWarDash() {
             snap.forEach(c => {
                 const v = c.val();
                 total++;
-                // Check if item is sold AND has a warranty duration set
-                if (v.status === "Sold Out" && v.warrantyMonths) {
-                    // Logic: Use manual date if it exists, otherwise fall back to soldAt
+                // An asset is Protected if it is Sold AND has a warranty tenure > 0
+                if (v.status === "Sold Out" && v.warrantyMonths && v.warrantyMonths > 0) {
                     const war = calculateWarranty(v.soldAt, v.warrantyMonths, v.manualWarDate);
+                    // Only count if the warranty has not actually expired yet
                     if (war && !war.expired) {
                         protectedCount++;
                     }
