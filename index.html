@@ -1902,6 +1902,26 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
         <i class="fas fa-file-invoice"></i> FINALIZE & PRINT CONSOLIDATED MEMO
     </button>
 </div>
+    <div id="war-claims-list" class="panel hidden">
+    <h3><i class="fas fa-ticket-alt"></i> Active Warranty Claims (Tickets)</h3>
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr style="background: var(--metro-blue); color: white;">
+                    <th>Ticket ID</th>
+                    <th>Asset Name</th>
+                    <th>Site</th>
+                    <th>Issue Description</th>
+                    <th>Filed By</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="warClaimsTableBody">
+                <tr><td colspan="6" style="text-align:center;">Loading active tickets...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
 </div>
 </section>
 <script type="module">
@@ -7423,11 +7443,13 @@ function calculateWarranty(saleDateTs, durationMonths, manualStartDate = null) {
 
 // 2. Navigation Controller
 window.toggleWarMode = (mode) => {
-    const panels = ['dash', 'setup', 'sales', 'claim', 'active', 'recovery']; // Added recovery
+    // Add 'claims-list' to the panels array
+    const panels = ['dash', 'setup', 'sales', 'claim', 'active', 'recovery', 'claims-list']; 
     panels.forEach(m => {
         const el = document.getElementById(`war-${m}`);
         if(el) el.classList.add('hidden');
     });
+    
     const target = document.getElementById(`war-${mode}`);
     if(target) target.classList.remove('hidden');
 
@@ -7435,6 +7457,7 @@ window.toggleWarMode = (mode) => {
     if(mode === 'setup') loadWarSetup();
     if(mode === 'sales') loadWarSales();
     if(mode === 'active') loadActiveWarranty();
+    if(mode === 'claims-list') loadWarrantyClaims(); // Trigger the loader
 };
 
 // 3. Updated Save Logic: Stores Manual Start Date instead of Signatory
@@ -8088,6 +8111,42 @@ window.finalizeRecoveryCart = async () => {
         </div>`;
     reportContainer.classList.remove("hidden");
 }
+  window.loadWarrantyClaims = () => {
+    const tbody = document.getElementById("warClaimsTableBody");
+    if(!tbody) return;
+
+    // Listen to the warranty_claims node in real-time
+    onValue(ref(db, "warranty_claims"), (snap) => {
+        tbody.innerHTML = "";
+        
+        if(!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>No active tickets found.</td></tr>";
+            return;
+        }
+
+        snap.forEach(c => {
+            const v = c.val();
+            const ticketId = c.key.substring(1, 8).toUpperCase(); // Generating a short display ID from the Firebase key
+            
+            let statusStyle = "background:#fef3c7; color:#d97706;"; // Pending
+            if(v.status === "Resolved") statusStyle = "background:#dcfce7; color:#166534;";
+
+            tbody.innerHTML += `
+                <tr>
+                    <td style="font-family:monospace; font-weight:bold;">#${ticketId}</td>
+                    <td style="font-weight:bold;">${v.item}</td>
+                    <td>${v.site}</td>
+                    <td style="font-size:11px; max-width:200px; word-wrap:break-word;">${v.issue}</td>
+                    <td>${v.filedBy}</td>
+                    <td style="text-align:center;">
+                        <span style="${statusStyle} padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">
+                            ${v.status.toUpperCase()}
+                        </span>
+                    </td>
+                </tr>`;
+        });
+    });
+};
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
