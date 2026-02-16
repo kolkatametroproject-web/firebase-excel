@@ -7205,10 +7205,34 @@ window.addServiceOnlyToBill = () => {
     alert("✅ Service Applied.");
 };
 // =========================================================
-// 🛡️ FINAL INTEGRATED WARRANTY ENGINE (SIGNATORY SELECTION)
+// 🛡️ FINAL INTEGRATED WARRANTY ENGINE (V4 - BUTTON FIX)
 // =========================================================
 
-// 1. Core Logic: Universal Warranty & Day Counter
+// 1. Navigation & State Controller
+window.toggleWarMode = (mode) => {
+    // Hide all possible warranty sub-panels
+    const panels = ['dash', 'setup', 'sales', 'claim', 'active'];
+    panels.forEach(m => {
+        const el = document.getElementById(`war-${m}`);
+        if(el) el.classList.add('hidden');
+    });
+    
+    // Show the target panel
+    const target = document.getElementById(`war-${mode}`);
+    if(target) {
+        target.classList.remove('hidden');
+    } else {
+        console.error(`Warranty Panel 'war-${mode}' not found in HTML.`);
+    }
+
+    // Trigger dynamic data loaders
+    if(mode === 'dash') refreshWarDash();
+    if(mode === 'setup') loadWarSetup();
+    if(mode === 'sales') loadWarSales();
+    if(mode === 'active') loadActiveWarranty();
+};
+
+// 2. Core Logic: Universal Warranty & Day Counter
 function calculateWarranty(saleDateTs, durationMonths) {
     if(!saleDateTs || !durationMonths) return null;
     
@@ -7232,9 +7256,28 @@ function calculateWarranty(saleDateTs, durationMonths) {
     };
 }
 
-// 2. Setup Data Loader
+// 3. Dashboard Data Loader
+async function refreshWarDash() {
+    const snap = await get(ref(db, "inventory"));
+    let total = 0, protectedCount = 0;
+    if(snap.exists()){
+        snap.forEach(c => {
+            const v = c.val();
+            total++;
+            if(v.status === "Sold Out" && v.warrantyMonths) {
+                const war = calculateWarranty(v.soldAt, v.warrantyMonths);
+                if(war && !war.expired) protectedCount++;
+            }
+        });
+    }
+    document.getElementById("warTotalAssets").innerText = total;
+    document.getElementById("warProtected").innerText = protectedCount;
+}
+
+// 4. Warranty Setup Loader
 async function loadWarSetup() {
     const tbody = document.getElementById("warSetupTableBody");
+    if(!tbody) return;
     const snap = await get(ref(db, "inventory"));
     tbody.innerHTML = "";
     
@@ -7254,9 +7297,70 @@ async function loadWarSetup() {
     });
 }
 
-// 3. OFFICIAL CUSTOMER SUPPORT PRINT (With Signatory Selection)
+// 5. Active Coverage List (Deployment List)
+async function loadActiveWarranty() {
+    const tbody = document.getElementById("warActiveTableBody");
+    if(!tbody) return;
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Calculating...</td></tr>";
+    const snap = await get(ref(db, "inventory"));
+    tbody.innerHTML = "";
+    
+    snap.forEach(c => {
+        const v = c.val();
+        if(v.status === "Sold Out" && v.warrantyMonths) {
+            const war = calculateWarranty(v.soldAt, v.warrantyMonths);
+            const statusBadge = war.expired ? 
+                '<span style="background:#fee2e2; color:#b91c1c; padding:3px 8px; border-radius:12px; font-weight:bold; font-size:10px;">EXPIRED</span>' : 
+                '<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:12px; font-weight:bold; font-size:10px;">ACTIVE</span>';
+
+            tbody.innerHTML += `
+                <tr>
+                    <td style="font-family:monospace; font-weight:bold;">${v.barcode}</td>
+                    <td>${v.item}</td>
+                    <td>${war.start}</td>
+                    <td style="font-weight:bold; color:#b91c1c;">${war.expiry}</td>
+                    <td style="text-align:center; font-weight:900;">${war.daysLeft} Days</td>
+                    <td>${statusBadge}</td>
+                </tr>`;
+        }
+    });
+}
+
+// 6. Sales History Loader
+async function loadWarSales() {
+    const tbody = document.getElementById("warSalesTableBody");
+    if(!tbody) return;
+    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Syncing Dispatch Data...</td></tr>";
+    
+    const snap = await get(ref(db, "inventory"));
+    const salesGroup = {}; 
+
+    snap.forEach(c => {
+        const v = c.val();
+        if(v.invoiceNo) {
+            if(!salesGroup[v.invoiceNo]) {
+                salesGroup[v.invoiceNo] = { site: v.assignedStation, date: v.soldAt, items: [] };
+            }
+            salesGroup[v.invoiceNo].items.push(v.item);
+        }
+    });
+
+    tbody.innerHTML = "";
+    Object.entries(salesGroup).forEach(([inv, data]) => {
+        tbody.innerHTML += `
+            <tr>
+                <td style="font-family:monospace; font-weight:bold; color:#0284c7; cursor:pointer;" onclick="printCustomerCopy('${inv}')">${inv}</td>
+                <td style="font-weight:bold;">${data.site}</td>
+                <td>${new Date(data.date).toLocaleDateString()}</td>
+                <td style="font-size:11px; color:#64748b;">${data.items.join(", ")}</td>
+                <td style="text-align:center;"><button onclick="printCustomerCopy('${inv}')" class="info"><i class="fas fa-print"></i></button></td>
+            </tr>`;
+    });
+}
+
+// 7. OFFICIAL CUSTOMER SUPPORT PRINT (With Signatory Selection)
 window.printCustomerCopy = async (invoiceNo) => {
-    // CAPTURE THE SELECTED AUTHORITY FROM THE UI
+    // CAPTURE THE SELECTED AUTHORITY
     const authorityElement = document.getElementById("selWarPrintAuthority");
     const selectedAuthority = authorityElement ? authorityElement.value : "AUTHORIZED SIGNATORY";
 
@@ -7332,19 +7436,20 @@ window.printCustomerCopy = async (invoiceNo) => {
     window.scrollTo(0, 0);
 };
 
-// 4. Warranty Scan Success Handler
+// 8. Warranty Scan Success Handler
 const oldOnScanSuccess = window.onScanSuccess;
 window.onScanSuccess = async function(decodedText) {
     if(scanMode === 'WARRANTY_CLAIM') {
         closeBarcodeScanner();
         const display = document.getElementById("claimDisplay");
-        display.classList.remove("hidden");
+        if(display) display.classList.remove("hidden");
         
         const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
         const snap = await get(q);
         
         if(!snap.exists()) {
-            document.getElementById("claimStatusBox").innerHTML = `<span style="color:red;">❌ TAG NOT REGISTERED</span>`;
+            const statusBox = document.getElementById("claimStatusBox");
+            if(statusBox) statusBox.innerHTML = `<span style="color:red;">❌ TAG NOT REGISTERED</span>`;
             return;
         }
 
@@ -7357,6 +7462,8 @@ window.onScanSuccess = async function(decodedText) {
         document.getElementById("claimDate").innerText = war ? war.start : "NOT DEPLOYED";
         
         const statusBox = document.getElementById("claimStatusBox");
+        if(!statusBox) return;
+
         if(item.status !== "Sold Out") {
             statusBox.innerHTML = `<span style="color:#d97706;">❌ ITEM NOT DEPLOYED</span>`;
             document.getElementById("btnFinalClaim").disabled = true;
