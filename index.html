@@ -1864,18 +1864,26 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
     </div>
 </div>
     <div id="war-recovery" class="panel hidden" style="border-top: 5px solid #be123c;">
-    <h3 style="color:#be123c;"><i class="fas fa-box-open"></i> Bulk/Fast Asset Recovery (Sold -> In-Stock)</h3>
+    <h3 style="color:#be123c;"><i class="fas fa-box-open"></i> Asset Recovery (Sold -> In-Stock)</h3>
     <div style="background:#fff1f2; padding:20px; border-radius:8px; margin-bottom:20px;">
-        <label style="font-weight:bold; font-size:12px;">STEP 1: ENTER GLOBAL RETURN REASON</label>
-        <input id="recoveryReason" placeholder="e.g. Project Cancelled, Calibration Required, Defective Replacement" style="border:2px solid #be123c;">
+        <label style="font-weight:bold; font-size:12px;">STEP 1: ENTER RETURN REASON</label>
+        <input id="recoveryReason" placeholder="e.g. Defective Replacement, Project Update" style="border:2px solid #be123c; margin-bottom:15px;">
         
-        <p style="text-align:center; margin-top:20px;">
-            <button onclick="openBarcodeScanner('ASSET_RECOVERY')" class="danger" style="padding:15px 40px; font-size:16px; width:100%; max-width:400px;">
-                <i class="fas fa-qrcode"></i> SCAN TO RETURN TO STOCK
+        <div style="display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center;">
+            <div>
+                <label style="font-weight:bold; font-size:11px;">STEP 2: SCAN TAG OR ENTER ID MANUALLY</label>
+                <input id="manualRecoveryTag" placeholder="Enter Tag ID (e.g. PI-001)">
+            </div>
+            <button onclick="openBarcodeScanner('ASSET_RECOVERY')" class="warning" style="height:45px; margin-top:5px;">
+                <i class="fas fa-qrcode"></i> SCAN
             </button>
-        </p>
+        </div>
+
+        <button onclick="processAssetRecovery(document.getElementById('manualRecoveryTag').value)" class="danger" style="width:100%; padding:12px; margin-top:10px; font-weight:900;">
+            <i class="fas fa-undo-alt"></i> RECOVER TO STOCK & PRINT MEMO
+        </button>
     </div>
-    <div id="recoveryStatus" style="text-align:center; font-weight:bold; font-size:14px; color:#15803d;"></div>
+    <div id="recoveryStatus" style="text-align:center; font-weight:bold; font-size:14px;"></div>
 </div>
 </div>
 </section>
@@ -6381,6 +6389,79 @@ window.revertSale = async (key, itemName) => {
 
     } catch(e) {
         alert("Restoration Failed: " + e.message);
+    }
+};
+  window.processAssetRecovery = async (tagId) => {
+    // Standardize input
+    const tag = tagId ? tagId.trim() : "";
+    const reason = document.getElementById("recoveryReason").value.trim();
+    const statusDiv = document.getElementById("recoveryStatus");
+
+    // 1. Validation
+    if(!tag) return alert("Please Scan a Tag or Enter ID manually.");
+    if(!reason) return alert("Please enter a Return Reason first.");
+
+    statusDiv.innerHTML = "⏳ Verifying Asset: " + tag;
+    statusDiv.style.color = "var(--metro-blue)";
+
+    try {
+        // 2. Database Query
+        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
+        const snap = await get(q);
+
+        if (!snap.exists()) {
+            statusDiv.innerHTML = "❌ Error: Tag ID not found.";
+            return alert("Tag ID '" + tag + "' is not registered in the system.");
+        }
+
+        let key, item;
+        snap.forEach(c => { key = c.key; item = c.val(); });
+
+        // 3. Status Gate: Only recover items that are "Sold Out"
+        if (item.status !== "Sold Out") {
+            statusDiv.innerHTML = "❌ Error: Item is already in stock.";
+            return;
+        }
+
+        // 4. Update Inventory Node
+        await update(ref(db, `inventory/${key}`), {
+            status: "In Stock",
+            holder: "Store",
+            location: "Recovered: " + reason,
+            soldAt: null,
+            invoiceNo: null,
+            assignedStation: null,
+            // Keep protectionActivated: true to maintain dashboard counts
+        });
+
+        // 5. Log for Audit Trail
+        await push(ref(db, "logs"), {
+            type: "ITEM_RECOVERED",
+            item: item.item,
+            barcode: tag,
+            originalInvoice: item.invoiceNo || "N/A",
+            reason: reason,
+            time: serverTimestamp(),
+            by: currentUser.name || currentUser.email
+        });
+
+        statusDiv.innerHTML = `✅ SUCCESS: ${item.item} recovered. Generating Memo...`;
+        statusDiv.style.color = "green";
+
+        // 6. Generate and Show the Return Memo
+        // This function was provided in the previous step
+        generateReturnPrintout(item.item, tag, item.invoiceNo || "N/A", item.assignedStation || "Site", reason);
+
+        // 7. UI Cleanup
+        const manualInp = document.getElementById("manualRecoveryTag");
+        if(manualInp) manualInp.value = "";
+        
+        // Update Dashboard Protected Counter
+        if (typeof refreshWarDash === "function") refreshWarDash();
+
+    } catch (e) {
+        console.error(e);
+        statusDiv.innerHTML = "❌ System Error: " + e.message;
     }
 };
 // Helper function to generate the Return Note
