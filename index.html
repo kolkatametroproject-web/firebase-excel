@@ -8141,69 +8141,63 @@ window.finalizeRecoveryCart = async () => {
     const tbody = document.getElementById("warClaimsTableBody");
     if(!tbody) return;
 
-    // Start real-time listener for the warranty_claims node
+    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Loading latest claims...</td></tr>";
+
     onValue(ref(db, "warranty_claims"), (snap) => {
         tbody.innerHTML = "";
         
         if(!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#64748b;'>No active warranty claims found in the database.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#64748b;'>No active claims found.</td></tr>";
             return;
         }
 
+        // --- INNOVATIVE SORTING: NEWEST FIRST ---
+        const claimsArray = [];
         snap.forEach(c => {
-            const v = c.val();
-            const ticketKey = c.key;
+            claimsArray.push({ key: c.key, ...c.val() });
+        });
+
+        // Sort by timestamp (filedAt) in descending order
+        claimsArray.sort((a, b) => (b.filedAt || 0) - (a.filedAt || 0));
+
+        claimsArray.forEach(v => {
+            const ticketKey = v.key;
             const displayId = ticketKey.substring(1, 10).toUpperCase();
-            
             const isResolved = (v.status === "Resolved");
             
-            // PROGRESS CALCULATOR (Amazon Style Steps)
-            let progress = "15%"; 
-            let step = 1;
-            
-            // Logic: Filed (Step 1) -> Diagnosis/Verification (Step 2) -> Resolved (Step 3)
-            if(v.status === "In Progress" || v.status === "Verification Pending") { 
-                progress = "60%"; 
-                step = 2; 
-            }
-            if(isResolved) { 
-                progress = "100%"; 
-                step = 3; 
-            }
+            // Progress Logic
+            let progress = "15%"; let step = 1;
+            if(v.status === "In Progress" || v.status === "Verification Pending") { progress = "60%"; step = 2; }
+            if(isResolved) { progress = "100%"; step = 3; }
 
-            // STYLE: Apply grayscale filter and disable interaction for resolved items
+            // Visual Gray-out for Resolved
             const rowStyle = isResolved ? 
                 "opacity: 0.55; filter: grayscale(1); background: #f8fafc; pointer-events: none;" : 
                 "background: #ffffff;";
 
-            // Sanitize data string for the print function button
             const dataString = JSON.stringify(v).replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
-            // ACTION BUTTONS LOGIC
+            // Action Buttons
             let actionBtns = `
                 <button class="info" onclick="generateClaimTicketPrint('${ticketKey}', JSON.parse('${dataString}'))" style="background:#febd69; color:#131a22; border:none; border-radius:4px; padding: 6px 15px; font-weight: bold; cursor:pointer;">
                     Receipt
                 </button>`;
 
-            // Show Admin-specific controls only if not already resolved
             if(isAdmin && !isResolved) {
                 if(v.status === "Verification Pending" && v.techAction === "REPLACE_PRODUCT") {
-                    // Command specifically for Replacement Invoices
-                    actionBtns += `<button class="warning" onclick="generateReplacementBill('${ticketKey}')" style="margin-left:8px; padding: 6px 15px; background:#e67e22; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Verify & Replace</button>`;
+                    actionBtns += `<button class="warning" onclick="generateReplacementBill('${ticketKey}')" style="margin-left:8px; padding: 6px 15px; background:#e67e22; color:white; border:none; border-radius:4px; font-weight:bold;">Verify & Replace</button>`;
                 } else {
-                    // General manual resolution button
-                    actionBtns += `<button class="success" onclick="updateClaimStatus('${ticketKey}', 'Resolved')" style="margin-left:8px; padding: 6px 15px; background:#2ecc71; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Manual Resolve</button>`;
+                    actionBtns += `<button class="success" onclick="updateClaimStatus('${ticketKey}', 'Resolved')" style="margin-left:8px; padding: 6px 15px; background:#2ecc71; color:white; border:none; border-radius:4px;">Manual Resolve</button>`;
                 }
             }
 
-            // Construct the Visual Amazon-Style Row
             tbody.innerHTML += `
                 <tr style="${rowStyle} border-bottom: 3px solid #f1f5f9;">
                     <td colspan="7" style="padding: 25px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                             <div>
                                 <span style="font-weight: 900; color: #232f3e; font-size: 16px;">TICKET ID: #${displayId}</span>
-                                <div style="font-size: 12px; color: #565959; margin-top: 4px;">Created: ${new Date(v.filedAt).toLocaleDateString('en-IN')}</div>
+                                <div style="font-size: 12px; color: #565959; margin-top: 4px;">Created: ${new Date(v.filedAt).toLocaleString('en-IN')}</div>
                             </div>
                             <div style="display: flex; align-items: center; gap: 10px;">
                                 ${isResolved ? '<span style="color:#000; font-weight:900; font-size:12px;">✅ CLOSED</span>' : ''}
@@ -8212,29 +8206,27 @@ window.finalizeRecoveryCart = async () => {
                         </div>
 
                         <div style="position: relative; height: 6px; background: #e7e9ec; border-radius: 3px; margin: 35px 20px 15px 20px;">
-                            <div style="position: absolute; top: 0; left: 0; height: 100%; width: ${progress}; background: #ff9900; transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);"></div>
-                            
+                            <div style="position: absolute; top: 0; left: 0; height: 100%; width: ${progress}; background: #ff9900; transition: width 0.8s ease;"></div>
                             <div style="display: flex; justify-content: space-between; position: absolute; width: 100%; top: -12px;">
                                 <div style="text-align: center; width: 100px;">
-                                    <div style="width:24px; height:24px; background:${step>=1?'#ff9900':'#fff'}; border:3px solid #ff9900; border-radius:50%; margin: 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"></div>
-                                    <div style="font-size: 11px; font-weight: 800; margin-top: 8px; color:${step>=1?'#111':'#888'}">FILED</div>
+                                    <div style="width:24px; height:24px; background:${step>=1?'#ff9900':'#fff'}; border:3px solid #ff9900; border-radius:50%; margin: 0 auto;"></div>
+                                    <div style="font-size: 11px; font-weight: 800; margin-top: 8px;">FILED</div>
                                 </div>
                                 <div style="text-align: center; width: 100px;">
-                                    <div style="width:24px; height:24px; background:${step>=2?'#ff9900':'#fff'}; border:3px solid #ff9900; border-radius:50%; margin: 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"></div>
-                                    <div style="font-size: 11px; font-weight: 800; margin-top: 8px; color:${step>=2?'#111':'#888'}">DIAGNOSIS</div>
+                                    <div style="width:24px; height:24px; background:${step>=2?'#ff9900':'#fff'}; border:3px solid #ff9900; border-radius:50%; margin: 0 auto;"></div>
+                                    <div style="font-size: 11px; font-weight: 800; margin-top: 8px;">DIAGNOSIS</div>
                                 </div>
                                 <div style="text-align: center; width: 100px;">
-                                    <div style="width:24px; height:24px; background:${step>=3?'#ff9900':'#fff'}; border:3px solid #ff9900; border-radius:50%; margin: 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"></div>
-                                    <div style="font-size: 11px; font-weight: 800; margin-top: 8px; color:${step>=3?'#111':'#888'}">RESOLVED</div>
+                                    <div style="width:24px; height:24px; background:${step>=3?'#ff9900':'#fff'}; border:3px solid #ff9900; border-radius:50%; margin: 0 auto;"></div>
+                                    <div style="font-size: 11px; font-weight: 800; margin-top: 8px;">RESOLVED</div>
                                 </div>
                             </div>
                         </div>
 
                         <div style="margin-top: 55px; font-size: 13px; background: #f3f3f3; padding: 15px; border-radius: 6px; border-left: 5px solid #ff9900;">
-                            <span style="color:#666; font-weight:bold; text-transform:uppercase; font-size:10px;">Asset Tracking Details:</span><br>
                             <strong style="font-size:14px;">${v.item}</strong> deployed at <strong>${v.site}</strong><br>
-                            <div style="margin-top:5px; color:#b91c1c; font-style:italic; font-weight: 900;">"Fault Reported: ${v.issue}"</div>
-                            ${v.techNotes ? `<div style="margin-top:8px; color:#232f3e; font-weight:bold; border-top:1px solid #ddd; padding-top:5px;">Tech Notes: ${v.techNotes}</div>` : ''}
+                            <div style="margin-top:5px; color:#b91c1c; font-style:italic; font-weight: 900;">"Fault: ${v.issue}"</div>
+                            ${v.techNotes ? `<div style="margin-top:8px; color:#232f3e; font-weight:bold; border-top:1px solid #ddd; padding-top:5px;">Resolution Note: ${v.techNotes}</div>` : ''}
                         </div>
                     </td>
                 </tr>`;
@@ -8268,57 +8260,83 @@ window.generateClaimTicketPrint = (ticketKey, data) => {
     const reportContainer = document.getElementById("printableReportContainer");
     const ticketId = ticketKey.substring(1, 10).toUpperCase();
     
-    // Generate a Google Chart QR code link dynamically
-    const qrUrl = `https://chart.googleapis.com/chart?chs=150x150&cht=qr&chl=${ticketKey}&choe=UTF-8`;
+    // GENERATE DYNAMIC QR CODE CONTENT (Ticket ID)
+    // chl=${ticketKey} ensures the QR contains the exact database ID for scanning
+    const qrUrl = `https://chart.googleapis.com/chart?chs=180x180&cht=qr&chl=${ticketKey}&choe=UTF-8`;
 
     reportContainer.innerHTML = `
         <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
-            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
-            <button onclick="window.print()" style="background:#131a22; color:#fff; padding:15px 40px; font-weight:bold;">PRINT TICKET</button>
+            <button class="danger" onclick="closeReportPreview()">CLOSE PREVIEW</button>
+            <button onclick="window.print()" style="background:#131a22; color:#fff; padding:15px 50px; font-weight:bold; cursor:pointer; border-radius:8px; margin-left:15px;">
+                <i class="fas fa-print"></i> PRINT OFFICIAL TICKET
+            </button>
         </div>
         
-        <div class="report-paper a4-max-wrapper" style="font-family: 'Times New Roman', serif; border: 2pt solid #000; padding: 10mm;">
-            <div style="display: flex; justify-content: space-between; border-bottom: 5pt solid #000; padding-bottom: 20px;">
-                <div style="text-align: left; width: 70%;">
-                    <div style="font-size: 32pt; font-weight: 900;">METRO RAILWAY</div>
-                    <div style="font-size: 18pt; font-weight: bold;">WARRANTY CLAIM TICKET</div>
-                    <div style="font-size: 28pt; color: #ff9900; font-weight: 900; margin-top: 10px;">ID: #${ticketId}</div>
+        <div class="report-paper a4-max-wrapper" style="font-family: 'Times New Roman', serif; background:white; color:black; border: 1pt solid #eee;">
+            <style>
+                @media print { 
+                    @page { size: A4; margin: 0; } 
+                    .no-print { display: none !important; } 
+                    .a4-max-wrapper { width: 100% !important; padding: 15mm !important; } 
+                }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 15mm; box-sizing: border-box; text-align: center; }
+                .header-line { border-bottom: 12pt solid #000; padding-bottom: 30px; margin-bottom: 35px; }
+                .project-title { font-size: 52pt; font-weight: 900; text-transform: uppercase; line-height: 1.1; }
+                .college-name { font-size: 26pt; font-weight: 900; margin-top: 15px; line-height: 1.4; text-transform: uppercase; }
+                .meta-label { font-size: 28pt; text-decoration: underline; display: block; margin-top: 30px; text-align: left; font-weight: bold; }
+                .meta-value { font-size: 38pt; font-weight: 900; display: block; border-bottom: 6pt solid #000; padding-bottom: 10px; text-align: left; word-wrap: break-word; }
+            </style>
+
+            <div class="header-line">
+                <div class="project-title">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+                <div class="college-name">
+                    INSTITUTE OF ENGINEERING AND MANAGEMENT<br>
+                    <div>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
                 </div>
-                <div style="text-align: right; width: 30%;">
-                    <img src="${qrUrl}" style="border: 2pt solid #000; padding: 5px;">
-                    <div style="font-size: 10pt; font-weight: bold;">SCAN TO TRACK</div>
+                <div style="font-size: 35pt; border: 8pt solid #000; margin-top: 35px; padding: 10px 25px; display: inline-block; font-weight: 900; text-transform: uppercase; background:#000; color:#fff; -webkit-print-color-adjust: exact;">
+                    WARRANTY CLAIM TICKET
                 </div>
             </div>
 
-            <div style="margin-top: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px;">
-                <div style="font-size: 18pt; line-height: 1.6;">
-                    <b style="text-decoration: underline;">LOGISTICS INFO:</b><br>
-                    <b>Asset:</b> ${data.item.toUpperCase()}<br>
-                    <b>Location:</b> ${data.site.toUpperCase()}<br>
-                    <b>Reference Inv:</b> ${data.invoiceNo}
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px; border: 5pt solid #000; padding: 20px; -webkit-print-color-adjust: exact;">
+                <div style="text-align: left;">
+                    <div style="font-size: 24pt; font-weight: bold;">TICKET REFERENCE ID:</div>
+                    <div style="font-size: 55pt; font-weight: 900; color: #b91c1c;">#${ticketId}</div>
+                    <div style="font-size: 18pt; font-family: monospace; margin-top: 5px;">DB_KEY: ${ticketKey}</div>
                 </div>
-                <div style="font-size: 18pt; line-height: 1.6; text-align: right;">
-                    <b style="text-decoration: underline;">FILING INFO:</b><br>
-                    <b>Reporter:</b> ${data.filedBy.toUpperCase()}<br>
-                    <b>Date:</b> ${new Date(data.filedAt).toLocaleDateString()}<br>
-                    <b>Priority:</b> <span style="color: red;">CRITICAL</span>
+                <div style="text-align: center;">
+                    <img src="${qrUrl}" alt="Ticket QR" style="width: 180px; height: 180px; border: 2pt solid #000; padding: 5px; background: white;">
+                    <div style="font-size: 12pt; font-weight: 900; margin-top: 5px; text-transform: uppercase;">Scan to Diagnose</div>
                 </div>
             </div>
 
-            <div style="margin-top: 40px;">
-                <div style="background: #000; color: #fff; padding: 10px; font-size: 16pt; font-weight: bold; text-align: center;">
-                    REPORTED COMPONENT FAILURE DESCRIPTION
+            <div style="margin-top: 30px;">
+                <span class="meta-label">AFFECTED ASSET:</span>
+                <span class="meta-value">${data.item.toUpperCase()}</span>
+                
+                <span class="meta-label">SITE LOCATION:</span>
+                <span class="meta-value">${data.site.toUpperCase()}</span>
+
+                <span class="meta-label">ORIGINAL INVOICE REF:</span>
+                <span class="meta-value" style="font-family: monospace;">${data.invoiceNo}</span>
+            </div>
+
+            <div style="margin-top: 40px; text-align: left;">
+                <div style="background: #000; color: #fff; padding: 15px; font-size: 22pt; font-weight: bold; text-align: center; -webkit-print-color-adjust: exact;">
+                    REPORTED FAILURE DESCRIPTION
                 </div>
-                <div style="border: 4pt solid #000; padding: 25px; font-size: 22pt; font-weight: 900; min-height: 250px; text-transform: uppercase;">
+                <div style="border: 6pt solid #000; padding: 25px; font-size: 32pt; font-weight: 900; min-height: 200px; text-transform: uppercase; line-height: 1.2;">
                     ${data.issue}
                 </div>
             </div>
 
-            <div style="margin-top: 50px; border-top: 2pt dashed #000; padding-top: 20px; text-align: center;">
-                <div style="font-size: 12pt; font-weight: bold;">
-                    INSTRUCTIONS: ATTACH THIS TICKET SECURELY TO THE RETURNED HARDWARE UNIT.<br>
-                    UNITS WITHOUT PHYSICAL TICKETS WILL NOT BE PROCESSED BY THE LABORATORY.
-                </div>
+            <div style="margin-top: 100px; border-top: 10pt solid #000; width: 60%; text-align: left;">
+                <div style="font-size: 42pt; font-weight: 900;">${data.filedBy.toUpperCase()}</div>
+                <div style="font-size: 28pt; font-weight: 900; text-transform: uppercase;">PERSONNEL FILING CLAIM</div>
+            </div>
+
+            <div style="margin-top: 80px; border-top: 3pt dashed #000; padding-top: 20px; font-size: 14pt; text-align: center; font-weight: bold; text-transform: uppercase;">
+                INSTRUCTIONS: ATTACH THIS PHYSICAL TICKET TO THE DEFECTIVE HARDWARE FOR LABORATORY VERIFICATION.
             </div>
         </div>`;
 
