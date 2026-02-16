@@ -7331,17 +7331,22 @@ window.saveWarrantyConfig = async () => {
         
         let key; snap.forEach(c => key = c.key);
         
+        // Calculate months based on dropdown (Months/Years)
         const finalMonths = unit === "Years" ? duration * 12 : duration;
 
         await update(ref(db, `inventory/${key}`), {
             warrantyMonths: finalMonths,
             manualWarDate: startDateVal || null,
-            noWarranty: finalMonths === 0 // Flag for the print template
+            // If user inputs 0, we flag it internally as No Warranty
+            noWarranty: finalMonths === 0 
         });
         
-        alert(finalMonths === 0 ? "✅ Item saved with NO WARRANTY." : "✅ Warranty updated.");
-        loadWarSetup();
-        refreshWarDash(); // FORCE dashboard to update immediately after save
+        alert(finalMonths === 0 ? "✅ Item saved with NO WARRANTY." : "✅ Warranty parameters updated successfully.");
+        
+        // REFRESH DATA IMMEDIATELY
+        loadWarSetup(); // Refresh the table below the inputs
+        refreshWarDash(); // FORCE the dashboard count to update
+        
     } catch (e) {
         alert("System Error: " + e.message);
     }
@@ -7372,15 +7377,14 @@ window.printCustomerCopy = async (invoiceNo) => {
 
     const reportContainer = document.getElementById("printableReportContainer");
     let rowsHtml = "";
-    items.forEach(it => {
-    // Check if tenure is 0
+    // Inside window.printCustomerCopy loop:
+items.forEach(it => {
+    // If totalDays is 0, display "NO WARRANTY"
     const tenureDisplay = it.totalDays === 0 ? 
-        `<span style="color:red;">NO WARRANTY</span>` : 
+        `<span style="color:red; font-weight:900;">NO WARRANTY</span>` : 
         `${it.totalDays} DAYS`;
 
-    const expiryDisplay = it.totalDays === 0 ? 
-        `N/A` : 
-        it.expiry;
+    const expiryDisplay = it.totalDays === 0 ? "N/A" : it.expiry;
 
     rowsHtml += `
         <tr style="border-bottom: 6pt solid #000;">
@@ -7494,16 +7498,20 @@ window.onScanSuccess = async function(decodedText) {
 async function refreshWarDash() {
     try {
         const snap = await get(ref(db, "inventory"));
-        let total = 0, protectedCount = 0;
+        let total = 0;
+        let protectedCount = 0;
 
         if (snap.exists()) {
             snap.forEach(c => {
                 const v = c.val();
                 total++;
-                // An asset is Protected if it is Sold AND has a warranty tenure > 0
+
+                // LOGIC: Asset is "Protected" if it is Sold AND has an active warranty
                 if (v.status === "Sold Out" && v.warrantyMonths && v.warrantyMonths > 0) {
+                    // Use your existing calculateWarranty helper
                     const war = calculateWarranty(v.soldAt, v.warrantyMonths, v.manualWarDate);
-                    // Only count if the warranty has not actually expired yet
+                    
+                    // Only count if the calculated expiry date is still in the future
                     if (war && !war.expired) {
                         protectedCount++;
                     }
@@ -7511,6 +7519,7 @@ async function refreshWarDash() {
             });
         }
         
+        // Update the UI Counters
         document.getElementById("warTotalAssets").innerText = total;
         document.getElementById("warProtected").innerText = protectedCount;
     } catch (e) {
