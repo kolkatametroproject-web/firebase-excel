@@ -8745,35 +8745,142 @@ async function renderTechArea(ticketKey, claim) {
 
 // Update to existing onScanSuccess (Ensure it handles Manual IDs)
 const oldTechOnScanSuccess = window.onScanSuccess;
+// --- Master Scan Success Handler ---
+// This handles EVERYTHING: Tech Tickets, Billing, Inventory, and Recovery
 window.onScanSuccess = async function(decodedText) {
+    // 1. Close scanner immediately to prevent ghost scans
     closeBarcodeScanner();
-    
-    if(scanMode === 'TECH_TICKET_SCAN') {
-    try {
-        const snap = await get(ref(db, `warranty_claims/${decodedText}`));
-        if(!snap.exists()) {
-            // If the code scanned is the SHORT ID (e.g. #ABCDEFG), we must find the real key
-            const allClaims = await get(ref(db, "warranty_claims"));
-            let foundKey = null;
-            let claimData = null;
-            allClaims.forEach(c => {
-                if(c.key.substring(1, 10).toUpperCase() === decodedText.replace("#", "").toUpperCase()) {
-                    foundKey = c.key;
-                    claimData = c.val();
-                }
-            });
+    console.log("System Processing Entry:", decodedText);
+
+    // 2. MODE: TECHNICIAN DIAGNOSTIC (QR or Manual ID)
+    if (scanMode === 'TECH_TICKET_SCAN') {
+        try {
+            const cleanId = decodedText.replace("#", "").trim().toUpperCase();
             
-            if(!foundKey) return alert("❌ INVALID ID: Ticket not found.");
-            renderTechArea(foundKey, claimData);
-        } else {
-            renderTechArea(decodedText, snap.val());
+            // Check if it's a full Firebase Key
+            const snap = await get(ref(db, `warranty_claims/${decodedText}`));
+            
+            if (snap.exists()) {
+                await renderTechArea(decodedText, snap.val());
+            } else {
+                // It's likely a Short ID (e.g. OLAIIXL), search the database for it
+                const allClaims = await get(ref(db, "warranty_claims"));
+                let foundKey = null;
+                let claimData = null;
+                
+                allClaims.forEach(c => {
+                    const shortIdFromDb = c.key.substring(1, 10).toUpperCase();
+                    if (shortIdFromDb === cleanId) {
+                        foundKey = c.key;
+                        claimData = c.val();
+                    }
+                });
+
+                if (foundKey) {
+                    await renderTechArea(foundKey, claimData);
+                } else {
+                    alert("❌ Ticket ID not found in system.");
+                }
+            }
+        } catch (err) {
+            console.error("Tech Scan Error:", err);
+            alert("System Error: " + err.message);
         }
-    } catch (err) { alert("Error: " + err.message); }
-    return;
-}
-    
-    // Pass control to other scan modes if not in Tech Mode
-    if(typeof oldTechOnScanSuccess === "function") oldTechOnScanSuccess(decodedText);
+        return; // Valid return inside function
+    }
+
+    // 3. MODE: ASSET RECOVERY (Batch Return to Stock)
+    if (scanMode === 'ASSET_RECOVERY') {
+        addToRecoveryCart(decodedText);
+        return;
+    }
+
+    // 4. MODE: INVENTORY LIST SEARCH
+    if (scanMode === 'SEARCH_STOCK') {
+        const searchInput = document.getElementById("mainStockSearch");
+        if(searchInput) {
+            searchInput.value = decodedText;
+            window.filterStockTable();
+        }
+        return;
+    }
+
+    // 5. MODE: BILLING SCAN
+    if (scanMode === 'BILLING_SCAN') {
+        const billInput = document.getElementById("billBarcodeInp");
+        if(billInput) {
+            billInput.value = decodedText;
+            addScannedItemToBill();
+        }
+        return; 
+    }
+
+    // 6. MODE: CHECKOUT / RETURN (Standard movement)
+    if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+        const isCheckout = (scanMode === 'CHECKOUT');
+        const displayId = isCheckout ? "checkout_display" : "return_display";
+        const nameId    = isCheckout ? "checkout_item_name" : "return_item_name";
+        const codeId    = isCheckout ? "checkout_item_code" : "return_item_code";
+
+        document.getElementById(displayId).classList.remove("hidden");
+        document.getElementById(nameId).innerHTML = "🔍 Verifying Tag ID...";
+        document.getElementById(codeId).innerText = decodedText;
+
+        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
+        const snap = await get(q);
+        
+        if (!snap.exists()) {
+            document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ Tag Not Registered</span>`;
+            return;
+        }
+        
+        let itm, k; snap.forEach(c => { itm = c.val(); k = c.key; });
+        pendingTransactionItem = { key: k, ...itm };
+        document.getElementById(nameId).innerHTML = `✔ ${itm.item}`;
+        return;
+    }
+
+    // 7. MODE: WARRANTY CLAIM (Customer Side)
+    if (scanMode === 'WARRANTY_CLAIM') {
+        const display = document.getElementById("claimDisplay");
+        if(display) display.classList.remove("hidden");
+        
+        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
+        const snap = await get(q);
+        const statusBox = document.getElementById("claimStatusBox");
+        
+        if(!snap.exists()) {
+            if(statusBox) statusBox.innerHTML = `<span style="color:red;">❌ TAG ID NOT REGISTERED</span>`;
+            return;
+        }
+
+        let item; snap.forEach(c => item = c.val());
+        const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
+        
+        document.getElementById("claimItemName").innerText = item.item;
+        document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
+        document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
+        document.getElementById("claimDate").innerText = war ? war.start : "NOT DEPLOYED";
+        
+        if(item.status !== "Sold Out") {
+            statusBox.innerHTML = `<span style="color:#d97706;">❌ ITEM NOT YET DEPLOYED</span>`;
+            document.getElementById("btnFinalClaim").disabled = true;
+        } else if (!war) {
+             statusBox.innerHTML = `<span style="color:#d97706;">⚠️ WARRANTY NOT SET UP</span>`;
+             document.getElementById("btnFinalClaim").disabled = true;
+        } else if (war.expired) {
+            statusBox.innerHTML = `<div style="color:#b91c1c;">🚫 COVERAGE EXPIRED ON: ${war.expiry}</div>`;
+            document.getElementById("btnFinalClaim").disabled = true;
+        } else {
+            statusBox.innerHTML = `
+                <div style="background:#f0fdf4; border: 2px solid #15803d; padding:15px; border-radius:10px; color:#15803d;">
+                    <span style="font-size:32px; font-weight:900;">${war.daysLeft} DAYS LEFT</span><br>
+                    <small>Valid Until: ${war.expiry}</small>
+                </div>`;
+            document.getElementById("btnFinalClaim").disabled = false;
+        }
+        return;
+    }
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
