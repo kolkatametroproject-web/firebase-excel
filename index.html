@@ -1864,26 +1864,44 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
     </div>
 </div>
     <div id="war-recovery" class="panel hidden" style="border-top: 5px solid #be123c;">
-    <h3 style="color:#be123c;"><i class="fas fa-box-open"></i> Asset Recovery (Sold -> In-Stock)</h3>
-    <div style="background:#fff1f2; padding:20px; border-radius:8px; margin-bottom:20px;">
-        <label style="font-weight:bold; font-size:12px;">STEP 1: ENTER RETURN REASON</label>
-        <input id="recoveryReason" placeholder="e.g. Defective Replacement, Project Update" style="border:2px solid #be123c; margin-bottom:15px;">
+    <h3 style="color:#be123c;"><i class="fas fa-shopping-cart"></i> Asset Recovery Cart</h3>
+    
+    <div style="background:#fff1f2; padding:20px; border-radius:8px; margin-bottom:20px; border-left: 5px solid #be123c;">
+        <label style="font-weight:bold; font-size:12px;">1. RETURN REASON (APPLIES TO ALL ITEMS IN CART)</label>
+        <input id="recoveryReason" placeholder="Enter reason for return..." style="border:2px solid #be123c; margin-bottom:15px;">
         
         <div style="display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center;">
             <div>
-                <label style="font-weight:bold; font-size:11px;">STEP 2: SCAN TAG OR ENTER ID MANUALLY</label>
-                <input id="manualRecoveryTag" placeholder="Enter Tag ID (e.g. PI-001)">
+                <label style="font-weight:bold; font-size:11px;">2. ADD TO CART (SCAN OR TYPE)</label>
+                <input id="manualRecoveryTag" placeholder="Enter ID..." style="margin:0; height:45px;">
             </div>
-            <button onclick="openBarcodeScanner('ASSET_RECOVERY')" class="warning" style="height:45px; margin-top:5px;">
+            <button onclick="openBarcodeScanner('ASSET_RECOVERY')" class="warning" style="height:45px; margin-top:15px; padding: 0 20px;">
                 <i class="fas fa-qrcode"></i> SCAN
             </button>
         </div>
-
-        <button onclick="processAssetRecovery(document.getElementById('manualRecoveryTag').value)" class="danger" style="width:100%; padding:12px; margin-top:10px; font-weight:900;">
-            <i class="fas fa-undo-alt"></i> RECOVER TO STOCK & PRINT MEMO
+        <button onclick="addToRecoveryCart(document.getElementById('manualRecoveryTag').value)" class="info" style="width:100%; margin-top:10px; background:var(--metro-blue);">
+            <i class="fas fa-plus"></i> ADD ITEM TO LIST
         </button>
     </div>
-    <div id="recoveryStatus" style="text-align:center; font-weight:bold; font-size:14px;"></div>
+
+    <div class="table-wrapper" style="margin-bottom:20px; border: 1px solid #be123c;">
+        <table style="width:100%">
+            <thead>
+                <tr style="background:#be123c; color:white;">
+                    <th>#</th>
+                    <th>Asset Name</th>
+                    <th>Tag ID</th>
+                    <th>Original Site</th>
+                    <th style="text-align:center;">Action</th>
+                </tr>
+            </thead>
+            <tbody id="recoveryCartBody"></tbody>
+        </table>
+    </div>
+
+    <button id="btnExecuteRecovery" onclick="finalizeRecoveryCart()" class="danger" style="width:100%; padding:18px; font-weight:900; font-size:16px; letter-spacing:1px; display:none;">
+        <i class="fas fa-file-invoice"></i> FINALIZE & PRINT CONSOLIDATED MEMO
+    </button>
 </div>
 </div>
 </section>
@@ -7504,71 +7522,11 @@ window.onScanSuccess = async function(decodedText) {
 
     // --- MODE: ASSET RECOVERY (FAST SCAN RETURN TO STOCK) ---
     if (scanMode === 'ASSET_RECOVERY') {
-        const reason = document.getElementById("recoveryReason").value.trim();
-        const statusDiv = document.getElementById("recoveryStatus");
-        
-        // Validation: Ensure reason is set before scan
-        if(!reason) {
-            alert("⚠️ STOP: Please enter a Return Reason BEFORE scanning.");
-            return;
-        }
-
-        statusDiv.innerHTML = `<i class="fas fa-sync fa-spin"></i> Recovering Tag: ${decodedText}...`;
-        statusDiv.style.color = "var(--metro-blue)";
-
-        try {
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
-            const snap = await get(q);
-
-            if (!snap.exists()) {
-                statusDiv.innerHTML = "❌ Error: Tag ID not registered in database.";
-                statusDiv.style.color = "var(--metro-red)";
-                return;
-            }
-
-            let key, item;
-            snap.forEach(c => { key = c.key; item = c.val(); });
-
-            // Restriction: Only recover items that are currently "Sold Out"
-            if (item.status !== "Sold Out") {
-                statusDiv.innerHTML = `❌ Error: ${item.item} is already in stock.`;
-                statusDiv.style.color = "var(--metro-red)";
-                return;
-            }
-
-            // High-Speed Database Update (Strip Sale Data)
-            await update(ref(db, `inventory/${key}`), {
-                status: "In Stock",
-                holder: "Store",
-                location: "Recovered via Scan [" + reason + "]",
-                soldAt: null,
-                invoiceNo: null,
-                assignedStation: null,
-                // We keep protectionActivated: true if it was set so dashboard count stays stable
-            });
-
-            // Log the recovery for audit trails
-            await push(ref(db, "logs"), {
-                type: "ITEM_RECOVERED",
-                item: item.item,
-                barcode: decodedText,
-                reason: reason,
-                time: serverTimestamp(),
-                by: currentUser.name || currentUser.email
-            });
-
-            statusDiv.innerHTML = `✅ SUCCESS: ${item.item} is now back in Stock.`;
-            statusDiv.style.color = "var(--success-green)";
-            
-            // Refresh counts
-            if (typeof refreshWarDash === "function") refreshWarDash();
-            
-        } catch (e) {
-            console.error(e);
-            statusDiv.innerHTML = "❌ System Error: " + e.message;
-        }
-        return; // End execution for this mode
-    }
+    closeBarcodeScanner();
+    // Use the new Add to Cart function instead of processing immediately
+    addToRecoveryCart(decodedText); 
+    return;
+}
 
     // --- MODE: WARRANTY CLAIM ENGINE ---
     if(scanMode === 'WARRANTY_CLAIM') {
@@ -7836,6 +7794,158 @@ async function loadActiveWarranty() {
         document.getElementById("warStartDate").value = "";
     }
 };
+  window.recoveryCart = [];
+
+// A. Add Item to the temporary list
+window.addToRecoveryCart = async (tagId) => {
+    const tag = tagId ? tagId.trim() : "";
+    if(!tag) return;
+
+    // Prevent duplicates in cart
+    if(window.recoveryCart.some(it => it.barcode === tag)) {
+        return alert("Item already in cart.");
+    }
+
+    try {
+        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
+        const snap = await get(q);
+
+        if (!snap.exists()) return alert("Tag not found in database.");
+
+        let item;
+        snap.forEach(c => item = { key: c.key, ...c.val() });
+
+        if (item.status !== "Sold Out") {
+            return alert(`Cannot return: ${item.item} is not marked as Sold.`);
+        }
+
+        // Add to local array
+        window.recoveryCart.push(item);
+        renderRecoveryCart();
+        
+        // Reset manual input
+        document.getElementById("manualRecoveryTag").value = "";
+    } catch (e) { alert(e.message); }
+};
+
+// B. Render the Cart UI
+function renderRecoveryCart() {
+    const tbody = document.getElementById("recoveryCartBody");
+    const btn = document.getElementById("btnExecuteRecovery");
+    tbody.innerHTML = "";
+
+    window.recoveryCart.forEach((it, i) => {
+        tbody.innerHTML += `
+            <tr>
+                <td>${i+1}</td>
+                <td style="font-weight:bold;">${it.item}</td>
+                <td style="font-family:monospace;">${it.barcode}</td>
+                <td>${it.assignedStation || 'N/A'}</td>
+                <td style="text-align:center;">
+                    <button onclick="window.recoveryCart.splice(${i},1); renderRecoveryCart();" class="danger" style="padding:2px 6px;">Remove</button>
+                </td>
+            </tr>`;
+    });
+
+    btn.style.display = window.recoveryCart.length > 0 ? "block" : "none";
+}
+
+// C. Finalize: Update DB and Print One Memo
+window.finalizeRecoveryCart = async () => {
+    const reason = document.getElementById("recoveryReason").value.trim();
+    if(!reason) return alert("Please enter a Return Reason for this batch.");
+    if(!confirm(`Proceed with recovery of ${window.recoveryCart.length} items?`)) return;
+
+    try {
+        const updates = {};
+        const logPromises = [];
+
+        window.recoveryCart.forEach(item => {
+            // Update Inventory
+            updates[`inventory/${item.key}/status`] = "In Stock";
+            updates[`inventory/${item.key}/holder`] = "Store";
+            updates[`inventory/${item.key}/location`] = "Batch Recovery: " + reason;
+            updates[`inventory/${item.key}/soldAt`] = null;
+            updates[`inventory/${item.key}/invoiceNo`] = null;
+            updates[`inventory/${item.key}/assignedStation`] = null;
+
+            // Log entry
+            logPromises.push(push(ref(db, "logs"), {
+                type: "ITEM_BATCH_RECOVERED",
+                item: item.item,
+                barcode: item.barcode,
+                reason: reason,
+                time: serverTimestamp(),
+                by: currentUser.name || currentUser.email
+            }));
+        });
+
+        await update(ref(db), updates);
+        await Promise.all(logPromises);
+
+        alert("✅ Master Inventory Updated.");
+        
+        // Generate consolidated Printout
+        generateConsolidatedMemo(window.recoveryCart, reason);
+        
+        // Clear everything
+        window.recoveryCart = [];
+        document.getElementById("recoveryReason").value = "";
+        renderRecoveryCart();
+        refreshWarDash();
+
+    } catch (e) { alert("Error: " + e.message); }
+};
+  function generateConsolidatedMemo(items, reason) {
+    const reportContainer = document.getElementById("printableReportContainer");
+    const receiverName = (currentUser.name || 'System Auditor').toUpperCase();
+    
+    let itemRows = "";
+    items.forEach((it, i) => {
+        itemRows += `
+            <tr style="border-bottom: 4pt solid #000;">
+                <td style="padding:15px; font-size:26pt; font-weight:900;">${i+1}. ${it.item.toUpperCase()}</td>
+                <td style="padding:15px; font-size:26pt; font-family:monospace;">${it.barcode}</td>
+                <td style="padding:15px; font-size:22pt;">${it.assignedStation || 'N/A'}</td>
+            </tr>`;
+    });
+
+    reportContainer.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
+            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold; cursor:pointer;">PRINT BATCH MEMO</button>
+        </div>
+        <div class="report-paper a4-max-wrapper">
+            <style>
+                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 15mm !important; } }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 15mm; background: white; font-family: "Times New Roman", serif; color: #000; text-align: center; }
+            </style>
+            <div style="border-bottom: 14pt solid #000; padding-bottom: 20px; margin-bottom: 30px;">
+                <div style="font-size: 55pt; font-weight: 900;">METRO RAILWAY</div>
+                <div style="font-size: 38pt; border: 10pt solid #000; margin-top: 25px; padding: 15px; font-weight: 900; display: inline-block;">BATCH RETURN NOTE</div>
+            </div>
+            
+            <div style="text-align:right; font-size: 26pt; font-weight: 900;">DATE: ${new Date().toLocaleDateString('en-IN')}</div>
+            <div style="text-align:left; font-size: 28pt; font-weight: bold; text-decoration:underline;">RECOVERY DETAILS:</div>
+            
+            <table style="width:100%; border-collapse:collapse; margin-top:20px; border: 6pt solid #000;">
+                <thead><tr style="background:#000; color:#fff;">
+                    <th style="font-size:24pt; padding:10px;">DESCRIPTION</th>
+                    <th style="font-size:24pt; padding:10px;">TAG ID</th>
+                    <th style="font-size:24pt; padding:10px;">SITE</th>
+                </tr></thead>
+                <tbody>${itemRows}</tbody>
+            </table>
+
+            <div style="text-align:left; margin-top:40px; font-size:28pt; font-weight:900;">REASON: <span style="font-style:italic;">${reason.toUpperCase()}</span></div>
+
+            <div style="margin-top: 150px; border-top: 10pt solid #000; width: 60%; text-align: left;">
+                <div style="font-size: 42pt; font-weight: 900;">${receiverName}</div>
+                <div style="font-size: 28pt; font-weight: 900;">AUTHORIZED RECEIVER (SIGNATURE)</div>
+            </div>
+        </div>`;
+    reportContainer.classList.remove("hidden");
+}
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
