@@ -5217,7 +5217,7 @@ window.submitTransactionNoFace = (type) => {
 // ⚙️ FINAL TRANSACTION PROCESSOR (LOGS & PRINT)
 // ==========================================
 async function processTransaction(adminName, customReturnLocation = null) {
-    if (!pendingTransactionItem) return alert("System Error: No item loaded.");
+    if(!pendingTransactionItem) return alert("System Error: No item loaded.");
 
     const itemKey = pendingTransactionItem.key;
     const itemName = pendingTransactionItem.item;
@@ -5229,18 +5229,16 @@ async function processTransaction(adminName, customReturnLocation = null) {
         const invSnap = await get(invRef);
         const currentData = invSnap.val();
 
-        // If it's a return, we wipe the invoice/sale fields entirely
         let updateData = isCheckout ? {
             status: "Checked Out",
             holder: currentUser.name || currentUser.email,
             location: "Field Operations",
-            usageCount: (currentData.usageCount || 0) + 1,
-            purpose: document.getElementById("checkoutPurpose")?.value || "General Use"
+            usageCount: (currentData.usageCount || 0) + 1
         } : {
             status: "In Stock",
             holder: "Store",
-            location: customReturnLocation || "D2 Building Lab [Returned]",
-            // FIX: Purge sale data so it returns to generic stock state
+            location: customReturnLocation || "D2 Building Lab",
+            // FIX: Purge all sale data on return
             invoiceNo: null,
             soldAt: null,
             assignedStation: null
@@ -5248,33 +5246,13 @@ async function processTransaction(adminName, customReturnLocation = null) {
 
         await update(invRef, updateData);
 
-        // Log the movement
-        await push(ref(db, "logs"), {
-            type: currentTransactionType,
-            item: itemName,
-            barcode: barcode,
-            time: serverTimestamp(),
-            by: currentUser.name || currentUser.email,
-            location: isCheckout ? "OUT" : customReturnLocation
-        });
-
+        // Auto-Generate Memo on Return
         if (!isCheckout) {
             alert(`✅ RETURN SUCCESSFUL: ${itemName}`);
-            // FIX: Automatically generate and show the print memo
-            generateReturnPrintout(
-                itemName, 
-                barcode, 
-                currentData.invoiceNo || "N/A", 
-                currentData.assignedStation || "Site Lab", 
-                "Standard Maintenance Return"
-            );
-        } else {
-            alert(`✅ CHECKOUT SUCCESSFUL: ${itemName}`);
-            toggleInvMode('list');
+            generateReturnPrintout(itemName, barcode, currentData.invoiceNo || "N/A", currentData.assignedStation || "Site Lab", "Maintenance Return");
         }
 
-        document.getElementById("checkout_display").classList.add("hidden");
-        document.getElementById("return_display").classList.add("hidden");
+        document.getElementById(isCheckout ? "checkout_display" : "return_display").classList.add("hidden");
         pendingTransactionItem = null;
 
     } catch (e) {
@@ -8065,83 +8043,57 @@ window.finalizeRecoveryCart = async () => {
     const tbody = document.getElementById("warClaimsTableBody");
     if(!tbody) return;
 
-    tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>⏳ Loading latest claims...</td></tr>";
-
     onValue(ref(db, "warranty_claims"), (snap) => {
         tbody.innerHTML = "";
-        
         if(!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'>No active claims found.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No active claims found.</td></tr>";
             return;
         }
 
-        const claimsArray = [];
         snap.forEach(c => {
-            claimsArray.push({ key: c.key, ...c.val() });
-        });
-
-        // Sort by newest first
-        claimsArray.sort((a, b) => (b.filedAt || 0) - (a.filedAt || 0));
-
-        claimsArray.forEach(v => {
-            const ticketKey = v.key;
-            const displayId = ticketKey.substring(1, 10).toUpperCase();
-            const isResolved = (v.status === "Resolved");
+            const v = c.val();
+            const ticketKey = c.key;
             
-            // --- CRITICAL FIX: DEFINE VARIABLES BEFORE USE ---
+            // --- FIX: VISUAL STATUS LOGIC ---
             let progress = "15%"; 
             let step = 1;
-            let statusColor = "#ff9900"; // Default Amazon Orange
+            let statusColor = "#ff9900"; // Standard Orange
 
+            // Determine progress bar position based on status string
             if (v.status === "In Progress" || v.status === "Verification Pending") { 
                 progress = "60%"; 
                 step = 2; 
-            } else if (v.status === "Resolved") { 
+            } else if (v.status === "Resolved" || v.status === "Rejected" || v.status === "Warranty Voided") { 
                 progress = "100%"; 
                 step = 3; 
-                statusColor = "#15803d"; // Success Green
-            } else if (v.status === "Rejected" || v.status === "Voided") {
-                progress = "100%";
-                step = 3;
-                statusColor = "#b91c1c"; // Alert Red
+                statusColor = (v.status === "Resolved") ? "#15803d" : "#b91c1c"; // Green for success, Red for Void/Reject
             }
 
-            // Visual Gray-out for closed tickets
-            const rowStyle = (isResolved || v.status === "Rejected" || v.status === "Voided") ? 
-                "opacity: 0.7; background: #f8fafc;" : "background: #ffffff;";
+            // Render action buttons only if the ticket is not in a final state
+            let actionBtns = "";
+            if(isAdmin && v.status !== "Resolved" && v.status !== "Rejected" && v.status !== "Warranty Voided") {
+                actionBtns = `
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px; margin-top:10px;">
+                        <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'REPLACE')" style="font-size:10px;">✅ Replace</button>
+                        <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'RESOLVE_FIXED')" style="font-size:10px; background:#065f46;">🛠 Resolved</button>
+                        <button class="warning" onclick="adminVerifyClaim('${ticketKey}', 'RECHECK')" style="font-size:10px;">🔄 Re-Check</button>
+                        <button class="info" onclick="adminVerifyClaim('${ticketKey}', 'NEW_TECH')" style="font-size:10px;">👤 New Tech</button>
+                        <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'REJECT')" style="font-size:10px;">🚫 Reject</button>
+                        <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'VOID')" style="font-size:10px; background:#450a0a;">💀 Void</button>
+                    </div>`;
+            } else {
+                actionBtns = `<button class="info" onclick="generateClaimTicketPrint('${ticketKey}', ${JSON.stringify(v)})">View Receipt</button>`;
+            }
 
-            const dataString = JSON.stringify(v).replace(/'/g, "\\'").replace(/"/g, '&quot;');
-
-            let actionBtns = `
-                <button class="info" onclick="generateClaimTicketPrint('${ticketKey}', JSON.parse('${dataString}'))" style="background:#febd69; color:#131a22; border:none; border-radius:4px; padding: 6px 15px; font-weight: bold; cursor:pointer;">
-                    Receipt
-                </button>`;
-
-            // Locate the isAdmin block inside loadWarrantyClaims and replace the buttons:
-if (isAdmin && v.status !== "Resolved" && v.status !== "Rejected" && v.status !== "Warranty Voided") {
-    actionBtns = `
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px; margin-top:10px;">
-            <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'REPLACE')" style="font-size:10px;">✅ Replace</button>
-            <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'RESOLVE_FIXED')" style="font-size:10px; background:#065f46;">🛠 Resolved (Fixed)</button>
-            <button class="warning" onclick="adminVerifyClaim('${ticketKey}', 'RECHECK')" style="font-size:10px;">🔄 Re-Check</button>
-            <button class="info" onclick="adminVerifyClaim('${ticketKey}', 'NEW_TECH')" style="font-size:10px; background:#1e40af;">👤 New Tech</button>
-            <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'REJECT')" style="font-size:10px;">🚫 Reject</button>
-            <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'VOID')" style="font-size:10px; background:#450a0a;">💀 Void Warranty</button>
-        </div>
-    `;
-}
-
-            tbody.innerHTML += `
-                <tr style="${rowStyle} border-bottom: 3px solid #f1f5f9;">
+            // Append row with updated progress bar             tbody.innerHTML += `
+                <tr style="border-bottom: 3px solid #f1f5f9;">
                     <td colspan="7" style="padding: 25px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <span style="font-weight: 900; color: #232f3e; font-size: 16px;">TICKET ID: #${displayId}</span>
-                                <div style="font-size: 12px; color: #565959; margin-top: 4px;">Status: <b>${v.status.toUpperCase()}</b></div>
+                                <span style="font-weight: 900; font-size: 16px;">TICKET: #${ticketKey.substring(1, 10).toUpperCase()}</span>
+                                <div style="font-size: 12px; margin-top: 4px;">Status: <b style="color:${statusColor}">${v.status.toUpperCase()}</b></div>
                             </div>
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                ${actionBtns}
-                            </div>
+                            <div>${actionBtns}</div>
                         </div>
 
                         <div style="position: relative; height: 6px; background: #e7e9ec; border-radius: 3px; margin: 35px 20px 15px 20px;">
@@ -8160,12 +8112,6 @@ if (isAdmin && v.status !== "Resolved" && v.status !== "Rejected" && v.status !=
                                     <div style="font-size: 11px; font-weight: 800; margin-top: 8px;">CLOSE</div>
                                 </div>
                             </div>
-                        </div>
-
-                        <div style="margin-top: 55px; font-size: 13px; background: #f3f3f3; padding: 15px; border-radius: 6px; border-left: 5px solid ${statusColor};">
-                            <strong style="font-size:14px;">${v.item}</strong> | Technicial: <b>${v.techName || 'Pending'}</b><br>
-                            <div style="margin-top:5px; color:#b91c1c; font-style:italic; font-weight: 900;">"Fault: ${v.issue}"</div>
-                            ${v.adminRemarks ? `<div style="margin-top:8px; color:#232f3e; font-weight:bold; border-top:1px solid #ddd; padding-top:5px;">Admin Note: ${v.adminRemarks}</div>` : ''}
                         </div>
                     </td>
                 </tr>`;
@@ -8463,7 +8409,7 @@ window.adminVerifyClaim = async (ticketKey, decision) => {
     switch(decision) {
         case 'REPLACE': 
             if (!confirm("Confirm and Issue Replacement?")) return;
-            newStatus = "Resolved (Replacement)";
+            newStatus = "Resolved"; // Moves progress to 'CLOSE'
             adminNote = "Warranty claim honored. Replacement unit dispatched.";
             generateReplacementBill(ticketKey); 
             break;
@@ -8471,37 +8417,37 @@ window.adminVerifyClaim = async (ticketKey, decision) => {
         case 'RECHECK':
             adminNote = prompt("Enter specific instructions for the Technician to re-examine:");
             if (!adminNote) return;
-            newStatus = "In Progress (Re-Check Required)";
-            // Reset tech status so it appears back in their terminal
+            newStatus = "In Progress"; // Reverts progress to 'DIAGNOSIS'
             updatePayload.techVerified = false; 
             break;
 
         case 'NEW_TECH':
             const techName = prompt("Enter the name of the New Assigned Technician:");
             if (!techName) return;
-            newStatus = "Assigned to New Technician";
+            newStatus = "In Progress"; // Keeps progress at 'DIAGNOSIS'
             updatePayload.techName = techName;
             adminNote = `Ticket reassigned to ${techName} for secondary opinion.`;
             break;
 
         case 'VOID':
             if (!confirm("Permanently VOID this product's warranty due to physical damage/misuse?")) return;
-            newStatus = "Warranty Voided";
+            newStatus = "Warranty Voided"; // Final state
             adminNote = "Claim denied: Asset shows signs of unauthorized tampering or physical impact.";
-            // Mark the actual asset as void in inventory
+            
+            // Mark the actual asset as void in the master inventory
             const assetSnap = await get(query(ref(db, "inventory"), orderByChild("barcode"), equalTo(data.barcode || "")));
-            assetSnap.forEach(c => update(ref(db, `inventory/${c.key}`), { noWarranty: true }));
+            assetSnap.forEach(c => update(ref(db, `inventory/${c.key}`), { noWarranty: true, protectionActivated: false }));
             break;
 
         case 'REJECT':
             adminNote = prompt("Provide the official reason for claim rejection:");
             if (!adminNote) return;
-            newStatus = "Rejected";
+            newStatus = "Rejected"; // Final state
             break;
 
         case 'RESOLVE_FIXED':
-            if (!confirm("Mark as Resolved? (Use this if fixed via repair/calibration without replacement)")) return;
-            newStatus = "Resolved (Repaired)";
+            if (!confirm("Mark as Resolved? (Fixed via repair without replacement)")) return;
+            newStatus = "Resolved"; // Moves progress to 'CLOSE'
             adminNote = "Issue resolved via professional repair. Original asset returned to site.";
             break;
     }
@@ -8512,7 +8458,7 @@ window.adminVerifyClaim = async (ticketKey, decision) => {
         
         await update(ref(db, `warranty_claims/${ticketKey}`), updatePayload);
         
-        // Log to Master Audit Trail
+        // Log decision to master audit trail
         await push(ref(db, "logs"), {
             type: "ADMIN_TICKET_DECISION",
             ticket: ticketKey,
@@ -8521,7 +8467,7 @@ window.adminVerifyClaim = async (ticketKey, decision) => {
             time: serverTimestamp()
         });
 
-        alert(`✅ Ticket #${ticketKey.substring(1, 6)} updated to: ${newStatus}`);
+        alert(`✅ Ticket updated to: ${newStatus}`);
     }
 };
 
