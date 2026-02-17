@@ -8046,7 +8046,7 @@ window.finalizeRecoveryCart = async () => {
     onValue(ref(db, "warranty_claims"), (snap) => {
         tbody.innerHTML = "";
         if(!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center;'>No active claims found.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'>No active claims found.</td></tr>";
             return;
         }
 
@@ -8054,26 +8054,25 @@ window.finalizeRecoveryCart = async () => {
             const v = c.val();
             const ticketKey = c.key;
             
-            // --- FIX: VISUAL STATUS LOGIC ---
+            // 1. Visual Status Logic
             let progress = "15%"; 
             let step = 1;
-            let statusColor = "#ff9900"; // Standard Orange
+            let statusColor = "#ff9900"; 
 
-            // Determine progress bar position based on status string
             if (v.status === "In Progress" || v.status === "Verification Pending") { 
                 progress = "60%"; 
                 step = 2; 
             } else if (v.status === "Resolved" || v.status === "Rejected" || v.status === "Warranty Voided") { 
                 progress = "100%"; 
                 step = 3; 
-                statusColor = (v.status === "Resolved") ? "#15803d" : "#b91c1c"; // Green for success, Red for Void/Reject
+                statusColor = (v.status === "Resolved") ? "#15803d" : "#b91c1c";
             }
 
-            // Render action buttons only if the ticket is not in a final state
+            // 2. Fix for Syntax Error: Handle the action buttons logic separately
             let actionBtns = "";
             if(isAdmin && v.status !== "Resolved" && v.status !== "Rejected" && v.status !== "Warranty Voided") {
                 actionBtns = `
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px; margin-top:10px;">
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px;">
                         <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'REPLACE')" style="font-size:10px;">✅ Replace</button>
                         <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'RESOLVE_FIXED')" style="font-size:10px; background:#065f46;">🛠 Resolved</button>
                         <button class="warning" onclick="adminVerifyClaim('${ticketKey}', 'RECHECK')" style="font-size:10px;">🔄 Re-Check</button>
@@ -8082,10 +8081,12 @@ window.finalizeRecoveryCart = async () => {
                         <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'VOID')" style="font-size:10px; background:#450a0a;">💀 Void</button>
                     </div>`;
             } else {
-                actionBtns = `<button class="info" onclick="generateClaimTicketPrint('${ticketKey}', ${JSON.stringify(v)})">View Receipt</button>`;
+                // We use a button that doesn't pass the whole object to avoid the quote nesting syntax error
+                actionBtns = `<button class="info" onclick="generateClaimTicketPrint('${ticketKey}')">View Receipt</button>`;
             }
 
-            // Append row with updated progress bar             tbody.innerHTML += `
+            // 3. Construct the HTML row safely
+            const rowHtml = `
                 <tr style="border-bottom: 3px solid #f1f5f9;">
                     <td colspan="7" style="padding: 25px;">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -8115,10 +8116,11 @@ window.finalizeRecoveryCart = async () => {
                         </div>
                     </td>
                 </tr>`;
+            
+            tbody.innerHTML += rowHtml;
         });
     });
 };
-
 // Function to update the claim status manually
 window.updateClaimStatus = async (key, newStatus) => {
     if(!confirm(`Are you sure you want to mark this ticket as ${newStatus}?`)) return;
@@ -8142,7 +8144,10 @@ window.handleManualClaimSearch = () => {
 };
 
 // Function to print the Ticket
-window.generateClaimTicketPrint = (ticketKey, data) => {
+window.generateClaimTicketPrint = (ticketKey) => {
+    const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
+    if (!snap.exists()) return alert("Ticket not found.");
+    const data = snap.val();
     const reportContainer = document.getElementById("printableReportContainer");
     
     // 1. EXTRACT SHORT ID (The human-readable part)
