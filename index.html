@@ -8117,15 +8117,19 @@ window.finalizeRecoveryCart = async () => {
                     Receipt
                 </button>`;
 
-            if(isAdmin && !isResolved && v.status !== "Rejected" && v.status !== "Voided") {
-                if(v.status === "Verification Pending") {
-                    actionBtns += `
-                        <div style="display:flex; gap:5px; margin-top:5px;">
-                            <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'REPLACE')">Verify & Replace</button>
-                            <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'REJECT')" style="background:#d97706; border:none;">Reject</button>
-                        </div>`;
-                }
-            }
+            // Locate the isAdmin block inside loadWarrantyClaims and replace the buttons:
+if (isAdmin && v.status !== "Resolved" && v.status !== "Rejected" && v.status !== "Warranty Voided") {
+    actionBtns = `
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px; margin-top:10px;">
+            <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'REPLACE')" style="font-size:10px;">✅ Replace</button>
+            <button class="success" onclick="adminVerifyClaim('${ticketKey}', 'RESOLVE_FIXED')" style="font-size:10px; background:#065f46;">🛠 Resolved (Fixed)</button>
+            <button class="warning" onclick="adminVerifyClaim('${ticketKey}', 'RECHECK')" style="font-size:10px;">🔄 Re-Check</button>
+            <button class="info" onclick="adminVerifyClaim('${ticketKey}', 'NEW_TECH')" style="font-size:10px; background:#1e40af;">👤 New Tech</button>
+            <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'REJECT')" style="font-size:10px;">🚫 Reject</button>
+            <button class="danger" onclick="adminVerifyClaim('${ticketKey}', 'VOID')" style="font-size:10px; background:#450a0a;">💀 Void Warranty</button>
+        </div>
+    `;
+}
 
             tbody.innerHTML += `
                 <tr style="${rowStyle} border-bottom: 3px solid #f1f5f9;">
@@ -8453,40 +8457,71 @@ window.adminVerifyClaim = async (ticketKey, decision) => {
     const data = snap.val();
 
     let newStatus = "";
-    let remarks = "";
+    let adminNote = "";
+    let updatePayload = { resolutionDate: serverTimestamp() };
 
     switch(decision) {
         case 'REPLACE': 
-            if (!confirm("Confirm replacement?")) return;
-            newStatus = "Resolved";
-            remarks = "Warranty Honored: Replacement Unit Issued.";
+            if (!confirm("Confirm and Issue Replacement?")) return;
+            newStatus = "Resolved (Replacement)";
+            adminNote = "Warranty claim honored. Replacement unit dispatched.";
             generateReplacementBill(ticketKey); 
             break;
+
         case 'RECHECK':
-            remarks = prompt("Enter instructions for Technician/New Inspector:");
-            if (!remarks) return;
-            newStatus = "In Progress (Re-Check)";
-            // remarks logic added to database below
+            adminNote = prompt("Enter specific instructions for the Technician to re-examine:");
+            if (!adminNote) return;
+            newStatus = "In Progress (Re-Check Required)";
+            // Reset tech status so it appears back in their terminal
+            updatePayload.techVerified = false; 
             break;
+
+        case 'NEW_TECH':
+            const techName = prompt("Enter the name of the New Assigned Technician:");
+            if (!techName) return;
+            newStatus = "Assigned to New Technician";
+            updatePayload.techName = techName;
+            adminNote = `Ticket reassigned to ${techName} for secondary opinion.`;
+            break;
+
         case 'VOID':
-            if (!confirm("Permanently VOID warranty for this specific asset due to tampering?")) return;
-            newStatus = "Voided";
-            remarks = "Claim Denied: Physical damage/tampering detected. Warranty Void.";
+            if (!confirm("Permanently VOID this product's warranty due to physical damage/misuse?")) return;
+            newStatus = "Warranty Voided";
+            adminNote = "Claim denied: Asset shows signs of unauthorized tampering or physical impact.";
+            // Mark the actual asset as void in inventory
+            const assetSnap = await get(query(ref(db, "inventory"), orderByChild("barcode"), equalTo(data.barcode || "")));
+            assetSnap.forEach(c => update(ref(db, `inventory/${c.key}`), { noWarranty: true }));
             break;
+
         case 'REJECT':
-            remarks = prompt("Reason for rejection:");
-            if (!remarks) return;
+            adminNote = prompt("Provide the official reason for claim rejection:");
+            if (!adminNote) return;
             newStatus = "Rejected";
+            break;
+
+        case 'RESOLVE_FIXED':
+            if (!confirm("Mark as Resolved? (Use this if fixed via repair/calibration without replacement)")) return;
+            newStatus = "Resolved (Repaired)";
+            adminNote = "Issue resolved via professional repair. Original asset returned to site.";
             break;
     }
 
     if (newStatus) {
-        await update(ref(db, `warranty_claims/${ticketKey}`), {
-            status: newStatus,
-            adminRemarks: remarks,
-            resolutionDate: serverTimestamp()
+        updatePayload.status = newStatus;
+        updatePayload.adminRemarks = adminNote;
+        
+        await update(ref(db, `warranty_claims/${ticketKey}`), updatePayload);
+        
+        // Log to Master Audit Trail
+        await push(ref(db, "logs"), {
+            type: "ADMIN_TICKET_DECISION",
+            ticket: ticketKey,
+            decision: newStatus,
+            by: currentUser.name || currentUser.email,
+            time: serverTimestamp()
         });
-        alert(`✅ Ticket updated to: ${newStatus}`);
+
+        alert(`✅ Ticket #${ticketKey.substring(1, 6)} updated to: ${newStatus}`);
     }
 };
 
