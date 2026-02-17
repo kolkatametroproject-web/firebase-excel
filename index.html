@@ -2904,60 +2904,96 @@ window.closeAuditModal = () => {
     document.getElementById("auditSearchInput").value = ""; 
 };
 
-// --- 4. DUMMY FUNCTION (To prevent errors if HTML still calls it) ---
-// --- REAL-TIME HISTORY LOGIC ---
-window.loadInventoryHistory = () => {
-    const tbody = document.getElementById("invHistoryBody");
-    tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Syncing Live Data...</td></tr>";
+window.loadInventory = () => {
+    const b = document.getElementById("inventoryBody");
+    const summaryEl = document.getElementById("stockSummaryText");
+    if (!b) return;
 
-    // This listener stays open and updates automatically when DB changes
-    const dbRef = getDatabase();
-    const q = query(ref(dbRef, "logs"), limitToLast(100));
-    
-    onValue(q, (snap) => {
-        const logs = [];
-        snap.forEach(c => logs.push({ key: c.key, ...c.val() }));
-        logs.reverse(); // Show newest events at the top
+    // Attach real-time listener to the inventory node
+    onValue(ref(db, "inventory"), (snap) => {
+        b.innerHTML = "";
+        let total = 0;
+        let available = 0;
 
-        // Filter: Show only inventory-related events (Checkout, Return, Add)
-        const invLogs = logs.filter(l => 
-            l.type === 'CHECKOUT' || l.type === 'RETURN' || l.type === 'STOCK_ADD' || l.type === 'STOCK_UPDATE'
-        );
-
-        if(invLogs.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No stock movement recorded recently.</td></tr>";
+        if (!snap.exists()) {
+            b.innerHTML = "<tr><td colspan='8' style='text-align:center; padding:20px;'>No assets found in database.</td></tr>";
+            if (summaryEl) summaryEl.innerText = "Total: 0 | Available: 0";
             return;
         }
 
-        tbody.innerHTML = "";
-        
-        invLogs.forEach(l => {
-            // Badge Styling
-            let badge = "";
-            if(l.type === 'CHECKOUT') badge = `<span style="background:#b38600; color:white; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:11px;">📤 OUT</span>`;
-            else if(l.type === 'RETURN') badge = `<span style="background:#17a2b8; color:white; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:11px;">📥 IN</span>`;
-            else if(l.type.includes('STOCK')) badge = `<span style="background:#28a745; color:white; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:11px;">➕ ADD</span>`;
+        snap.forEach((c) => {
+            const v = c.val();
+            const k = c.key;
+            total++;
 
-            // Barcode formatting
-            const barcodeDisplay = l.barcode ? `<div style="font-family:monospace; color:#003366; font-size:11px; margin-top:2px; letter-spacing:1px;">${l.barcode}</div>` : '';
+            // --- CRITICAL FIX: LOGIC FOR SOLD OUT VS IN STOCK ---
+            // An item is ONLY "Available" if it is NOT sold AND NOT checked out.
+            const isSold = (v.status === "Sold Out" || v.invoiceNo != null);
+            const isCheckedOut = (v.status === "Checked Out");
 
-            // Row HTML
+            if (!isSold && !isCheckedOut) {
+                available++;
+            }
+
+            // Define Status Badge Styling
+            let statusStyle = "background:#dcfce7; color:#166534; border: 1px solid #bbf7d0;"; // Default: In Stock
+            let displayStatus = v.status || "In Stock";
+
+            if (isSold) {
+                statusStyle = "background:#1e293b; color:#ffffff; border: 1px solid #0f172a;";
+                displayStatus = "Sold Out";
+            } else if (isCheckedOut) {
+                statusStyle = "background:#fef3c7; color:#d97706; border: 1px solid #fde68a;";
+                displayStatus = "Checked Out";
+            }
+
+            // Action Buttons Logic
+            let actionBtns = "";
+            if (isSold) {
+                // If Sold, only Admin can "Wipe/Restock" it via the Sales History tab. 
+                // We keep the inventory list clean by showing "Locked".
+                actionBtns = `<small style="color:#64748b; font-style:italic;">Asset Sold</small>`;
+            } else {
+                actionBtns = `
+                    <button class="warning" onclick="editExistingItem('${k}')" style="padding:2px 6px; font-size:10px;">EDIT</button>
+                    ${isAdmin ? `<button class="danger" onclick="delInv('${k}')" style="padding:2px 6px; font-size:10px; margin-left:4px;">DEL</button>` : ''}
+                `;
+            }
+
+            const invoiceLabel = v.invoiceNo ? `<div style="font-size:9px; color:#64748b; font-family:monospace; margin-top:2px;">INV: ${v.invoiceNo}</div>` : "";
+            const stationLabel = v.assignedStation ? `<div style="color:#B91C1C; font-weight:bold; font-size:10px; margin-top:2px;">📍 ${v.assignedStation}</div>` : "";
+
+            // Construct the Table Row
             const row = `
-            <tr class="inv-log-row" style="border-bottom:1px solid #eee;">
-                <td style="vertical-align:middle;">${barcodeDisplay}</td>
-                <td style="font-weight:bold; vertical-align:middle;">${l.takenBy || 'Unknown'}</td>
-                <td style="vertical-align:middle;">
-                    ${formatTime(l.time)}
+            <tr class="stock-row" data-invoice="${v.invoiceNo || ''}" style="${isSold ? 'background:#f8fafc; color:#64748b;' : ''}">
+                <td style="font-family:monospace; font-weight:bold;">${v.barcode || '--'}</td>
+                <td style="font-weight:bold;">
+                    ${v.item}
+                    ${invoiceLabel}
                 </td>
-                <td style="text-align:center; vertical-align:middle;">${badge}</td>
-                <td style="vertical-align:middle;">
-                    <span style="font-size:13px; font-weight:bold; color:#333;">${l.item}</span><br>
-                    <small style="color:#777;">Auth: ${l.approvedBy || 'System'}</small>
+                <td style="text-align:center;">${v.usageCount || 0}</td>
+                <td style="font-weight:bold;">
+                    ${stationLabel || v.holder || 'Store'}
+                </td>
+                <td style="font-size:11px; font-weight:bold;">${v.location || 'Main Lab'}</td>
+                <td style="text-align:right; font-weight:900; color:${isSold ? '#64748b' : 'green'};">₹ ${parseFloat(v.purchasePrice || 0).toFixed(2)}</td>
+                <td style="text-align:center;">
+                    <span style="${statusStyle} padding:4px 10px; border-radius:12px; font-size:10px; font-weight:bold; text-transform:uppercase;">
+                        ${displayStatus}
+                    </span>
+                </td>
+                <td style="text-align:center; white-space:nowrap;">
+                    ${actionBtns}
                 </td>
             </tr>`;
             
-            tbody.innerHTML += row;
+            b.innerHTML += row;
         });
+
+        // Update the top summary card
+        if (summaryEl) {
+            summaryEl.innerHTML = `Total Assets: ${total} | <span style="color:#15803d; font-weight:bold;">Available: ${available}</span>`;
+        }
     });
 };
 window.printReport = (mode) => {
