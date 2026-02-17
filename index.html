@@ -7180,9 +7180,8 @@ window.addScannedItemToBill = async () => {
     const barcode = document.getElementById("billBarcodeInp").value.trim();
     if(!barcode) return alert("Scan Asset Tag");
 
-    // 1. Check if the tag is already in the current cart (Prevent duplicate scanning in one session)
     const isAlreadyInCart = window.billCart.some(item => item.tag === barcode);
-    if(isAlreadyInCart) return alert("This item is already added to the current Invoice.");
+    if(isAlreadyInCart) return alert("This item is already in the current Invoice.");
 
     try {
         const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode));
@@ -7193,17 +7192,12 @@ window.addScannedItemToBill = async () => {
         let itemKey, itemData;
         snap.forEach(c => { itemKey = c.key; itemData = c.val(); });
 
-        // 2. STRICT VALIDATION: If item is SOLD or CHECKED OUT, it cannot be assigned again
-        if(itemData.status === "Sold Out") {
-            return alert(`DENIED: Item ${itemData.item} is already SOLD to ${itemData.assignedStation}.\nInvoice: ${itemData.invoiceNo}`);
-        }
-        
-        if(itemData.status === "Checked Out") {
-            return alert(`DENIED: Item is currently Checked Out by ${itemData.holder}. Return it to stock first.`);
-        }
+        if(itemData.status === "Sold Out") return alert(`DENIED: Item already SOLD.`);
+        if(itemData.status === "Checked Out") return alert(`DENIED: Item is Checked Out.`);
 
-        // 3. Process to Cart
-        const sellRate = (parseFloat(itemData.purchasePrice) || 0) * 1.20; 
+        // --- UPDATED PROFIT MARGIN: 30% ---
+        const sellRate = (parseFloat(itemData.purchasePrice) || 0) * 1.30; 
+
         window.billCart.push({
             name: itemData.item, 
             tag: barcode, 
@@ -7215,8 +7209,6 @@ window.addScannedItemToBill = async () => {
 
         renderBillCartUI();
         document.getElementById("billBarcodeInp").value = "";
-        document.getElementById("billBarcodeInp").focus();
-        
     } catch (e) { console.error(e); }
 };
 window.finalizeSaleRecords = async (targetStation) => {
