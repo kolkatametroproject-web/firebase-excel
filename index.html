@@ -5265,6 +5265,7 @@ async function processTransaction(adminName, customReturnLocation = null) {
         const invSnap = await get(invRef);
         const currentData = invSnap.val();
 
+        // LOGIC: If returning, we MUST wipe invoice and station data
         let updateData = isCheckout ? {
             status: "Checked Out",
             holder: currentUser.name || currentUser.email,
@@ -5273,19 +5274,17 @@ async function processTransaction(adminName, customReturnLocation = null) {
         } : {
             status: "In Stock",
             holder: "Store",
-            location: customReturnLocation || "D2 Building Lab",
-            // FIX: Purge all sale data on return
-            invoiceNo: null,
-            soldAt: null,
-            assignedStation: null
+            location: customReturnLocation || "D2 Building Lab [Returned]",
+            invoiceNo: null,      // WIPE INVOICE
+            soldAt: null,         // WIPE DATE
+            assignedStation: null // WIPE SITE
         };
 
         await update(invRef, updateData);
 
-        // Auto-Generate Memo on Return
         if (!isCheckout) {
-            alert(`✅ RETURN SUCCESSFUL: ${itemName}`);
-            generateReturnPrintout(itemName, barcode, currentData.invoiceNo || "N/A", currentData.assignedStation || "Site Lab", "Maintenance Return");
+            alert(`✅ RETURN SUCCESSFUL: ${itemName}. Invoice data cleared.`);
+            generateReturnPrintout(itemName, barcode, "CLEARED", "Returned to Store", "Standard Return");
         }
 
         document.getElementById(isCheckout ? "checkout_display" : "return_display").classList.add("hidden");
@@ -8016,15 +8015,17 @@ window.finalizeRecoveryCart = async () => {
     const reason = document.getElementById("recoveryReason").value.trim();
     if(!reason || window.recoveryCart.length === 0) return alert("Scan items and enter reason.");
     
-    if(confirm(`Recover ${window.recoveryCart.length} items?`)) {
+    if(confirm(`Recover ${window.recoveryCart.length} items? This will wipe their sale history.`)) {
         const updates = {};
         window.recoveryCart.forEach(it => {
             updates[`inventory/${it.key}/status`] = "In Stock";
             updates[`inventory/${it.key}/holder`] = "Store";
             updates[`inventory/${it.key}/location`] = "Recovered: " + reason;
+            updates[`inventory/${it.key}/invoiceNo`] = null;      // WIPE
+            updates[`inventory/${it.key}/assignedStation`] = null; // WIPE
+            updates[`inventory/${it.key}/soldAt`] = null;          // WIPE
         });
         await update(ref(db), updates);
-        // TRIGGER MEMO
         generateConsolidatedMemo(window.recoveryCart, reason);
         window.recoveryCart = [];
         renderRecoveryCart();
