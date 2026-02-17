@@ -5786,13 +5786,12 @@ onAuthStateChanged(auth, (user) => {
     });
 });
 window.removeFile = async (key) => {
-    if(!confirm("⚠️ Delete this file permanently?")) return;
+    if(!confirm("⚠️ PERMANENTLY DELETE this document? This leaves no mark in the database.")) return;
     try {
+        // Atomic removal of the entire node
         await remove(ref(db, `history/${key}`));
-        // No alert needed - the list will update automatically!
-    } catch(e) {
-        alert("Error: " + e.message);
-    }
+        alert("✅ Removed Completely.");
+    } catch(e) { alert("Error: " + e.message); }
 };
 // --- 2. ASSIGN TASK (Multi-User) ---
 window.assignTaskMulti = async () => {
@@ -7941,31 +7940,21 @@ function renderRecoveryCart() {
 // C. Finalize: Update DB and Print One Memo
 window.finalizeRecoveryCart = async () => {
     const reason = document.getElementById("recoveryReason").value.trim();
-    if(!reason || window.recoveryCart.length === 0) return alert("Enter reason and scan items.");
+    if(!reason || window.recoveryCart.length === 0) return alert("Scan items and enter reason.");
     
-    if(!confirm(`Authorize Batch Recovery for ${window.recoveryCart.length} items?`)) return;
-
-    try {
+    if(confirm(`Recover ${window.recoveryCart.length} items?`)) {
         const updates = {};
-        window.recoveryCart.forEach(item => {
-            updates[`inventory/${item.key}/status`] = "In Stock";
-            updates[`inventory/${item.key}/holder`] = "Store";
-            updates[`inventory/${item.key}/location`] = "Recovered: " + reason;
-            // Note: Invoice remains associated in history log but item is back in store.
+        window.recoveryCart.forEach(it => {
+            updates[`inventory/${it.key}/status`] = "In Stock";
+            updates[`inventory/${it.key}/holder`] = "Store";
+            updates[`inventory/${it.key}/location`] = "Recovered: " + reason;
         });
-
         await update(ref(db), updates);
-        
-        // --- TRIGGER CONSOLIDATED MEMO ---
+        // TRIGGER MEMO
         generateConsolidatedMemo(window.recoveryCart, reason);
-        
-        // Cleanup
         window.recoveryCart = [];
-        document.getElementById("recoveryReason").value = "";
         renderRecoveryCart();
-        alert("✅ Recovery Successful. Memo Generated.");
-
-    } catch (e) { alert("Error: " + e.message); }
+    }
 };
   function generateConsolidatedMemo(items, reason) {
     const reportContainer = document.getElementById("printableReportContainer");
@@ -8531,16 +8520,15 @@ window.resetTechVerification = () => {
     } catch(e) { alert(e.message); }
 };
 // ==========================================
-// 🛠️ FINAL MASTER UNIFIED SCANNER CONTROLLER
+// 🛠️ FINAL CONSOLIDATED SCANNER CONTROLLER
 // ==========================================
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
     closeBarcodeScanner();
     const input = decodedText.trim();
-    console.log(`[MRPSP Security] Active Mode: ${scanMode} | ID: ${input}`);
 
     try {
-        // --- MODE A: TECHNICIAN JOB TICKET SCAN (SECURITY LOCK) ---
+        // --- MODE A: TICKET SYSTEM (TECH TICKET SCAN) ---
         if (scanMode === 'TECH_TICKET_SCAN') {
             const cleanId = input.replace("#", "").toUpperCase();
             const allClaims = await get(ref(db, "warranty_claims"));
@@ -8556,12 +8544,11 @@ window.onScanSuccess = async function(decodedText) {
             if (found) {
                 document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
                 document.getElementById("btnScanProduct").disabled = false;
-                document.getElementById("manualProductInp").disabled = false;
-                document.getElementById("techStepTitle").innerText = "TICKET LOADED. SCAN PHYSICAL ASSET.";
-            } else { alert("❌ Ticket ID not found."); }
-        } 
+                document.getElementById("techStepTitle").innerText = "TICKET LOADED. SCAN ASSET.";
+            } else { alert("❌ Ticket Not Found"); }
+        }
 
-        // --- MODE B: TECHNICIAN PRODUCT VERIFY ---
+        // --- MODE B: TICKET SYSTEM (PRODUCT VERIFY + AUTO REJECT) ---
         else if (scanMode === 'TECH_PRODUCT_VERIFY') {
             const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
             const snap = await get(q);
@@ -8574,10 +8561,10 @@ window.onScanSuccess = async function(decodedText) {
             } else {
                 await update(ref(db, `warranty_claims/${techVerifiedTicketKey}`), {
                     status: "Rejected",
-                    adminRemarks: `AUTO-REJECT: Tag Mismatch. Scanned: ${input}`,
+                    adminRemarks: "AUTO-REJECT: Tag Mismatch.",
                     resolutionDate: serverTimestamp()
                 });
-                alert("⛔ SECURITY ALERT: ASSET MISMATCH! Ticket REJECTED.");
+                alert("⛔ SECURITY ALERT: MISMATCH. Ticket REJECTED.");
                 resetTechVerification();
             }
         }
@@ -8587,48 +8574,61 @@ window.onScanSuccess = async function(decodedText) {
             const isOut = (scanMode === 'CHECKOUT');
             const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
             const snap = await get(q);
-            if (!snap.exists()) return alert("❌ Tag Not Registered.");
-
+            if (!snap.exists()) return alert("❌ Tag Not Registered");
             let itm; snap.forEach(c => itm = {key: c.key, ...c.val()});
 
-            if (isOut && itm.status === "Sold Out") return alert("⛔ ACCESS DENIED: Item is SOLD OUT.");
-            if (!isOut && itm.status === "In Stock") return alert("⛔ ERROR: Already In Stock.");
+            if (isOut && itm.status === "Sold Out") return alert("⛔ SOLD OUT: Cannot Checkout.");
+            if (!isOut && itm.status === "In Stock") return alert("⛔ ALREADY IN STOCK.");
 
             pendingTransactionItem = itm;
             currentTransactionType = scanMode; 
-
-            const displayId = isOut ? "checkout_display" : "return_display";
-            document.getElementById(displayId).classList.remove("hidden");
+            document.getElementById(isOut ? "checkout_display" : "return_display").classList.remove("hidden");
             document.getElementById(isOut ? "checkout_item_name" : "return_item_name").innerHTML = `✔ ${itm.item}`;
         }
 
-        // --- MODE D: AUDIT TRAIL (FIXED RESULT BINDING) ---
-        else if (scanMode === 'AUDIT_SEARCH') {
-            const auditInp = document.getElementById("auditSearchInput");
-            if(auditInp) {
-                auditInp.value = input;
-                fetchAuditHistory(input); // Triggers result immediately
+        // --- MODE D: WARRANTY CLAIM (SCAN & CLAIM ENGINE) ---
+        else if (scanMode === 'WARRANTY_CLAIM') {
+            const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
+            const snap = await get(qWar);
+            if (!snap.exists()) return alert("❌ Tag Not Registered");
+            document.getElementById("claimDisplay").classList.remove("hidden");
+            let item; snap.forEach(c => item = c.val());
+            const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
+            
+            document.getElementById("claimItemName").innerText = item.item;
+            document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
+            document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
+            const statusBox = document.getElementById("claimStatusBox");
+            if (war && !war.expired) {
+                statusBox.innerHTML = `<div style="color:green; font-weight:900;">✅ ${war.daysLeft} DAYS LEFT</div>`;
+                document.getElementById("btnFinalClaim").disabled = false;
+            } else {
+                statusBox.innerHTML = `<span style="color:red;">🚫 VOID/EXPIRED</span>`;
             }
         }
 
-        // --- MODE E: BILLING SCAN (FIXED) ---
-        else if (scanMode === 'BILLING_SCAN') {
-            document.getElementById("billBarcodeInp").value = input;
+        // --- MODE E: BINDING TO INPUTS (ADD, AUDIT, BILLING, SEARCH) ---
+        else if (scanMode === 'ADD') { 
+            document.getElementById("invBarcode").value = input; 
+            checkBarcodeUnique(input); 
+        }
+        else if (scanMode === 'AUDIT_SEARCH') { 
+            document.getElementById("auditSearchInput").value = input; 
+            fetchAuditHistory(input); 
+        }
+        else if (scanMode === 'BILLING_SCAN') { 
+            document.getElementById("billBarcodeInp").value = input; 
             addScannedItemToBill(); 
         }
-
-        // --- MODE F: ASSET RECOVERY (BATCH) ---
-        else if (scanMode === 'ASSET_RECOVERY') {
-            addToRecoveryCart(input);
+        else if (scanMode === 'SEARCH_STOCK') { 
+            document.getElementById("mainStockSearch").value = input; 
+            filterStockTable(); 
+        }
+        else if (scanMode === 'ASSET_RECOVERY') { 
+            addToRecoveryCart(input); 
         }
 
-        // --- MODE G: VIEW STOCK SEARCH ---
-        else if (scanMode === 'SEARCH_STOCK') {
-            document.getElementById("mainStockSearch").value = input;
-            filterStockTable();
-        }
-
-    } catch (err) { console.error("Scanner Error:", err); }
+    } catch (err) { console.error(err); }
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
