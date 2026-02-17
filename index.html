@@ -5217,7 +5217,7 @@ window.submitTransactionNoFace = (type) => {
 // ⚙️ FINAL TRANSACTION PROCESSOR (LOGS & PRINT)
 // ==========================================
 async function processTransaction(adminName, customReturnLocation = null) {
-    if(!pendingTransactionItem) return alert("System Error: No item loaded.");
+    if (!pendingTransactionItem) return alert("System Error: No item loaded.");
 
     const itemKey = pendingTransactionItem.key;
     const itemName = pendingTransactionItem.item;
@@ -5225,12 +5225,11 @@ async function processTransaction(adminName, customReturnLocation = null) {
     const isCheckout = (currentTransactionType === 'CHECKOUT');
 
     try {
-        // 1. Fetch current data for printout context
         const invRef = ref(db, `inventory/${itemKey}`);
         const invSnap = await get(invRef);
         const currentData = invSnap.val();
 
-        // 2. Prepare Update Logic
+        // If it's a return, we wipe the invoice/sale fields entirely
         let updateData = isCheckout ? {
             status: "Checked Out",
             holder: currentUser.name || currentUser.email,
@@ -5240,13 +5239,16 @@ async function processTransaction(adminName, customReturnLocation = null) {
         } : {
             status: "In Stock",
             holder: "Store",
-            location: customReturnLocation || "D2 Building Lab [Returned]"
+            location: customReturnLocation || "D2 Building Lab [Returned]",
+            // FIX: Purge sale data so it returns to generic stock state
+            invoiceNo: null,
+            soldAt: null,
+            assignedStation: null
         };
 
-        // 3. Database Update
         await update(invRef, updateData);
 
-        // 4. Create History Log
+        // Log the movement
         await push(ref(db, "logs"), {
             type: currentTransactionType,
             item: itemName,
@@ -5256,10 +5258,9 @@ async function processTransaction(adminName, customReturnLocation = null) {
             location: isCheckout ? "OUT" : customReturnLocation
         });
 
-        // --- THE FIX: AUTOMATIC PRINTOUT ON RETURN ---
         if (!isCheckout) {
             alert(`✅ RETURN SUCCESSFUL: ${itemName}`);
-            // Force the official return memo to appear using IEM/UEM template
+            // FIX: Automatically generate and show the print memo
             generateReturnPrintout(
                 itemName, 
                 barcode, 
@@ -5272,16 +5273,75 @@ async function processTransaction(adminName, customReturnLocation = null) {
             toggleInvMode('list');
         }
 
-        // 5. Cleanup UI
         document.getElementById("checkout_display").classList.add("hidden");
         document.getElementById("return_display").classList.add("hidden");
         pendingTransactionItem = null;
 
     } catch (e) {
-        console.error(e);
         alert("Transaction Error: " + e.message);
     }
 }
+  window.loadWarSales = async () => {
+    const tbody = document.getElementById("warSalesTableBody");
+    const snap = await get(ref(db, "inventory"));
+    const salesGroup = {}; 
+    
+    snap.forEach(c => {
+        const v = c.val();
+        if (v.invoiceNo) {
+            if (!salesGroup[v.invoiceNo]) {
+                salesGroup[v.invoiceNo] = { 
+                    site: v.assignedStation, 
+                    date: v.soldAt, 
+                    items: [],
+                    keys: [] // Track keys to wipe them if deleted
+                };
+            }
+            salesGroup[v.invoiceNo].items.push(v.item);
+            salesGroup[v.invoiceNo].keys.push(c.key);
+        }
+    });
+
+    tbody.innerHTML = "";
+    Object.entries(salesGroup).forEach(([inv, data]) => {
+        tbody.innerHTML += `<tr>
+            <td style="font-family:monospace; font-weight:bold; color:#0284c7;">${inv}</td>
+            <td style="font-weight:bold;">${data.site}</td>
+            <td>${new Date(data.date).toLocaleDateString('en-IN')}</td>
+            <td style="font-size:11px;">${data.items.join(", ")}</td>
+            <td style="text-align:center; white-space:nowrap;">
+                <button onclick="printCustomerCopy('${inv}')" class="info" title="Print Warranty"><i class="fas fa-print"></i></button>
+                ${isAdmin ? `<button onclick="adminDeleteInvoiceRecord('${inv}')" class="danger" style="margin-left:5px;" title="Wipe Sale Record"><i class="fas fa-trash"></i> WIPE</button>` : ''}
+            </td>
+        </tr>`;
+    });
+};
+  window.adminDeleteInvoiceRecord = async (invoiceNo) => {
+    if (!isAdmin) return alert("Unauthorized");
+    if (!confirm(`⚠ CRITICAL: Wiping Invoice ${invoiceNo} will restock all associated items and delete this sale record permanently. Proceed?`)) return;
+
+    try {
+        const snap = await get(ref(db, "inventory"));
+        const updates = {};
+
+        snap.forEach(c => {
+            const v = c.val();
+            if (v.invoiceNo === invoiceNo) {
+                updates[`inventory/${c.key}/status`] = "In Stock";
+                updates[`inventory/${c.key}/holder`] = "Store";
+                updates[`inventory/${c.key}/invoiceNo`] = null;
+                updates[`inventory/${c.key}/assignedStation`] = null;
+                updates[`inventory/${c.key}/soldAt`] = null;
+            }
+        });
+
+        await update(ref(db), updates);
+        alert("✅ Sale Record Wiped successfully.");
+        loadWarSales(); // Refresh the table
+    } catch (e) {
+        alert("Error: " + e.message);
+    }
+};
 // --- NEW HELPER: POPULATE USER DROPDOWN ---
 window.populateUserDropdown = async () => {
     const sel = document.getElementById("selPrintInspector");
@@ -8389,7 +8449,7 @@ async function renderTechArea(ticketKey, claim) {
 // --- UPDATED ADMIN CLAIM ACTIONS ---
 window.adminVerifyClaim = async (ticketKey, decision) => {
     const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
-    if(!snap.exists()) return;
+    if (!snap.exists()) return;
     const data = snap.val();
 
     let newStatus = "";
@@ -8397,34 +8457,30 @@ window.adminVerifyClaim = async (ticketKey, decision) => {
 
     switch(decision) {
         case 'REPLACE': 
-            if(!confirm("Issue Replacement?")) return;
+            if (!confirm("Confirm replacement?")) return;
             newStatus = "Resolved";
-            remarks = "Warranty Honored: Replacement Issued.";
+            remarks = "Warranty Honored: Replacement Unit Issued.";
             generateReplacementBill(ticketKey); 
             break;
         case 'RECHECK':
-            remarks = prompt("Enter instructions for Technician Re-check:");
-            if(!remarks) return;
-            newStatus = "In Progress (Re-checking)";
+            remarks = prompt("Enter instructions for Technician/New Inspector:");
+            if (!remarks) return;
+            newStatus = "In Progress (Re-Check)";
+            // remarks logic added to database below
             break;
         case 'VOID':
-            if(!confirm("Permanently VOID Warranty for physical damage?")) return;
+            if (!confirm("Permanently VOID warranty for this specific asset due to tampering?")) return;
             newStatus = "Voided";
-            remarks = "Warranty Voided: Physical Tampering/Damage.";
+            remarks = "Claim Denied: Physical damage/tampering detected. Warranty Void.";
             break;
         case 'REJECT':
-            remarks = prompt("Enter Reason for Rejection:");
-            if(!remarks) return;
+            remarks = prompt("Reason for rejection:");
+            if (!remarks) return;
             newStatus = "Rejected";
-            break;
-        case 'RESOLVED_NO_REP':
-            if(!confirm("Mark as Resolved (Fixed without replacement)?")) return;
-            newStatus = "Resolved";
-            remarks = "Issue fixed via software/calibration. No replacement needed.";
             break;
     }
 
-    if(newStatus) {
+    if (newStatus) {
         await update(ref(db, `warranty_claims/${ticketKey}`), {
             status: newStatus,
             adminRemarks: remarks,
@@ -8587,25 +8643,35 @@ window.onScanSuccess = async function(decodedText) {
         }
 
         // --- MODE D: WARRANTY CLAIM (SCAN & CLAIM ENGINE) ---
-        else if (scanMode === 'WARRANTY_CLAIM') {
-            const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
-            const snap = await get(qWar);
-            if (!snap.exists()) return alert("❌ Tag Not Registered");
-            document.getElementById("claimDisplay").classList.remove("hidden");
-            let item; snap.forEach(c => item = c.val());
-            const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
-            
-            document.getElementById("claimItemName").innerText = item.item;
-            document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
-            document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
-            const statusBox = document.getElementById("claimStatusBox");
-            if (war && !war.expired) {
-                statusBox.innerHTML = `<div style="color:green; font-weight:900;">✅ ${war.daysLeft} DAYS LEFT</div>`;
-                document.getElementById("btnFinalClaim").disabled = false;
-            } else {
-                statusBox.innerHTML = `<span style="color:red;">🚫 VOID/EXPIRED</span>`;
-            }
-        }
+        // This replaces the 'WARRANTY_CLAIM' block inside window.onScanSuccess
+else if (scanMode === 'WARRANTY_CLAIM') {
+    const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
+    const snap = await get(qWar);
+    if (!snap.exists()) return alert("❌ Tag Not Registered");
+    
+    let item; snap.forEach(c => item = c.val());
+    const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
+    
+    document.getElementById("claimDisplay").classList.remove("hidden");
+    document.getElementById("claimItemName").innerText = item.item;
+    document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
+    document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
+    
+    // FIX: Populate the Sale Date field
+    const saleDateLabel = document.getElementById("claimDate");
+    if(saleDateLabel) {
+        saleDateLabel.innerText = item.soldAt ? new Date(item.soldAt).toLocaleDateString('en-IN') : "N/A (Stock)";
+    }
+    
+    const statusBox = document.getElementById("claimStatusBox");
+    if (war && !war.expired) {
+        statusBox.innerHTML = `<div style="color:green; font-weight:900;">✅ WARRANTY ACTIVE: ${war.daysLeft} DAYS LEFT</div>`;
+        document.getElementById("btnFinalClaim").disabled = false;
+    } else {
+        statusBox.innerHTML = `<span style="color:red; font-weight:900;">🚫 WARRANTY EXPIRED / VOID</span>`;
+        document.getElementById("btnFinalClaim").disabled = true;
+    }
+}
 
         // --- MODE E: BINDING TO INPUTS (ADD, AUDIT, BILLING, SEARCH) ---
         else if (scanMode === 'ADD') { 
