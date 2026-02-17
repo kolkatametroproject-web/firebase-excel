@@ -5213,89 +5213,74 @@ window.submitTransactionNoFace = (type) => {
     // Pass the calculated location to the processor
     processTransaction("Self/System", finalLocation);
 };
-// --- UPDATED TRANSACTION LOGIC ---
-// --- UPDATED PROCESSOR TO ACCEPT LOCATION ARGUMENT ---
+// ==========================================
+// ⚙️ FINAL TRANSACTION PROCESSOR (LOGS & PRINT)
+// ==========================================
 async function processTransaction(adminName, customReturnLocation = null) {
-    const isCheckout = currentTransactionType === 'CHECKOUT';
-    
-    if(!pendingTransactionItem) return alert("System Error: No item scanned.");
+    if(!pendingTransactionItem) return alert("System Error: No item loaded.");
 
     const itemKey = pendingTransactionItem.key;
     const itemName = pendingTransactionItem.item;
     const barcode = pendingTransactionItem.barcode;
+    const isCheckout = (currentTransactionType === 'CHECKOUT');
 
-    // Get Checkout Purpose (if applicable)
-    const purposeInput = isCheckout ? document.getElementById("checkoutPurpose").value : null;
+    try {
+        // 1. Fetch current data for printout context
+        const invRef = ref(db, `inventory/${itemKey}`);
+        const invSnap = await get(invRef);
+        const currentData = invSnap.val();
 
-    // 1. Fetch Fresh Data
-    const invRef = ref(db, `inventory/${itemKey}`);
-    const invSnap = await get(invRef);
-    
-    if(!invSnap.exists()) return alert("Item vanished from DB.");
-    
-    const val = invSnap.val();
-    const currentStatus = val.status;
-    const currentUsage = val.usageCount || 0; 
-
-    // 2. Logic Gates
-    if(isCheckout && currentStatus === 'Checked Out') return alert(`Item already taken by: ${val.holder}`);
-    if(!isCheckout && currentStatus === 'In Stock') return alert(`Item is already in the store.`);
-
-    // 3. Prepare Update Data
-    const uSnap = await get(ref(db, `users/${currentUser.uid}`));
-    const realUserName = uSnap.val()?.name || currentUser.email;
-
-    let updateData = {};
-
-    if (isCheckout) {
-        // CHECKOUT
-        updateData = {
+        // 2. Prepare Update Logic
+        let updateData = isCheckout ? {
             status: "Checked Out",
-            holder: realUserName,
-            purpose: purposeInput,
-            location: "Out with User", 
-            usageCount: currentUsage + 1 
-        };
-    } else {
-        // RETURN - USE THE CUSTOM LOCATION WE BUILT
-        updateData = {
+            holder: currentUser.name || currentUser.email,
+            location: "Field Operations",
+            usageCount: (currentData.usageCount || 0) + 1,
+            purpose: document.getElementById("checkoutPurpose")?.value || "General Use"
+        } : {
             status: "In Stock",
             holder: "Store",
-            purpose: null,
-            location: customReturnLocation // Saves "D2 Lab [Cabinet]"
+            location: customReturnLocation || "D2 Building Lab [Returned]"
         };
+
+        // 3. Database Update
+        await update(invRef, updateData);
+
+        // 4. Create History Log
+        await push(ref(db, "logs"), {
+            type: currentTransactionType,
+            item: itemName,
+            barcode: barcode,
+            time: serverTimestamp(),
+            by: currentUser.name || currentUser.email,
+            location: isCheckout ? "OUT" : customReturnLocation
+        });
+
+        // --- THE FIX: AUTOMATIC PRINTOUT ON RETURN ---
+        if (!isCheckout) {
+            alert(`✅ RETURN SUCCESSFUL: ${itemName}`);
+            // Force the official return memo to appear using IEM/UEM template
+            generateReturnPrintout(
+                itemName, 
+                barcode, 
+                currentData.invoiceNo || "N/A", 
+                currentData.assignedStation || "Site Lab", 
+                "Standard Maintenance Return"
+            );
+        } else {
+            alert(`✅ CHECKOUT SUCCESSFUL: ${itemName}`);
+            toggleInvMode('list');
+        }
+
+        // 5. Cleanup UI
+        document.getElementById("checkout_display").classList.add("hidden");
+        document.getElementById("return_display").classList.add("hidden");
+        pendingTransactionItem = null;
+
+    } catch (e) {
+        console.error(e);
+        alert("Transaction Error: " + e.message);
     }
-
-    // 4. Update Database
-    await update(invRef, updateData);
-
-    // 5. Log It
-    const logData = {
-        type: currentTransactionType,
-        item: itemName,
-        barcode: barcode,
-        qty: 1,
-        takenBy: realUserName,
-        approvedBy: "Direct (No Admin)",
-        location: isCheckout ? "Out" : customReturnLocation, 
-        purpose: isCheckout ? purposeInput : "Return",
-        time: serverTimestamp()
-    };
-
-    await push(ref(db, "logs"), logData);
-    
-    alert(`✅ ${currentTransactionType} Successful!\nItem: ${itemName}`);
-    
-    // Clear Inputs
-    if(document.getElementById("checkoutPurpose")) document.getElementById("checkoutPurpose").value = "";
-    if(document.getElementById("returnLocOther")) document.getElementById("returnLocOther").value = "";
-    if(document.getElementById("returnLocSpot")) document.getElementById("returnLocSpot").value = "";
-
-    // UI Cleanup
-    document.getElementById("checkout_display").classList.add("hidden");
-    document.getElementById("return_display").classList.add("hidden");
-    pendingTransactionItem = null;
-    toggleInvMode('list');
 }
 // --- NEW HELPER: POPULATE USER DROPDOWN ---
 window.populateUserDropdown = async () => {
@@ -8540,26 +8525,26 @@ window.resetTechVerification = () => {
     alert("Diagnostic Protocol Reset.");
 };
  // ==========================================
-// 🛠️ MASTER UNIFIED SCAN SUCCESS HANDLER
+// 🛠️ FINAL MASTER UNIFIED SCANNER CONTROLLER
 // ==========================================
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
     
     // 1. UI Reset: Stop scanner & Clean input
     closeBarcodeScanner();
-    const input = decodedText.trim();
-    console.log(`[MRPSP Security] Processing Mode: ${scanMode} | ID: ${input}`);
+    const cleanInput = decodedText.trim();
+    console.log(`[MRPSP Security] Active Mode: ${scanMode} | ID: ${cleanInput}`);
 
     try {
-        // --- MODE 1: TECHNICIAN JOB TICKET SCAN (WORKING - DO NOT CHANGE) ---
+        // --- MODE A: TECHNICIAN JOB TICKET SCAN (SECURITY LOCK) ---
         if (scanMode === 'TECH_TICKET_SCAN') {
-            const cleanId = input.replace("#", "").toUpperCase();
+            const cleanId = cleanInput.replace("#", "").toUpperCase();
             const allClaims = await get(ref(db, "warranty_claims"));
             let found = false;
 
             allClaims.forEach(c => {
                 const shortId = c.key.substring(1, 10).toUpperCase();
-                if (shortId === cleanId || c.key === input) {
+                if (shortId === cleanId || c.key === cleanInput) {
                     techVerifiedTicket = c.val();
                     techVerifiedTicketKey = c.key;
                     found = true;
@@ -8572,24 +8557,29 @@ window.onScanSuccess = async function(decodedText) {
                 document.getElementById("manualProductInp").disabled = false;
                 document.getElementById("techStepTitle").innerText = "TICKET LOADED. SCAN PHYSICAL ASSET.";
             } else { 
-                alert("❌ Ticket ID not found in Master Claims Log."); 
+                alert("❌ Ticket ID not found in system."); 
             }
         } 
 
-        // --- MODE 2: TECHNICIAN ASSET VERIFY (WITH AUTO-REJECT) ---
+        // --- MODE B: TECHNICIAN PRODUCT VERIFY (AUTO-REJECT ON MISMATCH) ---
         else if (scanMode === 'TECH_PRODUCT_VERIFY') {
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
+            if (!techVerifiedTicket) return alert("Security Error: Load Job Ticket first.");
+            
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
             const snap = await get(q);
             let itemData = null;
             if (snap.exists()) snap.forEach(c => itemData = c.val());
 
             if (itemData && itemData.item === techVerifiedTicket.item) {
                 document.getElementById("productVerifiedLabel").classList.remove("hidden");
+                document.getElementById("techStepTitle").innerText = "IDENTITY CONFIRMED. LOADING DIAGNOSTICS...";
+                document.getElementById("techStepTitle").style.color = "green";
                 renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
             } else {
+                // SECURITY AUTO-REJECTION
                 await update(ref(db, `warranty_claims/${techVerifiedTicketKey}`), {
                     status: "Rejected",
-                    adminRemarks: `AUTO-REJECT: Tag Mismatch. Scanned: ${input}`,
+                    adminRemarks: `AUTO-REJECT: Tag Mismatch. Scanned: ${cleanInput}`,
                     resolutionDate: serverTimestamp()
                 });
                 alert("⛔ SECURITY ALERT: ASSET MISMATCH!\nThis ticket has been automatically REJECTED.");
@@ -8597,43 +8587,74 @@ window.onScanSuccess = async function(decodedText) {
             }
         }
 
-        // --- MODE 3: ASSET LOGISTICS (CHECKOUT/RETURN - SINGLE QR RESTORED) ---
+        // --- MODE C: ASSET MOVEMENT (CHECKOUT/RETURN WITH LOGIC GATES) ---
         else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
             const isOut = (scanMode === 'CHECKOUT');
             const displayId = isOut ? "checkout_display" : "return_display";
             const nameId = isOut ? "checkout_item_name" : "return_item_name";
-            const codeId = isOut ? "checkout_item_code" : "return_item_code";
 
-            // Open confirmation UI
-            document.getElementById(displayId).classList.remove("hidden");
-            document.getElementById(nameId).innerHTML = "🔍 Checking Database...";
-
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
             const snap = await get(q);
             
-            if (!snap.exists()) {
-                document.getElementById(nameId).innerHTML = `<span style="color:red;">❌ Tag Not Registered</span>`;
-                return;
-            }
+            if (!snap.exists()) return alert("❌ Tag Not Registered in Inventory.");
 
             let itm, k; 
             snap.forEach(c => { itm = c.val(); k = c.key; });
-            
-            // Critical: Save to memory for the Confirm Button to use
+
+            // --- LOGIC GATE: PREVENT ILLEGAL STATUS CHANGES ---
+            if (!isOut && itm.status === "In Stock") {
+                return alert(`⛔ ERROR: "${itm.item}" is already In Stock. It cannot be returned.`);
+            }
+            if (isOut && itm.status === "Checked Out") {
+                return alert(`⛔ ERROR: "${itm.item}" is currently with ${itm.holder}.`);
+            }
+            if (isOut && itm.status === "Sold Out") {
+                return alert(`⛔ ERROR: Item is Deployed/Sold at ${itm.assignedStation}.`);
+            }
+
+            // Bind to global variables for buttons
             pendingTransactionItem = { key: k, ...itm };
             currentTransactionType = scanMode; 
 
-            document.getElementById(nameId).innerHTML = `<i class="fas fa-check-circle"></i> ${itm.item}`;
-            document.getElementById(codeId).innerText = input;
+            document.getElementById(displayId).classList.remove("hidden");
+            document.getElementById(nameId).innerHTML = `✔ ${itm.item}`;
+            document.getElementById(isOut ? "checkout_item_code" : "return_item_code").innerText = cleanInput;
         }
 
-        // --- MODE 4: BATCH RECOVERY ---
+        // --- MODE D: VIEW STOCK SEARCH (DATA BINDING) ---
+        else if (scanMode === 'SEARCH_STOCK') {
+            const searchBox = document.getElementById("mainStockSearch");
+            if(searchBox) {
+                searchBox.value = cleanInput;
+                filterStockTable(); 
+            }
+        }
+
+        // --- MODE E: NEW ASSET REGISTRATION (DATA BINDING) ---
+        else if (scanMode === 'ADD') {
+            const barcodeInp = document.getElementById("invBarcode");
+            if(barcodeInp) {
+                barcodeInp.value = cleanInput;
+                checkBarcodeUnique(cleanInput); 
+            }
+        }
+
+        // --- MODE F: AUDIT TRAIL SEARCH (DATA BINDING) ---
+        else if (scanMode === 'AUDIT_SEARCH') {
+            const auditInp = document.getElementById("auditSearchInput");
+            if(auditInp) {
+                auditInp.value = cleanInput;
+                fetchAuditHistory(cleanInput);
+            }
+        }
+
+        // --- MODE G: BATCH RECOVERY ---
         else if (scanMode === 'ASSET_RECOVERY') {
-             addToRecoveryCart(input);
+            addToRecoveryCart(cleanInput);
         }
 
-    } catch (err) { 
-        console.error("Scanner Runtime Error:", err); 
+    } catch (err) {
+        console.error("Critical Scanner Logic Failure:", err);
     }
 };
 </script>
