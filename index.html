@@ -7941,46 +7941,29 @@ function renderRecoveryCart() {
 // C. Finalize: Update DB and Print One Memo
 window.finalizeRecoveryCart = async () => {
     const reason = document.getElementById("recoveryReason").value.trim();
-    if(!reason) return alert("Please enter a Return Reason for this batch.");
-    if(!confirm(`Proceed with recovery of ${window.recoveryCart.length} items?`)) return;
+    if(!reason || window.recoveryCart.length === 0) return alert("Enter reason and scan items.");
+    
+    if(!confirm(`Authorize Batch Recovery for ${window.recoveryCart.length} items?`)) return;
 
     try {
         const updates = {};
-        const logPromises = [];
-
         window.recoveryCart.forEach(item => {
-            // Update Inventory
             updates[`inventory/${item.key}/status`] = "In Stock";
             updates[`inventory/${item.key}/holder`] = "Store";
-            updates[`inventory/${item.key}/location`] = "Batch Recovery: " + reason;
-            updates[`inventory/${item.key}/soldAt`] = null;
-            updates[`inventory/${item.key}/invoiceNo`] = null;
-            updates[`inventory/${item.key}/assignedStation`] = null;
-
-            // Log entry
-            logPromises.push(push(ref(db, "logs"), {
-                type: "ITEM_BATCH_RECOVERED",
-                item: item.item,
-                barcode: item.barcode,
-                reason: reason,
-                time: serverTimestamp(),
-                by: currentUser.name || currentUser.email
-            }));
+            updates[`inventory/${item.key}/location`] = "Recovered: " + reason;
+            // Note: Invoice remains associated in history log but item is back in store.
         });
 
         await update(ref(db), updates);
-        await Promise.all(logPromises);
-
-        alert("✅ Master Inventory Updated.");
         
-        // Generate consolidated Printout
+        // --- TRIGGER CONSOLIDATED MEMO ---
         generateConsolidatedMemo(window.recoveryCart, reason);
         
-        // Clear everything
+        // Cleanup
         window.recoveryCart = [];
         document.getElementById("recoveryReason").value = "";
         renderRecoveryCart();
-        refreshWarDash();
+        alert("✅ Recovery Successful. Memo Generated.");
 
     } catch (e) { alert("Error: " + e.message); }
 };
@@ -8414,67 +8397,51 @@ async function renderTechArea(ticketKey, claim) {
     await update(ref(db, `warranty_claims/${ticketKey}`), { status: "In Progress" });
     document.getElementById("techNameInput").focus();
 }
+// --- UPDATED ADMIN CLAIM ACTIONS ---
 window.adminVerifyClaim = async (ticketKey, decision) => {
     const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
-    if(!snap.exists()) return alert("Ticket not found.");
+    if(!snap.exists()) return;
     const data = snap.val();
 
-    // 1. OVERSIGHT SUMMARY FOR ADMIN
-    const auditSummary = `
-        ADMIN OVERSIGHT REPORT
-        ----------------------
-        TECHNICIAN: ${data.techName || 'Unknown'}
-        PART: ${data.failedComponent || 'N/A'}
-        TECH NOTES: ${data.techNotes || 'N/A'}
-        TECH ACTION: ${data.techAction}
-    `;
+    let newStatus = "";
+    let remarks = "";
 
-    // 2. REJECTION LOGIC
-    if(decision === 'REJECT') {
-        const rejectReason = prompt(auditSummary + "\n\nREJECTION PROTOCOL:\nEnter official reason for rejecting this replacement:");
-        if(!rejectReason) return alert("Rejection cancelled. Reason is mandatory.");
-
-        if(confirm("CONFIRM REJECTION?\nThis ticket will be closed without a replacement.")) {
-            await update(ref(db, `warranty_claims/${ticketKey}`), { 
-                status: "Rejected", 
-                adminRemarks: rejectReason,
-                adminAuthorizer: currentUser.name,
-                resolutionDate: serverTimestamp() 
-            });
-            
-            // Log to System Audit Trail
-            await push(ref(db, "logs"), {
-                type: "WARRANTY_REJECTED",
-                item: data.item,
-                reason: rejectReason,
-                time: serverTimestamp(),
-                by: currentUser.name
-            });
-
-            alert("❌ Replacement Request Rejected and Logged.");
-        }
-        return;
+    switch(decision) {
+        case 'REPLACE': 
+            if(!confirm("Issue Replacement?")) return;
+            newStatus = "Resolved";
+            remarks = "Warranty Honored: Replacement Issued.";
+            generateReplacementBill(ticketKey); 
+            break;
+        case 'RECHECK':
+            remarks = prompt("Enter instructions for Technician Re-check:");
+            if(!remarks) return;
+            newStatus = "In Progress (Re-checking)";
+            break;
+        case 'VOID':
+            if(!confirm("Permanently VOID Warranty for physical damage?")) return;
+            newStatus = "Voided";
+            remarks = "Warranty Voided: Physical Tampering/Damage.";
+            break;
+        case 'REJECT':
+            remarks = prompt("Enter Reason for Rejection:");
+            if(!remarks) return;
+            newStatus = "Rejected";
+            break;
+        case 'RESOLVED_NO_REP':
+            if(!confirm("Mark as Resolved (Fixed without replacement)?")) return;
+            newStatus = "Resolved";
+            remarks = "Issue fixed via software/calibration. No replacement needed.";
+            break;
     }
 
-    // 3. REPLACEMENT LOGIC
-    if(decision === 'REPLACE') {
-        if(!confirm(auditSummary + "\n\nAUTHORIZE REPLACEMENT?")) return;
-        if(confirm("FINAL CHECK: Issue replacement bill now?")) {
-            await generateReplacementBill(ticketKey); 
-            alert("✅ Replacement Authorized.");
-        }
-    } 
-
-    // 4. VOID LOGIC
-    else if(decision === 'VOID') {
-        if(confirm("CRITICAL: Permanently VOID this asset warranty?")) {
-            await update(ref(db, `warranty_claims/${ticketKey}`), { 
-                status: "Voided", 
-                adminAuthorizer: currentUser.name,
-                resolutionDate: serverTimestamp() 
-            });
-            alert("🚫 Warranty Voided.");
-        }
+    if(newStatus) {
+        await update(ref(db, `warranty_claims/${ticketKey}`), {
+            status: newStatus,
+            adminRemarks: remarks,
+            resolutionDate: serverTimestamp()
+        });
+        alert(`✅ Ticket updated to: ${newStatus}`);
     }
 };
 
@@ -8543,46 +8510,60 @@ window.resetTechVerification = () => {
 
     alert("Diagnostic Protocol Reset.");
 };
+  window.adminDeleteSaleRecord = async (itemKey) => {
+    if(!isAdmin) return alert("Unauthorized");
+    if(!confirm("CRITICAL: Wipe Invoice data for this item? The item will be restocked and the sale log deleted.")) return;
+
+    try {
+        const snap = await get(ref(db, `inventory/${itemKey}`));
+        const v = snap.val();
+        
+        await update(ref(db, `inventory/${itemKey}`), {
+            status: "In Stock",
+            holder: "Store",
+            invoiceNo: null, // Wipe Invoice
+            assignedStation: null,
+            soldAt: null
+        });
+
+        alert("✅ Sale record wiped. Item is back in Store.");
+        loadInventory();
+    } catch(e) { alert(e.message); }
+};
 // ==========================================
-// 🛠️ FINAL CONSOLIDATED SCANNER CONTROLLER
+// 🛠️ FINAL MASTER UNIFIED SCANNER CONTROLLER
 // ==========================================
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
-    
-    // 1. UI Reset: Stop scanner & Clean input
     closeBarcodeScanner();
-    const cleanInput = decodedText.trim();
-    console.log(`[MRPSP Security] Active Mode: ${scanMode} | ID: ${cleanInput}`);
+    const input = decodedText.trim();
+    console.log(`[MRPSP Security] Active Mode: ${scanMode} | ID: ${input}`);
 
     try {
-        // --- MODE A: TECHNICIAN JOB TICKET SCAN (WORKING) ---
+        // --- MODE A: TECHNICIAN JOB TICKET SCAN (SECURITY LOCK) ---
         if (scanMode === 'TECH_TICKET_SCAN') {
-            const cleanId = cleanInput.replace("#", "").toUpperCase();
+            const cleanId = input.replace("#", "").toUpperCase();
             const allClaims = await get(ref(db, "warranty_claims"));
             let found = false;
-
             allClaims.forEach(c => {
                 const shortId = c.key.substring(1, 10).toUpperCase();
-                if (shortId === cleanId || c.key === cleanInput) {
+                if (shortId === cleanId || c.key === input) {
                     techVerifiedTicket = c.val();
                     techVerifiedTicketKey = c.key;
                     found = true;
                 }
             });
-
             if (found) {
                 document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
                 document.getElementById("btnScanProduct").disabled = false;
                 document.getElementById("manualProductInp").disabled = false;
                 document.getElementById("techStepTitle").innerText = "TICKET LOADED. SCAN PHYSICAL ASSET.";
-            } else { 
-                alert("❌ Ticket ID not found in Master Claims Log."); 
-            }
+            } else { alert("❌ Ticket ID not found."); }
         } 
 
-        // --- MODE B: TECHNICIAN PRODUCT VERIFY (AUTO-REJECT ON MISMATCH) ---
+        // --- MODE B: TECHNICIAN PRODUCT VERIFY ---
         else if (scanMode === 'TECH_PRODUCT_VERIFY') {
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
             const snap = await get(q);
             let itemData = null;
             if (snap.exists()) snap.forEach(c => itemData = c.val());
@@ -8593,88 +8574,61 @@ window.onScanSuccess = async function(decodedText) {
             } else {
                 await update(ref(db, `warranty_claims/${techVerifiedTicketKey}`), {
                     status: "Rejected",
-                    adminRemarks: `AUTO-REJECT: Tag Mismatch. Scanned: ${cleanInput}`,
+                    adminRemarks: `AUTO-REJECT: Tag Mismatch. Scanned: ${input}`,
                     resolutionDate: serverTimestamp()
                 });
-                alert("⛔ SECURITY ALERT: ASSET MISMATCH!\nThis ticket has been automatically REJECTED.");
+                alert("⛔ SECURITY ALERT: ASSET MISMATCH! Ticket REJECTED.");
                 resetTechVerification();
             }
         }
 
-        // --- MODE C: ASSET MOVEMENT (STRICT STATUS LOCK) ---
+        // --- MODE C: ASSET MOVEMENT (CHECKOUT/RETURN) ---
         else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
             const isOut = (scanMode === 'CHECKOUT');
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
             const snap = await get(q);
-            
             if (!snap.exists()) return alert("❌ Tag Not Registered.");
 
-            let itm, k; 
-            snap.forEach(c => { itm = c.val(); k = c.key; });
+            let itm; snap.forEach(c => itm = {key: c.key, ...c.val()});
 
-            // --- THE FIX: SOLD OUT PROTECTION ---
-            if (isOut && itm.status === "Sold Out") {
-                return alert(`⛔ ACCESS DENIED: This item is SOLD OUT and deployed at ${itm.assignedStation}. It cannot be checked out.`);
-            }
-            if (!isOut && itm.status === "In Stock") return alert(`⛔ ERROR: Already In Stock.`);
-            if (isOut && itm.status === "Checked Out") return alert(`⛔ ERROR: Already out with ${itm.holder}.`);
+            if (isOut && itm.status === "Sold Out") return alert("⛔ ACCESS DENIED: Item is SOLD OUT.");
+            if (!isOut && itm.status === "In Stock") return alert("⛔ ERROR: Already In Stock.");
 
-            pendingTransactionItem = { key: k, ...itm };
+            pendingTransactionItem = itm;
             currentTransactionType = scanMode; 
 
             const displayId = isOut ? "checkout_display" : "return_display";
-            const nameId = isOut ? "checkout_item_name" : "return_item_name";
             document.getElementById(displayId).classList.remove("hidden");
-            document.getElementById(nameId).innerHTML = `✔ ${itm.item}`;
+            document.getElementById(isOut ? "checkout_item_name" : "return_item_name").innerHTML = `✔ ${itm.item}`;
         }
 
-        // --- MODE D: SCAN & CLAIM (FIXED - NO MANUAL ENTRY NEEDED) ---
-        else if (scanMode === 'WARRANTY_CLAIM') {
-            const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(cleanInput));
-            const snap = await get(qWar);
-            const statusBox = document.getElementById("claimStatusBox");
-            document.getElementById("claimDisplay").classList.remove("hidden");
-            
-            if (!snap.exists()) {
-                statusBox.innerHTML = `<span style="color:red;">❌ TAG NOT REGISTERED</span>`;
-                return;
-            }
-
-            let item; snap.forEach(c => item = c.val());
-            const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
-            
-            // AUTO-FILL DATA WITHOUT ASKING USER
-            document.getElementById("claimItemName").innerText = item.item;
-            document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
-            document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
-            document.getElementById("claimDate").innerText = war ? war.start : "NOT SET";
-
-            if (item.status !== "Sold Out") {
-                statusBox.innerHTML = `<span style="color:orange;">❌ NOT DEPLOYED</span>`;
-            } else if (!war || war.expired) {
-                statusBox.innerHTML = `<span style="color:red;">🚫 WARRANTY VOID/EXPIRED</span>`;
-            } else {
-                statusBox.innerHTML = `<div style="color:green; font-weight:900;">✅ ${war.daysLeft} DAYS LEFT</div>`;
-                document.getElementById("btnFinalClaim").disabled = false;
+        // --- MODE D: AUDIT TRAIL (FIXED RESULT BINDING) ---
+        else if (scanMode === 'AUDIT_SEARCH') {
+            const auditInp = document.getElementById("auditSearchInput");
+            if(auditInp) {
+                auditInp.value = input;
+                fetchAuditHistory(input); // Triggers result immediately
             }
         }
 
-        // --- MODE E: BILLING, SEARCH, ADD (DATA BINDING) ---
+        // --- MODE E: BILLING SCAN (FIXED) ---
         else if (scanMode === 'BILLING_SCAN') {
-            document.getElementById("billBarcodeInp").value = cleanInput;
+            document.getElementById("billBarcodeInp").value = input;
             addScannedItemToBill(); 
         }
-        else if (scanMode === 'SEARCH_STOCK') { 
-            document.getElementById("mainStockSearch").value = cleanInput; 
-            filterStockTable(); 
-        }
-        else if (scanMode === 'ADD') { 
-            document.getElementById("invBarcode").value = cleanInput; 
-            checkBarcodeUnique(cleanInput); 
-        }
-        else if (scanMode === 'ASSET_RECOVERY') { addToRecoveryCart(cleanInput); }
 
-    } catch (err) { console.error("Scanner Failure:", err); }
+        // --- MODE F: ASSET RECOVERY (BATCH) ---
+        else if (scanMode === 'ASSET_RECOVERY') {
+            addToRecoveryCart(input);
+        }
+
+        // --- MODE G: VIEW STOCK SEARCH ---
+        else if (scanMode === 'SEARCH_STOCK') {
+            document.getElementById("mainStockSearch").value = input;
+            filterStockTable();
+        }
+
+    } catch (err) { console.error("Scanner Error:", err); }
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
