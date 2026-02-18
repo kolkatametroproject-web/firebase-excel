@@ -4626,10 +4626,11 @@ window.loadAdminPanel = () => {
     const checkboxList = document.getElementById("userCheckboxList");
     if (!tbody || !checkboxList) return;
 
-    // 1. SYNC GLOBAL DESIGNATIONS (New Feature)
+    // --- SYNC GLOBAL DESIGNATIONS FROM DATABASE ---
     get(ref(db, "system_settings/designations")).then(snap => {
         if (snap.exists()) {
             const d = snap.val();
+            // This fills the boxes shown in your screenshot
             if(document.getElementById("cfgAdmin1Name")) document.getElementById("cfgAdmin1Name").value = d.admin1Name || "";
             if(document.getElementById("cfgAdmin1Title")) document.getElementById("cfgAdmin1Title").value = d.admin1Title || "";
             if(document.getElementById("cfgAdmin2Name")) document.getElementById("cfgAdmin2Name").value = d.admin2Name || "";
@@ -4637,13 +4638,13 @@ window.loadAdminPanel = () => {
         }
     });
 
-    // 2. SYNC MASTER PIN (Your Existing logic)
+    // --- EXISTING PIN SYNC ---
     get(ref(db, "system_settings/master_pin")).then(snap => {
         const pinDisplay = document.getElementById("displayCurrentPin");
         if (pinDisplay) pinDisplay.value = snap.exists() ? snap.val() : "1234";
     });
 
-    // 3. LOAD PERSONNEL LIST (Your Existing logic)
+    // --- EXISTING PERSONNEL LIST LOGIC ---
     if (adminUsersListener) { if (typeof adminUsersListener === "function") adminUsersListener(); adminUsersListener = null; }
     if (adminStatusListener) { if (typeof adminStatusListener === "function") adminStatusListener(); adminStatusListener = null; }
     
@@ -8338,18 +8339,27 @@ else if (scanMode === 'WARRANTY_CLAIM') {
 };
   // 1. SAVE DESIGNATIONS GLOBALLY
 window.saveGlobalDesignations = async () => {
-    if(!isAdmin) return alert("Admins Only");
+    if(!isAdmin) return alert("Unauthorized: Only Admins can set signatures.");
+    
     const settings = {
         admin1Name: document.getElementById("cfgAdmin1Name").value.trim(),
         admin1Title: document.getElementById("cfgAdmin1Title").value.trim(),
         admin2Name: document.getElementById("cfgAdmin2Name").value.trim(),
         admin2Title: document.getElementById("cfgAdmin2Title").value.trim()
     };
+
+    if(!settings.admin1Name || !settings.admin1Title) {
+        return alert("Principal Investigator details are mandatory.");
+    }
+
     try {
         await set(ref(db, "system_settings/designations"), settings);
-        alert("✅ Designations updated globally for all prints.");
-        populateAllAuthorityDropdowns(); 
-    } catch(e) { alert(e.message); }
+        alert("✅ SUCCESS: Global signatures updated for all prints and memos.");
+        // Automatically updates the authority selection dropdowns in other tabs
+        if(typeof populateAllAuthorityDropdowns === 'function') populateAllAuthorityDropdowns();
+    } catch(e) { 
+        alert("Database Error: " + e.message); 
+    }
 };
 async function populateAllAuthorityDropdowns() {
     const snap = await get(ref(db, "system_settings/designations"));
@@ -8358,21 +8368,13 @@ async function populateAllAuthorityDropdowns() {
         admin2Name: "Prof. Heerok Banerjee", admin2Title: "Co-Principal Investigator"
     };
 
-    // Sync Admin Panel Inputs
-    if(document.getElementById("cfgAdmin1Name")) {
-        document.getElementById("cfgAdmin1Name").value = d.admin1Name;
-        document.getElementById("cfgAdmin1Title").value = d.admin1Title;
-        document.getElementById("cfgAdmin2Name").value = d.admin2Name;
-        document.getElementById("cfgAdmin2Title").value = d.admin2Title;
-    }
-
-    // List of every Approving Authority select element
-    const dropdowns = ["selPrintAuthority", "selCommentAuthority", "selDirAuthority", "selPrintAuthorityBill"];
+    // Every tab that needs an "Approving Authority" selection
+    const targetDropdowns = ["selPrintAuthority", "selCommentAuthority", "selDirAuthority"];
     
-    dropdowns.forEach(id => {
+    targetDropdowns.forEach(id => {
         const sel = document.getElementById(id);
         if(sel) {
-            // Value is formatted as "Name|Title" for easy splitting during print
+            // We store Name and Title together separated by | for easy printing
             sel.innerHTML = `
                 <option value="${d.admin1Name}|${d.admin1Title}">${d.admin1Name} (${d.admin1Title})</option>
                 <option value="${d.admin2Name}|${d.admin2Title}">${d.admin2Name} (${d.admin2Title})</option>
