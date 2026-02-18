@@ -1032,40 +1032,52 @@ body:has(#printableReportContainer:not(.hidden)) .nav-bar {
     </div>
 </div>
 <div id="tab-adminPanel" class="hidden">
-    <div class="panel" style="border-top: 5px solid var(--metro-red);">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h3 style="color:var(--metro-red);"><i class="fas fa-shield-alt"></i> System Oversight Console</h3>
-        <button onclick="loadAdminPanel()" class="secondary"><i class="fas fa-sync"></i> Refresh Data</button>
-      </div>
+    <div class="panel" style="border-top: 5px solid var(--metro-red);">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="color:var(--metro-red);"><i class="fas fa-shield-alt"></i> System Oversight Console</h3>
+        <button onclick="loadAdminPanel()" class="secondary"><i class="fas fa-sync"></i> Refresh Data</button>
+      </div>
 
-      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-gold); margin-top: 20px;">0. Global Print Signature Settings</h4>
-      <div style="background:#fffbeb; border:1px solid #fef3c7; padding:20px; border-radius:6px; margin-bottom: 20px;">
-          <p style="font-size:12px; color:#92400e; margin-top:0;"><strong>Legal Notice:</strong> The position entered here will appear as the "Approving Authority" title on all Audit Reports, Invoices, and Directives. Any changes are logged with Admin ID.</p>
-          <div style="display:grid; grid-template-columns: 2fr 1fr; gap:15px; align-items:end;">
-              <div>
-                  <label style="font-size:11px; font-weight:bold; color:var(--metro-blue);">ADMIN OFFICIAL POSITION / DESIGNATION</label>
-                  <input id="adminPositionInput" placeholder="e.g. Principal Investigator" style="border:2px solid var(--metro-gold); font-weight:900; margin-top:5px;">
-              </div>
-              <button onclick="updateAdminPosition()" class="success" style="height:45px; font-weight:900;">UPDATE ALL TEMPLATES</button>
-          </div>
-      </div>
+      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-blue); margin-top: 20px;">1. Personnel Status & Security</h4>
+      <div class="table-wrapper">
+      <table>
+          <thead>
+              <tr>
+                  <th>User Profile</th>
+                  <th>Connection</th>
+                  <th>Task Load</th>
+                  <th>Biometrics</th>
+                  <th>Admin Actions</th>
+              </tr>
+          </thead>
+          <tbody id="userListBody"></tbody>
+      </table>
+      </div>
 
-      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-blue); margin-top: 30px;">1. Personnel Status & Security</h4>
-      <div class="table-wrapper">
-      <table>
-          <thead>
-              <tr>
-                  <th>User Profile</th>
-                  <th>Connection</th>
-                  <th>Task Load</th>
-                  <th>Biometrics</th>
-                  <th>Admin Actions</th>
-              </tr>
-          </thead>
-          <tbody id="userListBody"></tbody>
-      </table>
-      </div>
-      </div>
+      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-red); margin-top: 30px;">2. Master Security PIN (Global Bypass Code)</h4>
+      <div style="background:#fff1f2; border:1px solid #fecaca; padding:20px; border-radius:6px; margin-bottom: 20px;">
+          <p style="font-size:12px; color:#b91c1c; margin-top:0;"><strong>Strict Security:</strong> Changing this PIN immediately invalidates the old code for all users across all terminals.</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:15px; align-items:end;">
+              <div>
+                  <label style="font-size:11px; font-weight:bold; color:#7f1d1d;">CURRENT SYSTEM PIN</label>
+                  <input id="displayCurrentPin" disabled style="background:#f8fafc; font-weight:bold; letter-spacing:4px; text-align:center; color:#1e293b; border: 1px solid #ddd;" value="SYNCING...">
+              </div>
+              <div>
+                  <label style="font-size:11px; font-weight:bold; color:var(--metro-blue);">SET NEW 4-DIGIT PIN</label>
+                  <input id="newPinInput" type="text" maxlength="4" placeholder="0000" style="letter-spacing:8px; text-align:center; font-weight:bold; border:2px solid #cbd5e1;">
+              </div>
+              <button onclick="updateMasterPin()" class="danger" style="height:42px; width:100%; font-size: 12px; font-weight: 800;">UPDATE SYSTEM PIN</button>
+          </div>
+      </div>
+      
+      <h4 style="background:#f1f5f9; padding:10px; border-left: 3px solid var(--metro-blue); margin-top: 30px;">3. Task Assignment</h4>
+      <label style="font-size: 12px; font-weight: bold;">Select Personnel:</label>
+      <div id="userCheckboxList" class="checkbox-list"></div>
+      <div style="margin-top:15px;">
+        <textarea id="taskDesc" rows="2" placeholder="Enter detailed operational instructions..."></textarea>
+        <button onclick="assignTaskMulti()" style="width:100%; margin-top:10px;">Dispatch Orders</button>
+      </div>
+    </div>
 </div>
 <div id="adminTaskModal" class="modal-overlay hidden">
     <div class="panel" style="width:600px; max-width:95%; max-height:80vh; display:flex; flex-direction:column; padding:0; overflow:hidden; border:none;">
@@ -7320,37 +7332,137 @@ window.removeFromCart = (type, index) => {
 };
 // Updated Print Function with increased Font Sizes
 window.generateInvoicePrint = async function() {
-    const adminSig = await getAdminSignatureData();
-    const clientType = document.getElementById("billClientType").value;
-    let targetStation = (clientType === "METRO") ? document.getElementById("billMetroStation").value : document.getElementById("billCustName").value;
-    if(!targetStation) return alert("Please select a target station.");
+    // 1. Validation
+    if(window.billCart.length === 0 && window.serviceCart.length === 0) {
+        return alert("⚠️ ERROR: Cannot generate empty bill. Please scan an asset or add a service charge.");
+    }
 
-    const invoiceNo = await finalizeSaleRecords(targetStation);
-    if(!invoiceNo) return;
+    const clientType = document.getElementById("billClientType").value;
+    let targetStation = (clientType === "METRO") ? document.getElementById("billMetroStation").value : document.getElementById("billCustName").value;
 
-    let billRows = "";
-    let billTotal = 0; 
-    const combinedItems = [...window.billCart, ...window.serviceCart.map(s => ({name: "SERVICE: "+s.desc, tag: "N/A", rate: s.price, qty: 1, net: s.net}))];
-    combinedItems.forEach(it => {
-        billTotal += Math.round(it.net);
-        billRows += `<tr><td style="padding: 25px 10px; font-size: 32pt; font-weight: 900;">${it.name.toUpperCase()}<br><span style="font-size: 18pt;">ID: ${it.tag}</span></td><td style="text-align:right; font-size:30pt;">${it.rate.toFixed(0)}</td><td style="text-align:center; font-size:30pt;">${it.qty || 1}</td><td style="text-align:right; font-weight:900; font-size:32pt;">${Math.round(it.net)}</td></tr>`;
-    });
+    if(!targetStation) return alert("Please select a target station or enter Customer Name.");
 
-    const reportContainer = document.getElementById("printableReportContainer");
-    reportContainer.innerHTML = `
-        <div class="no-print" style="text-align:center; padding:20px; background:#f8fafc; border-bottom:1px solid #ddd;"><button class="danger" onclick="closeReportPreview()">CLOSE</button><button onclick="window.print()" style="background:#000; color:#fff; padding:15px 50px; font-weight:bold; font-size:24px; cursor:pointer; border-radius:8px; margin-left:15px;">PRINT INVOICE</button></div>
-        <div class="report-paper a4-max-wrapper" style="background:white; color:black; font-family:'Times New Roman', serif;">
-            <style>@media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 10mm !important; } } .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; } .header-line { border-bottom: 12pt solid #000; padding-bottom: 30px; margin-bottom: 35px; text-align: center; } .project-title { font-size: 52pt; font-weight: 900; text-transform: uppercase; } .total-bar { background: #000; color: #fff; padding: 25px; font-size: 50pt; font-weight: 900; display: flex; justify-content: space-between; margin-top: 30px; -webkit-print-color-adjust: exact; }</style>
-            <div class="header-line"><div class="project-title">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div><div style="font-size: 38pt; border: 8pt solid #000; margin-top: 35px; padding: 10px 20px; display: inline-block; font-weight: 900;">TAX INVOICE</div></div>
-            <div style="text-align:right; font-size: 28pt; font-weight: 900; margin-bottom: 40px; font-family: monospace;">INV NO: ${invoiceNo}</div>
-            <div style="font-size:32pt; font-weight:900; border-bottom:6pt solid #000; padding:15pt 0;">DATE: ${new Date().toLocaleDateString('en-IN')}</div>
-            <div style="font-size:32pt; font-weight:900; border-bottom:6pt solid #000; padding:15pt 0;">BILLED TO: ${targetStation.toUpperCase()}</div>
-            <table style="width:100%; border-collapse:collapse; margin-top:40px;"><thead><tr style="background:#eee; -webkit-print-color-adjust: exact; border-bottom:10pt solid #000;"><th style="text-align:left; font-size:28pt; padding:15px;">PARTICULARS</th><th style="text-align:right; font-size:28pt; padding:15px;">RATE</th><th style="text-align:center; font-size:28pt; padding:15px;">QTY</th><th style="text-align:right; font-size:28pt; padding:15px;">TOTAL</th></tr></thead><tbody>${billRows}</tbody></table>
-            <div class="total-bar"><span>GRAND TOTAL:</span><span>₹ ${billTotal.toLocaleString('en-IN')}</span></div>
-            <div style="margin-top: 140px; border-top: 10pt solid #000; width: 65%; text-align: left;"><div style="font-size: 42pt; font-weight: 900;">${adminSig.name}</div><div style="font-size: 28pt; font-weight: 900;">${adminSig.title}</div></div>
-        </div>`;
-    window.billCart = []; window.serviceCart = []; renderBillCartUI();
-    reportContainer.classList.remove("hidden");
+    // 2. Finalize Database Records
+    const invoiceNo = await finalizeSaleRecords(targetStation);
+    if(!invoiceNo) return;
+
+    let billRows = "";
+    let billTotal = 0; 
+
+    // 3. Combine Assets and Services
+    const combinedItems = [
+        ...window.billCart.map(it => ({name: it.name.toUpperCase(), tag: it.tag, rate: it.rate, qty: it.qty, net: it.net})),
+        ...window.serviceCart.map(sv => ({name: "SERVICE: " + sv.desc.toUpperCase(), tag: "SERVICE", rate: sv.price, qty: 1, net: sv.net}))
+    ];
+
+    combinedItems.forEach(it => {
+        const roundedNet = Math.round(it.net);
+        billTotal += roundedNet; 
+        billRows += `
+            <tr>
+                <td style="padding: 25px 10px; font-size: 32pt; font-weight: 900; text-align: left;">
+                    ${it.name}<br>
+                    <span style="font-size: 18pt; color: #444; font-weight: bold;">(REF ID: ${it.tag})</span>
+                </td>
+                <td style="text-align:right; padding: 25px 10px; font-size: 30pt;">${it.rate.toFixed(0)}</td>
+                <td style="text-align:center; padding: 25px 10px; font-size: 30pt;">${it.qty}</td>
+                <td style="text-align:right; padding: 25px 10px; font-weight: 900; font-size: 32pt;">${roundedNet}</td>
+            </tr>`;
+    });
+
+    // 4. Inject into Report Container
+    const reportContainer = document.getElementById("printableReportContainer");
+    const now = new Date();
+    
+    reportContainer.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:20px; background:#f8fafc; border-bottom:1px solid #ddd;">
+            <h2 style="color:var(--metro-blue);">Official Invoice Preview</h2>
+            <button class="danger" onclick="closeReportPreview()">CANCEL & CLOSE</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 50px; font-weight:bold; font-size:24px; cursor:pointer; border-radius:8px; margin-left:15px;">
+                <i class="fas fa-print"></i> PRINT INVOICE
+            </button>
+        </div>
+
+        <div class="report-paper a4-max-wrapper" style="background:white; color:black; font-family:'Times New Roman', serif;">
+            <style>
+                @media print { 
+                    @page { size: A4; margin: 0; } 
+                    .no-print { display: none !important; } 
+                    .a4-max-wrapper { width: 100% !important; padding: 10mm !important; } 
+                }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; box-sizing: border-box; }
+                .header-line { border-bottom: 12pt solid #000; padding-bottom: 30px; margin-bottom: 35px; text-align: center; }
+                
+                /* UNIFIED PROJECT TITLE STYLE */
+                .project-title { font-size: 52pt; font-weight: 900; text-transform: uppercase; line-height: 1.1; }
+                
+                .college-name { font-size: 26pt; font-weight: 900; margin-top: 15px; line-height: 1.2; text-transform: uppercase; }
+                .meta-row { font-size: 32pt; font-weight: 900; border-bottom: 6pt solid #000; padding: 18pt 0; text-align: left; }
+                .total-bar { background: #000; color: #fff; padding: 25px; font-size: 50pt; font-weight: 900; display: flex; justify-content: space-between; margin-top: 30px; -webkit-print-color-adjust: exact; }
+                
+                /* Borderless Table Style */
+                .invoice-table { width: 100%; border-collapse: collapse; margin-top: 50px; }
+                .invoice-table th { border-bottom: 10pt solid #000; padding: 15px 10px; font-size: 28pt; text-align: left; font-weight: 900; }
+                .invoice-table td { border-bottom: 1pt solid #ddd; } /* Faint line for alignment guidance */
+            </style>
+
+            <div class="header-line">
+                <div class="project-title">
+                    METRO RAILWAY<br>
+                    PLATFORM SAFETY PROJECT
+                </div>
+                <div class="college-name">
+                    INSTITUTE OF ENGINEERING AND MANAGEMENT<br>
+                    UNIVERSITY OF ENGINEERING AND MANAGEMENT
+                </div>
+                <div style="font-size: 38pt; border: 8pt solid #000; margin-top: 35px; padding: 12px 25px; display: inline-block; font-weight: 900; text-transform: uppercase;">TAX INVOICE</div>
+            </div>
+
+            <div style="text-align:right; font-size: 28pt; font-weight: 900; margin-bottom: 40px; font-family: monospace;">INV NO: ${invoiceNo}</div>
+            
+            <div class="meta-row"><b>DATE:</b> ${now.toLocaleDateString('en-IN')}</div>
+            <div class="meta-row"><b>BILLED TO:</b> ${targetStation.toUpperCase()}</div>
+            <div class="meta-row"><b>ISSUED BY:</b> ${currentUser.name.toUpperCase()}</div>
+
+            <table class="invoice-table">
+                <thead>
+                    <tr style="background: #eee; -webkit-print-color-adjust: exact;">
+                        <th style="text-align: left;">PARTICULARS</th>
+                        <th style="text-align: right;">RATE</th>
+                        <th style="text-align: center;">QTY</th>
+                        <th style="text-align: right;">TOTAL</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${billRows}
+                </tbody>
+            </table>
+
+            <div class="total-bar">
+                <span>GRAND TOTAL:</span>
+                <span>₹ ${billTotal.toLocaleString('en-IN')}</span>
+            </div>
+            
+            <div style="text-align:left; font-size: 22pt; font-style: italic; margin-top: 20px; font-weight: bold;">
+                Amount in words: ${numberToWords(billTotal)}
+            </div>
+
+            <div style="margin-top: 140px; border-top: 10pt solid #000; width: 65%; text-align: left;">
+                <div style="font-size: 42pt; font-weight: 900;">${currentUser.name.toUpperCase()}</div>
+                <div style="font-size: 28pt; font-weight: 900;">AUTHORIZED SIGNATORY (MRPSP)</div>
+            </div>
+
+            <div style="margin-top: 80px; border-top: 3pt dashed #000; padding-top: 20px; font-size: 16pt; text-align: center; font-weight: bold; text-transform: uppercase;">
+                Certified Official Record | System Authenticated Invoice
+            </div>
+        </div>`;
+
+    // 5. Reset App UI
+    window.billCart = []; 
+    window.serviceCart = []; 
+    renderBillCartUI();
+    reportContainer.classList.remove("hidden"); 
+    window.scrollTo(0, 0);
 };
 // Dedicated function for Service Block insertion
 window.addServiceOnlyToBill = () => {
@@ -8580,97 +8692,6 @@ else if (scanMode === 'WARRANTY_CLAIM') {
         }
 
     } catch (err) { console.error(err); }
-};
-  // --- NEW: DYNAMIC POSITION MANAGEMENT ---
-window.updateAdminPosition = async () => {
-    const pos = document.getElementById("adminPositionInput").value.trim();
-    if(!pos) return alert("Please enter a valid designation.");
-    
-    if(confirm(`⚠️ LEGAL ACTION: Update Approving Authority title to "${pos.toUpperCase()}" for all official documents?`)) {
-        try {
-            await set(ref(db, "system_settings/admin_designation"), pos.toUpperCase());
-            alert("✅ Global Position Updated.");
-        } catch(e) { alert("Database Error: " + e.message); }
-    }
-};
-
-// --- HELPER: FETCH CURRENT SIGNATURE DATA ---
-async function getAdminSignatureData() {
-    const snap = await get(ref(db, "system_settings/admin_designation"));
-    const designation = snap.exists() ? snap.val() : "PRINCIPAL INVESTIGATOR";
-    return {
-        name: (currentUser.name || currentUser.email).toUpperCase(),
-        title: designation
-    };
-}
-
-// --- UPDATED: RE-ENGINEERED PRINT FUNCTIONS ---
-
-// 1. DYNAMIC AUDIT REPORT
-window.generateFinalReport = async () => {
-    if (!currentPrintKey) return alert("Error: No record selected.");
-    const adminSig = await getAdminSignatureData();
-    const includeRakes = document.getElementById("chkRakeData").checked;
-    let conductingOfficerName = document.getElementById("selPrintInspector").value;
-    if (conductingOfficerName === "Self" || conductingOfficerName === "" || conductingOfficerName === "Self (Current User)") {
-        conductingOfficerName = currentUser.name || currentUser.email;
-    }
-
-    try {
-        const sSnap = await get(ref(db, `station_logs/${currentPrintKey}`));
-        if (!sSnap.exists()) return alert("Station record not found.");
-        const sData = sSnap.val();
-        const siteName = (sData.name || "").split("(")[0].trim().toUpperCase();
-        const corridor = (sData.name || "").match(/\(([^)]+)\)/)?.[1] || "Blue Line";
-        const logDate = sData.date || "";
-        const printTime = new Date().toLocaleString("en-IN");
-
-        let rakeTableHtml = "";
-        if (includeRakes) {
-            const rakeKey = sData.linkedRakeKey || currentPrintKey;
-            const rSnap = await get(ref(db, `rake_logs/${rakeKey}`));
-            if (rSnap.exists()) {
-                rakeTableHtml = `<div class="black-header-bar">RAKE CLEARANCE TABLE</div><table class="report-table-max"><thead><tr><th style="text-align:left; border-right:4pt solid #000;">RAKE ID TYPE</th><th style="text-align:center; border-right:4pt solid #000;">FRONT</th><th style="text-align:center;">REAR</th></tr></thead><tbody>`;
-                Object.values(rSnap.val()).forEach(r => {
-                    rakeTableHtml += `<tr><td style="border-right:4pt solid #000;">${r.rake || ""} ${r.type || ""}</td><td style="text-align:center; border-right:4pt solid #000;">${r.f || ""}</td><td style="text-align:center;">${r.r || ""}</td></tr>`;
-                });
-                rakeTableHtml += `</tbody></table>`;
-            }
-        }
-
-        const reportContainer = document.getElementById("printableReportContainer");
-        reportContainer.innerHTML = `
-            <div class="no-print" style="text-align:center; padding:25px; background:#f8fafc; border-bottom:1px solid #ddd;"><button class="danger" onclick="closeReportPreview()">CLOSE</button><button onclick="window.print()" style="background:#000; color:#fff; padding:15px 50px; font-weight:bold; font-size:24px; cursor:pointer; border-radius:8px; margin-left:15px;">PRINT OFFICIAL RECORD</button></div>
-            <div class="report-wrapper">
-                <style>
-                    @media print { @page { size: A4; margin: 5mm; } body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; margin: 0; padding: 0; } .no-print { display: none !important; } }
-                    .report-wrapper { width: 100%; padding: 10mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; }
-                    .black-header-bar { background: #000 !important; color: #fff !important; padding: 18pt !important; font-size: 38pt !important; font-weight: 900 !important; text-align: center; text-transform: uppercase; margin-top: 40pt; -webkit-print-color-adjust: exact; width: 100%; }
-                    .header-main { font-size: 72pt; font-weight: 900; text-align: center; line-height: 1; text-transform: uppercase; }
-                    .field-row { font-size: 42pt; border-bottom: 8pt solid #000; padding: 15pt 0; margin-bottom: 15pt; width: 100%; }
-                    .report-table-max { width: 100%; border-collapse: collapse; margin-top: 15pt; font-size: 32pt; border: 8pt solid #000; font-weight: 900; }
-                    .report-table-max th, .report-table-max td { padding: 20pt; border-bottom: 6pt solid #000; }
-                </style>
-                <div style="border-bottom: 16pt solid #000; padding-bottom: 35pt; text-align: center;"><div class="header-main">METRO RAILWAY</div><div class="header-main" style="font-size: 56pt;">PLATFORM SAFETY PROJECT</div><div style="font-size: 28pt; font-weight: 900; margin-top: 20pt; text-transform: uppercase;">IEM / UEM UNIVERSITY</div><div style="font-size: 38pt; font-weight: 900; text-decoration: underline; margin-top: 35pt;">OFFICIAL INSPECTION RECORD</div></div>
-                <div style="margin-top: 55pt;"><div class="field-row"><b>SITE:</b> ${siteName}</div><div class="field-row"><b>CORRIDOR:</b> ${corridor}</div><div class="field-row"><b>LOGGED BY:</b> ${conductingOfficerName.toUpperCase()}</div></div>
-                <div class="black-header-bar">MEASUREMENTS</div>
-                <div style="font-size: 38pt; font-weight: 900; line-height: 1.8; padding: 25pt 0; border-bottom: 6pt solid #000;">PLEN: ${sData.len || "-"} m | YL: ${sData.yl || "-"} cm | THICK: ${sData.th || "-"} cm | STATUS: ${sData.impl === "YES" ? "COMPLIANT" : "NON-COMPLIANT"}</div>
-                ${rakeTableHtml}
-                <div style="margin-top: 150pt; display: flex; justify-content: space-between; font-size: 28pt; font-weight: 900;">
-                    <div style="text-align: center; width: 48%; border-top: 8pt solid #000; padding-top: 15pt;"><div>${conductingOfficerName.toUpperCase()}</div><div style="font-size: 22pt;">CONDUCTING OFFICER</div></div>
-                    <div style="text-align: center; width: 48%; border-top: 8pt solid #000; padding-top: 15pt;"><div>${adminSig.name}</div><div style="font-size: 22pt;">${adminSig.title}</div></div>
-                </div>
-            </div>`;
-        closePrintModal();
-        reportContainer.classList.remove("hidden");
-    } catch (err) { alert("Print Error: " + err.message); }
-};
-  const originalLoadAdminPanel = window.loadAdminPanel;
-window.loadAdminPanel = function() {
-    originalLoadAdminPanel();
-    get(ref(db, "system_settings/admin_designation")).then(snap => {
-        if(snap.exists()) document.getElementById("adminPositionInput").value = snap.val();
-    });
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
