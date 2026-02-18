@@ -7957,7 +7957,6 @@ window.finalizeRecoveryCart = async () => {
 
             const isClosed = ["Resolved", "Rejected", "Warranty Voided"].includes(claim.status);
 
-            // --- REPRINT BUTTON (Keeps existing options) ---
             let actionBtns = `
                 <button class="info" onclick="generateClaimTicketPrint('${ticketKey}')" style="width:100%; margin-bottom:8px; background:#0A2342; font-weight:bold;">
                     <i class="fas fa-print"></i> REPRINT TICKET
@@ -7975,6 +7974,21 @@ window.finalizeRecoveryCart = async () => {
                     </div>`;
             }
 
+            // --- ADDED: TECHNICIAN INPUT VISIBILITY ---
+            let techDetailsHtml = "";
+            if (claim.techName) {
+                techDetailsHtml = `
+                    <div style="margin-top:10px; padding:10px; background:#fffbeb; border:1px solid #fef3c7; border-radius:6px; font-size:12px;">
+                        <div style="color:#92400e; font-weight:900; text-transform:uppercase; margin-bottom:5px;">
+                            <i class="fas fa-user-gear"></i> Technician Diagnosis (${claim.techName})
+                        </div>
+                        <div><b>Failed Component:</b> ${claim.failedComponent || 'N/A'}</div>
+                        <div><b>Suggested Action:</b> ${claim.techAction || 'N/A'}</div>
+                        <div style="margin-top:5px; color:#475569; font-style:italic;">"Notes: ${claim.techNotes || 'No additional notes.'}"</div>
+                    </div>
+                `;
+            }
+
             tbody.innerHTML += `
                 <tr style="border-bottom: 3px solid #f1f5f9; background: ${isClosed ? '#f8fafc' : '#fff'}">
                     <td colspan="7" style="padding: 20px;">
@@ -7990,8 +8004,11 @@ window.finalizeRecoveryCart = async () => {
                         </div>
                         <div style="margin-top: 25px; font-size: 13px; background: #f9f9f9; padding: 12px; border-radius: 6px; border-left: 4px solid ${statusColor};">
                             <strong>${claim.item}</strong> | Site: <b>${claim.site}</b><br>
-                            <div style="margin-top:4px; color:#b91c1c; font-style:italic;">"Fault: ${claim.issue}"</div>
-                            ${claim.adminRemarks ? `<div style="margin-top:8px; font-weight:bold; border-top:1px solid #ddd; padding-top:5px;">Admin: ${claim.adminRemarks}</div>` : ''}
+                            <div style="margin-top:4px; color:#b91c1c; font-style:italic;">"Customer Fault: ${claim.issue}"</div>
+                            
+                            ${techDetailsHtml} 
+                            
+                            ${claim.adminRemarks ? `<div style="margin-top:8px; font-weight:bold; border-top:1px solid #ddd; padding-top:5px; color:#1e40af;">Admin Remark: ${claim.adminRemarks}</div>` : ''}
                         </div>
                     </td>
                 </tr>`;
@@ -8453,26 +8470,40 @@ window.onScanSuccess = async function(decodedText) {
             } else { alert("❌ Ticket Not Found"); }
         }
 
-        // --- MODE B: TICKET SYSTEM (PRODUCT VERIFY + AUTO REJECT) ---
-        else if (scanMode === 'TECH_PRODUCT_VERIFY') {
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
-            const snap = await get(q);
-            let itemData = null;
-            if (snap.exists()) snap.forEach(c => itemData = c.val());
+        // --- UPDATED: PRODUCT VERIFY WITH TECHNICIAN CONFIRMATION ---
+else if (scanMode === 'TECH_PRODUCT_VERIFY') {
+    const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
+    const snap = await get(q);
+    let itemData = null;
+    if (snap.exists()) snap.forEach(c => itemData = c.val());
 
-            if (itemData && itemData.item === techVerifiedTicket.item) {
-                document.getElementById("productVerifiedLabel").classList.remove("hidden");
-                renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
-            } else {
-                await update(ref(db, `warranty_claims/${techVerifiedTicketKey}`), {
-                    status: "Rejected",
-                    adminRemarks: "AUTO-REJECT: Tag Mismatch.",
-                    resolutionDate: serverTimestamp()
-                });
-                alert("⛔ SECURITY ALERT: MISMATCH. Ticket REJECTED.");
-                resetTechVerification();
-            }
+    // Check if the physical asset matches the ticket record
+    if (itemData && itemData.item === techVerifiedTicket.item) {
+        document.getElementById("productVerifiedLabel").classList.remove("hidden");
+        renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
+    } else {
+        // --- NEW CONFIRMATION STEP ---
+        const mismatchMsg = `⚠️ ASSET MISMATCH DETECTED\n\n` +
+            `Scanned/Entered: ${input}\n` +
+            `Expected Asset: ${techVerifiedTicket.item}\n\n` +
+            `Is this a mistake? Click 'Cancel' to try again.\n` +
+            `Click 'OK' to officially REJECT this ticket due to a physical mismatch.`;
+
+        if (confirm(mismatchMsg)) {
+            // Technician confirmed it's not a typing mistake; proceed with rejection
+            await update(ref(db, `warranty_claims/${techVerifiedTicketKey}`), {
+                status: "Rejected",
+                adminRemarks: "AUTO-REJECT: Physical Tag Mismatch confirmed by Technician.",
+                resolutionDate: serverTimestamp()
+            });
+            alert("⛔ SECURITY ALERT: Ticket officially REJECTED.");
+            resetTechVerification();
+        } else {
+            // Technician likely made a typo or scanned the wrong box; allow retry
+            updateStatus("Retry: Please re-enter or re-scan the correct tag.", "orange");
         }
+    }
+}
 
         // --- MODE C: ASSET MOVEMENT (CHECKOUT/RETURN) ---
         else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
