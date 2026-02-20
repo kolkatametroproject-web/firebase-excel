@@ -3982,14 +3982,27 @@ window.closePrintModal = () => {
 };
 window.generateFinalReport = async () => {
     if (!currentPrintKey) return alert("Error: No record selected.");
+
     const includeRakes = document.getElementById("chkRakeData").checked;
-    let conductingOfficerName = document.getElementById("selPrintInspector").value || currentUser.name;
+    let conductingOfficerName = document.getElementById("selPrintInspector").value;
     let authName = document.getElementById("selPrintAuthority").value;
+
+    if (conductingOfficerName === "Self" || conductingOfficerName === "" || conductingOfficerName === "Self (Current User)") {
+        conductingOfficerName = currentUser.name || currentUser.email;
+    }
 
     try {
         const sSnap = await get(ref(db, `station_logs/${currentPrintKey}`));
         if (!sSnap.exists()) return alert("Station record not found.");
         const sData = sSnap.val();
+
+        const siteName = (sData.name || "").split("(")[0].trim().toUpperCase();
+        const corridor = (sData.name || "").match(/\(([^)]+)\)/)?.[1] || "Blue Line";
+        const logDate = sData.date || "";
+        const printTime = new Date().toLocaleString("en-IN", { 
+            day: "2-digit", month: "short", year: "numeric", 
+            hour: "2-digit", minute: "2-digit", hour12: true 
+        });
 
         let rakeTableHtml = "";
         if (includeRakes) {
@@ -3997,26 +4010,22 @@ window.generateFinalReport = async () => {
             const rSnap = await get(ref(db, `rake_logs/${rakeKey}`));
             if (rSnap.exists()) {
                 rakeTableHtml = `
-                <div style="background: #000 !important; color: #fff !important; padding: 6px; font-weight: 900; font-size: 23pt; margin-top: 15px; text-transform: uppercase; text-align: center; -webkit-print-color-adjust: exact;">
-                    B. RAKE CLEARANCE DATA
-                </div>
-                <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                <div class="black-header-bar">RAKE CLEARANCE TABLE</div>
+                <table class="report-table-max">
                     <thead>
-                        <tr style="border-bottom: 2pt solid #000;">
-                            <th style="text-align:left; font-size: 16pt; padding: 5px;">RAKE ID</th>
-                            <th style="text-align:center; font-size: 16pt; padding: 5px;">FRONT</th>
-                            <th style="text-align:center; font-size: 16pt; padding: 5px;">REAR</th>
-                            <th style="text-align:center; font-size: 16pt; padding: 5px;">TIME (M:S)</th>
+                        <tr>
+                            <th style="text-align:left; border-right:4pt solid #000;">RAKE ID TYPE</th>
+                            <th style="text-align:center; border-right:4pt solid #000;">FRONT</th>
+                            <th style="text-align:center;">REAR</th>
                         </tr>
                     </thead>
                     <tbody>`;
                 Object.values(rSnap.val()).forEach(r => {
                     rakeTableHtml += `
-                        <tr style="border-bottom: 1pt solid #eee;">
-                            <td style="font-size: 21pt; font-weight: 900; padding: 8px 5px;">${r.rake || ""} ${r.type || ""}</td>
-                            <td style="text-align:center; font-size: 21pt; font-weight: 900;">${r.f || ""}</td>
-                            <td style="text-align:center; font-size: 21pt; font-weight: 900;">${r.r || ""}</td>
-                            <td style="text-align:center; font-size: 21pt; font-weight: 900;">${r.time || "--"}</td>
+                        <tr>
+                            <td style="border-right:4pt solid #000;">${r.rake || ""} ${r.type || ""}</td>
+                            <td style="text-align:center; border-right:4pt solid #000;">${r.f || ""}</td>
+                            <td style="text-align:center;">${r.r || ""}</td>
                         </tr>`;
                 });
                 rakeTableHtml += `</tbody></table>`;
@@ -4024,45 +4033,95 @@ window.generateFinalReport = async () => {
         }
 
         const reportContainer = document.getElementById("printableReportContainer");
-        reportContainer.innerHTML = `
-        <div class="no-print" style="text-align:center; margin-bottom:20px; border-bottom:1px solid #e2e8f0; padding:15px; background:#f8fafc;">
-            <button class="danger" onclick="closeReportPreview()">CLOSE PREVIEW</button>
-            <button onclick="window.print()" style="background:#1e293b; color:white; padding: 10px 20px;">PRINT OFFICIAL RECORD</button>
+        
+        const styleSheet = `
+        <style>
+            @media print {
+                @page { size: A4; margin: 5mm; }
+                body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; margin: 0; padding: 0; }
+                .no-print { display: none !important; }
+                .report-wrapper { width: 100% !important; padding: 5mm !important; margin: 0 !important; border: none !important; }
+            }
+            .report-wrapper { 
+                width: 100%; min-height: 297mm; margin: 0 auto; padding: 10mm; 
+                background: white; font-family: "Times New Roman", Times, serif; color: #000; 
+                box-sizing: border-box;
+            }
+            .black-header-bar { 
+                background-color: #000 !important; color: #fff !important; 
+                padding: 18pt !important; font-size: 43pt !important; font-weight: 900 !important; 
+                text-align: center !important; text-transform: uppercase !important;
+                margin-top: 40pt !important; -webkit-print-color-adjust: exact !important;
+                width: 100% !important; box-sizing: border-box;
+            }
+            .header-main { font-size: 77pt; font-weight: 900; text-align: center; line-height: 1; text-transform: uppercase; }
+            .header-sub { font-size: 33pt; font-weight: 900; text-align: center; margin-top: 20pt; text-transform: uppercase; line-height: 1.2; }
+            .field-row { font-size: 47pt; font-weight: 900; border-bottom: 8pt solid #000; padding: 15pt 0; margin-bottom: 15pt; width: 100%; box-sizing: border-box; }
+            .measurement-text { font-size: 43pt; font-weight: 900; line-height: 1.8; padding: 25pt 0; border-bottom: 6pt solid #000; width: 100%; box-sizing: border-box; }
+            .report-table-max { width: 100%; border-collapse: collapse; margin-top: 15pt; font-size: 37pt; border: 8pt solid #000; font-weight: 900; table-layout: fixed; }
+            .report-table-max th, .report-table-max td { padding: 20pt; border-bottom: 6pt solid #000; overflow-wrap: break-word; }
+        </style>`;
+
+        reportContainer.innerHTML = styleSheet + `
+        <div class="no-print" style="text-align:center; padding:25px; background:#f8fafc; border-bottom:1px solid #ddd;">
+            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 50px; font-weight:bold; font-size:24px; cursor:pointer; border-radius:8px;">PRINT OFFICIAL RECORD</button>
         </div>
-        <div class="report-paper" style="width: 210mm; min-height: 297mm; box-sizing: border-box; padding: 15mm; margin: 0 auto; background:white; font-family: 'Times New Roman', serif;">
-            <div class="report-header" style="text-align: center; border-bottom: 6pt solid #000; padding-bottom: 5px;">
-                <div style="font-size: 31pt; font-weight: 900; text-transform: uppercase;">METRO RAILWAY<br>PLATFORM SAFETY<br>PROJECT</div>
-                <div style="font-size: 16pt; font-weight: 900; margin-top: 5px; line-height: 1.1;">INSTITUTE OF ENGINEERING AND MANAGEMENT<br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
-                <div style="margin-top: 10px; font-size: 23pt; font-weight: 900; text-decoration: underline; text-transform: uppercase;">OFFICIAL INSPECTION RECORD</div>
+
+        <div class="report-wrapper">
+            <div style="border-bottom: 16pt solid #000; padding-bottom: 35pt; text-align: center;">
+                <div class="header-main">METRO RAILWAY</div>
+                <div class="header-main" style="font-size: 61pt;">PLATFORM SAFETY PROJECT</div>
+                <div class="header-sub">INSTITUTE OF ENGINEERING AND MANAGEMENT<br><br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
+                <div style="font-size: 43pt; font-weight: 900; text-decoration: underline; margin-top: 35pt;">OFFICIAL INSPECTION RECORD</div>
             </div>
-            <div style="border-bottom: 4pt solid #000; padding: 8px 0; text-align: left; width: 100%;">
-                <div style="font-size: 21pt; text-decoration: underline;">Site:</div>
-                <div style="font-size: 27pt; font-weight: 900; word-wrap: break-word;">${sData.name || "--"}</div>
+
+            <div style="margin-top: 55pt;">
+                <div class="field-row"><b>SITE:</b> ${siteName}</div>
+                <div class="field-row"><b>CORRIDOR:</b> ${corridor}</div>
+                <div class="field-row"><b>CONDUCTING OFFICER:</b> ${conductingOfficerName.toUpperCase()}</div>
+                <div class="field-row"><b>LOGGED ON (DB):</b> ${logDate}</div>
             </div>
-            <div style="border-bottom: 4pt solid #000; padding: 8px 0; text-align: left; width: 100%;">
-                <div style="font-size: 21pt; text-decoration: underline;">Date:</div>
-                <div style="font-size: 25pt; font-weight: 900;">${sData.date || "--"}</div>
+
+            <div class="black-header-bar">MEASUREMENTS</div>
+            <div class="measurement-text">
+                PLATFORM LENGTH: ${sData.len || "172.8"} m<br>
+                YELLOW LINE DISTANCE: ${sData.yl || "70"} cm<br>
+                LINE THICKNESS: ${sData.th || "10"} cm<br>
+                COMPLIANCE STATUS: ${sData.impl === "YES" ? "YES / COMPLIANT" : "NO / NON-COMPLIANT"}
             </div>
-            <div style="background: #000 !important; color: #fff !important; padding: 6px; font-weight: 900; font-size: 23pt; margin-top: 15px; text-transform: uppercase; text-align: center; -webkit-print-color-adjust: exact;">A. YELLOW LINE COMPLIANCE</div>
-            <div style="font-size: 21pt; border-bottom: 2pt solid #000; padding: 6px 0;">Length: <span style="font-weight: 900; font-size: 25pt;">${sData.len || "--"}</span></div>
-            <div style="font-size: 21pt; border-bottom: 2pt solid #000; padding: 6px 0;">YL Dist: <span style="font-weight: 900; font-size: 25pt;">${sData.yl || "--"}</span></div>
-            <div style="font-size: 21pt; border-bottom: 2pt solid #000; padding: 6px 0;">Status: <span style="font-weight: 900; font-size: 25pt;">${sData.impl || "--"}</span></div>
+
+            <div class="black-header-bar">INSPECTOR REMARKS</div>
+            <div style="font-size: 41pt; font-weight: 900; line-height: 1.6; padding: 30pt 0; border-bottom: 8pt solid #000; text-align: justify;">
+                ${(sData.remarks || "STATION IS STRAIGHT. NO UNKNOWN CURVE FOUND.").toUpperCase()}
+            </div>
+
             ${rakeTableHtml}
-            <div class="report-footer" style="margin-top: 60px; display: flex; justify-content: space-between; align-items: flex-start; width: 100%; gap: 10px;">
-                <div style="width: 48%; text-align: center; display: flex; flex-direction: column;">
-                    <div style="border-top: 3pt solid #000 !important; width: 100%; margin-bottom: 5px;"></div>
-                    <div style="font-weight: 900; font-size: 16pt;">${conductingOfficerName.toUpperCase()}</div>
-                    <div style="font-size: 13pt; font-weight: 900;">CONDUCTING OFFICER</div>
+
+            <div style="margin-top: 150pt; display: flex; justify-content: space-between; font-size: 33pt; font-weight: 900;">
+                <div style="text-align: center; width: 48%;">
+                    <div style="border-top: 8pt solid #000; padding-top: 15pt;">${conductingOfficerName.toUpperCase()}</div>
+                    <div style="font-size: 27pt;">CONDUCTING OFFICER</div>
                 </div>
-                <div style="width: 48%; text-align: center; display: flex; flex-direction: column;">
-                    <div style="border-top: 3pt solid #000 !important; width: 100%; margin-bottom: 5px;"></div>
-                    <div style="font-weight: 900; font-size: 16pt;">${authName.toUpperCase()}</div>
-                    <div style="font-size: 13pt; font-weight: 900;">APPROVING AUTHORITY</div>
+                <div style="text-align: center; width: 48%;">
+                    <div style="border-top: 8pt solid #000; padding-top: 15pt;">${authName.toUpperCase()}</div>
+                    <div style="font-size: 27pt;">APPROVING AUTHORITY</div>
                 </div>
+            </div>
+
+            <div style="text-align: center; margin-top: 100pt; font-size: 27pt; font-weight: 900; border-top: 5pt dashed #000; padding-top: 30pt;">
+                SYSTEM GENERATED RECORD | PRINTED ON: ${printTime.toUpperCase()}
             </div>
         </div>`;
+
+        closePrintModal();
         reportContainer.classList.remove("hidden");
-    } catch (err) { alert("Error: " + err.message); }
+        window.scrollTo(0, 0);
+
+    } catch (err) {
+        console.error(err);
+        alert("Print Error: " + err.message);
+    }
 };
 window.closeReportPreview = () => {
     document.getElementById("printableReportContainer").classList.add("hidden");
@@ -5942,36 +6001,30 @@ window.generateDirectivePrint = function() {
     const authority = document.getElementById("selDirAuthority").value;
     const selectedUsers = Array.from(document.querySelectorAll('.dir-user-check:checked')).map(cb => cb.value);
     
-    if (selectedUsers.length === 0 || !content) return alert("Please select recipients and enter content.");
+    if (selectedUsers.length === 0 || !content) return alert("Fill data.");
 
-    const now = new Date();
     const reportContainer = document.getElementById("printableReportContainer");
-
     reportContainer.innerHTML = `
-        <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
-            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
-            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold; cursor:pointer; border-radius:8px; margin-left:10px;">PRINT DOCUMENT</button>
-        </div>
-        <div class="report-paper" style="width: 210mm; min-height: 297mm; margin: 0 auto; padding: 15mm; background: white; font-family: 'Times New Roman', serif; color: black; box-sizing: border-box;">
-            <div style="text-align: center; border-bottom: 12pt solid #000; padding-bottom: 30px; margin-bottom: 35px;">
-                <div style="font-size: 57pt; font-weight: 900; text-transform: uppercase; line-height: 1.1;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div style="font-size: 31pt; font-weight: 900; margin-top: 15px; line-height: 1.2; text-transform: uppercase;">INSTITUTE OF ENGINEERING AND MANAGEMENT<br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
-                <div style="font-size: 43pt; border: 8pt solid #000; margin-top: 30px; padding: 12px 25px; font-weight: 900; display: inline-block; text-transform: uppercase;">${type}</div>
-            </div>
-            <div style="text-align:right; font-size: 33pt; font-weight: 900; margin-bottom: 25px;">DATE: ${now.toLocaleDateString('en-IN')}</div>
-            <span style="font-size: 33pt; text-decoration: underline; font-weight: bold; text-align: left; display: block;">TO PERSONNEL / FACULTY:</span>
-            <span style="font-size: 43pt; font-weight: 900; display: block; border-bottom: 6pt solid #000; padding-bottom: 10px; text-align: left;">${selectedUsers.join(", ").toUpperCase()}</span>
-            
-            <div style="background: #000 !important; color: #fff !important; padding: 25px; font-size: 49pt; margin: 60px 0 35px 0; text-transform: uppercase; -webkit-print-color-adjust: exact; text-align: center; font-weight: 900;">SUBJECT / DESCRIPTION</div>
-            <div style="font-size: 47pt; font-weight: 900; padding: 20px 0; text-align: left; line-height: 1.3; white-space: pre-wrap;">${content.toUpperCase()}</div>
-
-            <div style="margin-top: 140px; border-top: 10pt solid #000; width: 65%; text-align: left;">
-                <div style="font-size: 47pt; font-weight: 900;">${authority.split('(')[0].toUpperCase()}</div>
-                <div style="font-size: 31pt; font-weight: bold;">${authority.includes("Soham") ? "PRINCIPAL" : "CO-PRINCIPAL"} INVESTIGATOR</div>
-            </div>
+        <div class="no-print" style="text-align:center; padding:15px;"><button class="danger" onclick="closeReportPreview()">CLOSE</button><button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; margin-left:10px;">PRINT</button></div>
+        <div class="report-paper a4-max-wrapper" style="font-family: 'Times New Roman', serif; background:white; color:black;">
+            <style>
+                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 15mm !important; } }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 15mm; box-sizing: border-box; text-align: center; }
+                .header-line { border-bottom: 12pt solid #000; padding-bottom: 30px; margin-bottom: 35px; }
+                .project-title { font-size: 57pt; font-weight: 900; text-transform: uppercase; }
+                .college-name { font-size: 31pt; font-weight: 900; margin-top: 20px; }
+                .max-label { font-size: 33pt; text-decoration: underline; display: block; margin-top: 35px; text-align: left; }
+                .max-value { font-size: 43pt; font-weight: 900; display: block; border-bottom: 6pt solid #000; text-align: left; }
+                .heavy-bar { background: #000 !important; color: #fff !important; padding: 25px; font-size: 49pt; margin: 60px 0 35px 0; -webkit-print-color-adjust: exact; }
+                .content-body { font-size: 47pt; font-weight: 900; padding: 20px 0; text-align: left; line-height: 1.3; }
+            </style>
+            <div class="header-line"><div class="project-title">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div><div class="college-name">IEM / UEM</div><div style="font-size: 43pt; border: 8pt solid #000; margin-top: 30px; padding: 12px 25px; font-weight: 900;">${type}</div></div>
+            <span class="max-label">RECIPIENTS:</span><span class="max-value">${selectedUsers.join(", ").toUpperCase()}</span>
+            <div class="heavy-bar">SUBJECT / DESCRIPTION</div>
+            <div class="content-body">${content.toUpperCase()}</div>
+            <div style="margin-top: 140px; border-top: 10pt solid #000; width: 65%; text-align: left;"><div style="font-size: 47pt; font-weight: 900;">${authority.toUpperCase()}</div></div>
         </div>`;
-    reportContainer.classList.remove("hidden");
-    window.scrollTo(0, 0);
+    reportContainer.classList.remove("hidden"); window.scrollTo(0, 0);
 };
 window.handleCommentLineChange = () => {
     const line = document.getElementById("commentLineSelect").value;
@@ -6486,37 +6539,64 @@ window.printStationComment = function () {
     const station = document.getElementById("commentStationSelect").value;
     const corridor = document.getElementById("commentLineSelect").value;
     const comment = document.getElementById("commentTextInput").value;
+    let inspector = document.getElementById("selCommentInspector").value;
     const authority = document.getElementById("selCommentAuthority").value;
 
-    if (!station || !comment) return alert("Please select station and enter comment.");
+    if (!station || !comment) return alert("Please fill fields.");
 
+    const getTitle = (name) => {
+        if (name && name.includes("Soham Pal")) return "PRINCIPAL INVESTIGATOR";
+        if (name && name.includes("Heerok Banerjee")) return "CO-PRINCIPAL INVESTIGATOR";
+        return "";
+    };
+
+    const inspectorTitle = getTitle(inspector);
+    const authorityTitle = getTitle(authority);
     const now = new Date();
+    const printTimestamp = now.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+
     const reportContainer = document.getElementById("printableReportContainer");
     
     reportContainer.innerHTML = `
         <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
             <button class="danger" onclick="closeReportPreview()">CLOSE</button>
-            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 30px; font-weight:bold; font-size:22px; cursor:pointer; border-radius:8px;">PRINT DOCUMENT</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 30px; font-weight:bold; font-size:22px; cursor:pointer; border-radius:8px;">GENERATE DOCUMENT</button>
         </div>
-        <div style="width: 210mm; min-height: 297mm; margin: 0 auto; padding: 15mm; background: white; font-family: 'Times New Roman', serif; color: #000; box-sizing: border-box; text-align: center;">
-            <div style="border-bottom: 14pt solid #000; padding-bottom: 25px; margin-bottom: 35px;">
-                <div style="font-size: 67pt; font-weight: 900; text-transform: uppercase; line-height: 1.1;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div style="font-size: 43pt; font-weight: 900; line-height: 1.2; margin-top: 15px;">UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
+
+        <div class="report-paper a4-max-wrapper">
+            <style>
+                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 5mm !important; } }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 8mm; background: white; font-family: "Times New Roman", serif; color: #000; box-sizing: border-box; text-align: center; }
+                .header-box { border-bottom: 14pt solid #000; padding-bottom: 25px; margin-bottom: 35px; }
+                .title-main { font-size: 67pt !important; font-weight: 900; text-transform: uppercase; } 
+                .title-sub { font-size: 43pt !important; font-weight: 900; margin-top: 15px; }
+                .max-label { font-size: 43pt !important; text-decoration: underline; display: block; margin-top: 35px; text-align: left; font-weight: bold; }
+                .max-value { font-size: 53pt !important; font-weight: 900; display: block; border-bottom: 7pt solid #000; padding-bottom: 12px; text-align: left; }
+                .heavy-bar { background: #000 !important; color: #fff !important; padding: 25px; font-size: 57pt !important; margin: 60px 0 40px 0; -webkit-print-color-adjust: exact; }
+                .comment-body { font-size: 53pt !important; font-weight: 900; padding: 30px 0; text-align: left; line-height: 1.4; }
+                .sig-box-name { margin-top: 130px; border-top: 12pt solid #000; padding-top: 25px; font-size: 61pt !important; font-weight: 900; text-align: left; }
+                .sig-investigator-title { font-size: 41pt !important; font-weight: bold; text-align: left; }
+                .sig-box-desc { font-size: 45pt !important; font-weight: 900; text-transform: uppercase; text-align: left; }
+            </style>
+
+            <div class="header-box">
+                <div class="title-main">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+                <div class="title-sub">INSTITUTE OF ENGINEERING AND MANAGEMENT<br><br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
                 <div style="font-size: 49pt; border: 8pt solid #000; margin-top: 40px; padding: 20px; font-weight: 900; display: inline-block;">OFFICIAL COMMENT RECORD</div>
             </div>
-            <span style="font-size: 43pt; text-decoration: underline; display: block; margin-top: 35px; text-align: left; font-weight: bold;">SITE:</span>
-            <span style="font-size: 53pt; font-weight: 900; display: block; border-bottom: 7pt solid #000; padding-bottom: 12px; text-align: left;">${station.toUpperCase()}</span>
-            <span style="font-size: 43pt; text-decoration: underline; display: block; margin-top: 35px; text-align: left; font-weight: bold;">CORRIDOR:</span>
-            <span style="font-size: 53pt; font-weight: 900; display: block; border-bottom: 7pt solid #000; padding-bottom: 12px; text-align: left;">${corridor.toUpperCase()}</span>
 
-            <div style="background: #000 !important; color: #fff !important; padding: 25px; font-size: 57pt; margin: 60px 0 40px 0; text-transform: uppercase; -webkit-print-color-adjust: exact;">REMARKS / OBSERVATIONS</div>
-            <div style="font-size: 53pt; font-weight: 900; padding: 30px 0; text-align: left; line-height: 1.4;">${comment.toUpperCase()}</div>
-            
-            <div style="margin-top: 130px; border-top: 12pt solid #000; padding-top: 25px; font-size: 61pt; font-weight: 900; text-align: left;">${authority.split('(')[0].toUpperCase()}</div>
-            <div style="font-size: 45pt; font-weight: 900; text-transform: uppercase; text-align: left;">APPROVING AUTHORITY</div>
+            <span class="max-label">SITE:</span><span class="max-value">${station}</span>
+            <span class="max-label">DATE & TIME:</span><span class="max-value">${now.toLocaleDateString('en-IN')} | ${now.toLocaleTimeString()}</span>
+
+            <div class="heavy-bar">REMARKS / OBSERVATIONS</div>
+            <div class="comment-body">${comment}</div>
+
+            <div style="margin-top: 140px;">
+                ${inspector && inspector !== "Self" ? `<div class="sig-box-name">${inspector}</div><div class="sig-investigator-title">(${inspectorTitle})</div><div class="sig-box-desc">CONDUCTING OFFICER</div>` : ''}
+                <div class="sig-box-name">${authority.split('(')[0]}</div><div class="sig-investigator-title">(${authorityTitle})</div><div class="sig-box-desc">APPROVING AUTHORITY</div>
+            </div>
         </div>`;
-    reportContainer.classList.remove("hidden");
-    window.scrollTo(0, 0);
+    reportContainer.classList.remove("hidden"); window.scrollTo(0, 0);
 };
 async function populateCommentUsers() {
     const sel = document.getElementById("selCommentInspector"); 
@@ -7011,65 +7091,90 @@ window.removeFromCart = (type, index) => {
 };
 // Updated Print Function with increased Font Sizes
 window.generateInvoicePrint = async function() {
-    if(window.billCart.length === 0 && window.serviceCart.length === 0) return alert("Error: Cart empty.");
+    if(window.billCart.length === 0 && window.serviceCart.length === 0) {
+        return alert("⚠️ ERROR: Cannot generate empty bill.");
+    }
+
     const clientType = document.getElementById("billClientType").value;
     let targetStation = (clientType === "METRO") ? document.getElementById("billMetroStation").value : document.getElementById("billCustName").value;
-    if(!targetStation) return alert("Please select a target.");
+
+    if(!targetStation) return alert("Please select target.");
 
     const invoiceNo = await finalizeSaleRecords(targetStation);
     if(!invoiceNo) return;
 
     let billRows = "";
     let billTotal = 0; 
-    const items = [...window.billCart, ...window.serviceCart];
 
-    items.forEach(it => {
-        billTotal += it.net; 
+    const combinedItems = [
+        ...window.billCart.map(it => ({name: it.name.toUpperCase(), tag: it.tag, rate: it.rate, qty: it.qty, net: it.net})),
+        ...window.serviceCart.map(sv => ({name: "SERVICE: " + sv.desc.toUpperCase(), tag: "SERVICE", rate: sv.price, qty: 1, net: sv.net}))
+    ];
+
+    combinedItems.forEach(it => {
+        const roundedNet = Math.round(it.net);
+        billTotal += roundedNet; 
         billRows += `
-            <tr style="border-bottom: 2pt solid #000;">
-                <td style="padding: 30px 10px; font-size: 37pt; font-weight: 900; text-align: left;">
-                    ${it.name.toUpperCase()}<br>
-                    <span style="font-size: 23pt; color: #444;">(REF ID: ${it.tag || 'SERVICE'})</span>
+            <tr>
+                <td style="padding: 25px 10px; font-size: 37pt; font-weight: 900; text-align: left;">
+                    ${it.name}<br>
+                    <span style="font-size: 23pt; color: #444; font-weight: bold;">(REF ID: ${it.tag})</span>
                 </td>
-                <td style="text-align:right; padding: 30px 10px; font-size: 35pt;">${it.rate.toFixed(0)}</td>
-                <td style="text-align:center; padding: 30px 10px; font-size: 35pt;">${it.qty || 1}</td>
-                <td style="text-align:right; padding: 30px 10px; font-weight: 900; font-size: 37pt;">${Math.round(it.net)}</td>
+                <td style="text-align:right; padding: 25px 10px; font-size: 35pt;">${it.rate.toFixed(0)}</td>
+                <td style="text-align:center; padding: 25px 10px; font-size: 35pt;">${it.qty}</td>
+                <td style="text-align:right; padding: 25px 10px; font-weight: 900; font-size: 37pt;">${roundedNet}</td>
             </tr>`;
     });
 
     const reportContainer = document.getElementById("printableReportContainer");
+    const now = new Date();
+    
     reportContainer.innerHTML = `
         <div class="no-print" style="text-align:center; padding:20px; background:#f8fafc; border-bottom:1px solid #ddd;">
             <button class="danger" onclick="closeReportPreview()">CLOSE</button>
-            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 50px; font-weight:bold; font-size:24px; cursor:pointer; border-radius:8px;">PRINT INVOICE</button>
+            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 50px; font-weight:bold; font-size:24px; cursor:pointer; border-radius:8px; margin-left:15px;">PRINT INVOICE</button>
         </div>
-        <div style="width: 210mm; min-height: 297mm; margin: 0 auto; padding: 15mm; background: white; font-family: 'Times New Roman', serif; color: black; box-sizing: border-box;">
-            <div style="border-bottom: 12pt solid #000; padding-bottom: 30px; text-align: center;">
-                <div style="font-size: 57pt; font-weight: 900; text-transform: uppercase; line-height: 1.1;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div style="font-size: 43pt; border: 8pt solid #000; margin-top: 35px; padding: 12px 25px; display: inline-block; font-weight: 900;">TAX INVOICE</div>
-            </div>
-            <div style="text-align:right; font-size: 28pt; font-weight: 900; margin-bottom: 30px; font-family: monospace;">INV NO: ${invoiceNo}</div>
-            <div style="font-size: 37pt; font-weight: 900; border-bottom: 6pt solid #000; padding: 23pt 0; text-align: left;"><b>DATE:</b> ${new Date().toLocaleDateString('en-IN')}</div>
-            <div style="font-size: 37pt; font-weight: 900; border-bottom: 6pt solid #000; padding: 23pt 0; text-align: left;"><b>BILLED TO:</b> ${targetStation.toUpperCase()}</div>
 
-            <table style="width: 100%; border-collapse: collapse; margin-top: 50px;">
-                <thead><tr style="background:#eee; -webkit-print-color-adjust: exact; border-bottom: 10pt solid #000;">
-                    <th style="padding: 20px 10px; font-size: 33pt; text-align: left;">PARTICULARS</th>
-                    <th style="text-align:right; font-size: 33pt;">RATE</th>
-                    <th style="text-align:center; font-size: 33pt;">QTY</th>
-                    <th style="text-align:right; font-size: 33pt;">TOTAL</th>
-                </tr></thead>
+        <div class="report-paper a4-max-wrapper" style="background:white; color:black; font-family:'Times New Roman', serif;">
+            <style>
+                @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } .a4-max-wrapper { width: 100% !important; padding: 10mm !important; } }
+                .a4-max-wrapper { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 10mm; box-sizing: border-box; }
+                .header-line { border-bottom: 12pt solid #000; padding-bottom: 30px; margin-bottom: 35px; text-align: center; }
+                .project-title { font-size: 57pt; font-weight: 900; text-transform: uppercase; line-height: 1.1; }
+                .college-name { font-size: 31pt; font-weight: 900; margin-top: 15px; line-height: 1.2; text-transform: uppercase; }
+                .meta-row { font-size: 37pt; font-weight: 900; border-bottom: 6pt solid #000; padding: 18pt 0; text-align: left; }
+                .total-bar { background: #000; color: #fff; padding: 25px; font-size: 55pt; font-weight: 900; display: flex; justify-content: space-between; margin-top: 30px; -webkit-print-color-adjust: exact; }
+                .invoice-table { width: 100%; border-collapse: collapse; margin-top: 50px; }
+                .invoice-table th { border-bottom: 10pt solid #000; padding: 15px 10px; font-size: 33pt; text-align: left; font-weight: 900; }
+            </style>
+
+            <div class="header-line">
+                <div class="project-title">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+                <div class="college-name">INSTITUTE OF ENGINEERING AND MANAGEMENT<br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
+                <div style="font-size: 43pt; border: 8pt solid #000; margin-top: 35px; padding: 12px 25px; display: inline-block; font-weight: 900; text-transform: uppercase;">TAX INVOICE</div>
+            </div>
+
+            <div style="text-align:right; font-size: 33pt; font-weight: 900; margin-bottom: 40px; font-family: monospace;">INV NO: ${invoiceNo}</div>
+            <div class="meta-row"><b>DATE:</b> ${now.toLocaleDateString('en-IN')}</div>
+            <div class="meta-row"><b>BILLED TO:</b> ${targetStation.toUpperCase()}</div>
+            <div class="meta-row"><b>ISSUED BY:</b> ${currentUser.name.toUpperCase()}</div>
+
+            <table class="invoice-table">
+                <thead><tr style="background: #eee; -webkit-print-color-adjust: exact;"><th>PARTICULARS</th><th style="text-align:right;">RATE</th><th style="text-align:center;">QTY</th><th style="text-align:right;">TOTAL</th></tr></thead>
                 <tbody>${billRows}</tbody>
             </table>
-            <div style="background: #000; color: #fff; padding: 30px; font-size: 55pt; font-weight: 900; display: flex; justify-content: space-between; margin-top: 35px; -webkit-print-color-adjust: exact;">
-                <span>GRAND TOTAL:</span><span>₹ ${Math.round(billTotal).toLocaleString('en-IN')}</span>
-            </div>
-            <div style="margin-top: 140px; border-top: 10pt solid #000; width: 65%; font-size: 52pt; font-weight: 900; text-align: left;">
-                ${currentUser.name.toUpperCase()}<br><span style="font-size: 33pt;">AUTHORIZED SIGNATORY</span>
+
+            <div class="total-bar"><span>GRAND TOTAL:</span><span>₹ ${billTotal.toLocaleString('en-IN')}</span></div>
+            <div style="text-align:left; font-size: 27pt; font-style: italic; margin-top: 20px; font-weight: bold;">Amount in words: ${numberToWords(billTotal)}</div>
+
+            <div style="margin-top: 140px; border-top: 10pt solid #000; width: 65%; text-align: left;">
+                <div style="font-size: 47pt; font-weight: 900;">${currentUser.name.toUpperCase()}</div>
+                <div style="font-size: 33pt; font-weight: 900;">AUTHORIZED SIGNATORY (MRPSP)</div>
             </div>
         </div>`;
-    reportContainer.classList.remove("hidden");
-    window.scrollTo(0, 0);
+
+    window.billCart = []; window.serviceCart = []; renderBillCartUI();
+    reportContainer.classList.remove("hidden"); window.scrollTo(0, 0);
 };
 // Dedicated function for Service Block insertion
 window.addServiceOnlyToBill = () => {
@@ -7642,41 +7747,20 @@ window.finalizeRecoveryCart = async () => {
     items.forEach((it, i) => {
         itemRows += `
             <tr style="border-bottom: 2pt solid #ddd;">
-                <td style="padding: 25px 15px; font-size: 28pt; font-weight: 900; text-align: left; vertical-align: middle;">
-                    ${i+1}. ${it.item.toUpperCase()}
-                </td>
-                <td style="padding: 25px 15px; font-size: 26pt; font-family: monospace; vertical-align: middle;">
-                    ${it.barcode}
-                </td>
-                <td style="padding: 25px 15px; font-size: 22pt; font-weight: bold; vertical-align: middle;">
-                    ${(it.assignedStation || 'N/A').toUpperCase()}
-                </td>
+                <td style="padding: 25px 15px; font-size: 33pt; font-weight: 900; text-align: left;">${i+1}. ${it.item.toUpperCase()}</td>
+                <td style="padding: 25px 15px; font-size: 31pt; font-family: monospace;">${it.barcode}</td>
+                <td style="padding: 25px 15px; font-size: 27pt; font-weight: bold;">${(it.assignedStation || 'N/A').toUpperCase()}</td>
             </tr>`;
     });
 
     reportContainer.innerHTML = `
-        <div class="no-print" style="text-align:center; padding:15px; background:#f8fafc; border-bottom:1px solid #ddd;">
-            <button class="danger" onclick="closeReportPreview()">CLOSE</button>
-            <button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold; cursor:pointer; margin-left:10px; border-radius: 8px;">PRINT BATCH MEMO</button>
-        </div>
-        <div class="report-paper a4-max-wrapper" style="font-family: 'Times New Roman', serif !important; background:white; color:black;">
-            <div class="header-line" style="text-align: center;">
-                <div class="project-title" style="font-size: 52pt; font-weight: 900; text-transform: uppercase; line-height: 1.1;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div class="college-name" style="font-size: 26pt; font-weight: 900; margin-top: 20px; line-height: 1.4; text-transform: uppercase;">INSTITUTE OF ENGINEERING AND MANAGEMENT<br><div style="margin-top: 5px;">UNIVERSITY OF ENGINEERING AND MANAGEMENT</div></div>
-                <div style="display: flex; justify-content: center; width: 100%;">
-                    <div style="font-size: 38pt; border: 8pt solid #000; margin-top: 30px; padding: 12px 25px; font-weight: 900; display: inline-block; background: #000 !important; color: #fff !important; -webkit-print-color-adjust: exact; text-transform: uppercase;">Batch Return Note</div>
-                </div>
-            </div>
-            <div style="text-align:right; font-size: 26pt; font-weight: 900; margin-bottom: 25px; margin-top: 20px;">DATE: ${new Date().toLocaleDateString('en-IN')}</div>
-            <table class="batch-table" style="width:100%; border-collapse: collapse; margin-top: 40px; table-layout: fixed;">
-                <thead><tr style="border-bottom: 8pt solid #000;"><th style="font-size: 24pt; text-align: left;">DESCRIPTION</th><th style="font-size: 24pt; text-align: left;">TAG ID</th><th style="font-size: 24pt; text-align: left;">ORIGINAL SITE</th></tr></thead>
-                <tbody>${itemRows}</tbody>
-            </table>
-            <div style="text-align:left; margin-top:50px; font-size:28pt; font-weight:900;">REASON: ${reason.toUpperCase()}</div>
-            <div style="margin-top: 150px; border-top: 10pt solid #000; width: 65%; text-align: left;">
-                <div style="font-size: 42pt; font-weight: 900;">${receiverName}</div>
-                <div style="font-size: 28pt; font-weight: 900;">AUTHORIZED RECEIVER (SIGNATURE)</div>
-            </div>
+        <div class="no-print" style="text-align:center; padding:15px;"><button class="danger" onclick="closeReportPreview()">CLOSE</button><button onclick="window.print()" style="background:#000; color:#fff; padding:15px 40px; font-weight:bold;">PRINT MEMO</button></div>
+        <div class="report-paper a4-max-wrapper" style="font-family: 'Times New Roman', serif; background:white; color:black; padding: 20mm;">
+            <style> .a4-max-wrapper { width: 210mm; min-height: 297mm; text-align: center; } .header-line { border-bottom: 12pt solid #000; } </style>
+            <div class="header-line"><div style="font-size: 57pt; font-weight: 900;">METRO RAILWAY</div><div style="font-size: 33pt; border: 8pt solid #000; margin-top: 30px; display: inline-block; padding: 10px;">Batch Return Note</div></div>
+            <table style="width:100%; border-collapse: collapse; margin-top: 40px;"><thead><tr style="border-bottom: 8pt solid #000;"><th style="font-size: 29pt;">DESCRIPTION</th><th style="font-size: 29pt;">TAG ID</th><th style="font-size: 29pt;">ORIGINAL SITE</th></tr></thead><tbody>${itemRows}</tbody></table>
+            <div style="text-align:left; margin-top:50px; font-size:33pt; font-weight:900;">REASON: ${reason.toUpperCase()}</div>
+            <div style="margin-top: 150px; border-top: 10pt solid #000; width: 65%; text-align: left;"><div style="font-size: 47pt; font-weight: 900;">${receiverName}</div><div style="font-size: 33pt; font-weight: 900;">AUTHORIZED RECEIVER</div></div>
         </div>`;
 }
   window.loadWarrantyClaims = () => {
