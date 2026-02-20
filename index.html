@@ -7461,85 +7461,109 @@ async function loadWarSales() {
 }
 // REISSUE TAX INVOICE - STRICT PDF REPLICATION
 window.reissueInvoice = async (invoiceNo, saleDateTs) => {
-    const snap = await get(ref(db, "inventory"));
-    const items = [];
-    let site = "";
+    const NOW = Date.now();
+    const TWO_MONTHS_MS = 60 * 24 * 60 * 60 * 1000;
 
-    snap.forEach(c => {
-        const v = c.val();
-        if(v.invoiceNo === invoiceNo) {
-            site = v.assignedStation;
-            const sellRate = (parseFloat(v.purchasePrice) || 0) * 1.30;
-            items.push({ name: v.item, tag: v.barcode, rate: sellRate, qty: 1, net: sellRate });
-        }
-    });
+    if (NOW - saleDateTs > TWO_MONTHS_MS) {
+        return alert("⛔ ACCESS DENIED: Reissue period expired (Max 60 Days).");
+    }
 
-    const reportContainer = document.getElementById("printableReportContainer");
-    let billRows = "";
-    let billTotal = 0;
+    if (!confirm("Confirm Reissue of Official Tax Invoice?")) return;
 
-    items.forEach(it => {
-        billTotal += it.net;
-        billRows += `
-            <tr style="border-bottom: 2pt solid #000; font-size: 30pt;">
-                <td style="padding: 20px 0; text-align: left;">
-                    <div style="font-weight: 900;">${it.name.toUpperCase()}</div>
-                    <div style="font-size: 18pt;">(TAG ID: ${it.tag})</div>
-                </td>
-                <td style="text-align:right;">${Math.round(it.rate)}</td>
-                <td style="text-align:center;">${it.qty}</td>
-                <td style="text-align:right; font-weight: 900;">${Math.round(it.net)}</td>
-            </tr>`;
-    });
+    try {
+        const snap = await get(ref(db, "inventory"));
+        const items = [];
+        let site = "";
 
-    reportContainer.innerHTML = `
+        snap.forEach(c => {
+            const v = c.val();
+            if(v.invoiceNo === invoiceNo) {
+                site = v.assignedStation;
+                const sellRate = (parseFloat(v.purchasePrice) || 0) * 1.30; // Matches 30% margin
+                items.push({ name: v.item, tag: v.barcode, rate: sellRate, qty: 1, net: sellRate });
+            }
+        });
+
+        const reportContainer = document.getElementById("printableReportContainer");
+        let billRows = "";
+        let billTotal = 0;
+
+        items.forEach(it => {
+            billTotal += it.net;
+            billRows += `
+                <tr style="border-bottom: 5pt solid black; font-size: 55pt;">
+                    <td style="padding: 30px 10px; text-align: left; width: 45%;">
+                        <div style="font-weight: 900; line-height: 1.1;">${it.name.toUpperCase()}</div>
+                        <div style="font-size: 35pt; margin-top: 10px;">(TAG ID: ${it.tag})</div>
+                    </td>
+                    <td style="text-align:center; font-weight: 900; width: 20%;">${Math.round(it.rate)}</td>
+                    <td style="text-align:center; font-weight: 900; width: 15%;">${it.qty}</td>
+                    <td style="text-align:right; padding-right: 25px; font-weight: 900; width: 20%;">${Math.round(it.net)}</td>
+                </tr>`;
+        });
+
+        const amountInWords = numberToWords(Math.round(billTotal));
+
+        reportContainer.innerHTML = `
         <style>
-            .pdf-print-wrapper { width: 210mm; min-height: 297mm; padding: 20mm; margin: 0 auto; font-family: 'Times New Roman', serif; color: black; background: white; text-align: center; }
-            .pdf-header-title { font-size: 52pt; font-weight: 900; line-height: 1.1; margin: 0; }
-            .pdf-college-name { font-size: 26pt; font-weight: 900; margin-top: 15px; line-height: 1.2; }
-            .pdf-doc-type { font-size: 35pt; border: 8pt solid #000; margin: 30px 0; padding: 10px 25px; font-weight: 900; display: inline-block; }
-            .pdf-meta-block { text-align: left; font-size: 28pt; font-weight: 900; line-height: 1.5; margin-bottom: 30px; }
-            .pdf-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            .pdf-total-bar { border-top: 8pt solid #000; margin-top: 20px; padding: 20px 0; display: flex; justify-content: space-between; font-size: 45pt; font-weight: 900; }
+            @media print { 
+                @page { size: A4; margin: 0; } 
+                .no-print { display: none !important; } 
+                body { height: auto !important; -webkit-print-color-adjust: exact !important; }
+            }
+            .invoice-wrapper { width: 95%; margin: 0 auto; font-family: "Arial Black", sans-serif; color: black; background: white; padding: 20px 40px 20px 20px; }
+            .header-title { font-size: 85pt; font-weight: 900; text-align: center; margin-bottom: 20px; line-height: 1; }
+            .inst-title { font-size: 45pt; font-weight: 900; text-align: center; line-height: 1.2; margin-bottom: 40px; border-top: 10pt solid black; padding-top: 20px; }
+            .doc-type-box { border: 15pt solid black; padding: 30px; display: inline-block; font-size: 60pt; font-weight: 900; text-align: center; width: 90%; margin: 0 auto 50px auto; }
+            .meta-section { text-align: left; margin-bottom: 50px; font-size: 50pt; line-height: 1.4; }
+            .meta-row { display: block; font-weight: 900; margin-bottom: 15px; text-transform: uppercase; }
+            .total-bar { background: black !important; color: white !important; font-size: 75pt; font-weight: 900; padding: 40px; display: flex; justify-content: space-between; margin-top: 50px; }
+            .sig-section { margin-top: 80px; border-top: 12pt solid black; width: 70%; text-align: left; }
         </style>
-        <div class="no-print" style="padding: 20px; background: #eee;"><button onclick="window.print()">PRINT AS PER PDF</button></div>
-        <div class="pdf-print-wrapper">
-            <div class="pdf-header-title">METRO RAILWAY<br>PLATFORM SAFETY<br>PROJECT</div>
-            <div class="pdf-college-name">INSTITUTE OF ENGINEERING AND MANAGEMENT<br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
-            <div class="pdf-doc-type">REISSUE TAX INVOICE</div>
-            
-            <div class="pdf-meta-block">
-                <div>INV NO: ${invoiceNo}</div>
-                <div>DATE: ${new Date(saleDateTs).toLocaleDateString('en-IN')}</div>
-                <div style="margin-top: 10px;">BILLED TO: ${site.toUpperCase()}</div>
-                <div>ISSUED BY: ${currentUser.name.toUpperCase()}</div>
+        <div class="no-print" style="text-align:center; padding:30px; position:sticky; top:0; background:white; z-index:100;">
+            <button onclick="window.print()" style="padding:40px 80px; font-size:35pt; font-weight:900; background:green; color:white; border-radius:20px;">🖨️ PRINT REISSUE BILL</button>
+            <button class="danger" onclick="closeReportPreview()" style="padding:40px 80px; font-size:35pt; font-weight:900; margin-left:20px;">CLOSE</button>
+        </div>
+        <div class="invoice-wrapper">
+            <div class="header-title">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+            <div class="inst-title">INSTITUTE OF ENGINEERING AND MANAGEMENT<br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
+            <div style="text-align:center;"><div class="doc-type-box">REISSUE TAX INVOICE</div></div>
+            <div class="meta-section">
+                <span class="meta-row">INV NO: ${invoiceNo}</span>
+                <span class="meta-row">DATE: ${new Date(saleDateTs).toLocaleDateString('en-IN')}</span>
+                <span class="meta-row">BILLED TO: ${site.toUpperCase()}</span>
+                <span class="meta-row">ISSUED BY: ${currentUser.name.toUpperCase()}</span>
             </div>
-
-            <table class="pdf-table">
-                <thead style="border-bottom: 8pt solid #000; font-size: 24pt;">
-                    <tr><th style="text-align:left;">PARTICULARS</th><th style="text-align:right;">RATE</th><th style="text-align:center;">QTY</th><th style="text-align:right;">TOTAL</th></tr>
+            <table style="width:100%; border-collapse: collapse; table-layout: fixed;">
+                <thead style="background: #000 !important; color: #fff !important; -webkit-print-color-adjust: exact;">
+                    <tr>
+                        <th style="padding: 30px 10px; font-size: 45pt; text-align:left; width: 45%;">PARTICULARS</th>
+                        <th style="width:20%; font-size: 45pt;">RATE</th>
+                        <th style="width:15%; font-size: 45pt;">QTY</th>
+                        <th style="width:20%; font-size: 45pt; text-align:right; padding-right: 20px;">TOTAL</th>
+                    </tr>
                 </thead>
                 <tbody>${billRows}</tbody>
             </table>
-
-            <div class="pdf-total-bar">
-                <span>GRAND TOTAL:</span>
-                <span>₹ ${Math.round(billTotal).toLocaleString('en-IN')}</span>
+            <div class="total-bar">
+                <span>TOTAL:</span>
+                <span style="padding-right: 20px;">₹ ${Math.round(billTotal).toLocaleString('en-IN')}</span>
             </div>
-            <div style="text-align: left; font-size: 20pt; font-style: italic; font-weight: bold; margin-top: 10px;">
-                Amount in words: ${numberToWords(Math.round(billTotal))}
+            <div style="text-align: left; font-size: 38pt; font-weight: 900; margin-top: 30px; line-height: 1.2; text-transform: uppercase;">
+                RUPEES IN WORDS: ${amountInWords.toUpperCase()}
             </div>
-
-            <div style="margin-top: 120px; border-top: 10pt solid #000; width: 60%; text-align: left;">
-                <div style="font-size: 38pt; font-weight: 900;">${currentUser.name.toUpperCase()}</div>
-                <div style="font-size: 24pt; font-weight: 900;">AUTHORIZED SIGNATORY (MRPSP)</div>
+            <div class="sig-section">
+                <br><br><br><br>
+                <div style="font-size: 55pt; font-weight: 900;">${currentUser.name.toUpperCase()}</div>
+                <div style="font-size: 32pt; font-weight: 900;">AUTHORIZED SIGNATORY (MRPSP)</div>
             </div>
-
-            <div style="margin-top: 60px; border-top: 3pt dashed #000; padding-top: 15px; font-size: 14pt; font-weight: bold;">
+            <div style="margin-top: 100px; text-align: center; font-size: 30pt; border-top: 5pt dashed black; padding-top: 30px; font-weight: 900;">
                 CERTIFIED DUPLICATE COPY | ORIGINAL SYSTEM RECORD
             </div>
         </div>`;
-    reportContainer.classList.remove("hidden");
+        document.getElementById("printableReportContainer").classList.remove("hidden");
+        window.scrollTo(0, 0);
+    } catch (e) { alert("Reissue Error: " + e.message); }
 };
 async function loadActiveWarranty() {
     const tbody = document.getElementById("warActiveTableBody");
