@@ -3989,48 +3989,150 @@ window.generateFinalReport = async () => {
     try {
         const sSnap = await get(ref(db, `station_logs/${currentPrintKey}`));
         const sData = sSnap.val();
+        
+        // Clean Station and Corridor Names
         const siteName = (sData.name || "").split("(")[0].trim().toUpperCase();
-        const corridor = (sData.name || "").match(/\(([^)]+)\)/)?.[1] || "Line";
+        const corridor = (sData.name || "").match(/\(([^)]+)\)/)?.[1] || "METRO CORRIDOR";
 
         let rakeTableHtml = "";
         if (includeRakes) {
             const rSnap = await get(ref(db, `rake_logs/${sData.linkedRakeKey || currentPrintKey}`));
             if (rSnap.exists()) {
-                rakeTableHtml = `<table style="width:100%; border-collapse:collapse; margin-top:30px; font-size:35px; border:6px solid black;">
-                    <thead><tr style="background:#000; color:#fff;"><th>RAKE ID</th><th>FRONT</th><th>REAR</th></tr></thead><tbody>`;
+                rakeTableHtml = `
+                    <div style="margin-top: 50px; border: 8px solid black; padding: 10px;">
+                        <div style="background: black; color: white; font-size: 40pt; font-weight: 900; text-align: center; padding: 10px; -webkit-print-color-adjust: exact;">RAKE CLEARANCE LOG</div>
+                        <table style="width:100%; border-collapse:collapse; margin-top:10px;">
+                            <thead>
+                                <tr style="border-bottom: 8pt solid black; font-size: 32pt;">
+                                    <th style="text-align:left; padding: 10px;">RAKE ID</th>
+                                    <th style="text-align:center;">FRONT</th>
+                                    <th style="text-align:center;">REAR</th>
+                                    <th style="text-align:right;">TIME</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
                 Object.values(rSnap.val()).forEach(r => {
-                    rakeTableHtml += `<tr style="border-bottom:3px solid black;"><td style="padding:10px;">${r.rake} (${r.type})</td><td style="text-align:center;">${r.f}</td><td style="text-align:center;">${r.r}</td></tr>`;
+                    rakeTableHtml += `
+                        <tr style="border-bottom: 4pt solid #000; font-size: 38pt; font-weight: 900;">
+                            <td style="padding: 20px 10px;">${r.rake} <br><small style="font-size: 20pt;">${r.type}</small></td>
+                            <td style="text-align:center;">${r.f}</td>
+                            <td style="text-align:center;">${r.r}</td>
+                            <td style="text-align:right; font-family: monospace;">${r.time}</td>
+                        </tr>`;
                 });
-                rakeTableHtml += `</tbody></table>`;
+                rakeTableHtml += `</tbody></table></div>`;
             }
         }
 
         document.getElementById("printableReportContainer").innerHTML = `
         <style>
-            @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } }
-            .print-wrapper { width: 210mm; min-height: 297mm; padding: 15mm; margin: 0 auto; font-family: "Times New Roman", serif; color: black; box-sizing: border-box; }
-            .huge-title { font-size: 80px; font-weight: 900; text-align: center; border-bottom: 15px solid black; padding-bottom: 10px; margin-bottom: 20px; }
-            .info-line { font-size: 45px; font-weight: 900; border-bottom: 6px solid black; padding: 15px 0; display: block; }
-            .data-block { font-size: 48px; font-weight: 900; line-height: 1.8; margin-top: 30px; }
-            .sig-line { margin-top: 150px; border-top: 10px solid black; font-size: 45px; font-weight: 900; padding-top: 10px; }
+            @media print { 
+                @page { size: A4; margin: 15mm; } 
+                .no-print { display: none !important; } 
+                body { background: white !important; }
+            }
+            .print-wrapper { 
+                width: 100%; 
+                font-family: "Times New Roman", Times, serif; 
+                color: black; 
+                background: white;
+            }
+            .huge-header { font-size: 70pt; font-weight: 900; text-align: center; border-bottom: 15pt solid black; line-height: 0.9; padding-bottom: 20px; }
+            .college-header { font-size: 24pt; font-weight: 900; text-align: center; margin-top: 15px; text-transform: uppercase; }
+            
+            .data-section { margin-top: 40px; text-align: left; }
+            .label-block { font-size: 28pt; font-weight: bold; text-decoration: underline; display: block; margin-top: 25px; }
+            .value-block { font-size: 45pt; font-weight: 900; display: block; border-bottom: 6pt solid black; padding-bottom: 10px; margin-bottom: 10px; word-wrap: break-word; }
+            
+            .compliance-box { 
+                border: 10pt solid black; 
+                padding: 20px; 
+                margin-top: 40px; 
+                font-size: 55pt; 
+                font-weight: 900; 
+                text-align: center;
+                background: #f0f0f0 !important;
+                -webkit-print-color-adjust: exact;
+            }
+
+            .sig-area { margin-top: 100px; display: flex; justify-content: space-between; align-items: flex-start; }
+            .sig-box { width: 45%; border-top: 8pt solid black; padding-top: 15px; text-align: left; }
+            .sig-name { font-size: 35pt; font-weight: 900; text-transform: uppercase; }
+            .sig-title { font-size: 22pt; font-weight: bold; }
         </style>
-        <div class="no-print" style="text-align:center; padding:20px;"><button onclick="window.print()" style="padding:20px 50px; font-size:25px; font-weight:bold;">PRINT REPORT</button></div>
+        
+        <div class="no-print" style="text-align:center; padding:20px; background: #eee; border-bottom: 2px solid #000;">
+            <button onclick="window.print()" style="padding:20px 60px; font-size:30px; font-weight:900; cursor:pointer; background:green; color:white; border-radius:10px;">
+                CLICK TO PRINT A4 REPORT
+            </button>
+            <button onclick="closeReportPreview()" style="margin-left:20px; padding:20px; font-size:20px;">CANCEL</button>
+        </div>
+
         <div class="print-wrapper">
-            <div class="huge-title">INSPECTION RECORD</div>
-            <span class="info-line">SITE: ${siteName} | ${corridor.toUpperCase()} | DATE: ${sData.date}</span>
-            <span class="info-line">CONDUCTING OFFICER: ${conductingOfficerName.toUpperCase()}</span>
-            <div class="data-block">
-                LENGTH: ${sData.len}m | YL DIST: ${sData.yl}cm | THICK: ${sData.th}cm | STATUS: ${sData.impl}<br>
-                REMARKS: ${(sData.remarks || "N/A").toUpperCase()}
+            <div class="huge-header">INSPECTION<br>RECORD</div>
+            <div class="college-header">
+                INSTITUTE OF ENGINEERING AND MANAGEMENT<br>
+                UNIVERSITY OF ENGINEERING AND MANAGEMENT
             </div>
+
+            <div class="data-section">
+                <span class="label-block">INSPECTION SITE:</span>
+                <span class="value-block">${siteName}</span>
+
+                <span class="label-block">METRO CORRIDOR:</span>
+                <span class="value-block">${corridor.toUpperCase()}</span>
+
+                <div style="display: flex; gap: 40px;">
+                    <div style="flex: 1;">
+                        <span class="label-block">DATE:</span>
+                        <span class="value-block">${sData.date.split(',')[0]}</span>
+                    </div>
+                    <div style="flex: 1;">
+                        <span class="label-block">PLATFORM LENGTH:</span>
+                        <span class="value-block">${sData.len} METERS</span>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 40px;">
+                    <div style="flex: 1;">
+                        <span class="label-block">YELLOW LINE DIST:</span>
+                        <span class="value-block">${sData.yl} CM</span>
+                    </div>
+                    <div style="flex: 1;">
+                        <span class="label-block">YL THICKNESS:</span>
+                        <span class="value-block">${sData.th} CM</span>
+                    </div>
+                </div>
+
+                <span class="label-block">INSPECTOR REMARKS:</span>
+                <span class="value-block" style="border-bottom: none; font-style: italic;">${(sData.remarks || "No additional observations.").toUpperCase()}</span>
+            </div>
+
+            <div class="compliance-box">
+                STATUS: ${sData.impl === 'YES' ? '✅ COMPLIANT' : '❌ NON-COMPLIANT'}
+            </div>
+
             ${rakeTableHtml}
-            <div style="display:flex; justify-content:space-between;">
-                <div class="sig-line" style="width:45%;">${conductingOfficerName.toUpperCase()}</div>
-                <div class="sig-line" style="width:45%;">${authName.split('(')[0].toUpperCase()}</div>
+
+            <div class="sig-area">
+                <div class="sig-box">
+                    <div class="sig-name">${conductingOfficerName.toUpperCase()}</div>
+                    <div class="sig-title">CONDUCTING OFFICER</div>
+                </div>
+                <div class="sig-box">
+                    <div class="sig-name">${authName.toUpperCase()}</div>
+                    <div class="sig-title">APPROVING AUTHORITY</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 50px; text-align: center; font-size: 14pt; border-top: 2pt dashed black; padding-top: 10px;">
+                OFFICIAL SYSTEM GENERATED DOCUMENT | KOLKATA METRO RAILWAY PROJECT
             </div>
         </div>`;
+        
         document.getElementById("printableReportContainer").classList.remove("hidden");
-    } catch (e) { alert(e.message); }
+        window.scrollTo(0, 0);
+    } catch (e) { alert("Report Error: " + e.message); }
 };
 window.closeReportPreview = () => {
     document.getElementById("printableReportContainer").classList.add("hidden");
