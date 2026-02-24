@@ -8256,21 +8256,40 @@ else if (scanMode === 'TECH_PRODUCT_VERIFY') {
 }
 
         // --- MODE C: ASSET MOVEMENT (CHECKOUT/RETURN) ---
-        else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-            const isOut = (scanMode === 'CHECKOUT');
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
-            const snap = await get(q);
-            if (!snap.exists()) return alert("❌ Tag Not Registered");
-            let itm; snap.forEach(c => itm = {key: c.key, ...c.val()});
+else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+    const isOut = (scanMode === 'CHECKOUT');
+    const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
+    const snap = await get(q);
+    
+    if (!snap.exists()) return alert("❌ Error: Tag ID not registered in database.");
+    
+    let itm; 
+    snap.forEach(c => itm = {key: c.key, ...c.val()});
 
-            if (isOut && itm.status === "Sold Out") return alert("⛔ SOLD OUT: Cannot Checkout.");
-            if (!isOut && itm.status === "In Stock") return alert("⛔ ALREADY IN STOCK.");
-
-            pendingTransactionItem = itm;
-            currentTransactionType = scanMode; 
-            document.getElementById(isOut ? "checkout_display" : "return_display").classList.remove("hidden");
-            document.getElementById(isOut ? "checkout_item_name" : "return_item_name").innerHTML = `✔ ${itm.item}`;
+    // --- NEW STRICT VALIDATION LOGIC ---
+    if (isOut) {
+        if (itm.status === "Checked Out") {
+            return alert(`⛔ ACCESS DENIED: This item is already Checked Out to ${itm.holder || 'another user'}.\nIt must be Returned to the store before it can be checked out again.`);
         }
+        if (itm.status === "Sold Out") {
+            return alert("⛔ SOLD OUT: This asset is permanently installed at a station and cannot be checked out.");
+        }
+    } else {
+        // Validation for RETURN mode
+        if (itm.status === "In Stock") {
+            return alert("⛔ LOGIC ERROR: This item is already marked 'In Stock' in the laboratory.");
+        }
+    }
+
+    // If validations pass, proceed to show the confirmation UI
+    pendingTransactionItem = itm;
+    currentTransactionType = scanMode; 
+    document.getElementById(isOut ? "checkout_display" : "return_display").classList.remove("hidden");
+    document.getElementById(isOut ? "checkout_item_name" : "return_item_name").innerHTML = `✔ ${itm.item}`;
+    
+    // Clear the purpose field for a fresh checkout
+    if(isOut) document.getElementById("checkoutPurpose").value = "";
+}
 
         // --- MODE D: WARRANTY CLAIM (SCAN & CLAIM ENGINE) ---
         // This replaces the 'WARRANTY_CLAIM' block inside window.onScanSuccess
