@@ -6673,12 +6673,12 @@ window.filterStockTable = () => {
     });
 };
 // ==========================================
-// 🏷️ SCAN-TO-SAVE REGISTRATION ENGINE
+// 🏷️ UNIQUE ASSET TAG & VERIFICATION ENGINE
 // ==========================================
 
 let pendingTagData = null; 
 
-// --- 1. PRE-SAVE & GENERATE ID ---
+// --- 1. GENERATE UNIQUE IDENTITY (MEMORY ONLY) ---
 window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
@@ -6688,10 +6688,10 @@ window.saveAndGenerateTag = async () => {
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // Generate 12-digit numeric ID for EAN-13 style
+    // Generate a 12-digit numeric ID for EAN-13 style
     const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
-    // Data stays ONLY in memory
+    // Data held in memory - NOT SAVED TO DATABASE YET
     pendingTagData = {
         dbKey: key,
         barcode: numericId,
@@ -6706,17 +6706,21 @@ window.saveAndGenerateTag = async () => {
         protectionActivated: true
     };
 
-    // UI Updates: Enable Scan button, disable Generate button
-    document.getElementById("invBarcode").value = "ID: " + numericId;
+    // UI Updates: Show scan button and reset the barcode box to waiting state
+    const barcodeInput = document.getElementById("invBarcode");
+    barcodeInput.value = ""; // Clear for fresh scan
+    barcodeInput.placeholder = "WAITING FOR SCAN...";
+    
     document.getElementById("btnVerifyScan").classList.remove("hidden"); 
     document.getElementById("registrationStatusMsg").classList.remove("hidden");
     document.getElementById("btnAddStock").disabled = true;
     document.getElementById("btnAddStock").style.opacity = "0.5";
 
     window.showTagPreview(numericId);
+    alert("📢 TAG GENERATED: Print the tag, then use the orange SCAN button to verify. Registration only saves after a match.");
 };
 
-// --- 2. START VERIFICATION SCAN ---
+// --- 2. TRIGGER VERIFICATION SCAN ---
 window.startVerificationScan = () => {
     if(!pendingTagData) return alert("Generate a tag first.");
     scanMode = 'REGISTRATION_VERIFY'; 
@@ -6728,20 +6732,16 @@ window.startVerificationScan = () => {
     }
 };
 
-// --- 3. HIGH-RES EAN-13 PREVIEW ---
-window.showTagPreview = (id) => {
-    document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
-    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
-    document.getElementById("tagBarDisplay").src = barUrl;
-    document.getElementById("tagPrintModal").classList.remove("hidden");
-};
-
-// --- 4. SCANNER VERIFICATION GATE (FINAL SAVE) ---
+// --- 3. SCANNER VERIFICATION GATE (FIXED: INPUTS VALUE) ---
 const systemScannerEntry = window.onScanSuccess; 
 window.onScanSuccess = async function(decodedText) {
     const scanned = decodedText.trim();
 
     if (scanMode === 'REGISTRATION_VERIFY') {
+        // 🛑 FIX: Explicitly input scanned value into the box for visual confirmation
+        const barcodeInput = document.getElementById("invBarcode");
+        barcodeInput.value = scanned;
+
         if (pendingTagData && scanned === pendingTagData.barcode) {
             // MATCHED: Officially Register
             try {
@@ -6755,7 +6755,9 @@ window.onScanSuccess = async function(decodedText) {
                     await push(ref(db, "inventory"), finalData);
                 }
 
-                alert("✅ MATCHED: Asset registration finalized.");
+                alert("✅ MATCHED & SAVED: Asset registration finalized.");
+                
+                // Reset Gate and UI
                 pendingTagData = null; 
                 document.getElementById('tagPrintModal').classList.add('hidden');
                 document.getElementById("btnVerifyScan").classList.add("hidden");
@@ -6770,19 +6772,22 @@ window.onScanSuccess = async function(decodedText) {
             } catch(e) { alert("Database Error: " + e.message); }
         } else {
             // NOT MATCHED
-            alert("❌ NOT MATCHED: Scanned tag ID does not match the generated session. Registration denied. Please re-check the tag.");
+            barcodeInput.style.borderColor = "red";
+            barcodeInput.value = "MISMATCH: " + scanned;
+            alert("❌ NOT MATCHED: Scanned tag ID does not match the session. Please re-check the physical tag.");
         }
         return;
     }
 
+    // Standard system scanner logic for other modes (Checkout/Return)
     if (typeof systemScannerEntry === "function") {
         systemScannerEntry(decodedText);
     }
 };
 
-// --- 5. A4 CENTERED PRINT ENGINE ---
+// --- 4. PRINT ENGINE ---
 window.executeTagPrint = () => {
-    const content = document.getElementById("printableTagArea").innerHTML;
+    const tagHtml = document.getElementById("printableTagArea").innerHTML;
     const win = window.open('', '', 'height=800,width=1000');
     
     win.document.write(`
@@ -6790,20 +6795,14 @@ window.executeTagPrint = () => {
             <head>
                 <title>Unique_Asset_Tag</title>
                 <style>
-                    @media print { 
-                        @page { size: A4; margin: 0; } 
-                        body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; } 
-                    }
-                    body { 
-                        display: flex; justify-content: center; align-items: center; 
-                        width: 100%; height: 100vh; background: #fff; margin: 0;
-                    }
+                    @media print { @page { size: A4; margin: 0; } body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; } }
+                    body { display: flex; justify-content: center; align-items: center; width: 100%; height: 100vh; background: #fff; margin: 0; }
                     #printableTagArea { border: none !important; }
                 </style>
             </head>
             <body>
-                <div style="width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-                    ${content}
+                <div style="width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
+                    ${tagHtml}
                 </div>
                 <script>
                     window.onload = function() {
@@ -6816,6 +6815,13 @@ window.executeTagPrint = () => {
         </html>
     `);
     win.document.close();
+};
+
+window.showTagPreview = (id) => {
+    document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
+    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
+    document.getElementById("tagBarDisplay").src = barUrl;
+    document.getElementById("tagPrintModal").classList.remove("hidden");
 };
   // Dropdown Logic for Comment Tab
 window.handleCommentLineChange = () => {
