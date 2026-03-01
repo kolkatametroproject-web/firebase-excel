@@ -6677,7 +6677,7 @@ window.filterStockTable = () => {
     });
 };
 // ==========================================
-// 🏷️ TAG ENGINE: FIXED POSITIONING & PRINT
+// 🏷️ TAG ENGINE: FIXED POSITIONING & VERIFICATION
 // ==========================================
 
 let pendingTagData = null; 
@@ -6691,9 +6691,10 @@ window.saveAndGenerateTag = async () => {
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // EAN-13 requires 12 digits (the 13th is a checksum added by the API)
+    // EAN-13 requires 12 digits (the 13th is a checksum automatically added by the API)
     const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
+    // Store temporarily in memory - do not save to Firebase yet
     pendingTagData = {
         dbKey: key,
         barcode: numericId,
@@ -6709,26 +6710,25 @@ window.saveAndGenerateTag = async () => {
     };
 
     window.showTagPreview(numericId);
-    alert("📢 TAG GENERATED: Print the tag and SCAN it to verify. Registration only saves after a match.");
+    alert("📢 TAG GENERATED: Print the tag and SCAN it using the system scanner to verify. Registration will only save after a successful match.");
 };
 
 window.showTagPreview = (id) => {
-    // QR Code
+    // Large QR Code
     document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
 
-    // Barcode: EAN-13 with numbers at the bottom (Matching your image)
+    // Barcode: EAN-13 style with numbers at the bottom (Matching your provided style)
     const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
     document.getElementById("tagBarDisplay").src = barUrl;
 
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
 
-// --- FIX: Correcting the write error and positioning ---
 window.executeTagPrint = () => {
     const content = document.getElementById("printableTagArea").innerHTML;
     const win = window.open('', '', 'height=800,width=1000');
     
-    // BACKSLASH REMOVED from ${content} to fix the print error
+    // BACKTICK INJECTION: Fixed interpolation error where ${content} was showing as text
     win.document.write(`
         <html>
             <head>
@@ -6747,8 +6747,8 @@ window.executeTagPrint = () => {
                         background: #fff;
                         margin: 0;
                     }
-                    /* Removes border for final print */
-                    div { border: none !important; }
+                    /* Removes visual borders for the final physical print */
+                    #printableTagArea { border: none !important; }
                 </style>
             </head>
             <body>
@@ -6761,7 +6761,7 @@ window.executeTagPrint = () => {
                             window.focus();
                             window.print();
                             window.close();
-                        }, 500);
+                        }, 800);
                     };
                 <\/script>
             </body>
@@ -6771,31 +6771,39 @@ window.executeTagPrint = () => {
 };
 
 // --- SCAN VERIFICATION GATE ---
-const masterScanner = window.onScanSuccess;
+// Overriding onScanSuccess to ensure registration only happens after a physical scan
+const masterScannerLogic = window.onScanSuccess;
 window.onScanSuccess = async function(decodedText) {
     const input = decodedText.trim();
 
+    // Check if the scanned code matches the one we just printed
     if (pendingTagData && input === pendingTagData.barcode) {
         try {
-            const data = {...pendingTagData};
-            const targetId = data.dbKey;
-            delete data.dbKey;
+            const dataToCommit = {...pendingTagData};
+            const targetId = dataToCommit.dbKey;
+            delete dataToCommit.dbKey;
 
             if(targetId) {
-                await update(ref(db, `inventory/${targetId}`), data);
+                // Edit mode: Overwrite existing record
+                await update(ref(db, `inventory/${targetId}`), dataToCommit);
             } else {
-                await push(ref(db, "inventory"), data);
+                // New registration: Push new node
+                await push(ref(db, "inventory"), dataToCommit);
             }
 
-            alert("✅ VERIFIED: Asset registered with ID: " + input);
-            pendingTagData = null;
+            alert("✅ VERIFIED: Asset registration finalized for ID: " + input);
+            pendingTagData = null; // Clear the memory gate
+            document.getElementById('tagPrintModal').classList.add('hidden');
             resetInvForm();
             toggleInvMode('list');
             return;
-        } catch(e) { alert("Error: " + e.message); }
+        } catch(e) {
+            alert("❌ System Error during registration: " + e.message);
+        }
     }
 
-    if (typeof masterScanner === "function") masterScanner(decodedText);
+    // Fallback to standard system scanner logic if not in registration mode
+    if (typeof masterScannerLogic === "function") masterScannerLogic(decodedText);
 };
   // Dropdown Logic for Comment Tab
 window.handleCommentLineChange = () => {
