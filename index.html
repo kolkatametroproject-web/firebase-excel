@@ -6677,11 +6677,12 @@ window.filterStockTable = () => {
     });
 };
 // ==========================================
-// 🏷️ TAG ENGINE: FIXED POSITIONING & VERIFICATION
+// 🏷️ UNIQUE ASSET TAG & VERIFICATION ENGINE
 // ==========================================
 
 let pendingTagData = null; 
 
+// --- 1. GENERATE UNIQUE IDENTITY ---
 window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
@@ -6691,10 +6692,11 @@ window.saveAndGenerateTag = async () => {
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // EAN-13 requires 12 digits (the 13th is a checksum automatically added by the API)
+    // Generate a 12-digit numeric ID. 
+    // Even if the name is the same, this random ID ensures uniqueness.
     const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
-    // Store temporarily in memory - do not save to Firebase yet
+    // Data is held in memory. It is NOT saved to Firebase yet.
     pendingTagData = {
         dbKey: key,
         barcode: numericId,
@@ -6710,44 +6712,76 @@ window.saveAndGenerateTag = async () => {
     };
 
     window.showTagPreview(numericId);
-    alert("📢 TAG GENERATED: Print the tag and SCAN it using the system scanner to verify. Registration will only save after a successful match.");
+    alert("📢 UNIQUE TAG READY: Product Name '" + name + "' is accepted. You MUST print and SCAN this specific tag to finalize registration.");
 };
 
+// --- 2. HIGH-RES EAN-13 PREVIEW ---
 window.showTagPreview = (id) => {
-    // Large QR Code
+    // QR Code
     document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
 
-    // Barcode: EAN-13 style with numbers at the bottom (Matching your provided style)
+    // Barcode: EAN-13 style with numbers at bottom
     const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
     document.getElementById("tagBarDisplay").src = barUrl;
 
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
 
+// --- 3. THE VERIFICATION GATE (Finalizes Save) ---
+const originalSystemScanner = window.onScanSuccess; 
+window.onScanSuccess = async function(decodedText) {
+    const scannedInput = decodedText.trim();
+
+    // Verification Mode: Only triggers if a tag was just generated
+    if (pendingTagData && scannedInput === pendingTagData.barcode) {
+        try {
+            const dataToCommit = {...pendingTagData};
+            const existingKey = dataToCommit.dbKey;
+            delete dataToCommit.dbKey; 
+
+            if(existingKey) {
+                // Edit mode: Overwrites old record with this new unique tag
+                await update(ref(db, `inventory/${existingKey}`), dataToCommit);
+            } else {
+                // New registration: Creates new unique entry
+                await push(ref(db, "inventory"), dataToCommit);
+            }
+
+            alert("✅ VERIFIED & SAVED: Unique Tag ID " + scannedInput + " is now active.");
+            pendingTagData = null; 
+            document.getElementById('tagPrintModal').classList.add('hidden');
+            resetInvForm();
+            toggleInvMode('list');
+            return; 
+        } catch(e) {
+            alert("❌ Database Error: " + e.message);
+        }
+    }
+
+    // Normal Mode: Handle standard operations (Checkout/Return/Audit)
+    if (typeof originalSystemScanner === "function") {
+        originalSystemScanner(decodedText);
+    }
+};
+
+// --- 4. A4 CENTERED PRINT ENGINE ---
 window.executeTagPrint = () => {
     const content = document.getElementById("printableTagArea").innerHTML;
     const win = window.open('', '', 'height=800,width=1000');
     
-    // BACKTICK INJECTION: Fixed interpolation error where ${content} was showing as text
     win.document.write(`
         <html>
             <head>
-                <title>Master_Asset_Tag</title>
+                <title>Unique_Asset_Tag</title>
                 <style>
                     @media print { 
                         @page { size: A4; margin: 0; } 
                         body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; } 
                     }
                     body { 
-                        display: flex; 
-                        justify-content: center; 
-                        align-items: center; 
-                        width: 100%; 
-                        height: 100vh; 
-                        background: #fff;
-                        margin: 0;
+                        display: flex; justify-content: center; align-items: center; 
+                        width: 100%; height: 100vh; background: #fff; margin: 0;
                     }
-                    /* Removes visual borders for the final physical print */
                     #printableTagArea { border: none !important; }
                 </style>
             </head>
@@ -6758,9 +6792,7 @@ window.executeTagPrint = () => {
                 <script>
                     window.onload = function() {
                         setTimeout(function() {
-                            window.focus();
-                            window.print();
-                            window.close();
+                            window.focus(); window.print(); window.close();
                         }, 800);
                     };
                 <\/script>
@@ -6768,42 +6800,6 @@ window.executeTagPrint = () => {
         </html>
     `);
     win.document.close();
-};
-
-// --- SCAN VERIFICATION GATE ---
-// Overriding onScanSuccess to ensure registration only happens after a physical scan
-const masterScannerLogic = window.onScanSuccess;
-window.onScanSuccess = async function(decodedText) {
-    const input = decodedText.trim();
-
-    // Check if the scanned code matches the one we just printed
-    if (pendingTagData && input === pendingTagData.barcode) {
-        try {
-            const dataToCommit = {...pendingTagData};
-            const targetId = dataToCommit.dbKey;
-            delete dataToCommit.dbKey;
-
-            if(targetId) {
-                // Edit mode: Overwrite existing record
-                await update(ref(db, `inventory/${targetId}`), dataToCommit);
-            } else {
-                // New registration: Push new node
-                await push(ref(db, "inventory"), dataToCommit);
-            }
-
-            alert("✅ VERIFIED: Asset registration finalized for ID: " + input);
-            pendingTagData = null; // Clear the memory gate
-            document.getElementById('tagPrintModal').classList.add('hidden');
-            resetInvForm();
-            toggleInvMode('list');
-            return;
-        } catch(e) {
-            alert("❌ System Error during registration: " + e.message);
-        }
-    }
-
-    // Fallback to standard system scanner logic if not in registration mode
-    if (typeof masterScannerLogic === "function") masterScannerLogic(decodedText);
 };
   // Dropdown Logic for Comment Tab
 window.handleCommentLineChange = () => {
