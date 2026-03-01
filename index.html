@@ -6677,6 +6677,92 @@ window.filterStockTable = () => {
         }
     });
 };
+  // --- 1. GENERATE AND SAVE LOGIC (Consolidated & Fixed) ---
+window.saveAndGenerateTag = async () => {
+    const key = document.getElementById("editItemKey").value;
+    const name = document.getElementById("invName").value.trim();
+    const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
+    const locationSelect = document.getElementById("addLocSelect").value;
+    const locationSpot = document.getElementById("addLocSpot").value.trim();
+    const condition = document.getElementById("invCondition").value;
+
+    if(!name) return alert("⚠️ Asset Name is required.");
+
+    // Generate NEW unique ID (This invalidates the old physical tag)
+    const newTagId = "MTR-" + Math.floor(100000 + Math.random() * 900000);
+    const finalLocation = `${locationSelect} [${locationSpot}]`;
+
+    const itemData = {
+        barcode: newTagId,
+        item: name,
+        purchasePrice: price,
+        location: finalLocation,
+        condition: condition,
+        updatedAt: serverTimestamp(),
+        protectionActivated: true
+    };
+
+    try {
+        if(key) {
+            // --- EDIT MODE: OVERWRITE OLD BARCODE ---
+            await update(ref(db, `inventory/${key}`), itemData);
+            
+            await push(ref(db, "logs"), {
+                type: "TAG_OVERWRITE",
+                item: name,
+                newTag: newTagId,
+                by: currentUser.email,
+                time: serverTimestamp()
+            });
+        } else {
+            // --- NEW REGISTRATION ---
+            itemData.status = "In Stock";
+            itemData.holder = "Store";
+            itemData.usageCount = 0;
+            await push(ref(db, "inventory"), itemData);
+        }
+
+        // Show the Print Modal with the new data
+        showTagPreview(name, newTagId);
+        
+        alert("✅ Data Saved. Old tag (if any) is now inactive.");
+        resetInvForm();
+        toggleInvMode('list');
+
+    } catch (e) {
+        alert("❌ Reference/Database Error: " + e.message);
+    }
+};
+
+// --- 2. SHOW TAG PREVIEW ---
+window.showTagPreview = (name, id) => {
+    document.getElementById("tagDisplayItemName").innerText = name.toUpperCase();
+    document.getElementById("tagDisplayId").innerText = id;
+    
+    // QR Code Generation
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${id}`;
+    document.getElementById("tagQrImage").src = qrUrl;
+
+    // Barcode Generation
+    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=code128&text=${id}&scale=2&rotate=N&includetext=false`;
+    document.getElementById("tagBarcodeImage").src = barUrl;
+
+    document.getElementById("tagPrintModal").classList.remove("hidden");
+};
+
+// --- 3. EXECUTE PRINT ---
+window.printAssetTag = () => {
+    const content = document.getElementById("printableTagArea").innerHTML;
+    const win = window.open('', '', 'height=500,width=600');
+    win.document.write('<html><head><title>Print Tag</title>');
+    win.document.write('<style>body{text-align:center; padding:20px; font-family:sans-serif;} img{max-width:100%;}</style>');
+    win.document.write('</head><body>');
+    win.document.write(content);
+    win.document.write('</body></html>');
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); win.close(); }, 500);
+};
   // Dropdown Logic for Comment Tab
 window.handleCommentLineChange = () => {
     const line = document.getElementById("commentLineSelect").value;
