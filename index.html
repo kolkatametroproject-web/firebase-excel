@@ -688,32 +688,40 @@ tr:hover { background: #fcfcfd; }
 </div>
 
 <div id="tagPrintModal" class="modal-overlay hidden">
-    <div class="panel" style="width:380px; text-align:center; background:white; border:4px solid var(--metro-blue); padding:10px;">
+    <div class="panel" style="width:90%; max-width:800px; text-align:center; background:white; border:4px solid var(--metro-blue); padding:10px;">
         <h3 style="border-bottom:2px solid var(--metro-gold); padding-bottom:10px; margin-bottom:15px;">
-            <i class="fas fa-print"></i> Thermal Tag Preview
+            <i class="fas fa-print"></i> High-Resolution A4 Master Tag
         </h3>
         
-        <div id="printableTagArea" style="background:white; padding:15px; border:2px solid #000; margin:10px auto; width: fit-content;">
-            <div style="font-family: sans-serif; font-size:14px; font-weight:900; border-bottom:1px solid #000; padding-bottom:4px; margin-bottom:10px; text-transform:uppercase;">
-                Metro Railway PSP | IEM-UEM
-            </div>
-            
-            <div id="tagLabelName" style="font-weight:900; font-size:18px; margin-bottom:10px;">---</div>
-            
-            <img id="tagQrDisplay" src="" style="width:160px; height:160px; border:1px solid #eee; padding:5px;">
-            <div id="tagIdDisplay" style="font-family:monospace; font-weight:900; font-size:22px; margin-top:5px; letter-spacing:2px;">#000000</div>
-            
-            <img id="tagBarDisplay" src="" style="width:240px; height:50px; margin-top:10px; object-fit: contain;">
-            
-            <div style="font-size:9px; margin-top:10px; border-top:1px solid #000; padding-top:4px; font-weight:bold;">
-                SECURITY SCAN REQUIRED FOR MOVEMENT
+        <div style="max-height: 50vh; overflow-y: auto; border: 1px solid #ccc; background: #f1f5f9; padding: 10px;">
+            <div id="printableTagArea" style="background:white; width: 210mm; min-height: 297mm; padding: 20mm; margin: 0 auto; box-sizing: border-box; color: black; text-align: center; border: 1px solid #000;">
+                
+                <div style="font-family: 'Arial Black', sans-serif; font-size: 65pt; font-weight: 900; border-bottom: 12pt solid #000; padding-bottom: 20pt; margin-bottom: 40pt; text-transform: uppercase;">
+                    METRO RAILWAY PSP
+                </div>
+                
+                <div id="tagLabelName" style="font-weight: 900; font-size: 80pt; margin-bottom: 40pt; line-height: 1.1; text-transform: uppercase;">---</div>
+                
+                <img id="tagQrDisplay" src="" style="width: 140mm; height: 140mm; border: 5pt solid #000; padding: 10pt;">
+                
+                <div id="tagIdDisplay" style="font-family: monospace; font-weight: 900; font-size: 90pt; margin-top: 30pt; letter-spacing: 15pt;">#000000</div>
+                
+                <img id="tagBarDisplay" src="" style="width: 170mm; height: 40mm; margin-top: 40pt; object-fit: contain;">
+                
+                <div style="font-size: 35pt; margin-top: 60pt; border-top: 8pt solid #000; padding-top: 20pt; font-weight: 900; text-transform: uppercase; letter-spacing: 2pt;">
+                    SECURITY SCAN REQUIRED FOR MOVEMENT
+                </div>
+
+                <div style="font-size: 25pt; margin-top: 20pt; font-weight: bold; opacity: 0.8;">
+                    INSTITUTE OF ENGINEERING AND MANAGEMENT GROUP
+                </div>
             </div>
         </div>
 
         <div style="display:flex; gap:10px; margin-top:20px;">
             <button class="secondary" style="flex:1;" onclick="document.getElementById('tagPrintModal').classList.add('hidden')">DISMISS</button>
-            <button class="success" style="flex:2;" onclick="executeTagPrint()">
-                <i class="fas fa-print"></i> PRINT NOW
+            <button class="success" style="flex:2; font-size: 16px;" onclick="executeTagPrint()">
+                <i class="fas fa-print"></i> SEND TO PRINTER (A4 RESOLUTION)
             </button>
         </div>
     </div>
@@ -6678,25 +6686,24 @@ window.filterStockTable = () => {
     });
 };
   // --- 1. GENERATE AND SAVE LOGIC (Consolidated & Fixed) ---
+// --- 1. ATTACH SAVE LOGIC TO WINDOW ---
 window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
     const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
-    const locationSelect = document.getElementById("addLocSelect").value;
-    const locationSpot = document.getElementById("addLocSpot").value.trim();
+    const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
     const condition = document.getElementById("invCondition").value;
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // Generate NEW unique ID (This invalidates the old physical tag)
+    // Generate NEW ID
     const newTagId = "MTR-" + Math.floor(100000 + Math.random() * 900000);
-    const finalLocation = `${locationSelect} [${locationSpot}]`;
 
     const itemData = {
         barcode: newTagId,
         item: name,
         purchasePrice: price,
-        location: finalLocation,
+        location: location,
         condition: condition,
         updatedAt: serverTimestamp(),
         protectionActivated: true
@@ -6704,50 +6711,70 @@ window.saveAndGenerateTag = async () => {
 
     try {
         if(key) {
-            // --- EDIT MODE: OVERWRITE OLD BARCODE ---
             await update(ref(db, `inventory/${key}`), itemData);
-            
-            await push(ref(db, "logs"), {
-                type: "TAG_OVERWRITE",
-                item: name,
-                newTag: newTagId,
-                by: currentUser.email,
-                time: serverTimestamp()
-            });
         } else {
-            // --- NEW REGISTRATION ---
             itemData.status = "In Stock";
             itemData.holder = "Store";
             itemData.usageCount = 0;
             await push(ref(db, "inventory"), itemData);
         }
 
-        // Show the Print Modal with the new data
-        showTagPreview(name, newTagId);
+        // Trigger High-Res Preview
+        window.showTagPreview(name, newTagId);
         
-        alert("✅ Data Saved. Old tag (if any) is now inactive.");
+        alert("✅ Master Record Updated.");
         resetInvForm();
         toggleInvMode('list');
 
     } catch (e) {
-        alert("❌ Reference/Database Error: " + e.message);
+        alert("❌ Error: " + e.message);
     }
 };
 
-// --- 2. SHOW TAG PREVIEW ---
+// --- 2. ATTACH PREVIEW LOGIC TO WINDOW ---
 window.showTagPreview = (name, id) => {
-    document.getElementById("tagDisplayItemName").innerText = name.toUpperCase();
-    document.getElementById("tagDisplayId").innerText = id;
+    document.getElementById("tagLabelName").innerText = name.toUpperCase();
+    document.getElementById("tagIdDisplay").innerText = id;
     
-    // QR Code Generation
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${id}`;
-    document.getElementById("tagQrImage").src = qrUrl;
+    // Using 1000x1000 for maximum clarity during printer reduction
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=10&data=${id}`;
+    document.getElementById("tagQrDisplay").src = qrUrl;
 
-    // Barcode Generation
-    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=code128&text=${id}&scale=2&rotate=N&includetext=false`;
-    document.getElementById("tagBarcodeImage").src = barUrl;
+    // Barcode with high scale
+    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=code128&text=${id}&scale=10&rotate=N&includetext=false`;
+    document.getElementById("tagBarDisplay").src = barUrl;
 
     document.getElementById("tagPrintModal").classList.remove("hidden");
+};
+
+// --- 3. ATTACH PRINT LOGIC TO WINDOW (FIXES THE ERROR) ---
+window.executeTagPrint = () => {
+    const content = document.getElementById("printableTagArea").innerHTML;
+    const win = window.open('', '', 'height=800,width=1000');
+    
+    win.document.write('<html><head><title>A4 Asset Master Tag</title>');
+    win.document.write('<style>');
+    win.document.write('@media print { @page { size: A4; margin: 0; } body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; } }');
+    win.document.write('body { display: flex; justify-content: center; align-items: flex-start; background: #fff; }');
+    win.document.write('</style></head><body>');
+    win.document.write(content);
+    win.document.write('</body></html>');
+    
+    win.document.close();
+    
+    // Wait for high-res images to load before printing
+    const qrImg = win.document.getElementById('tagQrDisplay');
+    if (qrImg.complete) {
+        win.focus();
+        win.print();
+        win.close();
+    } else {
+        qrImg.onload = () => {
+            win.focus();
+            win.print();
+            win.close();
+        };
+    }
 };
 
 // --- 3. EXECUTE PRINT ---
