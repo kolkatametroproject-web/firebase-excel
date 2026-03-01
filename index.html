@@ -638,31 +638,21 @@ tr:hover { background: #fcfcfd; }
         <button onclick="toggleInvMode('return')" class="info" style="background:var(--metro-blue); border-color:var(--metro-blue);"><i class="fas fa-sign-in-alt"></i> Return</button>
         <button onclick="toggleInvMode('history')" class="secondary"><i class="fas fa-history"></i> Audit Trail</button>
     </div>
-
 <div id="inv-add" class="panel hidden" style="border-top: 4px solid var(--success-green);">
     <h3 id="invFormTitle" style="color:var(--success-green);"><i class="fas fa-plus-circle"></i> Register New Asset</h3>
     <input type="hidden" id="editItemKey"> 
-    
     <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:15px; margin-bottom:15px;">
         <div>
             <label style="font-size:10px; font-weight:bold; color:var(--metro-blue);">ASSET TAG STATUS</label>
             <div style="display:flex; gap:5px;">
                 <input id="invBarcode" placeholder="Generated on Save" disabled style="background:#f8fafc; font-style:italic; font-weight:bold;">
-                <button id="btnGenerateTag" onclick="generateVisualTag()" class="warning" style="width:45px; padding:0;" title="Preview Tag"><i class="fas fa-eye"></i></button>
+                <button id="btnVerifyScan" onclick="startVerificationScan()" class="warning hidden" style="width:45px; padding:0;" title="Scan Tag to Finalize Registration">
+                    <i class="fas fa-qrcode"></i>
+                </button>
             </div>
         </div>
-        <div>
-            <label style="font-size:10px; font-weight:bold; color:var(--metro-blue);">ASSET NAME</label>
-            <input id="invName" placeholder="e.g. Arduino Uno">
-        </div>
-        <div>
-            <label style="font-size:10px; font-weight:bold; color:var(--metro-blue);">PURCHASE PRICE (₹)</label>
-            <input type="number" id="invRegPrice" placeholder="0.00">
-        </div>
-    </div>
-      
-    <div id="barcodeError" class="hidden" style="background:#fee2e2; color:#991b1b; padding:10px; border-radius:4px; margin-bottom:15px;">
-        <i class="fas fa-ban"></i> Error: Tag synchronization failed.
+        <input id="invName" placeholder="Asset Name (e.g. Raspberry Pi)">
+        <input type="number" id="invRegPrice" placeholder="Purchase Price (₹)">
     </div>
 
     <div style="display:grid; grid-template-columns: 1.5fr 1fr 1fr; gap:15px; margin-bottom:15px;">
@@ -681,7 +671,7 @@ tr:hover { background: #fcfcfd; }
 
     <div style="display:flex; gap:10px;">
         <button id="btnAddStock" onclick="saveAndGenerateTag()" class="success" style="flex:2; font-weight:900;">
-            <i class="fas fa-qrcode"></i> GENERATE TAG & SAVE TO MASTER
+            <i class="fas fa-barcode"></i> GENERATE TAG FOR VERIFICATION
         </button>
         <button id="btnCancelEdit" onclick="resetInvForm()" class="secondary hidden" style="flex:1;">CANCEL EDIT</button>
     </div>
@@ -6682,7 +6672,7 @@ window.filterStockTable = () => {
 
 let pendingTagData = null; 
 
-// --- 1. GENERATE UNIQUE IDENTITY ---
+// --- 1. GENERATE UNIQUE IDENTITY (MEMORY ONLY) ---
 window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
@@ -6692,11 +6682,10 @@ window.saveAndGenerateTag = async () => {
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // Generate a 12-digit numeric ID. 
-    // Even if the name is the same, this random ID ensures uniqueness.
+    // Generate a 12-digit numeric ID for EAN-13 style
     const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
-    // Data is held in memory. It is NOT saved to Firebase yet.
+    // Data held in memory - NOT SAVED TO DATABASE YET
     pendingTagData = {
         dbKey: key,
         barcode: numericId,
@@ -6711,68 +6700,85 @@ window.saveAndGenerateTag = async () => {
         protectionActivated: true
     };
 
+    // UI Updates: Enable the SCAN button next to the Tag Status box
+    document.getElementById("invBarcode").value = numericId;
+    document.getElementById("btnVerifyScan").classList.remove("hidden"); 
+
     window.showTagPreview(numericId);
-    alert("📢 UNIQUE TAG READY: Product Name '" + name + "' is accepted. You MUST print and SCAN this specific tag to finalize registration.");
+    alert("📢 TAG GENERATED: Print the tag, then click the orange Scan button to verify it. Registration is only successful after a match.");
 };
 
-// --- 2. HIGH-RES EAN-13 PREVIEW ---
-window.showTagPreview = (id) => {
-    // QR Code
-    document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
+// --- 2. TRIGGER VERIFICATION SCAN ---
+window.startVerificationScan = () => {
+    if(!pendingTagData) return alert("Please generate a tag first.");
+    scanMode = 'REGISTRATION_VERIFY'; // Set specific mode for verification
+    document.getElementById("barcodeModal").classList.remove("hidden");
+    
+    // Standard scanner initialization
+    if(!scanner) {
+        scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
+        scanner.render(onScanSuccess, onScanFailure);
+    }
+};
 
-    // Barcode: EAN-13 style with numbers at bottom
+// --- 3. HIGH-RES EAN-13 PREVIEW ---
+window.showTagPreview = (id) => {
+    document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
     const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
     document.getElementById("tagBarDisplay").src = barUrl;
-
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
 
-// --- 3. THE VERIFICATION GATE (Finalizes Save) ---
-const originalSystemScanner = window.onScanSuccess; 
+// --- 4. SCANNER VERIFICATION GATE (FINAL SAVE) ---
+// Save the original logic reference
+const masterOnScanSuccess = window.onScanSuccess; 
 window.onScanSuccess = async function(decodedText) {
     const scannedInput = decodedText.trim();
 
-    // Verification Mode: Only triggers if a tag was just generated
-    if (pendingTagData && scannedInput === pendingTagData.barcode) {
-        try {
-            const dataToCommit = {...pendingTagData};
-            const existingKey = dataToCommit.dbKey;
-            delete dataToCommit.dbKey; 
+    // Verification Mode: Finalizes the registration process
+    if (scanMode === 'REGISTRATION_VERIFY') {
+        if (pendingTagData && scannedInput === pendingTagData.barcode) {
+            try {
+                const dataToCommit = {...pendingTagData};
+                const existingKey = dataToCommit.dbKey;
+                delete dataToCommit.dbKey; 
 
-            if(existingKey) {
-                // Edit mode: Overwrites old record with this new unique tag
-                await update(ref(db, `inventory/${existingKey}`), dataToCommit);
-            } else {
-                // New registration: Creates new unique entry
-                await push(ref(db, "inventory"), dataToCommit);
-            }
+                if(existingKey) {
+                    await update(ref(db, `inventory/${existingKey}`), dataToCommit);
+                } else {
+                    await push(ref(db, "inventory"), dataToCommit);
+                }
 
-            alert("✅ VERIFIED & SAVED: Unique Tag ID " + scannedInput + " is now active.");
-            pendingTagData = null; 
-            document.getElementById('tagPrintModal').classList.add('hidden');
-            resetInvForm();
-            toggleInvMode('list');
-            return; 
-        } catch(e) {
-            alert("❌ Database Error: " + e.message);
+                alert("✅ VERIFICATION SUCCESSFUL: Asset registered with ID: " + scannedInput);
+                pendingTagData = null; 
+                document.getElementById('tagPrintModal').classList.add('hidden');
+                document.getElementById("btnVerifyScan").classList.add("hidden");
+                resetInvForm();
+                toggleInvMode('list');
+                closeBarcodeScanner();
+                return; 
+            } catch(e) { alert("Database Error: " + e.message); }
+        } else {
+            alert("❌ MISMATCH: Scanned tag does not match the generated ID. Please scan the correct printed tag.");
         }
+        return;
     }
 
     // Normal Mode: Handle standard operations (Checkout/Return/Audit)
-    if (typeof originalSystemScanner === "function") {
-        originalSystemScanner(decodedText);
+    if (typeof masterOnScanSuccess === "function") {
+        masterOnScanSuccess(decodedText);
     }
 };
 
-// --- 4. A4 CENTERED PRINT ENGINE ---
+// --- 5. A4 CENTERED PRINT ENGINE (FIXED TEXT BUG) ---
 window.executeTagPrint = () => {
-    const content = document.getElementById("printableTagArea").innerHTML;
+    const tagHtml = document.getElementById("printableTagArea").innerHTML;
     const win = window.open('', '', 'height=800,width=1000');
     
     win.document.write(`
         <html>
             <head>
-                <title>Unique_Asset_Tag</title>
+                <title>A4_Asset_Tag</title>
                 <style>
                     @media print { 
                         @page { size: A4; margin: 0; } 
@@ -6786,8 +6792,8 @@ window.executeTagPrint = () => {
                 </style>
             </head>
             <body>
-                <div style="width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-                    ${content}
+                <div style="width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
+                    ${tagHtml}
                 </div>
                 <script>
                     window.onload = function() {
