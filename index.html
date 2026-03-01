@@ -6681,7 +6681,7 @@ window.filterStockTable = () => {
     });
 };
 // =========================================================
-// 🏷️ FINAL SYNCED ENGINE: 8-DIGIT / NO-BLANK / ERROR-FREE
+// 🏷️ FINAL SYNCED ENGINE: SINGLE-PAGE / ERROR-FREE PRINT
 // =========================================================
 
 let pendingTagData = null; 
@@ -6696,7 +6696,7 @@ window.saveAndGenerateTag = async () => {
 
     if(!name) return alert("⚠️ Name is required.");
 
-    // Generate 8-digit ID (No hidden checksum digits)
+    // Generate 8-digit ID (Strict Sync)
     const numericId8 = Math.floor(10000000 + Math.random() * 90000000).toString();
 
     pendingTagData = {
@@ -6712,18 +6712,11 @@ window.saveAndGenerateTag = async () => {
         protectionActivated: true
     };
 
-    // UI Updates
-    document.getElementById("invBarcode").value = "GENERING CODES...";
-    document.getElementById("btnAddStock").classList.add("hidden");
-    document.getElementById("btnDirectUpdate").classList.add("hidden");
-    document.getElementById("btnVerifyScan").classList.remove("hidden");
-    document.getElementById("registrationStatusMsg").classList.remove("hidden");
-    document.getElementById("registrationStatusMsg").innerText = "⏳ Generating...";
-
+    document.getElementById("invBarcode").value = "GENERATING IMAGES...";
     window.showTagPreview(numericId8);
 };
 
-// --- 2. SHOW PREVIEW (STRICT SYNC) ---
+// --- 2. SHOW PREVIEW ---
 window.showTagPreview = (id) => {
     const qrImg = document.getElementById("tagQrDisplay");
     const barImg = document.getElementById("tagBarDisplay");
@@ -6735,64 +6728,89 @@ window.showTagPreview = (id) => {
     qrImg.src = qrUrl;
     barImg.src = barUrl;
     
-    // Safety check for display
     qrImg.onload = () => {
-        document.getElementById("invBarcode").value = "AWAITING SCAN...";
-        document.getElementById("registrationStatusMsg").innerText = "✅ PRINT & SCAN TO SAVE";
+        document.getElementById("invBarcode").value = "READY TO SCAN";
+        document.getElementById("registrationStatusMsg").classList.remove("hidden");
+        document.getElementById("registrationStatusMsg").innerText = "✅ PRINT & SCAN TO VERIFY";
         document.getElementById("registrationStatusMsg").style.color = "red";
     };
 
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
 
-// --- 3. PRINT HANDLER (FIXES BLANK PRINT) ---
+// --- 3. PRINT HANDLER (STRICT SINGLE PAGE FIX) ---
 window.executeTagPrint = () => {
     const qrSrc = document.getElementById("tagQrDisplay").src;
     const barSrc = document.getElementById("tagBarDisplay").src;
     const itemName = pendingTagData ? pendingTagData.item : "ASSET";
     const tagId = pendingTagData ? pendingTagData.barcode : "00000000";
 
-    const win = window.open('', '', 'height=800,width=900');
+    const win = window.open('', '', 'height=900,width=800');
+    
     win.document.write(`
         <html>
             <head>
-                <title>Print_Tag_${tagId}</title>
+                <title>Tag_${tagId}</title>
                 <style>
-                    body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; text-align: center; }
-                    .tag-card { width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid #eee; }
-                    h1 { font-size: 50pt; margin-bottom: 20px; }
-                    h2 { font-size: 35pt; text-transform: uppercase; margin-bottom: 40px; }
-                    img { width: 140mm; margin: 20px 0; }
-                    .footer { font-size: 25pt; font-weight: bold; margin-top: 50px; border-top: 5pt solid #000; padding-top: 20px; width: 80%; }
+                    @media print {
+                        @page { size: A4; margin: 0; }
+                        body { margin: 0; padding: 0; }
+                    }
+                    body { 
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                        display: flex; 
+                        justify-content: center; 
+                        align-items: center; 
+                        height: 100vh; 
+                        width: 100vw;
+                        overflow: hidden;
+                    }
+                    .tag-container {
+                        width: 190mm; /* Narrower than A4 to prevent overflow */
+                        height: 270mm; 
+                        border: 10pt solid black;
+                        padding: 10mm;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: space-around;
+                        text-align: center;
+                        box-sizing: border-box;
+                    }
+                    h1 { font-size: 45pt; font-weight: 900; margin: 0; border-bottom: 5pt solid black; width: 100%; padding-bottom: 10pt; }
+                    h2 { font-size: 30pt; color: #333; margin: 20pt 0; text-transform: uppercase; }
+                    .qr-box { width: 120mm; height: 120mm; }
+                    .barcode-box { width: 150mm; height: 50mm; object-fit: contain; }
+                    .footer-id { font-size: 35pt; font-weight: 900; background: black; color: white; padding: 10pt 30pt; margin-top: 20pt; }
                 </style>
             </head>
             <body>
-                <div class="tag-card">
+                <div class="tag-container">
                     <h1>METRO RAILWAY PSP</h1>
                     <h2>${itemName}</h2>
-                    <img src="${qrSrc}">
-                    <img src="${barSrc}" style="width: 160mm; height: 60mm; object-fit: contain;">
-                    <div class="footer">DO NOT DAMAGE THIS TAG | ID: ${tagId}</div>
+                    <img src="${qrSrc}" class="qr-box">
+                    <img src="${barSrc}" class="barcode-box">
+                    <div class="footer-id">TAG ID: ${tagId}</div>
+                    <div style="font-size: 15pt; margin-top: 10pt;">PROPERTY OF IEM-UEM GROUP</div>
                 </div>
+                <script>
+                    window.onload = function() {
+                        // Ensure images are rendered before dialogue
+                        setTimeout(function() {
+                            window.print();
+                            window.close();
+                        }, 1000);
+                    };
+                <\/script>
             </body>
         </html>
     `);
 
     win.document.close();
-    
-    // Wait for the window content to be ready
-    win.onload = () => {
-        setTimeout(() => {
-            win.focus();
-            win.print();
-            win.close();
-        }, 500);
-    };
 };
 
-// --- 4. SCANNER VERIFICATION (FIXED LOGIC) ---
-// Find your current onScanSuccess and replace the 'REGISTRATION_VERIFY' part with this:
-const baseScanner = window.onScanSuccess;
+// --- 4. SCANNER VERIFICATION (MATH-MATCH LOCK) ---
+const baseOnScanSuccess = window.onScanSuccess; 
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
     const scanned = decodedText.trim();
@@ -6805,17 +6823,17 @@ window.onScanSuccess = async function(decodedText) {
         if (pendingTagData && scanned === pendingTagData.barcode) {
             barcodeInput.style.borderColor = "green";
             document.getElementById("btnFinalizeSave").classList.remove("hidden");
-            document.getElementById("registrationStatusMsg").innerText = "✅ MATCHED! CLICK SAVE.";
+            document.getElementById("registrationStatusMsg").innerText = "✅ VERIFIED! CLICK SAVE.";
             document.getElementById("registrationStatusMsg").style.color = "green";
             alert("✅ VERIFIED: Physical tag matches system ID.");
         } else {
             barcodeInput.style.borderColor = "red";
             barcodeInput.value = "MISMATCH: " + scanned;
-            alert(`❌ ERROR: Scanned ID (${scanned}) does not match Generated ID (${pendingTagData.barcode})`);
+            alert("❌ SECURITY ERROR: Scanned ID does not match generated ID.");
         }
         return;
     }
-    if (typeof baseScanner === "function") baseScanner(decodedText);
+    if (typeof baseOnScanSuccess === "function") baseOnScanSuccess(decodedText);
 };
 
 // --- 5. DIRECT UPDATE (FOR EDITS) ---
@@ -6859,17 +6877,17 @@ window.executeManualSave = async () => {
     } catch(e) { alert("Error: " + e.message); }
 };
 
-// --- 7. RESET FORM (CLEANS ALL STATES) ---
+// --- 7. RESET FORM ---
 window.resetInvForm = () => {
     document.getElementById("editItemKey").value = "";
     document.getElementById("invBarcode").value = "";
-    document.getElementById("invBarcode").placeholder = "Verification Required";
     document.getElementById("invName").value = "";
     document.getElementById("invRegPrice").value = "";
     document.getElementById("addLocSpot").value = "";
     document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-plus-circle'></i> Register New Asset";
     
     document.getElementById("btnAddStock").classList.remove("hidden");
+    document.getElementById("btnAddStock").innerText = "1. GENERATE PHYSICAL TAG";
     document.getElementById("btnDirectUpdate").classList.add("hidden");
     document.getElementById("btnFinalizeSave").classList.add("hidden");
     document.getElementById("btnVerifyScan").classList.add("hidden");
