@@ -6686,12 +6686,12 @@ window.filterStockTable = () => {
 
 let pendingTagData = null; 
 
-// --- A. THE EDIT TRIGGER (Loads existing data) ---
+// --- 1. THE EDIT TRIGGER (Loads existing data) ---
 window.editExistingItem = async (key) => {
     const snap = await get(ref(db, `inventory/${key}`));
     const d = snap.val();
 
-    toggleInvMode('add');
+    window.toggleInvMode('add');
     
     // Fill UI Fields
     document.getElementById("editItemKey").value = key;
@@ -6712,20 +6712,20 @@ window.editExistingItem = async (key) => {
     window.scrollTo(0, 0);
 };
 
-// --- B. GENERATE SYNCED TAG (For New or Existing Items) ---
+// --- 2. GENERATE SYNCED TAG (For New or Existing Items) ---
 window.saveAndGenerateTag = async () => {
-    const key = document.getElementById("editItemKey").value; // Key exists if editing
+    const key = document.getElementById("editItemKey").value; 
     const name = document.getElementById("invName").value.trim();
     const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
     const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // Generate 12-digit synced ID
+    // Generate 12-digit synced ID (Source of truth for QR & Barcode)
     const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
     pendingTagData = {
-        dbKey: key, // Critical: Keeps track of WHICH item we are editing
+        dbKey: key, 
         barcode: numericId, 
         item: name,
         purchasePrice: price,
@@ -6739,54 +6739,71 @@ window.saveAndGenerateTag = async () => {
 
     // UI Feedback
     const barcodeInput = document.getElementById("invBarcode");
-    barcodeInput.value = "WAITING FOR SCAN...";
+    barcodeInput.value = "AWAITING VERIFICATION SCAN...";
     barcodeInput.style.borderColor = "var(--metro-gold)";
     
     document.getElementById("btnVerifyScan").classList.remove("hidden"); 
     document.getElementById("registrationStatusMsg").classList.remove("hidden");
-    document.getElementById("registrationStatusMsg").innerText = "⚠️ TAG GENERATED: Print and Scan to unlock Save.";
+    document.getElementById("registrationStatusMsg").innerText = "⚠️ TAG GENERATED: Print and Scan to verify digits.";
     document.getElementById("registrationStatusMsg").style.color = "red";
     
-    // Hide standard buttons to force verification flow
+    // Switch visibility to force verification flow
     document.getElementById("btnAddStock").classList.add("hidden");
     document.getElementById("btnDirectUpdate").classList.add("hidden");
 
     window.showTagPreview(numericId);
 };
 
-// --- C. SCANNER VERIFICATION (Strict Sync Check) ---
-const systemOnScanSuccess = window.onScanSuccess; 
+// --- 3. SYNCED PREVIEW (Ensures QR and Barcode Match) ---
+window.showTagPreview = (id) => {
+    // QR Code
+    document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
+    // Barcode (ean13 format for numericId)
+    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
+    document.getElementById("tagBarDisplay").src = barUrl;
+    
+    document.getElementById("tagPrintModal").classList.remove("hidden");
+};
+
+// --- 4. THE PRINT HANDLER (Fixes ReferenceError) ---
+window.executeTagPrint = () => {
+    const tagHtml = document.getElementById("printableTagArea").innerHTML;
+    const win = window.open('', '', 'height=800,width=1000');
+    win.document.write(`<html><head><title>Tag_Print</title><style>@media print{@page{size:A4;margin:0;}body{margin:0;padding:0;-webkit-print-color-adjust:exact;}}body{display:flex;justify-content:center;align-items:center;width:100%;height:100vh;background:#fff;margin:0;}#printableTagArea{border:none!important;}</style></head><body><div style="width:210mm;height:297mm;display:flex;flex-direction:column;align-items:center;justify-content:center;">${tagHtml}</div><script>window.onload=function(){setTimeout(function(){window.focus();window.print();window.close();},800);};<\/script></body></html>`);
+    win.document.close();
+};
+
+// --- 5. SCANNER VERIFICATION (Strict Sync Check) ---
+const baseOnScanSuccess = window.onScanSuccess; 
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
     const scanned = decodedText.trim();
 
     if (scanMode === 'REGISTRATION_VERIFY') {
-        closeBarcodeScanner();
+        window.closeBarcodeScanner();
         const barcodeInput = document.getElementById("invBarcode");
         barcodeInput.value = scanned;
 
-        // Verify match between scanned hardware and software session
         if (pendingTagData && scanned === pendingTagData.barcode) {
             barcodeInput.style.borderColor = "var(--success-green)";
             barcodeInput.style.color = "var(--success-green)";
             
             document.getElementById("btnFinalizeSave").classList.remove("hidden");
-            document.getElementById("registrationStatusMsg").innerText = "✅ VERIFIED: Click 'Finalize' to update Database.";
+            document.getElementById("registrationStatusMsg").innerText = "✅ VERIFIED: Physical tag matches system digits.";
             document.getElementById("registrationStatusMsg").style.color = "green";
             
-            alert("✅ VERIFICATION SUCCESSFUL\nPhysical tag verified. Ready to Save.");
+            alert("✅ VERIFICATION SUCCESSFUL\nTag is verified and synced. Click Finalize to save.");
         } else {
             barcodeInput.style.borderColor = "red";
             barcodeInput.value = "MISMATCH: " + scanned;
-            alert("❌ SECURITY MISMATCH\nThe scanned tag does not match the system. Please re-scan.");
+            alert("❌ SECURITY MISMATCH\nScanned tag digits do not match the session. Check the physical tag.");
         }
         return;
     }
-    
-    if (typeof systemOnScanSuccess === "function") systemOnScanSuccess(decodedText);
+    if (typeof baseOnScanSuccess === "function") baseOnScanSuccess(decodedText);
 };
 
-// --- D. FAST INFO UPDATE (No Scan Required) ---
+// --- 6. FAST INFO UPDATE (No Scan Required) ---
 window.executeDirectUpdate = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
@@ -6802,13 +6819,13 @@ window.executeDirectUpdate = async () => {
             location: location,
             updatedAt: serverTimestamp()
         });
-        alert("✅ Record Updated (Information only).");
-        resetInvForm();
-        toggleInvMode('list');
+        alert("✅ Record Updated (Text info saved successfully).");
+        window.resetInvForm();
+        window.toggleInvMode('list');
     } catch(e) { alert("Update Error: " + e.message); }
 };
 
-// --- E. FINALIZED SAVE (For New or Re-Tagged Items) ---
+// --- 7. FINALIZED SAVE (For New or Re-Tagged Items) ---
 window.executeManualSave = async () => {
     if(!pendingTagData) return;
 
@@ -6818,30 +6835,20 @@ window.executeManualSave = async () => {
         delete finalData.dbKey; 
 
         if(existingKey) {
-            // Overwrites the existing item with the NEW tag ID and info
             await update(ref(db, `inventory/${existingKey}`), finalData);
             alert("✅ ASSET RE-TAGGED AND UPDATED");
         } else {
-            // Standard new registration
             await push(ref(db, "inventory"), finalData);
             alert("✅ NEW ASSET REGISTERED AND VERIFIED");
         }
 
         document.getElementById("tagPrintModal").classList.add("hidden");
-        resetInvForm();
-        toggleInvMode('list'); 
+        window.resetInvForm();
+        window.toggleInvMode('list'); 
     } catch(e) { alert("Save Error: " + e.message); }
 };
 
-// --- F. SYNCED PREVIEW (Ensures QR and Barcode Match) ---
-window.showTagPreview = (id) => {
-    document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
-    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
-    document.getElementById("tagBarDisplay").src = barUrl;
-    document.getElementById("tagPrintModal").classList.remove("hidden");
-};
-
-// --- G. RESET FORM ---
+// --- 8. RESET FORM ---
 window.resetInvForm = () => {
     document.getElementById("editItemKey").value = "";
     document.getElementById("invBarcode").value = "";
