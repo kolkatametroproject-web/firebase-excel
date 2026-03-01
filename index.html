@@ -641,17 +641,28 @@ tr:hover { background: #fcfcfd; }
 
 <div id="inv-add" class="panel hidden" style="border-top: 4px solid var(--success-green);">
     <h3 id="invFormTitle" style="color:var(--success-green);"><i class="fas fa-plus-circle"></i> Register New Asset</h3>
-    <input type="hidden" id="editItemKey"> <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:15px; margin-bottom:15px;">
-        <div style="display:flex; gap:5px;">
-            <input id="invBarcode" placeholder="Scan/Type Tag ID" onchange="checkBarcodeUnique(this.value)">
-            <button onclick="openBarcodeScanner('ADD')" class="secondary" style="width:45px; padding:0;"><i class="fas fa-qrcode"></i></button>
+    <input type="hidden" id="editItemKey"> 
+    
+    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:15px; margin-bottom:15px;">
+        <div>
+            <label style="font-size:10px; font-weight:bold; color:var(--metro-blue);">ASSET TAG STATUS</label>
+            <div style="display:flex; gap:5px;">
+                <input id="invBarcode" placeholder="Generated on Save" disabled style="background:#f8fafc; font-style:italic; font-weight:bold;">
+                <button id="btnGenerateTag" onclick="generateVisualTag()" class="warning" style="width:45px; padding:0;" title="Preview Tag"><i class="fas fa-eye"></i></button>
+            </div>
         </div>
-        <input id="invName" placeholder="Asset Name (e.g. Raspberry Pi)">
-        <input type="number" id="invRegPrice" placeholder="Purchase Price (₹)">
+        <div>
+            <label style="font-size:10px; font-weight:bold; color:var(--metro-blue);">ASSET NAME</label>
+            <input id="invName" placeholder="e.g. Arduino Uno">
+        </div>
+        <div>
+            <label style="font-size:10px; font-weight:bold; color:var(--metro-blue);">PURCHASE PRICE (₹)</label>
+            <input type="number" id="invRegPrice" placeholder="0.00">
+        </div>
     </div>
       
     <div id="barcodeError" class="hidden" style="background:#fee2e2; color:#991b1b; padding:10px; border-radius:4px; margin-bottom:15px;">
-        <i class="fas fa-ban"></i> Error: Tag ID already exists.
+        <i class="fas fa-ban"></i> Error: Tag synchronization failed.
     </div>
 
     <div style="display:grid; grid-template-columns: 1.5fr 1fr 1fr; gap:15px; margin-bottom:15px;">
@@ -669,8 +680,42 @@ tr:hover { background: #fcfcfd; }
     </div>
 
     <div style="display:flex; gap:10px;">
-        <button id="btnAddStock" onclick="addUniqueItem()" class="success" style="flex:2;">SAVE ASSET DATA</button>
+        <button id="btnAddStock" onclick="saveAndGenerateTag()" class="success" style="flex:2; font-weight:900;">
+            <i class="fas fa-qrcode"></i> GENERATE TAG & SAVE TO MASTER
+        </button>
         <button id="btnCancelEdit" onclick="resetInvForm()" class="secondary hidden" style="flex:1;">CANCEL EDIT</button>
+    </div>
+</div>
+
+<div id="tagPrintModal" class="modal-overlay hidden">
+    <div class="panel" style="width:380px; text-align:center; background:white; border:4px solid var(--metro-blue); padding:10px;">
+        <h3 style="border-bottom:2px solid var(--metro-gold); padding-bottom:10px; margin-bottom:15px;">
+            <i class="fas fa-print"></i> Thermal Tag Preview
+        </h3>
+        
+        <div id="printableTagArea" style="background:white; padding:15px; border:2px solid #000; margin:10px auto; width: fit-content;">
+            <div style="font-family: sans-serif; font-size:14px; font-weight:900; border-bottom:1px solid #000; padding-bottom:4px; margin-bottom:10px; text-transform:uppercase;">
+                Metro Railway PSP | IEM-UEM
+            </div>
+            
+            <div id="tagLabelName" style="font-weight:900; font-size:18px; margin-bottom:10px;">---</div>
+            
+            <img id="tagQrDisplay" src="" style="width:160px; height:160px; border:1px solid #eee; padding:5px;">
+            <div id="tagIdDisplay" style="font-family:monospace; font-weight:900; font-size:22px; margin-top:5px; letter-spacing:2px;">#000000</div>
+            
+            <img id="tagBarDisplay" src="" style="width:240px; height:50px; margin-top:10px; object-fit: contain;">
+            
+            <div style="font-size:9px; margin-top:10px; border-top:1px solid #000; padding-top:4px; font-weight:bold;">
+                SECURITY SCAN REQUIRED FOR MOVEMENT
+            </div>
+        </div>
+
+        <div style="display:flex; gap:10px; margin-top:20px;">
+            <button class="secondary" style="flex:1;" onclick="document.getElementById('tagPrintModal').classList.add('hidden')">DISMISS</button>
+            <button class="success" style="flex:2;" onclick="executeTagPrint()">
+                <i class="fas fa-print"></i> PRINT NOW
+            </button>
+        </div>
     </div>
 </div>
   <div id="inv-checkout" class="panel hidden" style="border-top: 4px solid #d97706;">
@@ -6491,28 +6536,116 @@ window.openNewAssetForm = () => {
     resetInvForm();
     toggleInvMode('add');
 };
+// --- UPDATED: GENERATE NEW TAG & SYNC DATA ---
+window.generateAndSaveTag = async () => {
+    const key = document.getElementById("editItemKey").value; // Empty if new, has ID if edit
+    const name = document.getElementById("invName").value.trim();
+    const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
+    const locSelect = document.getElementById("addLocSelect").value;
+    const locSpot = document.getElementById("addLocSpot").value.trim();
+    
+    if(!name) return alert("Please enter Asset Name first.");
 
-// --- PREPARE FORM FOR EDITING ---
+    // RULE: ALWAYS GENERATE A NEW UNIQUE ID (Overwrites old sequence)
+    const newTagId = "MTR-" + Math.floor(100000 + Math.random() * 900000);
+    const finalLocation = `${locSelect} [${locSpot}]`;
+
+    const itemData = {
+        barcode: newTagId,
+        item: name,
+        purchasePrice: price,
+        location: finalLocation,
+        updatedAt: serverTimestamp()
+    };
+
+    try {
+        let finalKey = key;
+
+        if(key) {
+            // --- EDIT MODE: OVERWRITE ---
+            // The old tag will stop working because we are changing the 'barcode' field in the DB
+            await update(ref(db, `inventory/${key}`), itemData);
+            
+            // Log the overwrite
+            await push(ref(db, "logs"), {
+                type: "TAG_OVERWRITE",
+                item: name,
+                oldTag: "REPLACED",
+                newTag: newTagId,
+                by: currentUser.email,
+                time: serverTimestamp()
+            });
+        } else {
+            // --- NEW REGISTRATION ---
+            itemData.status = "In Stock";
+            itemData.holder = "Store";
+            itemData.usageCount = 0;
+            const newRef = await push(ref(db, "inventory"), itemData);
+            finalKey = newRef.key;
+        }
+
+        // --- PREPARE THE PRINT UI ---
+        document.getElementById("tagDisplayItemName").innerText = name;
+        document.getElementById("tagDisplayId").innerText = newTagId;
+        
+        // Generate QR and Barcode via External API (High Reliability)
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${newTagId}`;
+        const barUrl = `https://bwipjs-api.metafloor.com/?bcid=code128&text=${newTagId}&scale=2&rotate=N&includetext=false`;
+        
+        document.getElementById("tagQrImage").src = qrUrl;
+        document.getElementById("tagBarcodeImage").src = barUrl;
+
+        // Show Modal
+        document.getElementById("tagPrintModal").classList.remove("hidden");
+        
+        // Reset Form
+        resetInvForm();
+        toggleInvMode('list');
+
+    } catch (e) {
+        alert("System Error during Tag Generation: " + e.message);
+    }
+};
+
+// --- UPDATED: EDIT BUTTON REDIRECT ---
 window.editExistingItem = async (key) => {
     const snap = await get(ref(db, `inventory/${key}`));
     const d = snap.val();
 
+    // Redirect to "Add Asset" Tab
     toggleInvMode('add');
     
+    // Fill all existing details
     document.getElementById("editItemKey").value = key;
-    document.getElementById("invBarcode").value = d.barcode || "";
+    document.getElementById("invBarcode").value = d.barcode || "WILL GENERATE NEW";
+    document.getElementById("invBarcode").disabled = true; // Block manual typing
     document.getElementById("invName").value = d.item || "";
     document.getElementById("invRegPrice").value = d.purchasePrice || 0;
     
-    // Clean location parsing (removes bracketed spot for inputs)
     const locParts = (d.location || "").split(" [");
     document.getElementById("addLocSelect").value = locParts[0] || "Other";
     document.getElementById("addLocSpot").value = locParts[1] ? locParts[1].replace("]", "") : "";
 
-    document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-edit'></i> Update Asset Information";
-    document.getElementById("btnAddStock").innerText = "CONFIRM CHANGES";
+    document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-sync'></i> Regenerate & Overwrite Asset Tag";
+    document.getElementById("btnAddStock").innerText = "GENERATE NEW TAG (WIPES OLD)";
+    document.getElementById("btnAddStock").onclick = window.generateAndSaveTag; 
     document.getElementById("btnCancelEdit").classList.remove("hidden");
+    
     window.scrollTo(0, 0);
+};
+
+// --- TAG PRINT TRIGGER ---
+window.printAssetTag = () => {
+    const printContent = document.getElementById("printableTagArea").innerHTML;
+    const win = window.open('', '', 'height=500,width=500');
+    win.document.write('<html><head><title>Asset Tag Print</title>');
+    win.document.write('<style>body{text-align:center;font-family:sans-serif;padding:20px;} img{max-width:100%;}</style>');
+    win.document.write('</head><body>');
+    win.document.write(printContent);
+    win.document.write('</body></html>');
+    win.document.close();
+    win.focus();
+    setTimeout(() => { win.print(); win.close(); }, 500);
 };
 
 // --- RESET FORM UI ---
@@ -6525,42 +6658,6 @@ window.resetInvForm = () => {
     document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-plus-circle'></i> Register New Asset";
     document.getElementById("btnAddStock").innerText = "SAVE ASSET RECORD";
     document.getElementById("btnCancelEdit").classList.add("hidden");
-};
-
-// --- SAVE / UPDATE LOGIC ---
-window.addUniqueItem = async () => {
-    const key = document.getElementById("editItemKey").value;
-    const barcode = document.getElementById("invBarcode").value.trim();
-    const name = document.getElementById("invName").value.trim();
-    const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
-    const loc = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
-
-    if(!name || !barcode) return alert("Tag ID and Asset Name are required.");
-
-    const itemData = {
-        barcode: barcode,
-        item: name,
-        purchasePrice: price,
-        location: loc,
-        updatedAt: serverTimestamp()
-    };
-
-    try {
-        if(key) {
-            // MODE: UPDATE
-            await update(ref(db, `inventory/${key}`), itemData);
-            alert("✅ Record Updated.");
-        } else {
-            // MODE: NEW
-            itemData.status = "In Stock";
-            itemData.holder = "Store";
-            itemData.usageCount = 0;
-            await push(ref(db, "inventory"), itemData);
-            alert("✅ New Asset Added.");
-        }
-        resetInvForm();
-        toggleInvMode('list');
-    } catch(e) { alert("Save Error: " + e.message); }
 };
 window.filterStockTable = () => {
     const input = document.getElementById("mainStockSearch").value.trim().toLowerCase();
@@ -8413,6 +8510,38 @@ else if (scanMode === 'WARRANTY_CLAIM') {
                  style="max-width: 100%; max-height: 90vh; border: 4px solid white; border-radius: 4px; box-shadow: 0 0 50px rgba(0,0,0,0.9); object-fit: contain;">
         </div>
 
+    </div>
+</div>
+  <div id="tagPrintModal" class="modal-overlay hidden">
+    <div class="panel" style="width:400px; text-align:center; background:white; border:4px solid var(--metro-blue);">
+        <h3 style="border-bottom:2px solid var(--metro-gold); padding-bottom:10px;">
+            <i class="fas fa-barcode"></i> OFFICIAL ASSET TAG
+        </h3>
+        
+        <div id="printableTagArea" style="background:white; padding:20px; border:2px solid #eee; margin:15px 0;">
+            <div style="font-family: 'Arial Black', sans-serif; font-size:18px; border-bottom:2px solid #000; padding-bottom:5px; margin-bottom:10px;">
+                METRO RAILWAY PSP
+            </div>
+            
+            <div id="tagDisplayItemName" style="font-weight:900; font-size:16px; text-transform:uppercase; margin-bottom:10px;">ASSET NAME</div>
+            
+            <img id="tagQrImage" src="" style="width:180px; height:180px; border:1px solid #000; padding:5px;">
+            
+            <img id="tagBarcodeImage" src="" style="width:250px; height:60px; margin-top:15px;">
+            
+            <div id="tagDisplayId" style="font-family:monospace; font-weight:bold; font-size:20px; margin-top:5px; letter-spacing:2px;">#000000</div>
+            
+            <div style="font-size:10px; margin-top:10px; border-top:1px solid #000; padding-top:5px;">
+                PROPERTY OF IEM-UEM GROUP
+            </div>
+        </div>
+
+        <div style="display:flex; gap:10px;">
+            <button class="secondary" style="flex:1;" onclick="document.getElementById('tagPrintModal').classList.add('hidden')">CANCEL</button>
+            <button class="success" style="flex:2;" onclick="printAssetTag()">
+                <i class="fas fa-print"></i> PRINT THERMAL TAG
+            </button>
+        </div>
     </div>
 </div>
 </body>
