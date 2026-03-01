@@ -671,13 +671,21 @@ tr:hover { background: #fcfcfd; }
         </select>
     </div>
 
-    <div style="display:flex; gap:10px;">
-        <button id="btnAddStock" onclick="saveAndGenerateTag()" class="success" style="flex:2; font-weight:900;">
-            <i class="fas fa-barcode"></i> 1. GENERATE PHYSICAL TAG
-        </button>
-        <button id="btnCancelEdit" onclick="resetInvForm()" class="secondary hidden" style="flex:1;">CANCEL EDIT</button>
-    </div>
+   <div style="display:flex; gap:10px;">
+    <button id="btnAddStock" onclick="saveAndGenerateTag()" class="success" style="flex:2; font-weight:900;">
+        <i class="fas fa-barcode"></i> 1. GENERATE PHYSICAL TAG
+    </button>
     
+    <button id="btnDirectUpdate" onclick="executeDirectUpdate()" class="info hidden" style="flex:2; background:#0ea5e9; font-weight:900;">
+        <i class="fas fa-save"></i> UPDATE DATABASE
+    </button>
+    
+    <button id="btnFinalizeSave" onclick="executeManualSave()" class="info hidden" style="flex:2; background:#10b981; font-weight:900;">
+        <i class="fas fa-check-circle"></i> 2. FINALIZE TAG
+    </button>
+
+    <button id="btnCancelEdit" onclick="resetInvForm()" class="secondary hidden" style="flex:1;">CANCEL</button>
+</div>
     <p id="registrationStatusMsg" style="font-size: 11px; color: #b91c1c; font-weight: bold; margin-top: 10px;" class="hidden">
         ⚠️ TAG PRINTED: Use the orange Scan button above to verify and Save.
     </p>
@@ -6672,34 +6680,83 @@ window.filterStockTable = () => {
         }
     });
 };
-// =========================================================
-// 🏷️ ASSET REGISTRATION & VERIFICATION ENGINE (FULL BLOCK)
-// =========================================================
+// ==========================================
+// 🛡️ SMART ASSET MANAGEMENT ENGINE
+// ==========================================
 
-let pendingTagData = null; 
+// --- 1. THE EDIT TRIGGER (FIXED) ---
+window.editExistingItem = async (key) => {
+    const snap = await get(ref(db, `inventory/${key}`));
+    const d = snap.val();
 
-// --- STEP 1: GENERATE SYNCED DATA & CODES ---
+    toggleInvMode('add');
+    
+    // Fill details
+    document.getElementById("editItemKey").value = key;
+    document.getElementById("invBarcode").value = d.barcode || "";
+    document.getElementById("invBarcode").disabled = true; 
+    document.getElementById("invName").value = d.item || "";
+    document.getElementById("invRegPrice").value = d.purchasePrice || 0;
+    
+    const locParts = (d.location || "").split(" [");
+    document.getElementById("addLocSelect").value = locParts[0] || "D2 Building - Heerok Sir Lab";
+    document.getElementById("addLocSpot").value = locParts[1] ? locParts[1].replace("]", "") : "";
+
+    // --- UI LOGIC FOR EDIT ---
+    document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-edit'></i> Edit Asset Information";
+    
+    // Show "Update Database" (Direct Save)
+    document.getElementById("btnDirectUpdate").classList.remove("hidden");
+    
+    // Hide "Generate Tag" (Optional: User can click it if they want a NEW tag)
+    document.getElementById("btnAddStock").innerText = "RE-GENERATE TAG (Optional)";
+    
+    document.getElementById("btnCancelEdit").classList.remove("hidden");
+    window.scrollTo(0, 0);
+};
+
+// --- 2. DIRECT UPDATE (NO SCAN REQUIRED) ---
+window.executeDirectUpdate = async () => {
+    const key = document.getElementById("editItemKey").value;
+    const name = document.getElementById("invName").value.trim();
+    const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
+    const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
+
+    if(!key) return alert("System Error: No key found for update.");
+    if(!name) return alert("Name is required.");
+
+    try {
+        await update(ref(db, `inventory/${key}`), {
+            item: name,
+            purchasePrice: price,
+            location: location,
+            updatedAt: serverTimestamp()
+        });
+
+        alert("✅ Information Updated Successfully (Direct Save).");
+        resetInvForm();
+        toggleInvMode('list');
+    } catch(e) { alert("Update Error: " + e.message); }
+};
+
+// --- 3. GENERATE TAG (STILL ASKS FOR SCAN FOR SECURITY) ---
 window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
     const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
-    const locSelect = document.getElementById("addLocSelect").value;
-    const locSpot = document.getElementById("addLocSpot").value.trim();
-    const condition = document.getElementById("invCondition").value;
+    const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
 
-    if(!name) return alert("⚠️ Asset Name is required.");
+    if(!name) return alert("⚠️ Name is required.");
 
-    // Generate 12-digit ID: Shared source for QR and Barcode
+    // Unified ID for QR and Barcode
     const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
-    // Store in memory (Not yet in Firebase)
     pendingTagData = {
         dbKey: key,
         barcode: numericId,
         item: name,
         purchasePrice: price,
-        location: `${locSelect} [${locSpot}]`,
-        condition: condition,
+        location: location,
         status: "In Stock",
         holder: "Store",
         usageCount: 0,
@@ -6707,167 +6764,38 @@ window.saveAndGenerateTag = async () => {
         protectionActivated: true
     };
 
-    // UI Updates
-    const barcodeInput = document.getElementById("invBarcode");
-    barcodeInput.value = ""; 
-    barcodeInput.placeholder = "WAITING FOR SCAN...";
-    barcodeInput.style.borderColor = "var(--metro-gold)";
-    
-    document.getElementById("btnVerifyScan").classList.remove("hidden"); 
+    // UI Prep for Scan
+    document.getElementById("btnVerifyScan").classList.remove("hidden");
     document.getElementById("registrationStatusMsg").classList.remove("hidden");
-    document.getElementById("registrationStatusMsg").innerText = "⚠️ TAG GENERATED: Print and Scan to verify.";
-    document.getElementById("registrationStatusMsg").style.color = "#b91c1c";
+    document.getElementById("registrationStatusMsg").innerText = "⚠️ NEW TAG CREATED: Please scan to verify.";
+    document.getElementById("invBarcode").value = "AWAITING VERIFICATION...";
     
-    // Disable primary button to prevent multi-generation
-    const mainBtn = document.getElementById("btnAddStock");
-    mainBtn.disabled = true;
-    mainBtn.style.opacity = "0.5";
-    mainBtn.innerText = "AWAITING VERIFICATION";
+    // Switch buttons
+    document.getElementById("btnAddStock").classList.add("hidden");
+    document.getElementById("btnDirectUpdate").classList.add("hidden");
 
-    // Show Print Preview
     window.showTagPreview(numericId);
 };
-// --- FIX FOR PRINT BUTTON REFERENCE ERROR ---
-window.executeTagPrint = () => {
-    const tagHtml = document.getElementById("printableTagArea").innerHTML;
-    const win = window.open('', '', 'height=800,width=1000');
+
+// --- 4. THE FULL RESET (CLEANS BUTTONS) ---
+window.resetInvForm = () => {
+    document.getElementById("editItemKey").value = "";
+    document.getElementById("invBarcode").value = "";
+    document.getElementById("invBarcode").placeholder = "Verification Required";
+    document.getElementById("invName").value = "";
+    document.getElementById("invRegPrice").value = "";
+    document.getElementById("addLocSpot").value = "";
     
-    win.document.write(`
-        <html>
-            <head>
-                <title>Unique_Asset_Tag</title>
-                <style>
-                    @media print { 
-                        @page { size: A4; margin: 0; } 
-                        body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; } 
-                    }
-                    body { 
-                        display: flex; 
-                        justify-content: center; 
-                        align-items: center; 
-                        width: 100%; 
-                        height: 100vh; 
-                        background: #fff; 
-                        margin: 0; 
-                    }
-                    #printableTagArea { border: none !important; }
-                </style>
-            </head>
-            <body>
-                <div style="width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
-                    ${tagHtml}
-                </div>
-                <script>
-                    window.onload = function() {
-                        setTimeout(function() {
-                            window.focus(); 
-                            window.print(); 
-                            window.close();
-                        }, 800);
-                    };
-                <\/script>
-            </body>
-        </html>
-    `);
-    win.document.close();
-};
-// --- STEP 2: SYNCED PREVIEW (SAME DATA) ---
-window.showTagPreview = (id) => {
-    // Generate QR (350px for high clarity)
-    document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
+    document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-plus-circle'></i> Register New Asset";
     
-    // Generate Barcode (Matching the QR ID)
-    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
-    document.getElementById("tagBarDisplay").src = barUrl;
-    
-    document.getElementById("tagPrintModal").classList.remove("hidden");
-};
-
-// --- STEP 3: SCANNER LOGIC (THE GATEKEEPER) ---
-// Note: This replaces your 'REGISTRATION_VERIFY' block inside onScanSuccess
-const originalOnScanSuccess = window.onScanSuccess;
-window.onScanSuccess = async function(decodedText) {
-    if (!decodedText) return;
-    const scanned = decodedText.trim();
-
-    if (scanMode === 'REGISTRATION_VERIFY') {
-        closeBarcodeScanner();
-        const barcodeInput = document.getElementById("invBarcode");
-        
-        // Populate the input box with scanned data
-        barcodeInput.value = scanned;
-
-        if (pendingTagData && scanned === pendingTagData.barcode) {
-            // MATCH SUCCESS
-            barcodeInput.style.borderColor = "var(--success-green)";
-            barcodeInput.style.color = "var(--success-green)";
-            barcodeInput.style.fontWeight = "900";
-            
-            // UNLOCK THE SAVE BUTTON
-            document.getElementById("btnFinalizeSave").classList.remove("hidden");
-            document.getElementById("registrationStatusMsg").innerText = "✅ VERIFIED: Click 'Finalize' to Save to Database.";
-            document.getElementById("registrationStatusMsg").style.color = "green";
-            
-            alert("✅ VERIFICATION SUCCESSFUL\nPhysical tag matches session data. Save button unlocked.");
-        } else {
-            // MISMATCH
-            barcodeInput.style.borderColor = "var(--metro-red)";
-            barcodeInput.style.color = "var(--metro-red)";
-            barcodeInput.value = "MISMATCH: " + scanned;
-            alert("❌ SECURITY MISMATCH\nThe scanned tag does not match the current registration session. Please re-scan the printed tag.");
-        }
-        return;
-    }
-
-    // Call previous logic for other modes (Checkout/Return etc)
-    if (typeof originalOnScanSuccess === "function") {
-        originalOnScanSuccess(decodedText);
-    }
-};
-
-// --- STEP 4: FINAL DATABASE COMMIT ---
-window.executeManualSave = async () => {
-    if(!pendingTagData) return alert("System Error: No pending data.");
-
-    try {
-        const finalData = {...pendingTagData};
-        const existingKey = finalData.dbKey;
-        delete finalData.dbKey; 
-
-        if(existingKey) {
-            await update(ref(db, `inventory/${existingKey}`), finalData);
-        } else {
-            await push(ref(db, "inventory"), finalData);
-        }
-
-        // Log the new registration
-        await push(ref(db, "logs"), {
-            type: "STOCK_ADD",
-            item: finalData.item,
-            barcode: finalData.barcode,
-            by: currentUser.name || currentUser.email,
-            time: serverTimestamp()
-        });
-
-        alert("✅ ASSET OFFICIALLY REGISTERED");
-        
-        // FULL RESET
-        document.getElementById("btnFinalizeSave").classList.add("hidden");
-        document.getElementById("btnVerifyScan").classList.add("hidden");
-        document.getElementById("registrationStatusMsg").classList.add("hidden");
-        document.getElementById("tagPrintModal").classList.add("hidden");
-        
-        const mainBtn = document.getElementById("btnAddStock");
-        mainBtn.disabled = false;
-        mainBtn.style.opacity = "1";
-        mainBtn.innerText = "1. GENERATE PHYSICAL TAG";
-        
-        pendingTagData = null;
-        resetInvForm();
-        toggleInvMode('list'); 
-    } catch(e) {
-        alert("❌ Database Error: " + e.message);
-    }
+    // Button Reset
+    document.getElementById("btnAddStock").classList.remove("hidden");
+    document.getElementById("btnAddStock").innerText = "1. GENERATE PHYSICAL TAG";
+    document.getElementById("btnDirectUpdate").classList.add("hidden");
+    document.getElementById("btnFinalizeSave").classList.add("hidden");
+    document.getElementById("btnVerifyScan").classList.add("hidden");
+    document.getElementById("btnCancelEdit").classList.add("hidden");
+    document.getElementById("registrationStatusMsg").classList.add("hidden");
 };
   // Dropdown Logic for Comment Tab
 window.handleCommentLineChange = () => {
