@@ -641,12 +641,14 @@ tr:hover { background: #fcfcfd; }
 <div id="inv-add" class="panel hidden" style="border-top: 4px solid var(--success-green);">
     <h3 id="invFormTitle" style="color:var(--success-green);"><i class="fas fa-plus-circle"></i> Register New Asset</h3>
     <input type="hidden" id="editItemKey"> 
+    
     <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:15px; margin-bottom:15px;">
         <div>
             <label style="font-size:10px; font-weight:bold; color:var(--metro-blue);">ASSET TAG STATUS</label>
             <div style="display:flex; gap:5px;">
-                <input id="invBarcode" placeholder="Generated on Save" disabled style="background:#f8fafc; font-style:italic; font-weight:bold;">
-                <button id="btnVerifyScan" onclick="startVerificationScan()" class="warning hidden" style="width:45px; padding:0;" title="Scan Tag to Finalize Registration">
+                <input id="invBarcode" placeholder="Verification Required" disabled style="background:#f8fafc; font-style:italic; font-weight:bold;">
+                
+                <button id="btnVerifyScan" onclick="startVerificationScan()" class="warning hidden" style="width:45px; padding:0; background: #f59e0b;" title="Scan Printed Tag to Finalize Registration">
                     <i class="fas fa-qrcode"></i>
                 </button>
             </div>
@@ -671,10 +673,14 @@ tr:hover { background: #fcfcfd; }
 
     <div style="display:flex; gap:10px;">
         <button id="btnAddStock" onclick="saveAndGenerateTag()" class="success" style="flex:2; font-weight:900;">
-            <i class="fas fa-barcode"></i> GENERATE TAG FOR VERIFICATION
+            <i class="fas fa-barcode"></i> 1. GENERATE PHYSICAL TAG
         </button>
         <button id="btnCancelEdit" onclick="resetInvForm()" class="secondary hidden" style="flex:1;">CANCEL EDIT</button>
     </div>
+    
+    <p id="registrationStatusMsg" style="font-size: 11px; color: #b91c1c; font-weight: bold; margin-top: 10px;" class="hidden">
+        ⚠️ TAG PRINTED: Use the orange Scan button above to verify and Save.
+    </p>
 </div>
 <div id="tagPrintModal" class="modal-overlay hidden">
     <div class="panel" style="width:95%; max-width:900px; text-align:center; background:white; border:4px solid var(--metro-blue); padding:10px;">
@@ -6667,12 +6673,12 @@ window.filterStockTable = () => {
     });
 };
 // ==========================================
-// 🏷️ UNIQUE ASSET TAG & VERIFICATION ENGINE
+// 🏷️ SCAN-TO-SAVE REGISTRATION ENGINE
 // ==========================================
 
 let pendingTagData = null; 
 
-// --- 1. GENERATE UNIQUE IDENTITY (MEMORY ONLY) ---
+// --- 1. PRE-SAVE & GENERATE ID ---
 window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
@@ -6682,10 +6688,10 @@ window.saveAndGenerateTag = async () => {
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // Generate a 12-digit numeric ID for EAN-13 style
+    // Generate 12-digit numeric ID for EAN-13 style
     const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
-    // Data held in memory - NOT SAVED TO DATABASE YET
+    // Data stays ONLY in memory
     pendingTagData = {
         dbKey: key,
         barcode: numericId,
@@ -6700,21 +6706,22 @@ window.saveAndGenerateTag = async () => {
         protectionActivated: true
     };
 
-    // UI Updates: Enable the SCAN button next to the Tag Status box
-    document.getElementById("invBarcode").value = numericId;
+    // UI Updates: Enable Scan button, disable Generate button
+    document.getElementById("invBarcode").value = "ID: " + numericId;
     document.getElementById("btnVerifyScan").classList.remove("hidden"); 
+    document.getElementById("registrationStatusMsg").classList.remove("hidden");
+    document.getElementById("btnAddStock").disabled = true;
+    document.getElementById("btnAddStock").style.opacity = "0.5";
 
     window.showTagPreview(numericId);
-    alert("📢 TAG GENERATED: Print the tag, then click the orange Scan button to verify it. Registration is only successful after a match.");
 };
 
-// --- 2. TRIGGER VERIFICATION SCAN ---
+// --- 2. START VERIFICATION SCAN ---
 window.startVerificationScan = () => {
-    if(!pendingTagData) return alert("Please generate a tag first.");
-    scanMode = 'REGISTRATION_VERIFY'; // Set specific mode for verification
+    if(!pendingTagData) return alert("Generate a tag first.");
+    scanMode = 'REGISTRATION_VERIFY'; 
     document.getElementById("barcodeModal").classList.remove("hidden");
     
-    // Standard scanner initialization
     if(!scanner) {
         scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
         scanner.render(onScanSuccess, onScanFailure);
@@ -6730,55 +6737,58 @@ window.showTagPreview = (id) => {
 };
 
 // --- 4. SCANNER VERIFICATION GATE (FINAL SAVE) ---
-// Save the original logic reference
-const masterOnScanSuccess = window.onScanSuccess; 
+const systemScannerEntry = window.onScanSuccess; 
 window.onScanSuccess = async function(decodedText) {
-    const scannedInput = decodedText.trim();
+    const scanned = decodedText.trim();
 
-    // Verification Mode: Finalizes the registration process
     if (scanMode === 'REGISTRATION_VERIFY') {
-        if (pendingTagData && scannedInput === pendingTagData.barcode) {
+        if (pendingTagData && scanned === pendingTagData.barcode) {
+            // MATCHED: Officially Register
             try {
-                const dataToCommit = {...pendingTagData};
-                const existingKey = dataToCommit.dbKey;
-                delete dataToCommit.dbKey; 
+                const finalData = {...pendingTagData};
+                const existingKey = finalData.dbKey;
+                delete finalData.dbKey; 
 
                 if(existingKey) {
-                    await update(ref(db, `inventory/${existingKey}`), dataToCommit);
+                    await update(ref(db, `inventory/${existingKey}`), finalData);
                 } else {
-                    await push(ref(db, "inventory"), dataToCommit);
+                    await push(ref(db, "inventory"), finalData);
                 }
 
-                alert("✅ VERIFICATION SUCCESSFUL: Asset registered with ID: " + scannedInput);
+                alert("✅ MATCHED: Asset registration finalized.");
                 pendingTagData = null; 
                 document.getElementById('tagPrintModal').classList.add('hidden');
                 document.getElementById("btnVerifyScan").classList.add("hidden");
+                document.getElementById("registrationStatusMsg").classList.add("hidden");
+                document.getElementById("btnAddStock").disabled = false;
+                document.getElementById("btnAddStock").style.opacity = "1";
+                
+                closeBarcodeScanner();
                 resetInvForm();
                 toggleInvMode('list');
-                closeBarcodeScanner();
                 return; 
             } catch(e) { alert("Database Error: " + e.message); }
         } else {
-            alert("❌ MISMATCH: Scanned tag does not match the generated ID. Please scan the correct printed tag.");
+            // NOT MATCHED
+            alert("❌ NOT MATCHED: Scanned tag ID does not match the generated session. Registration denied. Please re-check the tag.");
         }
         return;
     }
 
-    // Normal Mode: Handle standard operations (Checkout/Return/Audit)
-    if (typeof masterOnScanSuccess === "function") {
-        masterOnScanSuccess(decodedText);
+    if (typeof systemScannerEntry === "function") {
+        systemScannerEntry(decodedText);
     }
 };
 
-// --- 5. A4 CENTERED PRINT ENGINE (FIXED TEXT BUG) ---
+// --- 5. A4 CENTERED PRINT ENGINE ---
 window.executeTagPrint = () => {
-    const tagHtml = document.getElementById("printableTagArea").innerHTML;
+    const content = document.getElementById("printableTagArea").innerHTML;
     const win = window.open('', '', 'height=800,width=1000');
     
     win.document.write(`
         <html>
             <head>
-                <title>A4_Asset_Tag</title>
+                <title>Unique_Asset_Tag</title>
                 <style>
                     @media print { 
                         @page { size: A4; margin: 0; } 
@@ -6792,8 +6802,8 @@ window.executeTagPrint = () => {
                 </style>
             </head>
             <body>
-                <div style="width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
-                    ${tagHtml}
+                <div style="width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                    ${content}
                 </div>
                 <script>
                     window.onload = function() {
