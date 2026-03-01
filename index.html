@@ -680,7 +680,7 @@ tr:hover { background: #fcfcfd; }
         <i class="fas fa-save"></i> UPDATE INFO ONLY
     </button>
     
-    <button id="btnFinalizeSave" onclick="executeManualSave()" class="info hidden" style="flex:2; background:#10b981; font-weight:900;">
+    <button id="btnFinalizeSave" onclick="executeManualSave()" class="success hidden" style="flex:2; background:#10b981; font-weight:900;">
         <i class="fas fa-check-circle"></i> 2. FINALIZE & SAVE
     </button>
 
@@ -6681,7 +6681,7 @@ window.filterStockTable = () => {
     });
 };
 // =========================================================
-// 🏷️ 8-DIGIT SYNCED ASSET ENGINE: FIXED DATA MATCHING
+// 🏷️ SYNCED 8-DIGIT ASSET ENGINE: LOAD-CHECKED PRINTING
 // =========================================================
 
 let pendingTagData = null; 
@@ -6696,7 +6696,7 @@ window.saveAndGenerateTag = async () => {
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // Generate a clean 8-digit numeric ID (No hidden checksum digits)
+    // Generate strict 8-digit numeric ID
     const numericId8 = Math.floor(10000000 + Math.random() * 90000000).toString();
 
     pendingTagData = {
@@ -6712,38 +6712,91 @@ window.saveAndGenerateTag = async () => {
         protectionActivated: true
     };
 
-    // UI Feedback
-    const barcodeInput = document.getElementById("invBarcode");
-    barcodeInput.value = "AWAITING VERIFICATION...";
-    barcodeInput.style.borderColor = "var(--metro-gold)";
-    
-    document.getElementById("btnVerifyScan").classList.remove("hidden"); 
-    document.getElementById("registrationStatusMsg").classList.remove("hidden");
-    document.getElementById("registrationStatusMsg").innerText = "⚠️ 8-DIGIT TAG READY: Print and Scan to verify.";
-    document.getElementById("registrationStatusMsg").style.color = "red";
-    
-    // Switch visibility
+    // UI Updates
+    document.getElementById("invBarcode").value = "LOADING TAG IMAGES...";
     document.getElementById("btnAddStock").classList.add("hidden");
     document.getElementById("btnDirectUpdate").classList.add("hidden");
+    document.getElementById("btnVerifyScan").classList.remove("hidden");
+    document.getElementById("registrationStatusMsg").classList.remove("hidden");
+    document.getElementById("registrationStatusMsg").innerText = "⏳ Generating high-res images...";
 
+    // Trigger Synced Preview
     window.showTagPreview(numericId8);
 };
 
-// --- 2. SYNCED PREVIEW (Strict 8-Digit Rendering) ---
+// --- 2. SYNCED PREVIEW WITH LOAD DETECTION (Fixes Blank QR) ---
 window.showTagPreview = (id) => {
-    // QR Code (Encoding only the 8 digits)
-    document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
-    
-    // Barcode (Using Code 128 format - strictly encodes what you give it, no hidden digits)
+    const qrImg = document.getElementById("tagQrDisplay");
+    const barImg = document.getElementById("tagBarDisplay");
+
+    // QR Code (Encoding exact 8 digits)
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
+    // Barcode (Code 128 - "What you see is what you get")
     const barUrl = `https://bwipjs-api.metafloor.com/?bcid=code128&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
-    document.getElementById("tagBarDisplay").src = barUrl;
+
+    let loadedCount = 0;
+    const checkReady = () => {
+        loadedCount++;
+        if(loadedCount === 2) {
+            document.getElementById("invBarcode").value = "AWAITING SCAN...";
+            document.getElementById("registrationStatusMsg").innerText = "✅ TAG READY: Print and Scan to verify.";
+            document.getElementById("registrationStatusMsg").style.color = "red";
+        }
+    };
+
+    qrImg.onload = checkReady;
+    barImg.onload = checkReady;
+
+    qrImg.src = qrUrl;
+    barImg.src = barUrl;
     
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
 
-// --- 3. SCANNER VERIFICATION (Strict 8-Digit Match) ---
-// This replaces your 'REGISTRATION_VERIFY' logic inside window.onScanSuccess
-const systemBaseScan = window.onScanSuccess; 
+// --- 3. THE PRINT HANDLER (Ensures Images are NOT Blank) ---
+window.executeTagPrint = () => {
+    const tagHtml = document.getElementById("printableTagArea").innerHTML;
+    const win = window.open('', '', 'height=800,width=1000');
+    
+    win.document.write(`
+        <html>
+            <head>
+                <title>Metro_Asset_Tag_${pendingTagData ? pendingTagData.barcode : 'new'}</title>
+                <style>
+                    @media print { @page { size: A4; margin: 0; } body { margin: 0; padding: 0; } }
+                    body { display: flex; justify-content: center; align-items: center; width: 100%; height: 100vh; background: #fff; }
+                    img { display: block; }
+                </style>
+            </head>
+            <body>
+                <div style="width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
+                    ${tagHtml}
+                </div>
+            </body>
+        </html>
+    `);
+
+    win.document.close();
+    
+    // CRITICAL: Wait for images inside the new window to load before printing
+    const imgs = win.document.getElementsByTagName('img');
+    let loaded = 0;
+    for (let img of imgs) {
+        img.onload = () => {
+            loaded++;
+            if (loaded === imgs.length) {
+                win.focus();
+                win.print();
+                win.close();
+            }
+        };
+        // If images are already cached
+        if (img.complete) img.onload();
+    }
+};
+
+// --- 4. SCANNER VERIFICATION (Exact 8-Digit Match) ---
+const sysScanBase = window.onScanSuccess;
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
     const scanned = decodedText.trim();
@@ -6751,40 +6804,45 @@ window.onScanSuccess = async function(decodedText) {
     if (scanMode === 'REGISTRATION_VERIFY') {
         window.closeBarcodeScanner();
         const barcodeInput = document.getElementById("invBarcode");
-        
-        // Show exactly what the scanner "saw"
         barcodeInput.value = scanned;
 
-        // Compare scanned ID with the 8-digit generated ID
         if (pendingTagData && scanned === pendingTagData.barcode) {
             barcodeInput.style.borderColor = "var(--success-green)";
             barcodeInput.style.color = "var(--success-green)";
+            barcodeInput.style.fontWeight = "900";
             
-            // UNLOCK SAVE BUTTON
             document.getElementById("btnFinalizeSave").classList.remove("hidden");
-            document.getElementById("registrationStatusMsg").innerText = "✅ VERIFIED: Data Matches. Click Finalize to Save.";
+            document.getElementById("registrationStatusMsg").innerText = "✅ VERIFIED: Data Matches. You can now SAVE.";
             document.getElementById("registrationStatusMsg").style.color = "green";
-            
-            alert(`✅ MATCHED: ${scanned}\nScanner and QR are perfectly synced.`);
+            alert(`✅ MATCHED: ${scanned}\nHardware verified. Save unlocked.`);
         } else {
             barcodeInput.style.borderColor = "red";
             barcodeInput.value = "MISMATCH: " + scanned;
-            alert(`❌ ERROR: Data Mismatch\nExpected: ${pendingTagData ? pendingTagData.barcode : 'None'}\nScanned: ${scanned}`);
+            alert("❌ SECURITY ERROR: Scanned ID does not match session.");
         }
         return;
     }
-    if (typeof systemBaseScan === "function") systemBaseScan(decodedText);
+    if (typeof sysScanBase === "function") sysScanBase(decodedText);
 };
 
-// --- 4. PRINT HANDLER (Fixes ReferenceError) ---
-window.executeTagPrint = () => {
-    const tagHtml = document.getElementById("printableTagArea").innerHTML;
-    const win = window.open('', '', 'height=800,width=1000');
-    win.document.write(`<html><head><title>8Digit_Tag</title><style>@media print{@page{size:A4;margin:0;}body{margin:0;padding:0;-webkit-print-color-adjust:exact;}}body{display:flex;justify-content:center;align-items:center;width:100%;height:100vh;background:#fff;margin:0;}#printableTagArea{border:none!important;}</style></head><body><div style="width:210mm;height:297mm;display:flex;flex-direction:column;align-items:center;justify-content:center;">${tagHtml}</div><script>window.onload=function(){setTimeout(function(){window.focus();window.print();window.close();},800);};<\/script></body></html>`);
-    win.document.close();
+// --- 5. DIRECT UPDATE (The Fast Edit Fix) ---
+window.executeDirectUpdate = async () => {
+    const key = document.getElementById("editItemKey").value;
+    const name = document.getElementById("invName").value.trim();
+    const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
+    const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
+
+    try {
+        await update(ref(db, `inventory/${key}`), {
+            item: name, purchasePrice: price, location: location, updatedAt: serverTimestamp()
+        });
+        alert("✅ Information Updated (Direct Save).");
+        window.resetInvForm();
+        window.toggleInvMode('list');
+    } catch(e) { alert("Error: " + e.message); }
 };
 
-// --- 5. FINALIZE SAVE (For Verified Tags) ---
+// --- 6. FINALIZE SAVE ---
 window.executeManualSave = async () => {
     if(!pendingTagData) return;
     try {
@@ -6798,7 +6856,7 @@ window.executeManualSave = async () => {
             await push(ref(db, "inventory"), finalData);
         }
 
-        alert("✅ ASSET SAVED SUCCESSFULLY");
+        alert("✅ ASSET REGISTERED IN MASTER DB");
         document.getElementById("tagPrintModal").classList.add("hidden");
         window.resetInvForm();
         window.toggleInvMode('list');
