@@ -8466,181 +8466,197 @@ window.resetTechVerification = () => {
     } catch(e) { alert(e.message); }
 };
 // ==========================================
-// 🛠️ FINAL CONSOLIDATED SCANNER CONTROLLER
+// 🛠️ FIXED: CONSOLIDATED SCANNER CONTROLLER
 // ==========================================
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
+    
+    // Close the scanner modal immediately upon successful read
     closeBarcodeScanner();
-    const input = decodedText.trim();
+    
+    const scannedInput = decodedText.trim();
 
     try {
-        // --- MODE A: TICKET SYSTEM (TECH TICKET SCAN) ---
-        // --- UPDATED: UNLOCK ASSET TAG FIELD AFTER TICKET VERIFICATION ---
-if (scanMode === 'TECH_TICKET_SCAN') {
-    const cleanId = input.replace("#", "").toUpperCase();
-    const allClaims = await get(ref(db, "warranty_claims"));
-    let found = false;
-    
-    allClaims.forEach(c => {
-        const shortId = c.key.substring(1, 10).toUpperCase();
-        if (shortId === cleanId || c.key === input) {
-            techVerifiedTicket = c.val();
-            techVerifiedTicketKey = c.key;
-            found = true;
+        // --- MODE A: ASSET REGISTRATION VERIFICATION (THE FIX) ---
+        if (scanMode === 'REGISTRATION_VERIFY') {
+            const barcodeInput = document.getElementById("invBarcode");
+            
+            // 1. Visually populate the status box with the scanned ID
+            barcodeInput.value = scannedInput;
+
+            if (pendingTagData && scannedInput === pendingTagData.barcode) {
+                // 2. SUCCESS: Data matches the generated session
+                barcodeInput.style.borderColor = "var(--success-green)";
+                barcodeInput.style.color = "var(--success-green)";
+
+                try {
+                    const finalData = {...pendingTagData};
+                    const existingKey = finalData.dbKey;
+                    delete finalData.dbKey; // Remove the temp key before DB push
+
+                    if(existingKey) {
+                        // Update existing asset
+                        await update(ref(db, `inventory/${existingKey}`), finalData);
+                    } else {
+                        // Create new asset entry
+                        await push(ref(db, "inventory"), finalData);
+                    }
+
+                    alert("✅ VERIFICATION SUCCESSFUL\nAsset has been officially registered in the Master Database.");
+                    
+                    // 3. UI RESET & CLEANUP
+                    pendingTagData = null; 
+                    document.getElementById('tagPrintModal').classList.add('hidden');
+                    document.getElementById("btnVerifyScan").classList.add("hidden");
+                    document.getElementById("registrationStatusMsg").classList.add("hidden");
+                    
+                    // Restore the main button state
+                    const mainBtn = document.getElementById("btnAddStock");
+                    mainBtn.disabled = false;
+                    mainBtn.style.opacity = "1";
+                    mainBtn.innerText = "1. GENERATE PHYSICAL TAG";
+
+                    resetInvForm();
+                    toggleInvMode('list'); // Redirect to inventory list to see the new entry
+                    
+                } catch(e) { 
+                    alert("❌ Database Save Error: " + e.message); 
+                }
+            } else {
+                // 4. MISMATCH: Scanned tag doesn't match the one we just made
+                barcodeInput.style.borderColor = "var(--metro-red)";
+                barcodeInput.style.color = "var(--metro-red)";
+                barcodeInput.value = "MISMATCH: " + scannedInput;
+                alert("❌ SECURITY ALERT: Scanned tag ID does not match the generated session. Please scan the correct printed tag.");
+                
+                // Allow them to try scanning again
+                document.getElementById("registrationStatusMsg").innerText = "⚠️ MISMATCH DETECTED. Please re-scan the printed tag.";
+            }
+            return; // Exit function
         }
-    });
 
-    if (found) {
-        document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
-        document.getElementById("btnScanProduct").disabled = false;
-        
-        // --- CRITICAL FIX: MANUALLY ENABLE THE ASSET TAG BOX AND BUTTON ---
-        const assetInput = document.getElementById("manualProductInp");
-        const assetBtn = document.getElementById("btnManualProduct");
-        
-        if(assetInput) {
-            assetInput.disabled = false; // Remove the "disabled" lock
-            assetInput.removeAttribute("disabled"); // Secondary force unlock
-            assetInput.placeholder = "Now type Asset Tag ID...";
-            assetInput.style.background = "#ffffff"; // Change color to show it's active
-            assetInput.focus(); // Automatically put the cursor in the box
-        }
-        
-        if(assetBtn) {
-            assetBtn.disabled = false;
-            assetBtn.style.cursor = "pointer";
-            assetBtn.style.opacity = "1";
-        }
-        
-        document.getElementById("techStepTitle").innerText = "STEP 2: ENTER OR SCAN PHYSICAL ASSET";
-        document.getElementById("techStepTitle").style.color = "#15803d";
-    } else { 
-        alert("❌ Error: Ticket ID not recognized."); 
-    }
-}
-
-        // --- UPDATED: PRODUCT VERIFY WITH TECHNICIAN CONFIRMATION ---
-else if (scanMode === 'TECH_PRODUCT_VERIFY') {
-    const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
-    const snap = await get(q);
-    let itemData = null;
-    if (snap.exists()) snap.forEach(c => itemData = c.val());
-
-    // Check if the physical asset matches the ticket record
-    if (itemData && itemData.item === techVerifiedTicket.item) {
-        document.getElementById("productVerifiedLabel").classList.remove("hidden");
-        renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
-    } else {
-        // --- NEW CONFIRMATION STEP ---
-        const mismatchMsg = `⚠️ ASSET MISMATCH DETECTED\n\n` +
-            `Scanned/Entered: ${input}\n` +
-            `Expected Asset: ${techVerifiedTicket.item}\n\n` +
-            `Is this a mistake? Click 'Cancel' to try again.\n` +
-            `Click 'OK' to officially REJECT this ticket due to a physical mismatch.`;
-
-        if (confirm(mismatchMsg)) {
-            // Technician confirmed it's not a typing mistake; proceed with rejection
-            await update(ref(db, `warranty_claims/${techVerifiedTicketKey}`), {
-                status: "Rejected",
-                adminRemarks: "AUTO-REJECT: Physical Tag Mismatch confirmed by Technician.",
-                resolutionDate: serverTimestamp()
+        // --- MODE B: TICKET SYSTEM (TECH TICKET SCAN) ---
+        if (scanMode === 'TECH_TICKET_SCAN') {
+            const cleanId = scannedInput.replace("#", "").toUpperCase();
+            const allClaims = await get(ref(db, "warranty_claims"));
+            let found = false;
+            
+            allClaims.forEach(c => {
+                const shortId = c.key.substring(1, 10).toUpperCase();
+                if (shortId === cleanId || c.key === scannedInput) {
+                    techVerifiedTicket = c.val();
+                    techVerifiedTicketKey = c.key;
+                    found = true;
+                }
             });
-            alert("⛔ SECURITY ALERT: Ticket officially REJECTED.");
-            resetTechVerification();
-        } else {
-            // Technician likely made a typo or scanned the wrong box; allow retry
-            updateStatus("Retry: Please re-enter or re-scan the correct tag.", "orange");
+
+            if (found) {
+                document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
+                document.getElementById("btnScanProduct").disabled = false;
+                
+                const assetInput = document.getElementById("manualProductInp");
+                const assetBtn = document.getElementById("btnManualProduct");
+                
+                if(assetInput) {
+                    assetInput.disabled = false;
+                    assetInput.placeholder = "Enter Asset Tag ID...";
+                    assetInput.focus();
+                }
+                
+                if(assetBtn) assetBtn.disabled = false;
+                
+                document.getElementById("techStepTitle").innerText = "STEP 2: ENTER OR SCAN PHYSICAL ASSET";
+            } else { 
+                alert("❌ Error: Ticket ID not recognized."); 
+            }
         }
-    }
-}
 
-        // --- MODE C: ASSET MOVEMENT (CHECKOUT/RETURN) ---
-else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-    const isOut = (scanMode === 'CHECKOUT');
-    const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
-    const snap = await get(q);
-    
-    if (!snap.exists()) return alert("❌ Tag Not Registered in System");
-    
-    let itm; snap.forEach(c => itm = {key: c.key, ...c.val()});
+        // --- MODE C: PRODUCT VERIFY (TECH) ---
+        else if (scanMode === 'TECH_PRODUCT_VERIFY') {
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const snap = await get(q);
+            let itemData = null;
+            if (snap.exists()) snap.forEach(c => itemData = c.val());
 
-    if (isOut) {
-        // Validation: Cannot check out what is already out or sold
-        if (itm.status === "Checked Out") return alert("⛔ INVALID: Item is already in the field.");
-        if (itm.status === "Sold Out") return alert("⛔ INVALID: Item has been sold/installed.");
-        
-        document.getElementById("checkout_display").classList.remove("hidden");
-        document.getElementById("checkout_item_name").innerHTML = `✔ ${itm.item}`;
-        document.getElementById("checkout_item_code").innerText = itm.barcode;
-    } else {
-        // VALIDATION: THE FIX YOU REQUESTED
-        // Cannot return an item that was never checked out
-        if (itm.status === "In Stock") {
-            return alert("⚠️ SYSTEM REJECTION: This item is already 'In Stock'. You cannot return an asset that is not currently 'Checked Out'.");
+            if (itemData && itemData.item === techVerifiedTicket.item) {
+                document.getElementById("productVerifiedLabel").classList.remove("hidden");
+                renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
+            } else {
+                alert("⚠️ ASSET MISMATCH: The scanned tag does not match the reported item.");
+            }
         }
-        
-        document.getElementById("return_display").classList.remove("hidden");
-        document.getElementById("return_item_name").innerHTML = `✔ ${itm.item}`;
-        document.getElementById("return_item_code").innerText = itm.barcode;
-    }
 
-    pendingTransactionItem = itm;
-    currentTransactionType = scanMode; 
-}
+        // --- MODE D: ASSET MOVEMENT (CHECKOUT/RETURN) ---
+        else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+            const isOut = (scanMode === 'CHECKOUT');
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const snap = await get(q);
+            
+            if (!snap.exists()) return alert("❌ Tag Not Registered in System");
+            
+            let itm; snap.forEach(c => itm = {key: c.key, ...c.val()});
 
-        // --- MODE D: WARRANTY CLAIM (SCAN & CLAIM ENGINE) ---
-        // This replaces the 'WARRANTY_CLAIM' block inside window.onScanSuccess
-else if (scanMode === 'WARRANTY_CLAIM') {
-    const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(input));
-    const snap = await get(qWar);
-    if (!snap.exists()) return alert("❌ Tag Not Registered");
-    
-    let item; snap.forEach(c => item = c.val());
-    const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
-    
-    document.getElementById("claimDisplay").classList.remove("hidden");
-    document.getElementById("claimItemName").innerText = item.item;
-    document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
-    document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
-    
-    // FIX: Populate the Sale Date field
-    const saleDateLabel = document.getElementById("claimDate");
-    if(saleDateLabel) {
-        saleDateLabel.innerText = item.soldAt ? new Date(item.soldAt).toLocaleDateString('en-IN') : "N/A (Stock)";
-    }
-    
-    const statusBox = document.getElementById("claimStatusBox");
-    if (war && !war.expired) {
-        statusBox.innerHTML = `<div style="color:green; font-weight:900;">✅ WARRANTY ACTIVE: ${war.daysLeft} DAYS LEFT</div>`;
-        document.getElementById("btnFinalClaim").disabled = false;
-    } else {
-        statusBox.innerHTML = `<span style="color:red; font-weight:900;">🚫 WARRANTY EXPIRED / VOID</span>`;
-        document.getElementById("btnFinalClaim").disabled = true;
-    }
-}
+            if (isOut) {
+                if (itm.status === "Checked Out") return alert("⛔ Item already in the field.");
+                if (itm.status === "Sold Out") return alert("⛔ Item has been installed/sold.");
+                
+                document.getElementById("checkout_display").classList.remove("hidden");
+                document.getElementById("checkout_item_name").innerHTML = `✔ ${itm.item}`;
+                document.getElementById("checkout_item_code").innerText = itm.barcode;
+            } else {
+                if (itm.status === "In Stock") return alert("⚠️ Item is already In Stock.");
+                
+                document.getElementById("return_display").classList.remove("hidden");
+                document.getElementById("return_item_name").innerHTML = `✔ ${itm.item}`;
+                document.getElementById("return_item_code").innerText = itm.barcode;
+            }
 
-        // --- MODE E: BINDING TO INPUTS (ADD, AUDIT, BILLING, SEARCH) ---
-        else if (scanMode === 'ADD') { 
-            document.getElementById("invBarcode").value = input; 
-            checkBarcodeUnique(input); 
+            pendingTransactionItem = itm;
+            currentTransactionType = scanMode; 
         }
+
+        // --- MODE E: WARRANTY CLAIM ---
+        else if (scanMode === 'WARRANTY_CLAIM') {
+            const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const snap = await get(qWar);
+            if (!snap.exists()) return alert("❌ Tag Not Registered");
+            
+            let item; snap.forEach(c => item = c.val());
+            const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
+            
+            document.getElementById("claimDisplay").classList.remove("hidden");
+            document.getElementById("claimItemName").innerText = item.item;
+            document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
+            document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
+            
+            const statusBox = document.getElementById("claimStatusBox");
+            if (war && !war.expired) {
+                statusBox.innerHTML = `<div style="color:green; font-weight:900;">✅ WARRANTY ACTIVE: ${war.daysLeft} DAYS LEFT</div>`;
+                document.getElementById("btnFinalClaim").disabled = false;
+            } else {
+                statusBox.innerHTML = `<span style="color:red; font-weight:900;">🚫 WARRANTY EXPIRED / VOID</span>`;
+                document.getElementById("btnFinalClaim").disabled = true;
+            }
+        }
+
+        // --- MODE F: BINDING TO INPUTS ---
         else if (scanMode === 'AUDIT_SEARCH') { 
-            document.getElementById("auditSearchInput").value = input; 
-            fetchAuditHistory(input); 
+            document.getElementById("auditSearchInput").value = scannedInput; 
+            fetchAuditHistory(scannedInput); 
         }
         else if (scanMode === 'BILLING_SCAN') { 
-            document.getElementById("billBarcodeInp").value = input; 
+            document.getElementById("billBarcodeInp").value = scannedInput; 
             addScannedItemToBill(); 
         }
         else if (scanMode === 'SEARCH_STOCK') { 
-            document.getElementById("mainStockSearch").value = input; 
+            document.getElementById("mainStockSearch").value = scannedInput; 
             filterStockTable(); 
         }
-        else if (scanMode === 'ASSET_RECOVERY') { 
-            addToRecoveryCart(input); 
-        }
 
-    } catch (err) { console.error(err); }
+    } catch (err) { 
+        console.error("Scanner Error:", err); 
+        alert("Scan processing failed.");
+    }
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
