@@ -693,10 +693,12 @@ tr:hover { background: #fcfcfd; }
         </h3>
         
         <div style="max-height: 60vh; overflow-y: auto; border: 1px solid #ccc; background: #f1f5f9; padding: 10px;">
-            <div id="printableTagArea" style="background:white; width: 210mm; height: 297mm; padding: 20mm; margin: 0 auto; box-sizing: border-box; color: black; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30pt; border: 1px solid #ddd;">
+            <div id="printableTagArea" style="background:white; width: 210mm; height: 297mm; padding: 20mm; margin: 0 auto; box-sizing: border-box; color: black; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid #ddd;">
                 
                 <img id="tagQrDisplay" src="" style="width: 130mm; height: 130mm; border: 2pt solid #000; padding: 10pt;">
                 
+                <div style="height: 5em;"></div> 
+
                 <div style="width: 100%; text-align: center;">
                     <img id="tagBarDisplay" src="" style="width: 160mm; height: 65mm; object-fit: contain;">
                 </div>
@@ -6677,10 +6679,10 @@ window.filterStockTable = () => {
  // ==========================================
 // 🏷️ PROFESSIONAL TAG GENERATION ENGINE
 // ==========================================
-// --- LOGIC GATE FOR VERIFICATION ---
-let pendingTagData = null;
 
-// --- 1. PRE-SAVE & GENERATE ENGINE ---
+let pendingTagData = null; // Memory gate for verification
+
+// --- 1. PRE-SAVE & GENERATE ID ---
 window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
@@ -6690,10 +6692,10 @@ window.saveAndGenerateTag = async () => {
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // Generate 12-digit numeric ID (Required for EAN-13 style)
+    // Generate 12-digit numeric ID for EAN-13 style
     const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
-    // Store data in memory - DO NOT SAVE TO DB YET
+    // Data stays in memory, NOT in Firebase yet
     pendingTagData = {
         dbKey: key,
         barcode: numericId,
@@ -6708,66 +6710,60 @@ window.saveAndGenerateTag = async () => {
         protectionActivated: true
     };
 
-    // Show Preview
     window.showTagPreview(numericId);
-    
-    alert("📢 TAG GENERATED: You MUST print this tag and SCAN it to verify the physical copy before registration is saved to Master Logs.");
+    alert("📢 TAG READY: Print this tag and SCAN it to verify. Registration will only complete after a successful match.");
 };
 
-// --- 2. PREVIEW ENGINE (EAN-13 STYLE) ---
+// --- 2. HIGH-RES PREVIEW ENGINE ---
 window.showTagPreview = (id) => {
-    // QR Code High-Res
     document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
-
-    // Barcode: bcid=ean13 + includetext=true puts numbers at the bottom
+    
+    // EAN-13 style with numbers at bottom
     const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
     document.getElementById("tagBarDisplay").src = barUrl;
 
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
 
-// --- 3. MODIFIED SCANNER SUCCESS (The Verification Gate) ---
-// This overrides your existing onScanSuccess logic
-const masterOnScanSuccess = window.onScanSuccess; 
+// --- 3. MODIFIED SCANNER GATE (Verification Step) ---
+// Save your old scanner logic to a variable first
+const oldScannerSuccess = window.onScanSuccess;
 window.onScanSuccess = async function(decodedText) {
-    const scannedInput = decodedText.trim();
+    const scanned = decodedText.trim();
 
-    // CHECK: Is this a verification scan for a new product?
-    if (pendingTagData && scannedInput === pendingTagData.barcode) {
+    // Check if we are waiting for a new product verification
+    if (pendingTagData && scanned === pendingTagData.barcode) {
         try {
-            const finalData = {...pendingTagData};
-            const targetKey = finalData.dbKey;
-            delete finalData.dbKey; // Clean key before save
+            const dataToSave = {...pendingTagData};
+            const targetId = dataToSave.dbKey;
+            delete dataToSave.dbKey;
 
-            if(targetKey) {
-                // Edit mode overwrite
-                await update(ref(db, `inventory/${targetKey}`), finalData);
+            if(targetId) {
+                await update(ref(db, `inventory/${targetId}`), dataToSave);
             } else {
-                // New registration
-                await push(ref(db, "inventory"), finalData);
+                await push(ref(db, "inventory"), dataToSave);
             }
 
-            alert("✅ VERIFICATION SUCCESS: Product officially registered with Tag: " + scannedInput);
+            alert("✅ MATCHED: Asset registered successfully.");
             pendingTagData = null; // Clear gate
             resetInvForm();
             toggleInvMode('list');
-            return; // Stop here
-        } catch(e) {
-            alert("Save Error: " + e.message);
-        }
+            return;
+        } catch(e) { alert("Registration Error: " + e.message); }
     }
 
-    // If not a verification scan, run original system logic (Checkout/Return/Audit)
-    if (typeof masterOnScanSuccess === "function") {
-        masterOnScanSuccess(decodedText);
+    // Otherwise, run original system logic (Checkout/Return/Audit)
+    if (typeof oldScannerSuccess === "function") {
+        oldScannerSuccess(decodedText);
     }
 };
 
-// --- 4. A4 PRECISION PRINT ENGINE ---
+// --- 4. PRINT ENGINE (FIXED TYPEERROR) ---
 window.executeTagPrint = () => {
     const content = document.getElementById("printableTagArea").innerHTML;
     const win = window.open('', '', 'height=800,width=1000');
     
+    // Construct HTML and use a specific ID for the image to check status
     win.document.write(`
         <html>
             <head>
@@ -6785,23 +6781,21 @@ window.executeTagPrint = () => {
                         height: 100vh; 
                         background: #fff;
                     }
-                    #printableTagArea { border: none !important; }
                 </style>
             </head>
-            <body>\${content}</body>
+            <body>
+                <div id="printBody">\${content}</div>
+                <script>
+                    window.onload = function() {
+                        window.focus();
+                        window.print();
+                        window.close();
+                    };
+                <\/script>
+            </body>
         </html>
     `);
-    
     win.document.close();
-    
-    const qrImg = win.document.getElementById('tagQrDisplay');
-    const trigger = () => {
-        win.focus();
-        win.print();
-        win.close();
-    };
-
-    if (qrImg.complete) trigger(); else qrImg.onload = trigger;
 };
   // Dropdown Logic for Comment Tab
 window.handleCommentLineChange = () => {
