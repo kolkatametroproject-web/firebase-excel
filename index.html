@@ -6676,13 +6676,12 @@ window.filterStockTable = () => {
         }
     });
 };
- // ==========================================
-// 🏷️ PROFESSIONAL TAG GENERATION ENGINE
+// ==========================================
+// 🏷️ TAG ENGINE: FIXED POSITIONING & PRINT
 // ==========================================
 
-let pendingTagData = null; // Memory gate for verification
+let pendingTagData = null; 
 
-// --- 1. PRE-SAVE & GENERATE ID ---
 window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
@@ -6692,10 +6691,9 @@ window.saveAndGenerateTag = async () => {
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // Generate 12-digit numeric ID for EAN-13 style
+    // EAN-13 requires 12 digits (the 13th is a checksum added by the API)
     const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
 
-    // Data stays in memory, NOT in Firebase yet
     pendingTagData = {
         dbKey: key,
         barcode: numericId,
@@ -6711,59 +6709,26 @@ window.saveAndGenerateTag = async () => {
     };
 
     window.showTagPreview(numericId);
-    alert("📢 TAG READY: Print this tag and SCAN it to verify. Registration will only complete after a successful match.");
+    alert("📢 TAG GENERATED: Print the tag and SCAN it to verify. Registration only saves after a match.");
 };
 
-// --- 2. HIGH-RES PREVIEW ENGINE ---
 window.showTagPreview = (id) => {
+    // QR Code
     document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
-    
-    // EAN-13 style with numbers at bottom
+
+    // Barcode: EAN-13 with numbers at the bottom (Matching your image)
     const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
     document.getElementById("tagBarDisplay").src = barUrl;
 
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
 
-// --- 3. MODIFIED SCANNER GATE (Verification Step) ---
-// Save your old scanner logic to a variable first
-const oldScannerSuccess = window.onScanSuccess;
-window.onScanSuccess = async function(decodedText) {
-    const scanned = decodedText.trim();
-
-    // Check if we are waiting for a new product verification
-    if (pendingTagData && scanned === pendingTagData.barcode) {
-        try {
-            const dataToSave = {...pendingTagData};
-            const targetId = dataToSave.dbKey;
-            delete dataToSave.dbKey;
-
-            if(targetId) {
-                await update(ref(db, `inventory/${targetId}`), dataToSave);
-            } else {
-                await push(ref(db, "inventory"), dataToSave);
-            }
-
-            alert("✅ MATCHED: Asset registered successfully.");
-            pendingTagData = null; // Clear gate
-            resetInvForm();
-            toggleInvMode('list');
-            return;
-        } catch(e) { alert("Registration Error: " + e.message); }
-    }
-
-    // Otherwise, run original system logic (Checkout/Return/Audit)
-    if (typeof oldScannerSuccess === "function") {
-        oldScannerSuccess(decodedText);
-    }
-};
-
-// --- 4. PRINT ENGINE (FIXED TYPEERROR) ---
+// --- FIX: Correcting the write error and positioning ---
 window.executeTagPrint = () => {
     const content = document.getElementById("printableTagArea").innerHTML;
     const win = window.open('', '', 'height=800,width=1000');
     
-    // Construct HTML and use a specific ID for the image to check status
+    // BACKSLASH REMOVED from ${content} to fix the print error
     win.document.write(`
         <html>
             <head>
@@ -6780,22 +6745,57 @@ window.executeTagPrint = () => {
                         width: 100%; 
                         height: 100vh; 
                         background: #fff;
+                        margin: 0;
                     }
+                    /* Removes border for final print */
+                    div { border: none !important; }
                 </style>
             </head>
             <body>
-                <div id="printBody">\${content}</div>
+                <div style="width: 210mm; height: 297mm; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                    ${content}
+                </div>
                 <script>
                     window.onload = function() {
-                        window.focus();
-                        window.print();
-                        window.close();
+                        setTimeout(function() {
+                            window.focus();
+                            window.print();
+                            window.close();
+                        }, 500);
                     };
                 <\/script>
             </body>
         </html>
     `);
     win.document.close();
+};
+
+// --- SCAN VERIFICATION GATE ---
+const masterScanner = window.onScanSuccess;
+window.onScanSuccess = async function(decodedText) {
+    const input = decodedText.trim();
+
+    if (pendingTagData && input === pendingTagData.barcode) {
+        try {
+            const data = {...pendingTagData};
+            const targetId = data.dbKey;
+            delete data.dbKey;
+
+            if(targetId) {
+                await update(ref(db, `inventory/${targetId}`), data);
+            } else {
+                await push(ref(db, "inventory"), data);
+            }
+
+            alert("✅ VERIFIED: Asset registered with ID: " + input);
+            pendingTagData = null;
+            resetInvForm();
+            toggleInvMode('list');
+            return;
+        } catch(e) { alert("Error: " + e.message); }
+    }
+
+    if (typeof masterScanner === "function") masterScanner(decodedText);
 };
   // Dropdown Logic for Comment Tab
 window.handleCommentLineChange = () => {
