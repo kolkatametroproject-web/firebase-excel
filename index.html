@@ -6681,55 +6681,30 @@ window.filterStockTable = () => {
     });
 };
 // =========================================================
-// 🏷️ COMPREHENSIVE ASSET ENGINE: NEW & EDIT VERIFICATION
+// 🏷️ 8-DIGIT SYNCED ASSET ENGINE: FIXED DATA MATCHING
 // =========================================================
 
 let pendingTagData = null; 
 
-// --- 1. THE EDIT TRIGGER (Loads existing data) ---
-window.editExistingItem = async (key) => {
-    const snap = await get(ref(db, `inventory/${key}`));
-    const d = snap.val();
-
-    window.toggleInvMode('add');
-    
-    // Fill UI Fields
-    document.getElementById("editItemKey").value = key;
-    document.getElementById("invBarcode").value = d.barcode || "";
-    document.getElementById("invName").value = d.item || "";
-    document.getElementById("invRegPrice").value = d.purchasePrice || 0;
-    
-    const locParts = (d.location || "").split(" [");
-    document.getElementById("addLocSelect").value = locParts[0] || "D2 Building - Heerok Sir Lab";
-    document.getElementById("addLocSpot").value = locParts[1] ? locParts[1].replace("]", "") : "";
-
-    // Toggle Buttons for Edit Mode
-    document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-edit'></i> Edit Asset Record";
-    document.getElementById("btnAddStock").innerText = "RE-GENERATE PHYSICAL TAG";
-    document.getElementById("btnDirectUpdate").classList.remove("hidden");
-    document.getElementById("btnCancelEdit").classList.remove("hidden");
-    
-    window.scrollTo(0, 0);
-};
-
-// --- 2. GENERATE SYNCED TAG (For New or Existing Items) ---
+// --- 1. GENERATE SYNCED 8-DIGIT CODES ---
 window.saveAndGenerateTag = async () => {
-    const key = document.getElementById("editItemKey").value; 
+    const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
     const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
-    const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
+    const locSelect = document.getElementById("addLocSelect").value;
+    const locSpot = document.getElementById("addLocSpot").value.trim();
 
     if(!name) return alert("⚠️ Asset Name is required.");
 
-    // Generate 12-digit synced ID (Source of truth for QR & Barcode)
-    const numericId = Math.floor(100000000000 + Math.random() * 900000000000).toString();
+    // Generate a clean 8-digit numeric ID (No hidden checksum digits)
+    const numericId8 = Math.floor(10000000 + Math.random() * 90000000).toString();
 
     pendingTagData = {
-        dbKey: key, 
-        barcode: numericId, 
+        dbKey: key,
+        barcode: numericId8, 
         item: name,
         purchasePrice: price,
-        location: location,
+        location: `${locSelect} [${locSpot}]`,
         status: "In Stock",
         holder: "Store",
         usageCount: 0,
@@ -6739,42 +6714,36 @@ window.saveAndGenerateTag = async () => {
 
     // UI Feedback
     const barcodeInput = document.getElementById("invBarcode");
-    barcodeInput.value = "AWAITING VERIFICATION SCAN...";
+    barcodeInput.value = "AWAITING VERIFICATION...";
     barcodeInput.style.borderColor = "var(--metro-gold)";
     
     document.getElementById("btnVerifyScan").classList.remove("hidden"); 
     document.getElementById("registrationStatusMsg").classList.remove("hidden");
-    document.getElementById("registrationStatusMsg").innerText = "⚠️ TAG GENERATED: Print and Scan to verify digits.";
+    document.getElementById("registrationStatusMsg").innerText = "⚠️ 8-DIGIT TAG READY: Print and Scan to verify.";
     document.getElementById("registrationStatusMsg").style.color = "red";
     
-    // Switch visibility to force verification flow
+    // Switch visibility
     document.getElementById("btnAddStock").classList.add("hidden");
     document.getElementById("btnDirectUpdate").classList.add("hidden");
 
-    window.showTagPreview(numericId);
+    window.showTagPreview(numericId8);
 };
 
-// --- 3. SYNCED PREVIEW (Ensures QR and Barcode Match) ---
+// --- 2. SYNCED PREVIEW (Strict 8-Digit Rendering) ---
 window.showTagPreview = (id) => {
-    // QR Code
+    // QR Code (Encoding only the 8 digits)
     document.getElementById("tagQrDisplay").src = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&margin=15&data=${id}`;
-    // Barcode (ean13 format for numericId)
-    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=ean13&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
+    
+    // Barcode (Using Code 128 format - strictly encodes what you give it, no hidden digits)
+    const barUrl = `https://bwipjs-api.metafloor.com/?bcid=code128&text=${id}&scale=10&includetext=true&textsize=10&textgaps=15`;
     document.getElementById("tagBarDisplay").src = barUrl;
     
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
 
-// --- 4. THE PRINT HANDLER (Fixes ReferenceError) ---
-window.executeTagPrint = () => {
-    const tagHtml = document.getElementById("printableTagArea").innerHTML;
-    const win = window.open('', '', 'height=800,width=1000');
-    win.document.write(`<html><head><title>Tag_Print</title><style>@media print{@page{size:A4;margin:0;}body{margin:0;padding:0;-webkit-print-color-adjust:exact;}}body{display:flex;justify-content:center;align-items:center;width:100%;height:100vh;background:#fff;margin:0;}#printableTagArea{border:none!important;}</style></head><body><div style="width:210mm;height:297mm;display:flex;flex-direction:column;align-items:center;justify-content:center;">${tagHtml}</div><script>window.onload=function(){setTimeout(function(){window.focus();window.print();window.close();},800);};<\/script></body></html>`);
-    win.document.close();
-};
-
-// --- 5. SCANNER VERIFICATION (Strict Sync Check) ---
-const baseOnScanSuccess = window.onScanSuccess; 
+// --- 3. SCANNER VERIFICATION (Strict 8-Digit Match) ---
+// This replaces your 'REGISTRATION_VERIFY' logic inside window.onScanSuccess
+const systemBaseScan = window.onScanSuccess; 
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
     const scanned = decodedText.trim();
@@ -6782,88 +6751,58 @@ window.onScanSuccess = async function(decodedText) {
     if (scanMode === 'REGISTRATION_VERIFY') {
         window.closeBarcodeScanner();
         const barcodeInput = document.getElementById("invBarcode");
+        
+        // Show exactly what the scanner "saw"
         barcodeInput.value = scanned;
 
+        // Compare scanned ID with the 8-digit generated ID
         if (pendingTagData && scanned === pendingTagData.barcode) {
             barcodeInput.style.borderColor = "var(--success-green)";
             barcodeInput.style.color = "var(--success-green)";
             
+            // UNLOCK SAVE BUTTON
             document.getElementById("btnFinalizeSave").classList.remove("hidden");
-            document.getElementById("registrationStatusMsg").innerText = "✅ VERIFIED: Physical tag matches system digits.";
+            document.getElementById("registrationStatusMsg").innerText = "✅ VERIFIED: Data Matches. Click Finalize to Save.";
             document.getElementById("registrationStatusMsg").style.color = "green";
             
-            alert("✅ VERIFICATION SUCCESSFUL\nTag is verified and synced. Click Finalize to save.");
+            alert(`✅ MATCHED: ${scanned}\nScanner and QR are perfectly synced.`);
         } else {
             barcodeInput.style.borderColor = "red";
             barcodeInput.value = "MISMATCH: " + scanned;
-            alert("❌ SECURITY MISMATCH\nScanned tag digits do not match the session. Check the physical tag.");
+            alert(`❌ ERROR: Data Mismatch\nExpected: ${pendingTagData ? pendingTagData.barcode : 'None'}\nScanned: ${scanned}`);
         }
         return;
     }
-    if (typeof baseOnScanSuccess === "function") baseOnScanSuccess(decodedText);
+    if (typeof systemBaseScan === "function") systemBaseScan(decodedText);
 };
 
-// --- 6. FAST INFO UPDATE (No Scan Required) ---
-window.executeDirectUpdate = async () => {
-    const key = document.getElementById("editItemKey").value;
-    const name = document.getElementById("invName").value.trim();
-    const price = parseFloat(document.getElementById("invRegPrice").value) || 0;
-    const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
-
-    if(!key) return alert("System Error: No key found.");
-
-    try {
-        await update(ref(db, `inventory/${key}`), {
-            item: name,
-            purchasePrice: price,
-            location: location,
-            updatedAt: serverTimestamp()
-        });
-        alert("✅ Record Updated (Text info saved successfully).");
-        window.resetInvForm();
-        window.toggleInvMode('list');
-    } catch(e) { alert("Update Error: " + e.message); }
+// --- 4. PRINT HANDLER (Fixes ReferenceError) ---
+window.executeTagPrint = () => {
+    const tagHtml = document.getElementById("printableTagArea").innerHTML;
+    const win = window.open('', '', 'height=800,width=1000');
+    win.document.write(`<html><head><title>8Digit_Tag</title><style>@media print{@page{size:A4;margin:0;}body{margin:0;padding:0;-webkit-print-color-adjust:exact;}}body{display:flex;justify-content:center;align-items:center;width:100%;height:100vh;background:#fff;margin:0;}#printableTagArea{border:none!important;}</style></head><body><div style="width:210mm;height:297mm;display:flex;flex-direction:column;align-items:center;justify-content:center;">${tagHtml}</div><script>window.onload=function(){setTimeout(function(){window.focus();window.print();window.close();},800);};<\/script></body></html>`);
+    win.document.close();
 };
 
-// --- 7. FINALIZED SAVE (For New or Re-Tagged Items) ---
+// --- 5. FINALIZE SAVE (For Verified Tags) ---
 window.executeManualSave = async () => {
     if(!pendingTagData) return;
-
     try {
         const finalData = {...pendingTagData};
         const existingKey = finalData.dbKey;
-        delete finalData.dbKey; 
+        delete finalData.dbKey;
 
         if(existingKey) {
             await update(ref(db, `inventory/${existingKey}`), finalData);
-            alert("✅ ASSET RE-TAGGED AND UPDATED");
         } else {
             await push(ref(db, "inventory"), finalData);
-            alert("✅ NEW ASSET REGISTERED AND VERIFIED");
         }
 
+        alert("✅ ASSET SAVED SUCCESSFULLY");
         document.getElementById("tagPrintModal").classList.add("hidden");
         window.resetInvForm();
-        window.toggleInvMode('list'); 
-    } catch(e) { alert("Save Error: " + e.message); }
-};
-
-// --- 8. RESET FORM ---
-window.resetInvForm = () => {
-    document.getElementById("editItemKey").value = "";
-    document.getElementById("invBarcode").value = "";
-    document.getElementById("invName").value = "";
-    document.getElementById("invRegPrice").value = "";
-    document.getElementById("addLocSpot").value = "";
-    document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-plus-circle'></i> Register New Asset";
-    
-    document.getElementById("btnAddStock").classList.remove("hidden");
-    document.getElementById("btnAddStock").innerText = "1. GENERATE PHYSICAL TAG";
-    document.getElementById("btnDirectUpdate").classList.add("hidden");
-    document.getElementById("btnFinalizeSave").classList.add("hidden");
-    document.getElementById("btnVerifyScan").classList.add("hidden");
-    document.getElementById("btnCancelEdit").classList.add("hidden");
-    document.getElementById("registrationStatusMsg").classList.add("hidden");
+        window.toggleInvMode('list');
+    } catch(e) { alert("Error: " + e.message); }
 };
   // Dropdown Logic for Comment Tab
 window.handleCommentLineChange = () => {
