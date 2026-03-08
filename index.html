@@ -392,6 +392,21 @@ tr:hover { background: #fcfcfd; }
     .preview-window-scroll { overflow: visible !important; padding: 0 !important; }
     .paper-shadow-effect { box-shadow: none !important; }
 }
+  /* Ensure the print container is visible and white during generation */
+#printableReportContainer:not(.hidden) {
+    display: flex !important;
+    background: white !important;
+    color: black !important;
+}
+
+@media print {
+    .report-paper {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 10mm !important;
+        display: block !important;
+    }
+}
 </style>
 </head>
 
@@ -7985,23 +8000,24 @@ window.finalizeRecoveryCart = async () => {
     const reason = document.getElementById("recoveryReason").value.trim();
     if(!reason || window.recoveryCart.length === 0) return alert("Scan items and enter reason.");
     
-    if(confirm(`Recover ${window.recoveryCart.length} items? This will reset them to In-Stock.`)) {
+    if(confirm(`Recover ${window.recoveryCart.length} items?`)) {
         const updates = {};
         window.recoveryCart.forEach(it => {
             updates[`inventory/${it.key}/status`] = "In Stock";
             updates[`inventory/${it.key}/holder`] = "Store";
             updates[`inventory/${it.key}/location`] = "Recovered: " + reason;
-            // CLEAN WIPE
             updates[`inventory/${it.key}/invoiceNo`] = null;
             updates[`inventory/${it.key}/assignedStation`] = null;
-            updates[`inventory/${it.key}/soldAt`] = null;
         });
         
         await update(ref(db), updates);
+        
+        // --- KEY FIX: CALL THE CORRECT PRINT FUNCTION ---
         generateConsolidatedMemo(window.recoveryCart, reason);
+        
         window.recoveryCart = [];
         renderRecoveryCart();
-        alert("✅ Recovery Successful. Invoice data wiped.");
+        alert("✅ Recovery Successful.");
     }
 };
   function generateConsolidatedMemo(items, reason) {
@@ -8714,6 +8730,17 @@ window.onScanSuccess = async function(decodedText) {
             document.getElementById("mainStockSearch").value = scannedInput; 
             filterStockTable(); 
         }
+        else if (scanMode === 'ASSET_RECOVERY') {
+    // This connects the scanner directly to your Recovery Cart
+    window.addToRecoveryCart(scannedInput);
+    
+    // Provide visual feedback
+    const statusDiv = document.getElementById("recoveryStatus");
+    if(statusDiv) {
+        statusDiv.innerText = "✅ Item Added: " + scannedInput;
+        statusDiv.style.color = "green";
+    }
+}
 
     } catch (err) { 
         console.error("Scanner Error:", err); 
