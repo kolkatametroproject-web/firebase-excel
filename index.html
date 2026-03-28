@@ -8863,136 +8863,223 @@ window.startVerificationScan = () => {
     }
 };
 // =========================================================
-// 📅 UPDATED PROFIT ENGINE & TRANSACTION CONTROL
+// 📅 ATTENDANCE & PROFIT ENGINE - GLOBAL INITIALIZATION
 // =========================================================
 
-window.calcProfitEngine = async () => {
-    const clientPay = parseFloat(document.getElementById("inpClientPay").value) || 0;
-    const reservePer = parseFloat(document.getElementById("inpReservePercent").value) || 0;
-    // CRITICAL: Get current input value for Admin %
-    const adminSharePer = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
-    
-    // Ledger Spending Calculation
-    const financeSnap = await get(ref(db, "finance"));
-    let totalSpent = 0;
-    financeSnap.forEach(c => {
-        const v = c.val();
-        if((v.type === 'DEBIT' || v.type === 'EXPENSE') && v.status === 'Approved') {
-            totalSpent += parseFloat(v.amount || 0);
+// STEP 1: IMMEDIATELY BIND FUNCTIONS TO WINDOW (Prevents "is not a function" error)
+// We do this inside a function to ensure all Firebase variables are captured
+const setupGlobalAttendanceFunctions = () => {
+
+    // 1. LOAD INTERACTIVE LIST
+    window.loadAttendanceList = async () => {
+        const dateEl = document.getElementById("attDate");
+        if(!dateEl || !dateEl.value) return alert("⚠️ Please select a date first.");
+        const date = dateEl.value;
+        
+        const tbody = document.getElementById("attTableBody");
+        if(!tbody) return;
+        tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔍 Fetching Personnel...</td></tr>";
+
+        try {
+            const userSnap = await get(ref(db, "users"));
+            tbody.innerHTML = ""; 
+
+            if (!userSnap.exists()) {
+                tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No users found.</td></tr>";
+                return;
+            }
+
+            userSnap.forEach(c => {
+                const u = c.val();
+                if(ADMIN_EMAILS.includes(u.email.toLowerCase())) return;
+
+                tbody.innerHTML += `
+                    <tr class="draft-att-row" data-uid="${c.key}" data-name="${u.name || u.email}">
+                        <td style="font-size:11px; color:#64748b;">${date} (New)</td>
+                        <td style="font-weight:bold;">${u.name || u.email}</td>
+                        <td class="status-cell" style="font-weight:900; color:#10b981;">PRESENT</td>
+                        <td>
+                            <button class="warning" onclick="window.toggleDraftStatus(this)" style="padding:5px 10px; font-size:10px;">
+                                Toggle Status
+                            </button>
+                        </td>
+                        <td style="text-align:center; color:#ccc;"><i class="fas fa-clock"></i></td>
+                    </tr>
+                `;
+            });
+            window.loadAttendanceLog(true); // Load existing records below
+        } catch (e) { console.error("Load List Error:", e); }
+    };
+
+    // 2. TOGGLE STATUS IN DRAFT MODE
+    window.toggleDraftStatus = (btn) => {
+        const row = btn.closest('tr');
+        const statusCell = row.querySelector('.status-cell');
+        if (statusCell.innerText === "PRESENT") {
+            statusCell.innerText = "ABSENT";
+            statusCell.style.color = "#e11d48";
+        } else {
+            statusCell.innerText = "PRESENT";
+            statusCell.style.color = "#10b981";
         }
-    });
-    document.getElementById("dispPayrollSpent").innerText = `₹ ${totalSpent.toFixed(2)}`;
+    };
 
-    // Profit Math
-    const netProjectProfit = clientPay - totalSpent;
-    if(netProjectProfit <= 0) {
-        document.getElementById("profitResultArea").classList.add("hidden");
-        return;
-    }
-    document.getElementById("profitResultArea").classList.remove("hidden");
+    // 3. SAVE RECORD
+    window.submitAttendanceBatch = async () => {
+        const date = document.getElementById("attDate").value;
+        const rows = document.querySelectorAll(".draft-att-row");
+        if(rows.length === 0) return alert("Please Load Personnel List first.");
 
-    const reserveAmt = (netProjectProfit * reservePer) / 100;
-    const distributablePool = netProjectProfit - reserveAmt;
-
-    // Admin Payout Math based on manual %
-    const adminPayoutAmt = (distributablePool * adminSharePer) / 100;
-    const staffPool = distributablePool - adminPayoutAmt;
-
-    document.getElementById("resNetProfit").innerText = `₹ ${netProjectProfit.toFixed(2)}`;
-    document.getElementById("resReserveAmt").innerText = `₹ ${reserveAmt.toFixed(2)}`;
-
-    // Attendance Scoring Logic
-    const attSnap = await get(ref(db, "attendance"));
-    const userStats = {}; let totalGlobalPresents = 0;
-    if(attSnap.exists()){
-        attSnap.forEach(day => day.forEach(uRec => {
-            const uid = uRec.key;
-            if(!userStats[uid]) userStats[uid] = { p: 0, t: 0 };
-            userStats[uid].t++;
-            if(uRec.val().status === "Present") { userStats[uid].p++; totalGlobalPresents++; }
-        }));
-    }
-
-    const pBody = document.getElementById("payoutTableBody");
-    if(!pBody) return;
-    pBody.innerHTML = "";
-
-    // --- 1. ADMIN ROW (Dynamic %) ---
-    pBody.innerHTML += `
-        <tr style="background:#fffbeb; border: 2.5px solid var(--metro-gold);">
-            <td style="font-weight:900;">ADMIN MANAGEMENT SHARE</td>
-            <td style="text-align:center;">100%</td>
-            <td style="text-align:center;">
-                <input type="number" id="manualAdminPercentInp" value="${adminSharePer}" 
-                       oninput="window.calcProfitEngine()" 
-                       style="width:55px; text-align:center; font-weight:bold; border:1px solid #fbbf24;"> %
-            </td>
-            <td style="font-weight:900; color:var(--success-green); text-align:right;">₹ ${adminPayoutAmt.toFixed(2)}</td>
-            <td style="text-align:center;">
-                <button onclick="window.postAdminPayout(${adminPayoutAmt})" class="success" style="padding:5px 12px; font-size:10px; background:var(--metro-blue);">
-                    POST LEDGER
-                </button>
-            </td>
-        </tr>`;
-
-    // --- 2. STAFF ROWS ---
-    const userSnap = await get(ref(db, "users"));
-    userSnap.forEach(c => {
-        const uid = c.key;
-        if(ADMIN_EMAILS.includes(c.val().email.toLowerCase()) || !userStats[uid] || userStats[uid].p === 0) return;
-
-        const userShare = (userStats[uid].p / (totalGlobalPresents || 1)) * staffPool;
-        const attPct = (userStats[uid].p / userStats[uid].total) * 100;
-        const sharePct = (userShare / distributablePool) * 100;
-
-        pBody.innerHTML += `
-            <tr>
-                <td style="font-weight:bold;">${c.val().name}</td>
-                <td style="text-align:center;">${attPct.toFixed(0)}%</td>
-                <td style="text-align:center;">${sharePct.toFixed(1)}%</td>
-                <td style="text-align:right; font-weight:bold;">₹ ${userShare.toFixed(2)}</td>
-                <td>
-                    <div id="status_box_${uid}" style="display:flex; gap:5px; justify-content:center;">
-                        <input type="text" id="utr_admin_${uid}" maxlength="4" placeholder="UTR 4" style="width:50px; font-size:10px; padding:3px;">
-                        <button onclick="window.initiatePayoutHandshake('${uid}', ${userShare}, '${c.val().name}')" class="info" style="padding:4px 8px; font-size:9px;">SEND</button>
-                    </div>
-                </td>
-            </tr>`;
-    });
-
-    // --- 3. DANGER ZONE: DELETE ALL TRANSACTIONS ---
-    pBody.innerHTML += `
-        <tr>
-            <td colspan="5" style="padding:20px 10px; background:#fff1f2; text-align:right;">
-                <span style="font-size:11px; color:#991b1b; margin-right:15px; font-weight:bold;">Mistake in calculation?</span>
-                <button onclick="window.nuclearDeletePayouts()" class="danger" style="padding:8px 15px; font-size:11px; background:#991b1b;">
-                    <i class="fas fa-exclamation-triangle"></i> WIPE ALL PENDING PAYOUTS
-                </button>
-            </td>
-        </tr>`;
-};
-
-// --- NUCLEAR DELETE: CLEARS ALL PENDING HANDSHAKES ---
-window.nuclearDeletePayouts = async () => {
-    if(!confirm("☢️ NUCLEAR OPTION: This will delete ALL pending UTR handshakes currently waiting for user confirmation. This cannot be undone. Proceed?")) return;
-    
-    try {
-        await remove(ref(db, "pending_payouts"));
-        alert("✅ All pending transactions have been wiped.");
-        window.calcProfitEngine(); // Refresh Table UI
-    } catch(e) { alert("Error: " + e.message); }
-};
-
-// Ensure postAdminPayout remains available
-window.postAdminPayout = async (amt) => {
-    if(!amt || amt <= 0) return alert("Invalid amount.");
-    if(confirm(`Post ₹${amt.toFixed(2)} Admin Share to Master Ledger?`)) {
-        await push(ref(db, "finance"), {
-            type: "EXPENSE", amount: amt, desc: "Payout: Admin Management Profit Share", mode: "Direct Payout", status: "Approved", by: currentUser.email, timestamp: serverTimestamp()
+        const updates = {};
+        rows.forEach(row => {
+            const uid = row.getAttribute("data-uid");
+            const status = row.querySelector(".status-cell").innerText === "PRESENT" ? "Present" : "Absent";
+            updates[`attendance/${date}/${uid}`] = {
+                status: status,
+                userName: row.getAttribute("data-name"),
+                timestamp: serverTimestamp()
+            };
         });
-        alert("✅ Admin share posted.");
-    }
+
+        try {
+            await update(ref(db), updates);
+            alert("✅ Attendance Saved.");
+            window.loadAttendanceLog(false);
+            window.calcProfitEngine(); 
+        } catch(e) { alert("Save error: " + e.message); }
+    };
+
+    // 4. LOG VIEWER
+    window.loadAttendanceLog = (append = false) => {
+        const tbody = document.getElementById("attTableBody");
+        onValue(ref(db, "attendance"), (snap) => {
+            if(!append) tbody.innerHTML = "";
+            if(!snap.exists()) return;
+
+            snap.forEach(daySnap => {
+                const date = daySnap.key;
+                daySnap.forEach(userSnap => {
+                    const uid = userSnap.key;
+                    const v = userSnap.val();
+                    const isPresent = v.status === "Present";
+
+                    tbody.innerHTML += `
+                        <tr style="background:#f8fafc; border-left: 4px solid ${isPresent?'#10b981':'#e11d48'};">
+                            <td>${date}</td>
+                            <td style="font-weight:bold;">${v.userName}</td>
+                            <td style="font-weight:900; color:${isPresent ? '#10b981' : '#e11d48'};">${v.status.toUpperCase()}</td>
+                            <td><button class="${isPresent?'danger':'success'}" onclick="window.updateAttStatus('${date}','${uid}','${isPresent?'Absent':'Present'}')">Change Status</button></td>
+                            <td style="text-align:center;"><button onclick="window.deleteAttendanceRecord('${date}','${uid}')" style="color:red; background:none; border:none;"><i class="fas fa-trash"></i></button></td>
+                        </tr>`;
+                });
+            });
+        }, { onlyOnce: true });
+    };
+
+    // 5. PROFIT ENGINE
+    window.calcProfitEngine = async () => {
+        const clientPay = parseFloat(document.getElementById("inpClientPay").value) || 0;
+        const reservePer = parseFloat(document.getElementById("inpReservePercent").value) || 0;
+        const adminSharePer = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
+        
+        const financeSnap = await get(ref(db, "finance"));
+        let totalSpent = 0;
+        financeSnap.forEach(c => {
+            const v = c.val();
+            if((v.type === 'DEBIT' || v.type === 'EXPENSE') && v.status === 'Approved') 
+                totalSpent += parseFloat(v.amount || 0);
+        });
+        document.getElementById("dispPayrollSpent").innerText = `₹ ${totalSpent.toFixed(2)}`;
+
+        const netProfit = clientPay - totalSpent;
+        if(netProfit <= 0) return;
+
+        const reserveAmt = (netProfit * reservePer) / 100;
+        const distributable = netProfit - reserveAmt;
+        const adminAmt = (distributable * adminSharePer) / 100;
+        const staffPool = distributable - adminAmt;
+
+        document.getElementById("resNetProfit").innerText = `₹ ${netProjectProfit.toFixed(2)}`;
+        document.getElementById("resReserveAmt").innerText = `₹ ${reserveAmt.toFixed(2)}`;
+        document.getElementById("profitResultArea").classList.remove("hidden");
+
+        const attSnap = await get(ref(db, "attendance"));
+        const userStats = {}; let totalGlobalPresents = 0;
+        if(attSnap.exists()){
+            attSnap.forEach(day => day.forEach(uRec => {
+                const uid = uRec.key;
+                if(!userStats[uid]) userStats[uid] = { p: 0, t: 0 };
+                userStats[uid].t++;
+                if(uRec.val().status === "Present") { userStats[uid].p++; totalGlobalPresents++; }
+            }));
+        }
+
+        const pBody = document.getElementById("payoutTableBody");
+        pBody.innerHTML = `
+            <tr style="background:#fffbeb; border:2.5px solid var(--metro-gold);">
+                <td style="font-weight:900;">ADMIN MANAGEMENT SHARE</td>
+                <td style="text-align:center;">100%</td>
+                <td style="text-align:center;"><input type="number" id="manualAdminPercentInp" value="${adminSharePer}" oninput="window.calcProfitEngine()" style="width:50px;"> %</td>
+                <td style="text-align:right; font-weight:900; color:var(--success-green);">₹ ${adminAmt.toFixed(2)}</td>
+                <td style="text-align:center;"><button onclick="window.postAdminPayout(${adminAmt})" class="success" style="font-size:10px;">POST</button></td>
+            </tr>`;
+
+        const userSnap = await get(ref(db, "users"));
+        userSnap.forEach(c => {
+            const uid = c.key;
+            if(ADMIN_EMAILS.includes(c.val().email.toLowerCase()) || !userStats[uid] || userStats[uid].p === 0) return;
+            const share = (userStats[uid].p / (totalGlobalPresents || 1)) * staffPool;
+            pBody.innerHTML += `
+                <tr>
+                    <td style="font-weight:bold;">${c.val().name}</td>
+                    <td style="text-align:center;">${((userStats[uid].p/userStats[uid].t)*100).toFixed(0)}%</td>
+                    <td style="text-align:center;">${((share/distributable)*100).toFixed(1)}%</td>
+                    <td style="text-align:right; font-weight:bold;">₹ ${share.toFixed(2)}</td>
+                    <td style="text-align:center;">
+                        <div id="status_box_${uid}" style="display:flex; gap:2px; justify-content:center;">
+                            <input type="text" id="utr_admin_${uid}" maxlength="4" placeholder="UTR" style="width:40px; font-size:10px;">
+                            <button onclick="window.initiatePayoutHandshake('${uid}', ${share}, '${c.val().name}')" class="info" style="padding:4px 8px; font-size:9px;">SEND</button>
+                        </div>
+                    </td>
+                </tr>`;
+        });
+    };
+
+    // 6. UTILITY ACTIONS (DELETE / POST / HANDSHAKE)
+    window.deleteAttendanceRecord = async (date, uid) => {
+        if(confirm("Delete record?")) {
+            await remove(ref(db, `attendance/${date}/${uid}`));
+            window.calcProfitEngine();
+        }
+    };
+
+    window.updateAttStatus = async (date, uid, newStatus) => {
+        await update(ref(db, `attendance/${date}/${uid}`), { status: newStatus });
+        window.calcProfitEngine();
+    };
+
+    window.initiatePayoutHandshake = async (uid, amt, name) => {
+        const utr = document.getElementById(`utr_admin_${uid}`).value;
+        if(utr.length !== 4) return alert("Enter 4 digits.");
+        await set(ref(db, `pending_payouts/${uid}`), { amount: amt, targetName: name, utrSuffix: utr, status: "AWAITING_CONFIRMATION", time: serverTimestamp() });
+        document.getElementById(`status_box_${uid}`).innerHTML = "<span style='color:orange; font-size:10px;'>⏳ Pending</span>";
+    };
+
+    window.finalizeProfitEntry = async () => {
+        const netProfit = parseFloat(document.getElementById("resNetProfit").innerText.replace("₹ ", ""));
+        if(!netProfit) return alert("No profit detected.");
+        await push(ref(db, "finance"), { type: "CREDIT", amount: netProfit, desc: "Project Profit Settlement", status: "Approved", timestamp: serverTimestamp() });
+        alert("✅ Posted to Balance Sheet.");
+    };
+    
+    window.postAdminPayout = async (amt) => {
+        await push(ref(db, "finance"), { type: "EXPENSE", amount: amt, desc: "Admin Share Payout", status: "Approved", timestamp: serverTimestamp() });
+        alert("✅ Posted.");
+    };
 };
+
+// FINAL STEP: CALL THE INITIALIZER
+setupGlobalAttendanceFunctions();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
