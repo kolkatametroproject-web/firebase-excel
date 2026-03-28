@@ -8917,7 +8917,7 @@ This action cannot be undone.`);
     }
 };
 // =========================================================
-// 📅 MRPSP MASTER ENGINE: CLEAN UI & SMART PROFIT
+// 💰 MRPSP MASTER SYSTEM: DASHBOARD, ATTENDANCE & PAYOUT
 // =========================================================
 
 const initAttendanceSystem = () => {
@@ -8925,7 +8925,7 @@ const initAttendanceSystem = () => {
     let currentInterviewIndex = 0;
     let interviewDate = "";
 
-    // --- 1. THE REFINED PROFIT ENGINE (CLEAN UI) ---
+    // --- 1. THE FINANCIAL DASHBOARD ENGINE ---
     window.calcProfitEngine = async () => {
         const dateEl = document.getElementById("attDate");
         const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
@@ -8935,7 +8935,7 @@ const initAttendanceSystem = () => {
         if (!dateEl || !dateEl.value) return; 
         const selDate = dateEl.value;
 
-        // Fetch Spending
+        // Fetch Spending for specific date
         const finSnap = await get(ref(db, "finance"));
         let dateSpent = 0;
         if (finSnap.exists()) {
@@ -8947,90 +8947,93 @@ const initAttendanceSystem = () => {
                 }
             });
         }
-        
-        // Update Spent Card
-        const spentEl = document.getElementById("dispPayrollSpent");
-        if(spentEl) spentEl.innerHTML = `<span style="font-size:0.6em; vertical-align:middle;">₹</span>${dateSpent.toLocaleString('en-IN')}`;
 
-        const netProfit = clientPay - dateSpent;
+        // --- MASTER MATH ---
+        const totalRevenue = clientPay; 
+        const netProfit = totalRevenue - dateSpent; 
         const reserveAmt = (netProfit > 0) ? (netProfit * reservePer / 100) : 0;
-        const distributable = (netProfit > 0) ? (netProfit - reserveAmt) : 0;
-        const adminAmt = (distributable * adminSharePer) / 100;
-        const staffPool = distributable - adminAmt;
+        const finalPool = (netProfit > 0) ? (netProfit - reserveAmt) : 0; 
+        const adminAmt = (finalPool * adminSharePer) / 100;
+        const staffPool = finalPool - adminAmt;
 
-        // Update Stat Badges
-        if(document.getElementById("resNetProfit")) document.getElementById("resNetProfit").innerText = `₹ ${netProfit.toLocaleString('en-IN')}`;
-        if(document.getElementById("resReserveAmt")) document.getElementById("resReserveAmt").innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
+        // --- 4-CARD DASHBOARD UI ---
+        const summaryBox = document.getElementById("profitSummaryRow");
+        if(summaryBox) {
+            summaryBox.innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin: 20px 0;">
+                    <div style="background:#fff; border-top:4px solid #10b981; padding:15px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
+                        <p style="font-size:10px; color:#64748b; margin:0; font-weight:bold;">TOTAL REVENUE</p>
+                        <h2 style="margin:5px 0;">₹${totalRevenue.toLocaleString('en-IN')}</h2>
+                    </div>
+                    <div style="background:#fff; border-top:4px solid #ef4444; padding:15px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
+                        <p style="font-size:10px; color:#64748b; margin:0; font-weight:bold;">TOTAL SPENT (DB)</p>
+                        <h2 style="margin:5px 0; color:#ef4444;">₹${dateSpent.toLocaleString('en-IN')}</h2>
+                    </div>
+                    <div style="background:#fff; border-top:4px solid #f59e0b; padding:15px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
+                        <p style="font-size:10px; color:#64748b; margin:0; font-weight:bold;">RESERVE (${reservePer}%)</p>
+                        <h2 style="margin:5px 0; color:#f59e0b;">- ₹${reserveAmt.toLocaleString('en-IN')}</h2>
+                    </div>
+                    <div style="background:#1e293b; color:white; padding:15px; border-radius:8px; box-shadow:0 10px 15px -3px rgba(0,0,0,0.2);">
+                        <p style="font-size:10px; color:#94a3b8; margin:0; font-weight:bold;">FINAL DISTRIBUTABLE</p>
+                        <h2 style="margin:5px 0; color:#3b82f6;">₹${finalPool.toLocaleString('en-IN')}</h2>
+                    </div>
+                </div>`;
+        }
 
-        // Attendance Math
+        // --- ATTENDANCE & POINTS ---
         const attSnap = await get(ref(db, "attendance"));
         const userStats = {}; let globalPts = 0;
-
         if (attSnap.exists()) {
-            const allData = attSnap.val();
-            const dates = Object.keys(allData).sort();
+            const allAt = attSnap.val();
+            const dates = Object.keys(allAt).sort();
             const users = await get(ref(db, "users"));
-
-            users.forEach(uSnap => {
-                const uid = uSnap.key;
-                if (ADMIN_EMAILS.includes(uSnap.val().email.toLowerCase())) return;
-
+            users.forEach(uS => {
+                const uid = uS.key;
+                if (ADMIN_EMAILS.includes(uS.val().email.toLowerCase())) return;
                 let pts = 0; let combo = 0; let days = 0;
                 dates.forEach(d => {
-                    if (allData[d] && allData[d][uid]) {
-                        days++;
-                        const s = allData[d][uid].status;
+                    if (allAt[d] && allAt[d][uid]) {
+                        days++; const s = allAt[d][uid].status;
                         if (s === "Present") { pts += 1; combo = 0; }
-                        else if (s === "Excused") {
-                            combo++;
-                            pts += (combo === 2) ? 0 : 1; 
-                            if(combo === 2) combo = 0;
-                        } else { combo = 0; }
+                        else if (s === "Excused") { combo++; pts += (combo === 2) ? 0 : 1; if(combo === 2) combo = 0; }
+                        else { combo = 0; }
                     }
                 });
-                if (days > 0) {
-                    userStats[uid] = { name: uSnap.val().name, pts: pts, total: days };
-                    globalPts += pts;
-                }
+                if (days > 0) { userStats[uid] = { name: uS.val().name, pts, total: days }; globalPts += pts; }
             });
         }
 
+        // --- RENDER PAYOUT TABLE ---
         const pBody = document.getElementById("payoutTableBody");
         if(!pBody) return;
-        
-        // 🎨 BEAUTIFIED TABLE RENDERING
         pBody.innerHTML = `
-            <tr style="background:rgba(255,193,7,0.05); border-left:4px solid #ffc107;">
-                <td style="padding:15px;"><b>ADMIN MANAGEMENT</b></td>
+            <tr style="background:#f8fafc; font-weight:bold;">
+                <td style="padding:12px;">ADMIN MANAGEMENT</td>
                 <td style="text-align:center;">100%</td>
-                <td style="text-align:center;">
-                    <div style="display:inline-flex; align-items:center; background:#eee; padding:2px 8px; border-radius:4px;">
-                        <input type="number" id="manualAdminPercentInp" value="${adminSharePer}" oninput="window.calcProfitEngine()" style="width:40px; border:none; background:none; text-align:center; font-weight:bold;">%
-                    </div>
-                </td>
-                <td style="text-align:right; font-weight:900; color:#1e293b;">₹ ${adminAmt.toFixed(2)}</td>
-                <td style="text-align:center;"><button onclick="window.postAdminPayout(${adminAmt})" class="success" style="padding:6px 12px; font-size:10px;">POST</button></td>
+                <td style="text-align:center;"><input type="number" id="manualAdminPercentInp" value="${adminSharePer}" oninput="window.calcProfitEngine()" style="width:40px; border:1px solid #ddd; text-align:center;">%</td>
+                <td style="text-align:right;">₹ ${adminAmt.toFixed(2)}</td>
+                <td style="text-align:center;"><button class="success" onclick="window.postAdminPayout(${adminAmt})">POST</button></td>
             </tr>`;
 
         Object.entries(userStats).forEach(([uid, d]) => {
             const share = (d.pts / (globalPts || 1)) * staffPool;
             pBody.innerHTML += `
-                <tr style="border-bottom:1px solid #f1f5f9;">
-                    <td style="padding:12px;">${d.name}</td>
-                    <td style="text-align:center; color:#64748b;">${((d.pts/d.total)*100).toFixed(0)}%</td>
-                    <td style="text-align:center; font-weight:bold; color:#0f172a;">${((share/(distributable||1))*100).toFixed(1)}%</td>
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:10px;">${d.name}</td>
+                    <td style="text-align:center;">${((d.pts/d.total)*100).toFixed(0)}%</td>
+                    <td style="text-align:center; font-weight:bold;">${((share/(finalPool||1))*100).toFixed(1)}%</td>
                     <td style="text-align:right; font-weight:bold; color:#2563eb;">₹ ${share.toFixed(2)}</td>
                     <td style="text-align:center;">
-                        <div style="display:flex; gap:5px; justify-content:center; align-items:center;">
-                            <input type="text" id="utr_admin_${uid}" maxlength="4" placeholder="UTR" style="width:45px; padding:4px; font-size:10px; border:1px solid #ddd; border-radius:3px;">
-                            <button onclick="window.initiatePayoutHandshake('${uid}', ${share}, '${d.name}')" class="info" style="padding:5px 10px; font-size:9px;">SEND</button>
+                        <div id="status_box_${uid}" style="display:flex; gap:3px; justify-content:center;">
+                            <input type="text" id="utr_admin_${uid}" maxlength="4" placeholder="UTR" style="width:40px; font-size:10px;">
+                            <button onclick="window.initiatePayoutHandshake('${uid}', ${share}, '${d.name}')" class="info" style="padding:4px 8px; font-size:9px;">SEND</button>
                         </div>
                     </td>
                 </tr>`;
         });
     };
 
-    // --- 2. INTERVIEW & TOOLS (KEPT STABLE) ---
+    // --- 2. ATTENDANCE INTERVIEW MODE ---
     window.submitAttendanceBatch = async () => {
         const date = document.getElementById("attDate")?.value;
         if (!date) return alert("Select Date First");
@@ -9045,17 +9048,17 @@ const initAttendanceSystem = () => {
     window.nextInterviewStep = () => {
         const container = document.getElementById("interviewContainer");
         if (currentInterviewIndex >= interviewQueue.length) {
-            container.innerHTML = `<div style="text-align:center; padding:20px;"><h3>Session Complete</h3><button class="success" onclick="window.loadAttendanceList()">VIEW SUMMARY</button></div>`;
+            container.innerHTML = `<div style="text-align:center; padding:20px;"><h3>✅ All Processed</h3><button class="success" onclick="window.loadAttendanceList()">SAVE & FINISH</button></div>`;
             return;
         }
         const u = interviewQueue[currentInterviewIndex];
         container.innerHTML = `
-            <div style="background:#fff; padding:20px; border:1px solid #e2e8f0; border-radius:8px; text-align:center; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);">
-                <p style="font-size:10px; color:#94a3b8; text-transform:uppercase;">Personnel ${currentInterviewIndex + 1}/${interviewQueue.length}</p>
-                <h2 style="margin:10px 0;">${u.name}</h2>
+            <div style="background:#fff; padding:20px; border:1px solid #e2e8f0; border-radius:8px; text-align:center; box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+                <p style="font-size:10px; color:#94a3b8;">PERSONNEL ${currentInterviewIndex+1}/${interviewQueue.length}</p>
+                <h2 style="margin:10px 0; color:#1e293b;">Is <b>${u.name}</b> Present?</h2>
                 <div style="display:flex; gap:10px; justify-content:center;">
-                    <button class="success" onclick="window.recordInterviewStep('${u.uid}', 'Present')" style="padding:10px 30px;">PRESENT</button>
-                    <button class="danger" onclick="window.recordInterviewStep('${u.uid}', 'Absent')" style="padding:10px 30px;">ABSENT</button>
+                    <button class="success" onclick="window.recordInterviewStep('${u.uid}', 'Present')" style="padding:10px 30px;">YES</button>
+                    <button class="danger" onclick="window.recordInterviewStep('${u.uid}', 'Absent')" style="padding:10px 30px;">NO</button>
                 </div>
             </div>`;
     };
@@ -9071,23 +9074,30 @@ const initAttendanceSystem = () => {
         const tbody = document.getElementById("attTableBody");
         const snap = await get(ref(db, `attendance/${date}`));
         tbody.innerHTML = "";
-        if(!snap.exists()) { tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px; color:#94a3b8;'>No data for this date.</td></tr>"; return; }
+        if(!snap.exists()) { tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px; color:#94a3b8;'>No data. Hit 'Create Day Record'.</td></tr>"; return; }
         snap.forEach(uS => {
             const v = uS.val(); const s = v.status.toUpperCase();
             let color = s === "PRESENT" ? "#10b981" : "#e11d48";
-            tbody.innerHTML += `<tr><td>${date}</td><td><b>${v.userName}</b></td><td style="color:${color}; font-weight:bold;">${s}</td><td>${v.userReason||'-'}</td><td>-</td><td style="text-align:center;"><button onclick="window.deleteSingleAtt('${date}','${uS.key}')" style="background:none; border:none; color:red; cursor:pointer;"><i class="fas fa-trash"></i></button></td></tr>`;
+            tbody.innerHTML += `<tr><td>${date}</td><td><b>${v.userName}</b></td><td style="color:${color}; font-weight:bold;">${s}</td><td>${v.userReason||'-'}</td><td>-</td><td style="text-align:center;"><button onclick="window.deleteSingleAtt('${date}','${uS.key}')" style="background:none; border:none; color:red;"><i class="fas fa-trash-alt"></i></button></td></tr>`;
         });
         window.calcProfitEngine();
     };
 
+    // --- 3. PAYOUT HANDSHAKE & TOOLS ---
     window.initiatePayoutHandshake = async (uid, amt, name) => {
         const utr = document.getElementById(`utr_admin_${uid}`).value;
-        if(utr.length !== 4) return alert("UTR suffix required.");
+        if(utr.length !== 4) return alert("Enter last 4 digits of UTR.");
         await set(ref(db, `pending_payouts/${uid}`), { amount: amt, targetName: name, utrSuffix: utr, status: "AWAITING_CONFIRMATION", time: serverTimestamp() });
         document.getElementById(`status_box_${uid}`).innerHTML = "⏳ Pending";
     };
 
+    window.postAdminPayout = async (amt) => {
+        await push(ref(db, "finance"), { type: "EXPENSE", amount: amt, desc: "Admin Management Payout", status: "Approved", timestamp: serverTimestamp() });
+        alert("✅ Posted.");
+    };
+
     window.loadAttendanceLog = () => window.calcProfitEngine();
+    window.deleteSingleAtt = async (d, u) => { if(confirm("Delete?")) { await remove(ref(db, `attendance/${d}/${u}`)); window.loadAttendanceList(); } };
 };
 
 initAttendanceSystem();
