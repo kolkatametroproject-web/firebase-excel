@@ -8863,41 +8863,42 @@ window.startVerificationScan = () => {
     }
 };
 // =========================================================
-// 📅 CLEAN-LOG ATTENDANCE & FORCE-DELETE ENGINE
+// 📅 STABLE ATTENDANCE & PROFIT ENGINE (VERSION 5.0)
 // =========================================================
 
 const setupGlobalAttendanceFunctions = () => {
 
-    // 1. LOAD PREVIEW: Wipes table and shows ONLY new draft rows
+    // 1. LOAD PREVIEW: Shows NEW people to mark for the selected date
     window.loadAttendanceList = async () => {
         const dateEl = document.getElementById("attDate");
         if(!dateEl || !dateEl.value) return alert("⚠️ Select Date First.");
         const date = dateEl.value;
         
         const tbody = document.getElementById("attTableBody");
-        tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>🔍 Fetching...</td></tr>";
+        tbody.innerHTML = ""; // CLEAN WIPE
 
         try {
             const userSnap = await get(ref(db, "users"));
-            tbody.innerHTML = ""; // FULL WIPE
-
+            
             userSnap.forEach(c => {
                 const u = c.val();
                 if(ADMIN_EMAILS.includes(u.email.toLowerCase())) return;
 
                 tbody.innerHTML += `
                     <tr class="draft-att-row" data-uid="${c.key}" data-name="${u.name || u.email}">
-                        <td style="background:#fffbeb; font-weight:bold;">${date} (NEW)</td>
+                        <td style="background:#fffbeb; font-weight:bold; color:#b45309;">${date} (NEW)</td>
                         <td>${u.name || u.email}</td>
                         <td class="status-cell" style="font-weight:900; color:#10b981;">PRESENT</td>
-                        <td><button class="warning" onclick="window.toggleDraftStatus(this)">TOGGLE</button></td>
-                        <td style="text-align:center; color:#ccc;"><i class="fas fa-edit"></i></td>
+                        <td><button class="warning" onclick="window.toggleDraftStatus(this)" style="font-size:10px; padding:5px;">TOGGLE</button></td>
+                        <td style="text-align:center; color:#ccc;"><i class="fas fa-save"></i></td>
                     </tr>`;
             });
+            // Append saved logs ONLY if you specifically want to see them
+            window.loadAttendanceLog(true); 
         } catch (e) { alert("Error: " + e.message); }
     };
 
-    // 2. TOGGLE STATUS (Purely UI)
+    // 2. TOGGLE STATUS (UI ONLY)
     window.toggleDraftStatus = (btn) => {
         const statusCell = btn.closest('tr').querySelector('.status-cell');
         const isPresent = statusCell.innerText === "PRESENT";
@@ -8905,11 +8906,11 @@ const setupGlobalAttendanceFunctions = () => {
         statusCell.style.color = isPresent ? "#e11d48" : "#10b981";
     };
 
-    // 3. SAVE: Commits drafts and then switches to LOG VIEW
+    // 3. SAVE: Moves data to Permanent Database
     window.submitAttendanceBatch = async () => {
         const date = document.getElementById("attDate").value;
         const rows = document.querySelectorAll(".draft-att-row");
-        if(rows.length === 0) return alert("Load Preview first.");
+        if(rows.length === 0) return alert("Click 'Load Preview' first.");
 
         const updates = {};
         rows.forEach(row => {
@@ -8922,78 +8923,78 @@ const setupGlobalAttendanceFunctions = () => {
         });
 
         await update(ref(db), updates);
-        alert("✅ Saved! Switching to Log View.");
-        window.loadAttendanceLog(); // This will clear the drafts and show saved data
+        alert("✅ SAVED TO DATABASE");
+        window.loadAttendanceLog(false); // Switch to permanent view
     };
 
-    // 4. LOG VIEWER: Wipes table and shows ONLY saved database records
-    window.loadAttendanceLog = () => {
+    // 4. PERMANENT LOG VIEWER (Manual Fetch - No Background Sync)
+    window.loadAttendanceLog = async (append = false) => {
         const tbody = document.getElementById("attTableBody");
-        tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Loading Logs...</td></tr>";
+        if(!append) tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Loading Logs...</td></tr>";
 
-        get(ref(db, "attendance")).then((snap) => {
-            tbody.innerHTML = ""; // FULL WIPE
-            if(!snap.exists()) {
-                tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No saved records.</td></tr>";
-                return;
-            }
+        const snap = await get(ref(db, "attendance"));
+        if(!append) tbody.innerHTML = ""; // Clear loader
 
-            snap.forEach(daySnap => {
-                const date = daySnap.key;
-                daySnap.forEach(userSnap => {
-                    const uid = userSnap.key;
-                    const v = userSnap.val();
-                    const isPresent = v.status === "Present";
+        if(!snap.exists()) {
+            if(!append) tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No records found.</td></tr>";
+            return;
+        }
 
-                    tbody.innerHTML += `
-                        <tr style="border-left: 5px solid ${isPresent?'#10b981':'#e11d48'};">
-                            <td>${date}</td>
-                            <td style="font-weight:bold;">${v.userName}</td>
-                            <td style="font-weight:900; color:${isPresent ? '#10b981' : '#e11d48'};">${v.status.toUpperCase()}</td>
-                            <td><button class="info" style="font-size:10px; padding:5px;" onclick="window.quickToggle('${date}','${uid}','${isPresent?'Absent':'Present'}')">CHANGE</button></td>
-                            <td style="text-align:center;">
-                                <button onclick="window.deleteAttendanceRecord('${date}','${uid}')" style="color:red; background:none; border:none; cursor:pointer; font-size:18px;">
-                                    <i class="fas fa-trash-alt"></i>
-                                </button>
-                            </td>
-                        </tr>`;
-                });
+        snap.forEach(daySnap => {
+            const date = daySnap.key;
+            daySnap.forEach(userSnap => {
+                const uid = userSnap.key;
+                const v = userSnap.val();
+                const isPresent = v.status === "Present";
+
+                tbody.innerHTML += `
+                    <tr style="border-left: 5px solid ${isPresent?'#10b981':'#e11d48'};">
+                        <td>${date}</td>
+                        <td style="font-weight:bold;">${v.userName}</td>
+                        <td style="font-weight:900; color:${isPresent ? '#10b981' : '#e11d48'};">${v.status.toUpperCase()}</td>
+                        <td><button class="info" style="font-size:10px; padding:5px;" onclick="window.quickToggle('${date}','${uid}','${isPresent?'Absent':'Present'}')">CHANGE</button></td>
+                        <td style="text-align:center;">
+                            <button class="danger" onclick="window.deleteAttendanceRecord('${date}','${uid}')" style="background:none; border:none; color:#e11d48; cursor:pointer; font-size:16px;">
+                                <i class="fas fa-trash-alt"></i>
+                            </button>
+                        </td>
+                    </tr>`;
             });
-            window.calcProfitEngine();
         });
+        window.calcProfitEngine();
     };
 
-    // 5. DELETE: Targeted path removal
+    // 5. DELETE FUNCTION (Fixed path targeting)
     window.deleteAttendanceRecord = async (date, uid) => {
         if(!confirm(`Delete record for ${date}?`)) return;
         try {
             await remove(ref(db, `attendance/${date}/${uid}`));
-            // Cleanup: Check if date folder is now empty
             const dateRef = ref(db, `attendance/${date}`);
             const check = await get(dateRef);
             if(!check.exists() || Object.keys(check.val()).length === 0) await remove(dateRef);
             
-            alert("✅ Deleted.");
-            window.loadAttendanceLog(); // Refresh
-        } catch(e) { alert("Error: " + e.message); }
+            alert("✅ Deleted Successfully.");
+            window.loadAttendanceLog(false); // Refresh list
+        } catch(e) { alert("Delete failed."); }
     };
 
-    window.quickToggle = async (date, uid, next) => {
-        await update(ref(db, `attendance/${date}/${uid}`), { status: next });
-        window.loadAttendanceLog();
+    window.quickToggle = async (date, uid, nextStatus) => {
+        await update(ref(db, `attendance/${date}/${uid}`), { status: nextStatus });
+        window.loadAttendanceLog(false);
     };
 
-    // --- PROFIT ENGINE (REMAINS SAME BUT GLOBAL) ---
+    // --- PROFIT CALCULATION (PERCENTAGE BASED) ---
     window.calcProfitEngine = async () => {
         const clientPay = parseFloat(document.getElementById("inpClientPay").value) || 0;
-        const reservePer = parseFloat(document.getElementById("inpReservePercent").value) || 0;
+        const reservePer = parseFloat(document.getElementById("inpReservePercent").value) || 10;
         const adminSharePer = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
         
         const financeSnap = await get(ref(db, "finance"));
         let totalSpent = 0;
         financeSnap.forEach(c => {
             const v = c.val();
-            if((v.type === 'DEBIT' || v.type === 'EXPENSE') && v.status === 'Approved') totalSpent += parseFloat(v.amount || 0);
+            if((v.type === 'DEBIT' || v.type === 'EXPENSE') && v.status === 'Approved') 
+                totalSpent += parseFloat(v.amount || 0);
         });
         document.getElementById("dispPayrollSpent").innerText = `₹ ${totalSpent.toFixed(2)}`;
 
@@ -9013,9 +9014,10 @@ const setupGlobalAttendanceFunctions = () => {
         const userStats = {}; let totalGlobalPresents = 0;
         if(attSnap.exists()){
             attSnap.forEach(day => day.forEach(uRec => {
-                if(!userStats[uRec.key]) userStats[uRec.key] = { p: 0, t: 0 };
-                userStats[uRec.key].t++;
-                if(uRec.val().status === "Present") { userStats[uRec.key].p++; totalGlobalPresents++; }
+                const id = uRec.key;
+                if(!userStats[id]) userStats[id] = { p: 0, t: 0 };
+                userStats[id].t++;
+                if(uRec.val().status === "Present") { userStats[id].p++; totalGlobalPresents++; }
             }));
         }
 
@@ -9025,8 +9027,8 @@ const setupGlobalAttendanceFunctions = () => {
                 <td style="font-weight:900;">ADMIN MANAGEMENT SHARE</td>
                 <td style="text-align:center;">100%</td>
                 <td style="text-align:center;"><input type="number" id="manualAdminPercentInp" value="${adminSharePer}" oninput="window.calcProfitEngine()" style="width:50px;"> %</td>
-                <td style="text-align:right; font-weight:900;">₹ ${adminAmt.toFixed(2)}</td>
-                <td style="text-align:center;"><button onclick="window.postAdminPayout(${adminAmt})" class="success" style="font-size:10px;">POST</button></td>
+                <td style="text-align:right; font-weight:900; color:var(--success-green);">₹ ${adminAmt.toFixed(2)}</td>
+                <td style="text-align:center;"><button onclick="window.postAdminPayout(${adminAmt})" class="success" style="font-size:10px; background:var(--metro-blue);">POST</button></td>
             </tr>`;
 
         const userSnap = await get(ref(db, "users"));
@@ -9034,15 +9036,17 @@ const setupGlobalAttendanceFunctions = () => {
             const uid = c.key;
             if(ADMIN_EMAILS.includes(c.val().email.toLowerCase()) || !userStats[uid] || userStats[uid].p === 0) return;
             const share = (userStats[uid].p / (totalGlobalPresents || 1)) * staffPool;
+            const sharePct = (share / (distributable || 1)) * 100;
+
             pBody.innerHTML += `
                 <tr>
-                    <td>${c.val().name}</td>
+                    <td style="font-weight:bold;">${c.val().name}</td>
                     <td style="text-align:center;">${((userStats[uid].p/userStats[uid].t)*100).toFixed(0)}%</td>
-                    <td style="text-align:center;">${((share/distributable)*100).toFixed(1)}%</td>
+                    <td style="text-align:center;">${sharePct.toFixed(1)}%</td>
                     <td style="text-align:right; font-weight:bold;">₹ ${share.toFixed(2)}</td>
                     <td style="text-align:center;">
                         <div id="status_box_${uid}" style="display:flex; gap:2px; justify-content:center;">
-                            <input type="text" id="utr_admin_${uid}" maxlength="4" placeholder="UTR" style="width:40px;">
+                            <input type="text" id="utr_admin_${uid}" maxlength="4" placeholder="UTR" style="width:40px; font-size:10px;">
                             <button onclick="window.initiatePayoutHandshake('${uid}', ${share}, '${c.val().name}')" class="info" style="padding:4px 8px; font-size:9px;">SEND</button>
                         </div>
                     </td>
@@ -9050,9 +9054,13 @@ const setupGlobalAttendanceFunctions = () => {
         });
     };
 
-    // Other Global Hooks
-    window.nuclearDeletePayouts = async () => { if(confirm("Wipe all?")) { await remove(ref(db, "pending_payouts")); window.calcProfitEngine(); } };
-    window.postAdminPayout = async (amt) => { await push(ref(db, "finance"), { type: "EXPENSE", amount: amt, desc: "Admin Profit Payout", status: "Approved", by: currentUser.email, timestamp: serverTimestamp() }); alert("✅ Posted."); };
+    window.postAdminPayout = async (amt) => {
+        if(confirm(`Post ₹${amt.toFixed(2)} Admin Share?`)) {
+            await push(ref(db, "finance"), { type: "EXPENSE", amount: amt, desc: "Admin Profit Share", status: "Approved", by: currentUser.email, timestamp: serverTimestamp() });
+            alert("✅ Posted to Ledger.");
+        }
+    };
+
     window.initiatePayoutHandshake = async (uid, amt, name) => {
         const utr = document.getElementById(`utr_admin_${uid}`).value;
         if(utr.length !== 4) return alert("Enter 4 digits.");
