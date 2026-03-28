@@ -8917,13 +8917,14 @@ This action cannot be undone.`);
     }
 };
 // =========================================================
-// 💎 MRPSP MASTER ENGINE: FINAL REVISED DISTRIBUTION
+// 💎 MRPSP MASTER ENGINE: FINAL REVISED & DEBUGGED
 // =========================================================
 
 const initAttendanceSystem = () => {
     // --- 1. THE AUDITOR: RANGE-BASED PROFIT ENGINE ---
     window.calcProfitEngine = async () => {
         try {
+            // UI Inputs
             const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
             const reservePer = parseFloat(document.getElementById("inpReservePercent")?.value) || 0;
             const adminSharePer = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
@@ -8931,7 +8932,11 @@ const initAttendanceSystem = () => {
             const startDate = document.getElementById("expStartDate")?.value;
             const endDate = document.getElementById("expEndDate")?.value;
 
-            if (!startDate || !endDate) return;
+            // Stop if dates are missing to prevent DB spam
+            if (!startDate || !endDate) {
+                console.log("Waiting for Project Date Range...");
+                return;
+            }
 
             // A. FETCH TOTAL SPENT FROM BALANCE SHEET (FINANCE NODE)
             const finSnap = await get(ref(db, "finance"));
@@ -8939,6 +8944,7 @@ const initAttendanceSystem = () => {
             if (finSnap.exists()) {
                 finSnap.forEach(c => {
                     const v = c.val();
+                    // Match Approved DEBIT/EXPENSE within the selected date range
                     if ((v.type === 'DEBIT' || v.type === 'EXPENSE') && v.status === 'Approved') {
                         const d = v.date || (v.timestamp ? new Date(v.timestamp).toISOString().split('T')[0] : null);
                         if (d >= startDate && d <= endDate) totalSpentDB += parseFloat(v.amount || 0);
@@ -8946,11 +8952,11 @@ const initAttendanceSystem = () => {
                 });
             }
 
-            // Update the "TOTAL SPENT (DB)" Card in your UI
-            const spentDisplay = document.getElementById("totalSpentDisplay");
+            // FIXED ID: Match your HTML 'dispPayrollSpent'
+            const spentDisplay = document.getElementById("dispPayrollSpent");
             if (spentDisplay) spentDisplay.innerText = `₹ ${totalSpentDB.toLocaleString('en-IN')}`;
 
-            // B. WATERFALL MATH
+            // B. WATERFALL MATH (ZERO-LOSS PROTECTED)
             const grossProfit = clientPay - totalSpentDB;
             const isLoss = grossProfit <= 0;
 
@@ -8959,31 +8965,47 @@ const initAttendanceSystem = () => {
             const adminAmt = !isLoss ? (netPool * adminSharePer / 100) : 0;
             const staffPool = !isLoss ? (netPool - adminAmt) : 0;
 
-            // C. RENDER STAKEHOLDER TABLE (THE BOTTOM PART)
+            // C. UPDATE DASHBOARD UI
+            const resNet = document.getElementById("resNetProfit");
+            const resRes = document.getElementById("resReserveAmt");
+            const resArea = document.getElementById("profitResultArea");
+
+            if (resNet && resRes) {
+                resArea.classList.remove("hidden");
+                resNet.innerText = `₹ ${grossProfit.toLocaleString('en-IN')}`;
+                resRes.innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
+                resArea.style.background = isLoss ? "#be123c" : "#0f172a"; // Red if loss
+            }
+
+            // D. RENDER STAKEHOLDER TABLE
             const pBody = document.getElementById("payoutTableBody");
             if (!pBody) return;
             pBody.innerHTML = ""; 
 
-            // 1. ADMIN ROW
+            // 1. ADMIN ROW (First Stakeholder)
             pBody.innerHTML += `
                 <tr style="background:#f8fafc; font-weight:bold;">
-                    <td style="padding:15px;">ADMIN (MANUAL)</td>
-                    <td style="text-align:center;">100%</td>
+                    <td style="padding:15px;">ADMIN (MANAGEMENT)</td>
+                    <td style="text-align:center;">---</td>
                     <td style="text-align:center;">${adminSharePer}%</td>
                     <td style="text-align:right; color:#1e293b;">₹ ${adminAmt.toFixed(2)}</td>
-                    <td style="text-align:center;"><span class="badge" style="background:#e2e8f0; color:#475569; padding:4px 8px; border-radius:4px; font-size:10px;">PROVISION</span></td>
+                    <td style="text-align:center;">
+                        <button class="success" style="font-size:10px; padding:4px 8px;" onclick="window.postAdminPayout(${adminAmt})">POST</button>
+                    </td>
                 </tr>`;
 
-            // 2. STAFF ROWS (BY ATTENDANCE)
+            // 2. STAFF ROWS (BY ATTENDANCE POINTS)
             const attSnap = await get(ref(db, "attendance"));
-            let globalPts = 0; let userStats = {};
+            let globalPts = 0; 
+            let userStats = {};
 
             if (attSnap.exists()) {
                 const allAt = attSnap.val();
-                const users = await get(ref(db, "users"));
-                users.forEach(uS => {
+                const usersSnap = await get(ref(db, "users"));
+                usersSnap.forEach(uS => {
                     const uid = uS.key;
                     if (ADMIN_EMAILS.includes(uS.val().email.toLowerCase())) return;
+                    
                     let pts = 0; let days = 0;
                     Object.keys(allAt).forEach(d => {
                         if (d >= startDate && d <= endDate && allAt[d][uid]) {
@@ -9010,44 +9032,39 @@ const initAttendanceSystem = () => {
                         <td style="text-align:center;">${sharePercent}%</td>
                         <td style="text-align:right; font-weight:bold; color:#2563eb;">₹ ${shareAmt.toFixed(2)}</td>
                         <td style="text-align:center;">
-                            <input type="text" id="utr_${uid}" placeholder="UTR" style="width:50px; font-size:10px; border:1px solid #ddd; border-radius:3px;">
+                            <input type="text" id="utr_${uid}" placeholder="UTR" style="width:45px; font-size:9px; border:1px solid #ddd;">
+                            <button onclick="window.initiatePayoutHandshake('${uid}', ${shareAmt}, '${d.name}')" class="info" style="font-size:9px; padding:2px 5px;">SEND</button>
                         </td>
                     </tr>`;
             });
 
-            // D. UPDATE THE MASTER BUTTON COLOR BASED ON PROFIT/LOSS
+            // E. SAFETY LOCK FOR MASTER BUTTON
             const masterBtn = document.getElementById("btnPostFinalBalance");
             if (masterBtn) {
-                masterBtn.style.background = isLoss ? "#ef4444" : "#0f172a";
-                masterBtn.innerText = isLoss ? "CANNOT POST LOSS TO BALANCE" : "POST TOTAL PROFIT TO BALANCE SHEET";
                 masterBtn.disabled = isLoss;
+                masterBtn.style.opacity = isLoss ? "0.5" : "1";
+                masterBtn.innerText = isLoss ? "⚠️ CANNOT SETTLE PROJECT LOSS" : "POST TOTAL PROFIT TO BALANCE SHEET";
             }
 
-        } catch (err) { console.error("Engine Error:", err); }
+        } catch (err) { console.error("Profit Engine Error:", err); }
     };
 
-    // --- 2. THE MASTER POSTER (THE BOTTOM BUTTON ACTION) ---
-    window.postProfitToBalance = async () => {
-        const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
-        const totalSpent = parseFloat(document.getElementById("totalSpentDisplay")?.innerText.replace('₹', '').replace(/,/g, '')) || 0;
-        const netProfit = clientPay - totalSpent;
-
-        if (netProfit <= 0) return alert("Loss detected. Settlement aborted.");
-
-        if (confirm(`Confirm posting Net Profit of ₹${netProfit.toLocaleString('en-IN')} to Balance Sheet?`)) {
-            // Log the Final Settlement as an Income Entry
-            await push(ref(db, "finance"), {
-                type: "INCOME",
-                category: "Project Settlement",
-                amount: netProfit,
-                desc: `Settlement: ${document.getElementById("expStartDate").value} to ${document.getElementById("expEndDate").value}`,
-                status: "Approved",
-                timestamp: serverTimestamp()
-            });
-            alert("✅ Profit recorded in Balance Sheet.");
-            window.calcProfitEngine(); // Refresh UI
-        }
+    // Helper for Admin Payout Posting
+    window.postAdminPayout = async (amt) => {
+        if(amt <= 0) return alert("Nothing to post.");
+        await push(ref(db, "finance"), { 
+            type: "EXPENSE", 
+            amount: amt, 
+            desc: "Admin Management Share", 
+            status: "Approved", 
+            timestamp: serverTimestamp(),
+            date: new Date().toISOString().split('T')[0]
+        });
+        alert("✅ Admin share posted to Ledger.");
     };
+
+    // Safety Link for Tab Switching
+    window.loadAttendanceLog = () => window.calcProfitEngine();
 };
 
 initAttendanceSystem();
