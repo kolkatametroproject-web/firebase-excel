@@ -8917,7 +8917,7 @@ This action cannot be undone.`);
     }
 };
 // =========================================================
-// 💎 MRPSP MASTER ENGINE: ZERO-CRASH & LOSS-PROTECTED
+// 💎 MRPSP MASTER ENGINE: REVISED PROFIT & LOSS ARCHITECTURE
 // =========================================================
 
 const initAttendanceSystem = () => {
@@ -8928,8 +8928,9 @@ const initAttendanceSystem = () => {
     // --- 1. THE AUDITOR: RANGE-BASED PROFIT ENGINE ---
     window.calcProfitEngine = async () => {
         try {
+            // UI Inputs
             const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
-            const reservePer = parseFloat(document.getElementById("inpReservePercent")?.value) || 10;
+            const reservePer = parseFloat(document.getElementById("inpReservePercent")?.value) || 0;
             const adminSharePer = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
             
             const startDate = document.getElementById("expStartDate")?.value;
@@ -8938,12 +8939,14 @@ const initAttendanceSystem = () => {
             // Stop if dates are missing
             if (!startDate || !endDate) return;
 
-            // Scan Finance for Expenses in Range
+            // A. SCAN FINANCE FOR EXPENSES (Balance Sheet Integration)
             const finSnap = await get(ref(db, "finance"));
             let totalRangeSpent = 0;
+            
             if (finSnap.exists()) {
-                finSnap.forEach(c => {
-                    const v = c.val();
+                finSnap.forEach(child => {
+                    const v = child.val();
+                    // Match Approved DEBIT/EXPENSE within the selected date range
                     if ((v.type === 'DEBIT' || v.type === 'EXPENSE') && v.status === 'Approved') {
                         const entryDate = v.date || (v.timestamp ? new Date(v.timestamp).toISOString().split('T')[0] : null);
                         if (entryDate >= startDate && entryDate <= endDate) {
@@ -8953,82 +8956,91 @@ const initAttendanceSystem = () => {
                 });
             }
 
-            // --- MASTER MATH (ZERO-LOSS PROTECTION) ---
-            const netProfit = clientPay - totalRangeSpent;
-            const isLoss = netProfit <= 0;
+            // B. MASTER MATH (WATERFALL PROTECTION)
+            const grossProfit = clientPay - totalRangeSpent;
+            const isLoss = grossProfit <= 0;
 
-            // Calculations clamped to 0 if there is a loss
-            const reserveAmt = (!isLoss) ? (netProfit * reservePer / 100) : 0;
-            const finalPool = (!isLoss) ? (netProfit - reserveAmt) : 0;
-            const adminAmt = (!isLoss) ? (finalPool * adminSharePer / 100) : 0;
-            const staffPool = (!isLoss) ? (finalPool - adminAmt) : 0;
+            // 1. Calculate Reserve from Gross
+            const reserveAmt = (!isLoss) ? (grossProfit * reservePer / 100) : 0;
+            const netAfterReserve = (!isLoss) ? (grossProfit - reserveAmt) : 0;
 
-            // --- ADMIN DASHBOARD UI ---
+            // 2. Calculate Admin Share from Net
+            const adminAmt = (!isLoss) ? (netAfterReserve * adminSharePer / 100) : 0;
+
+            // 3. Final Pool for Staff
+            const staffPool = (!isLoss) ? (netAfterReserve - adminAmt) : 0;
+
+            // C. ADMIN DASHBOARD UI
             const summaryBox = document.getElementById("profitSummaryRow");
             if (summaryBox && isAdmin) {
                 summaryBox.style.display = "block";
                 summaryBox.innerHTML = `
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;">
-                        <div style="background:#fff; border-top:4px solid #10b981; padding:15px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                            <p style="font-size:10px; color:#64748b; margin:0; font-weight:bold;">CLIENT REVENUE</p>
-                            <h2 style="margin:5px 0; color:#1e293b;">₹${clientPay.toLocaleString('en-IN')}</h2>
+                        <div style="background:#fff; border-top:4px solid #3b82f6; padding:15px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
+                            <p style="font-size:10px; color:#64748b; margin:0; font-weight:bold;">GROSS PROFIT</p>
+                            <h2 style="margin:5px 0; color:#1e293b;">₹${grossProfit.toLocaleString('en-IN')}</h2>
                         </div>
-                        <div style="background:#fff; border-top:4px solid #ef4444; padding:15px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                            <p style="font-size:10px; color:#64748b; margin:0; font-weight:bold;">TOTAL SPENT (RANGE)</p>
-                            <h2 style="margin:5px 0; color:#ef4444;">₹${totalRangeSpent.toLocaleString('en-IN')}</h2>
+                        <div style="background:#fff; border-top:4px solid #f59e0b; padding:15px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
+                            <p style="font-size:10px; color:#64748b; margin:0; font-weight:bold;">RESERVE FUND</p>
+                            <h2 style="margin:5px 0; color:#f59e0b;">₹${reserveAmt.toLocaleString('en-IN')}</h2>
                         </div>
-                        <div style="background:${isLoss ? '#fef2f2' : '#1e293b'}; color:${isLoss ? '#b91c1c' : 'white'}; padding:15px; border-radius:8px; box-shadow:0 10px 15px rgba(0,0,0,0.1); border:${isLoss ? '1px solid #f87171' : 'none'};">
-                            <p style="font-size:10px; color:${isLoss ? '#f87171' : '#94a3b8'}; margin:0; font-weight:bold;">${isLoss ? '⚠️ PROJECT LOSS' : 'FINAL POOL'}</p>
-                            <h2 style="margin:5px 0;">₹${isLoss ? netProfit.toLocaleString('en-IN') : finalPool.toLocaleString('en-IN')}</h2>
+                        <div style="background:${isLoss ? '#fef2f2' : '#1e293b'}; color:${isLoss ? '#b91c1c' : 'white'}; padding:15px; border-radius:8px; box-shadow:0 10px 15px rgba(0,0,0,0.1);">
+                            <p style="font-size:10px; color:${isLoss ? '#f87171' : '#94a3b8'}; margin:0; font-weight:bold;">${isLoss ? '⚠️ LOSS' : 'STAFF DISTRIBUTION POOL'}</p>
+                            <h2 style="margin:5px 0;">₹${isLoss ? grossProfit.toLocaleString('en-IN') : staffPool.toLocaleString('en-IN')}</h2>
                         </div>
                     </div>`;
             }
 
-            // --- ATTENDANCE & PAYOUT TABLE ---
+            // D. PERSONNEL POINTS (Filtered by Range)
             const pBody = document.getElementById("payoutTableBody");
             if (!pBody) return;
-            pBody.innerHTML = ""; // Wipe previous
+            pBody.innerHTML = ""; 
 
-            // Admin Management Row
+            const attSnap = await get(ref(db, "attendance"));
+            let globalPts = 0; 
+            let userStats = {};
+
+            if (attSnap.exists()) {
+                const allAt = attSnap.val();
+                const users = await get(ref(db, "users"));
+                
+                users.forEach(uS => {
+                    const uid = uS.key;
+                    if (ADMIN_EMAILS.includes(uS.val().email.toLowerCase())) return;
+
+                    let pts = 0; let combo = 0; let daysTracked = 0;
+                    
+                    // Only count attendance within the project range
+                    Object.keys(allAt).forEach(d => {
+                        if (d >= startDate && d <= endDate && allAt[d][uid]) {
+                            daysTracked++;
+                            const s = allAt[d][uid].status;
+                            if (s === "Present") { pts += 1; combo = 0; }
+                            else if (s === "Excused") { combo++; pts += (combo === 2) ? 0 : 1; if(combo === 2) combo = 0; }
+                        }
+                    });
+
+                    if (daysTracked > 0) {
+                        userStats[uid] = { name: uS.val().name, pts, total: daysTracked };
+                        if (!isLoss) globalPts += pts;
+                    }
+                });
+            }
+
+            // E. RENDER ROWS
+            // Admin Row
             if (isAdmin) {
                 pBody.innerHTML += `
                     <tr style="background:#f8fafc; font-weight:bold;">
                         <td style="padding:12px;">ADMIN MANAGEMENT</td>
-                        <td style="text-align:center;">100%</td>
+                        <td style="text-align:center;">---</td>
                         <td style="text-align:center;">${adminSharePer}%</td>
                         <td style="text-align:right;">₹ ${adminAmt.toFixed(2)}</td>
                         <td style="text-align:center;">${!isLoss ? `<button class="success" onclick="window.postAdminPayout(${adminAmt})">POST</button>` : 'LOSS'}</td>
                     </tr>`;
             }
 
-            // Personnel Points (Consecutive Penalty Logic)
-            const attSnap = await get(ref(db, "attendance"));
-            let globalPts = 0; let userStats = {};
-            if (attSnap.exists()) {
-                const allAt = attSnap.val();
-                const dates = Object.keys(allAt).sort();
-                const users = await get(ref(db, "users"));
-                
-                users.forEach(uS => {
-                    const uid = uS.key;
-                    if (ADMIN_EMAILS.includes(uS.val().email.toLowerCase())) return;
-                    let pts = 0; let combo = 0; let days = 0;
-                    dates.forEach(d => {
-                        if (allAt[d] && allAt[d][uid]) {
-                            days++; const s = allAt[d][uid].status;
-                            if (s === "Present") { pts += 1; combo = 0; }
-                            else if (s === "Excused") { combo++; pts += (combo === 2) ? 0 : 1; if(combo === 2) combo = 0; }
-                            else { combo = 0; }
-                        }
-                    });
-                    if (days > 0) { 
-                        userStats[uid] = { name: uS.val().name, pts, total: days }; 
-                        if (!isLoss) globalPts += pts; 
-                    }
-                });
-            }
-
-            // Render Staff Rows
+            // Staff Rows
             Object.entries(userStats).forEach(([uid, d]) => {
                 const share = (isLoss || globalPts === 0) ? 0 : (d.pts / globalPts) * staffPool;
                 const isMe = (uid === currentUser.uid);
@@ -9036,13 +9048,13 @@ const initAttendanceSystem = () => {
                 pBody.innerHTML += `
                     <tr style="${isMe ? 'background:#f0f9ff;' : ''}">
                         <td style="padding:10px;">${d.name}</td>
-                        <td style="text-align:center; font-size:11px; color:#64748b;">${((d.pts/d.total)*100).toFixed(0)}%</td>
-                        <td style="text-align:center; color:#0f172a;">${isAdmin ? (isLoss ? '0%' : ((share/(finalPool||1))*100).toFixed(1) + '%') : '---'}</td>
+                        <td style="text-align:center; font-size:11px; color:#64748b;">${d.pts} Pts</td>
+                        <td style="text-align:center;">${isAdmin ? (isLoss ? '0%' : ((share/(staffPool||1))*100).toFixed(1) + '%') : '---'}</td>
                         <td style="text-align:right; font-weight:bold; color:${isLoss ? '#94a3b8' : '#2563eb'};">₹ ${share.toFixed(2)}</td>
                         <td style="text-align:center;">
                             ${isAdmin && !isLoss ? `
                                 <div id="status_box_${uid}" style="display:flex; gap:3px; justify-content:center;">
-                                    <input type="text" id="utr_admin_${uid}" maxlength="4" placeholder="UTR" style="width:40px; font-size:10px; border:1px solid #ddd;">
+                                    <input type="text" id="utr_admin_${uid}" maxlength="4" placeholder="UTR" style="width:40px; font-size:10px;">
                                     <button onclick="window.initiatePayoutHandshake('${uid}', ${share}, '${d.name}')" class="info" style="padding:4px 8px; font-size:9px;">SEND</button>
                                 </div>` : '<i class="fas fa-lock" style="color:#eee;"></i>'}
                         </td>
@@ -9051,7 +9063,7 @@ const initAttendanceSystem = () => {
         } catch (err) { console.error("Profit Engine Error:", err); }
     };
 
-    // --- 2. ADMIN: CREATE DAY RECORD (INTERVIEW MODE) ---
+    // --- 2. ATTENDANCE & PAYOUT UTILITIES ---
     window.submitAttendanceBatch = async () => {
         const date = document.getElementById("attDate")?.value;
         if (!date) return alert("Please select Working Date first.");
@@ -9078,7 +9090,7 @@ const initAttendanceSystem = () => {
         }
         const u = interviewQueue[currentInterviewIndex];
         ui.innerHTML = `
-            <div style="background:#fff; padding:20px; border:1px solid #e2e8f0; border-radius:10px; text-align:center; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);">
+            <div style="background:#fff; padding:20px; border:1px solid #e2e8f0; border-radius:10px; text-align:center;">
                 <p style="font-size:10px; color:#94a3b8;">${currentInterviewIndex + 1}/${interviewQueue.length}</p>
                 <h2 style="margin:10px 0;">Is <b>${u.name}</b> Present?</h2>
                 <div style="display:flex; gap:10px; justify-content:center;">
@@ -9095,7 +9107,6 @@ const initAttendanceSystem = () => {
         currentInterviewIndex++; window.nextInterviewStep();
     };
 
-    // --- 3. PAYOUT HANDSHAKE & TOOLS ---
     window.initiatePayoutHandshake = async (uid, amt, name) => {
         const utr = document.getElementById(`utr_admin_${uid}`).value;
         if (utr.length !== 4) return alert("Enter last 4 digits of UTR.");
@@ -9111,7 +9122,7 @@ const initAttendanceSystem = () => {
         if (!date || !tbody) return;
         const snap = await get(ref(db, `attendance/${date}`));
         tbody.innerHTML = "";
-        if (!snap.exists()) { tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px;'>No data. Hit 'Create Day Record'.</td></tr>"; return; }
+        if (!snap.exists()) { tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px;'>No data.</td></tr>"; return; }
         snap.forEach(uS => {
             const v = uS.val(); const s = v.status.toUpperCase();
             tbody.innerHTML += `<tr><td>${date}</td><td><b>${v.userName}</b></td><td style="color:${s==='PRESENT'?'#10b981':'#e11d48'}; font-weight:bold;">${s}</td><td>${v.userReason||'-'}</td><td>-</td><td style="text-align:center;"><button onclick="window.deleteSingleAtt('${date}','${uS.key}')" style="background:none; border:none; color:red; cursor:pointer;"><i class="fas fa-trash-alt"></i></button></td></tr>`;
@@ -9120,13 +9131,22 @@ const initAttendanceSystem = () => {
     };
 
     window.deleteSingleAtt = async (d, u) => { if (confirm("Delete?")) { await remove(ref(db, `attendance/${d}/${u}`)); window.loadAttendanceList(); } };
-    window.postAdminPayout = async (amt) => { await push(ref(db, "finance"), { type: "EXPENSE", amount: amt, desc: "Admin Share", status: "Approved", timestamp: serverTimestamp() }); alert("✅ Posted."); };
     
-    // Safety Link for switchTab
+    window.postAdminPayout = async (amt) => { 
+        await push(ref(db, "finance"), { 
+            type: "EXPENSE", 
+            amount: amt, 
+            desc: "Admin Share Payout", 
+            status: "Approved", 
+            date: new Date().toISOString().split('T')[0],
+            timestamp: serverTimestamp() 
+        }); 
+        alert("✅ Admin share posted to finance."); 
+    };
+    
     window.loadAttendanceLog = () => window.calcProfitEngine();
 };
 
-// Initialize
 initAttendanceSystem();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
