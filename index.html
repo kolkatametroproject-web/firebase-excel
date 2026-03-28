@@ -8917,7 +8917,7 @@ This action cannot be undone.`);
     }
 };
 // =========================================================
-// 📅 MRPSP TOTAL ENGINE: INTERVIEW, ARCHIVE & SMART SHARE
+// 📅 MRPSP MASTER ENGINE: INTERVIEW, DATE-EXPENSE & PAYOUT
 // =========================================================
 
 const initAttendanceSystem = () => {
@@ -8925,182 +8925,242 @@ const initAttendanceSystem = () => {
     let currentInterviewIndex = 0;
     let interviewDate = "";
 
-    // --- 1. ADMIN: LOAD PREVIEW (FOCUSED DATE) ---
-    window.loadAttendanceList = async () => {
-        if (!isAdmin) return alert("Admin Only");
-        const date = document.getElementById("attDate")?.value;
-        if (!date) return alert("Select Date First");
-        
-        const tbody = document.getElementById("attTableBody");
-        tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing...</td></tr>";
-
-        try {
-            const snap = await get(ref(db, `attendance/${date}`));
-            tbody.innerHTML = "";
-            if (snap.exists()) {
-                Object.entries(snap.val()).forEach(([uid, v]) => {
-                    renderRow(tbody, date, uid, v.userName, v.status, v.userReason);
-                });
-            } else {
-                alert("No records for this date. Use 'Create Day Record' to start.");
-            }
-        } catch (e) { console.error(e); }
-    };
-
-    function renderRow(tbody, date, uid, name, status, reason) {
-        const s = (status || "Present").toUpperCase();
-        let color = s === "PRESENT" ? "#10b981" : (s === "EXCUSED" ? "#3b82f6" : "#e11d48");
-        tbody.innerHTML += `
-            <tr class="draft-att-row" data-uid="${uid}" data-name="${name}">
-                <td style="font-weight:bold;">${date}</td>
-                <td>${name}</td>
-                <td class="status-cell" style="font-weight:900; color:${color};">${s}</td>
-                <td style="font-size:10px; color:#64748b;">${reason || '---'}</td>
-                <td>
-                    <div style="display:flex; gap:2px;">
-                        <button class="warning" style="font-size:9px; padding:3px;" onclick="window.toggleDraftStatus(this)">TOGGLE</button>
-                        ${reason ? `<button class="success" style="font-size:9px; padding:3px;" onclick="window.forceStatus(this, 'Excused')">EXCUSE</button>` : ''}
-                    </div>
-                </td>
-                <td style="text-align:center;">
-                    <button onclick="window.deleteAttendanceRecord('${date}','${uid}')" style="color:red; background:none; border:none; cursor:pointer;"><i class="fas fa-trash-alt"></i></button>
-                </td>
-            </tr>`;
-    }
-
-    // --- 2. CREATE DAY: INTERVIEW MODE ---
+    // --- 1. ADMIN: START STEP-BY-STEP INTERVIEW ---
     window.submitAttendanceBatch = async () => {
-        const date = document.getElementById("attDate")?.value;
-        if (!date) return alert("Select Date");
+        const dateEl = document.getElementById("attDate");
+        if (!dateEl || !dateEl.value) return alert("⚠️ Select Working Date First.");
+        const date = dateEl.value;
         
+        // Check if records already exist to prevent accidental overwrites
+        const check = await get(ref(db, `attendance/${date}`));
+        if (check.exists() && !confirm("Records already exist for this date. Start interview to overwrite?")) return;
+
         const userSnap = await get(ref(db, "users"));
         interviewQueue = [];
         userSnap.forEach(c => {
-            if(!ADMIN_EMAILS.includes(c.val().email.toLowerCase())) {
-                interviewQueue.push({ uid: c.key, name: c.val().name || c.val().email });
+            const u = c.val();
+            if(!ADMIN_EMAILS.includes(u.email.toLowerCase())) {
+                interviewQueue.push({ uid: c.key, name: u.name || u.email });
             }
         });
+
         interviewDate = date;
         currentInterviewIndex = 0;
-        document.getElementById("attTableBody").innerHTML = `<tr><td colspan="6" id="interviewCell"></td></tr>`;
+        // Target the table body to show the interview UI
+        document.getElementById("attTableBody").innerHTML = `<tr><td colspan="6" id="interviewContainer"></td></tr>`;
         window.nextInterviewStep();
     };
 
     window.nextInterviewStep = () => {
-        const cell = document.getElementById("interviewCell");
-        if(currentInterviewIndex >= interviewQueue.length) {
-            cell.innerHTML = `<div style="text-align:center; padding:20px;"><h3>✅ Done</h3><button class="success" onclick="window.loadAttendanceList()">FINISH</button></div>`;
+        const container = document.getElementById("interviewContainer");
+        if (currentInterviewIndex >= interviewQueue.length) {
+            container.innerHTML = `
+                <div style="text-align:center; padding:30px; background:#f0fdf4; border-radius:10px;">
+                    <h3 style="color:#166534;">✅ Daily Interview Complete</h3>
+                    <p>All personnel for ${interviewDate} have been processed.</p>
+                    <button class="success" onclick="window.loadAttendanceList()" style="padding:10px 20px;">FINISH & VIEW LOGS</button>
+                </div>`;
             return;
         }
+
         const u = interviewQueue[currentInterviewIndex];
-        cell.innerHTML = `
-            <div style="background:#f1f5f9; padding:15px; border-radius:8px;">
-                <p>Personnel ${currentInterviewIndex+1} of ${interviewQueue.length}</p>
-                <h2>Is <b>${u.name}</b> Present?</h2>
-                <button class="success" onclick="window.recordStep('${u.uid}', 'Present')">YES</button>
-                <button class="danger" onclick="window.recordStep('${u.uid}', 'Absent')">NO</button>
+        container.innerHTML = `
+            <div style="background:#f8fafc; padding:25px; border:2px solid var(--metro-blue); border-radius:12px; animation: fadeIn 0.3s ease;">
+                <span style="font-size:11px; color:var(--metro-blue); font-weight:bold;">PERSONNEL ${currentInterviewIndex + 1} OF ${interviewQueue.length}</span>
+                <h2 style="margin:15px 0; color:#1e293b;">Is <span style="color:var(--metro-blue);">${u.name}</span> Present today?</h2>
+                <div style="display:flex; gap:15px;">
+                    <button class="success" onclick="window.recordInterviewStep('${u.uid}', 'Present')" style="flex:1; padding:15px; font-weight:900;">YES (PRESENT)</button>
+                    <button class="danger" onclick="window.recordInterviewStep('${u.uid}', 'Absent')" style="flex:1; padding:15px; font-weight:900;">NO (ABSENT)</button>
+                </div>
             </div>`;
     };
 
-    window.recordStep = async (uid, status) => {
-        await update(ref(db, `attendance/${interviewDate}/${uid}`), {
-            status: status, userName: interviewQueue[currentInterviewIndex].name, timestamp: serverTimestamp()
+    window.recordInterviewStep = async (uid, status) => {
+        await set(ref(db, `attendance/${interviewDate}/${uid}`), {
+            status: status,
+            userName: interviewQueue[currentInterviewIndex].name,
+            timestamp: serverTimestamp(),
+            adminDecision: status === "Present" ? "Approved" : "Pending"
         });
         currentInterviewIndex++;
         window.nextInterviewStep();
     };
 
-    // --- 3. SMART PROFIT SHARE (CONSECUTIVE PENALTY) ---
+    // --- 2. ADMIN: LOAD DATE-SPECIFIC LOGS ---
+    window.loadAttendanceList = async () => {
+        const dateEl = document.getElementById("attDate");
+        if (!dateEl || !dateEl.value) return alert("Select Date First.");
+        const date = dateEl.value;
+        
+        const tbody = document.getElementById("attTableBody");
+        tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing...</td></tr>";
+
+        const snap = await get(ref(db, `attendance/${date}`));
+        tbody.innerHTML = ""; // Clear loader
+
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px;'>No records found for this date. Click 'Create Day Record' to start.</td></tr>";
+            return;
+        }
+
+        snap.forEach(userSnap => {
+            const uid = userSnap.key;
+            const v = userSnap.val();
+            const s = (v.status || "Present").toUpperCase();
+            let color = s === "PRESENT" ? "#10b981" : (s === "EXCUSED" ? "#3b82f6" : "#e11d48");
+
+            tbody.innerHTML += `
+                <tr style="border-left:5px solid ${color};">
+                    <td>${date}</td>
+                    <td><b>${v.userName}</b></td>
+                    <td style="font-weight:900; color:${color};">${s}</td>
+                    <td style="font-size:10px; color:#64748b;">${v.userReason || '---'}</td>
+                    <td style="text-align:center;">
+                        ${isAdmin && (s.includes("ABSENT") || s.includes("PENDING")) && v.userReason ? `
+                            <button class="success" style="font-size:9px; padding:4px;" onclick="window.adminSetStatus('${date}','${uid}','Excused')">EXCUSE</button>
+                            <button class="danger" style="font-size:9px; padding:4px;" onclick="window.adminSetStatus('${date}','${uid}','Absent')">REJECT</button>
+                        ` : '<i class="fas fa-lock" style="color:#eee;"></i>'}
+                    </td>
+                    <td style="text-align:center;">
+                        ${isAdmin ? `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:red; background:none; border:none; cursor:pointer;"><i class="fas fa-trash-alt"></i></button>` : '-'}
+                    </td>
+                </tr>`;
+        });
+        window.calcProfitEngine();
+    };
+
+    // --- 3. PROFIT ENGINE: DATE-SPECIFIC SPENDING ---
     window.calcProfitEngine = async () => {
-        const clientPay = parseFloat(document.getElementById("inpClientPay").value) || 0;
-        const reservePer = parseFloat(document.getElementById("inpReservePercent").value) || 10;
+        const dateEl = document.getElementById("attDate");
+        const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
+        const reservePer = parseFloat(document.getElementById("inpReservePercent")?.value) || 10;
         const adminSharePer = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
         
-        const finSnap = await get(ref(db, "finance"));
-        let totalSpent = 0;
-        finSnap.forEach(c => {
-            const v = c.val();
-            if((v.type==='DEBIT'||v.type==='EXPENSE') && v.status==='Approved') totalSpent += parseFloat(v.amount||0);
-        });
+        if (!dateEl || !dateEl.value) return; 
+        const selDate = dateEl.value;
 
-        const netProfit = clientPay - totalSpent;
-        if(netProfit <= 0) return;
+        // FILTERED SPENDING: Count expenses matching the project date
+        const finSnap = await get(ref(db, "finance"));
+        let dateSpent = 0;
+        if (finSnap.exists()) {
+            finSnap.forEach(c => {
+                const v = c.val();
+                if ((v.type === 'DEBIT' || v.type === 'EXPENSE') && v.status === 'Approved') {
+                    const entryDate = v.date || (v.timestamp ? new Date(v.timestamp).toISOString().split('T')[0] : null);
+                    if (entryDate === selDate) dateSpent += parseFloat(v.amount || 0);
+                }
+            });
+        }
+        
+        document.getElementById("dispPayrollSpent").innerText = `₹ ${dateSpent.toFixed(2)}`;
+        const netProfit = clientPay - dateSpent;
+        if (netProfit <= 0) return;
 
         const distributable = netProfit - ((netProfit * reservePer) / 100);
         const adminAmt = (distributable * adminSharePer) / 100;
         const staffPool = distributable - adminAmt;
 
         document.getElementById("resNetProfit").innerText = `₹ ${netProfit.toFixed(2)}`;
+        document.getElementById("resReserveAmt").innerText = `₹ ${(netProfit * reservePer / 100).toFixed(2)}`;
 
+        // Consecutive Penalty Point System
         const attSnap = await get(ref(db, "attendance"));
-        const userStats = {}; let globalPoints = 0;
+        const userStats = {}; let globalPts = 0;
 
-        if(attSnap.exists()){
+        if (attSnap.exists()) {
             const allData = attSnap.val();
             const dates = Object.keys(allData).sort();
             const users = await get(ref(db, "users"));
 
-            users.forEach(uC => {
-                const uid = uC.key;
-                if(ADMIN_EMAILS.includes(uC.val().email.toLowerCase())) return;
+            users.forEach(uSnap => {
+                const uid = uSnap.key;
+                if (ADMIN_EMAILS.includes(uSnap.val().email.toLowerCase())) return;
 
                 let pts = 0; let combo = 0; let days = 0;
                 dates.forEach(d => {
-                    const r = allData[d][uid];
-                    if(!r) return;
-                    days++;
-                    if(r.status === "Present") { pts += 1; combo = 0; }
-                    else if(r.status === "Excused") {
-                        combo++;
-                        if(combo === 2) { pts += 0; combo = 0; } // 2nd Consecutive Excuse = 0
-                        else { pts += 1; }
-                    } else { combo = 0; }
+                    if (allData[d][uid]) {
+                        days++;
+                        const s = allAttStatus = allData[d][uid].status;
+                        if (s === "Present") { pts += 1; combo = 0; }
+                        else if (s === "Excused") {
+                            combo++;
+                            if (combo === 2) { pts += 0; combo = 0; } // Penalty: 2 Consecutive = 0
+                            else { pts += 1; }
+                        } else { combo = 0; }
+                    }
                 });
-                if(days > 0) {
-                    userStats[uid] = { name: uC.val().name, pts: pts, total: days };
-                    globalPoints += pts;
+                if (days > 0) {
+                    userStats[uid] = { name: uSnap.val().name, pts: pts, total: days };
+                    globalPts += pts;
                 }
             });
         }
 
         const pBody = document.getElementById("payoutTableBody");
-        pBody.innerHTML = `<tr><td colspan="3">ADMIN SHARE (${adminSharePer}%)</td><td style="text-align:right;">₹ ${adminAmt.toFixed(2)}</td><td></td></tr>`;
+        pBody.innerHTML = `
+            <tr style="background:#fffbeb; border:2px solid var(--metro-gold);">
+                <td><b>ADMIN MANAGEMENT</b></td>
+                <td style="text-align:center;">100%</td>
+                <td style="text-align:center;"><input type="number" id="manualAdminPercentInp" value="${adminSharePer}" oninput="window.calcProfitEngine()" style="width:40px;"> %</td>
+                <td style="text-align:right; font-weight:900;">₹ ${adminAmt.toFixed(2)}</td>
+                <td style="text-align:center;"><button onclick="window.postAdminPayout(${adminAmt})" class="success" style="padding:5px;">POST</button></td>
+            </tr>`;
 
         Object.entries(userStats).forEach(([uid, d]) => {
-            const share = (d.pts / (globalPoints || 1)) * staffPool;
+            const share = (d.pts / (globalPts || 1)) * staffPool;
             pBody.innerHTML += `
                 <tr>
                     <td>${d.name}</td>
                     <td style="text-align:center;">${((d.pts/d.total)*100).toFixed(0)}%</td>
                     <td style="text-align:center;">${((share/distributable)*100).toFixed(1)}%</td>
                     <td style="text-align:right; font-weight:bold;">₹ ${share.toFixed(2)}</td>
-                    <td><input type="text" id="utr_admin_${uid}" placeholder="UTR" style="width:40px;"><button onclick="window.initiatePayoutHandshake('${uid}', ${share}, '${d.name}')">SEND</button></td>
+                    <td style="text-align:center;">
+                        <div id="status_box_${uid}" style="display:flex; gap:2px; justify-content:center;">
+                            <input type="text" id="utr_admin_${uid}" maxlength="4" placeholder="UTR" style="width:35px; font-size:10px;">
+                            <button onclick="window.initiatePayoutHandshake('${uid}', ${share}, '${d.name}')" class="info" style="padding:4px; font-size:9px;">SEND</button>
+                        </div>
+                    </td>
                 </tr>`;
         });
     };
 
-    // Safety for switchTab
+    // --- 4. SECURE HANDSHAKE & TOOLS ---
+    window.initiatePayoutHandshake = async (uid, amt, name) => {
+        const utr = document.getElementById(`utr_admin_${uid}`).value;
+        if (utr.length !== 4) return alert("Enter last 4 digits of UTR.");
+        await set(ref(db, `pending_payouts/${uid}`), {
+            amount: amt, targetName: name, utrSuffix: utr, status: "AWAITING_CONFIRMATION", initiatedBy: currentUser.name, time: serverTimestamp()
+        });
+        document.getElementById(`status_box_${uid}`).innerHTML = `<span style="color:orange; font-size:10px;">⏳ Pending</span>`;
+    };
+
+    window.adminSetStatus = async (d, u, s) => {
+        await update(ref(db, `attendance/${d}/${u}`), { status: s });
+        window.loadAttendanceList();
+    };
+
+    window.deleteSingleAtt = async (d, u) => {
+        if (confirm("Delete?")) {
+            await remove(ref(db, `attendance/${d}/${u}`));
+            window.loadAttendanceList();
+        }
+    };
+
+    window.postAdminPayout = async (amt) => {
+        await push(ref(db, "finance"), { type: "EXPENSE", amount: amt, desc: "Admin Management Payout", status: "Approved", timestamp: serverTimestamp() });
+        alert("✅ Posted.");
+    };
+
+    window.finalizeProfitEntry = async () => {
+        const net = parseFloat(document.getElementById("resNetProfit").innerText.replace("₹ ", ""));
+        await push(ref(db, "finance"), { type: "CREDIT", amount: net, desc: "Project Profit Settlement", status: "Approved", timestamp: serverTimestamp() });
+        alert("✅ Settled.");
+    };
+
+    // Auto-refresh hook
     window.loadAttendanceLog = () => window.calcProfitEngine();
-
-    window.toggleDraftStatus = (btn) => {
-        const cell = btn.closest('tr').querySelector('.status-cell');
-        const isP = cell.innerText === "PRESENT";
-        cell.innerText = isP ? "ABSENT" : "PRESENT";
-        cell.style.color = isP ? "#e11d48" : "#10b981";
-    };
-
-    window.forceStatus = (btn, s) => {
-        const cell = btn.closest('tr').querySelector('.status-cell');
-        cell.innerText = s.toUpperCase();
-        cell.style.color = "#3b82f6";
-    };
-    
-    window.deleteAttendanceRecord = async (d, u) => {
-        if(confirm("Delete?")) { await remove(ref(db, `attendance/${d}/${u}`)); window.loadAttendanceList(); }
-    };
 };
 
-// INITIALIZE IMMEDIATELY
 initAttendanceSystem();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
