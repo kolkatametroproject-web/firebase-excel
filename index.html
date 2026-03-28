@@ -543,6 +543,9 @@ tr:hover { background: #fcfcfd; }
     <button class="nav-btn" onclick="switchTab('warranty')" id="btnWarranty">
     <i class="fas fa-shield-halved"></i> Warranty & Claims
 </button>
+    <button class="nav-btn" onclick="switchTab('attendance')" id="btnAttendance">
+    <i class="fas fa-calendar-check"></i> Payroll & Attendance
+</button>
     <span id="adminBadge" class="hidden" style="margin-left:auto; background:var(--metro-red); color:white; padding:6px 12px; border-radius:20px; font-size:10px; font-weight:bold; display:flex; align-items:center; letter-spacing: 0.5px;">
         <i class="fas fa-shield-alt" style="margin-right:5px;"></i> AUDITOR
     </span>
@@ -1687,6 +1690,78 @@ tr:hover { background: #fcfcfd; }
             </div>
         </div>
         <div style="margin-top: 30px; font-size: 9pt; text-align: center;">[SYSTEM GENERATED RECORD]</div>
+    </div>
+</div>
+  <div id="tab-attendance" class="hidden">
+    <div class="panel" style="border-top: 5px solid var(--metro-blue);">
+        <h3><i class="fas fa-user-clock"></i> Working Day Attendance</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap:15px; background: #f1f5f9; padding:15px; border-radius:8px; margin-bottom:20px;">
+            <div>
+                <label style="font-size:11px; font-weight:bold;">SELECT WORKING DATE</label>
+                <input type="date" id="attDate" style="margin:0;">
+            </div>
+            <button onclick="loadAttendanceList()" class="info" style="margin-top:20px;">Load Personnel List</button>
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Personnel Name</th>
+                        <th>Status</th>
+                        <th>If Absent: Reason</th>
+                        <th>Admin Decision</th>
+                    </tr>
+                </thead>
+                <tbody id="attTableBody">
+                    <tr><td colspan="4" style="text-align:center;">Select date and load list...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <button onclick="submitAttendanceBatch()" class="success" style="width:100%; margin-top:15px; padding:15px; font-weight:900;">SAVE ATTENDANCE RECORD</button>
+    </div>
+
+    <div class="panel" style="border-top: 5px solid var(--success-green);">
+        <h3><i class="fas fa-chart-pie"></i> Profit Distribution & Reserve</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap:15px; margin-bottom: 20px;">
+            <div class="fin-card" style="padding:15px;">
+                <label style="font-size:10px; font-weight:bold;">TOTAL SPENT (DB)</label>
+                <div id="dispPayrollSpent" style="font-size:20px; font-weight:900; color:red;">₹ 0</div>
+            </div>
+            <div class="fin-card" style="padding:15px;">
+                <label style="font-size:10px; font-weight:bold;">CLIENT PAYMENT (ENTER)</label>
+                <input type="number" id="inpClientPay" placeholder="₹ Amount Received" oninput="calcProfitEngine()">
+            </div>
+            <div class="fin-card" style="padding:15px;">
+                <label style="font-size:10px; font-weight:bold;">RESERVE FUND (%)</label>
+                <input type="number" id="inpReservePercent" value="10" oninput="calcProfitEngine()">
+            </div>
+        </div>
+
+        <div id="profitResultArea" class="hidden" style="background:var(--metro-blue); color:white; padding:20px; border-radius:8px; margin-bottom:20px;">
+            <div style="display:flex; justify-content:space-between; border-bottom:1px solid #334155; padding-bottom:10px;">
+                <span>NET PROJECT PROFIT:</span>
+                <span id="resNetProfit" style="font-weight:900; color:var(--metro-gold); font-size:24px;">₹ 0</span>
+            </div>
+            <div style="margin-top:10px; font-size:13px; opacity:0.8;">
+                RESERVE FUND ALLOCATION: <span id="resReserveAmt">₹ 0</span>
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+            <table style="background:#fff;">
+                <thead style="background:#f8fafc;">
+                    <tr>
+                        <th>Stakeholder</th>
+                        <th>Attd %</th>
+                        <th>Share %</th>
+                        <th>Payout Amount</th>
+                    </tr>
+                </thead>
+                <tbody id="payoutTableBody"></tbody>
+            </table>
+        </div>
+        <button onclick="finalizeProfitEntry()" class="success" style="width:100%; margin-top:15px; background:var(--metro-blue);">POST TO BALANCE SHEET & LOGS</button>
     </div>
 </div>
   <div id="tab-warranty" class="hidden">
@@ -8777,6 +8852,186 @@ window.startVerificationScan = () => {
         console.log("Scanner already initialized, resuming...");
     }
 };
+  // --- ATTENDANCE & PAYROLL LOGIC ---
+
+window.loadAttendanceList = async () => {
+    const date = document.getElementById("attDate").value;
+    if(!date) return alert("Select Date");
+    
+    const tbody = document.getElementById("attTableBody");
+    tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'>Syncing...</td></tr>";
+
+    const userSnap = await get(ref(db, "users"));
+    tbody.innerHTML = "";
+
+    userSnap.forEach(c => {
+        const u = c.val();
+        const uid = c.key;
+        // Skip Admins from manual attendance if you prefer, or include all
+        if(ADMIN_EMAILS.includes(u.email.toLowerCase())) return;
+
+        tbody.innerHTML += `
+            <tr>
+                <td style="font-weight:bold;">${u.name}</td>
+                <td>
+                    <select id="status_${uid}" onchange="toggleAbsenceInp('${uid}')" style="margin:0;">
+                        <option value="Present">✅ Present</option>
+                        <option value="Absent">❌ Absent</option>
+                    </select>
+                </td>
+                <td><input id="reason_${uid}" placeholder="Reason..." disabled style="margin:0; font-size:12px;"></td>
+                <td>
+                    <select id="excuse_${uid}" disabled style="margin:0;">
+                        <option value="No">No (Mark Absent)</option>
+                        <option value="Yes">Yes (Excuse/Mark Present)</option>
+                    </select>
+                </td>
+            </tr>
+        `;
+    });
+};
+
+window.toggleAbsenceInp = (uid) => {
+    const isAbsent = document.getElementById(`status_${uid}`).value === "Absent";
+    document.getElementById(`reason_${uid}`).disabled = !isAbsent;
+    document.getElementById(`excuse_${uid}`).disabled = !isAbsent;
+};
+
+window.submitAttendanceBatch = async () => {
+    const date = document.getElementById("attDate").value;
+    const updates = {};
+    const rows = document.querySelectorAll("#attTableBody tr");
+
+    rows.forEach(row => {
+        const uid = row.querySelector('select').id.replace("status_", "");
+        const status = document.getElementById(`status_${uid}`).value;
+        const excuse = document.getElementById(`excuse_${uid}`).value;
+        
+        // Logic: If Absent but Excused -> Count as Present for Profit share
+        const finalStatus = (status === "Absent" && excuse === "Yes") ? "Excused" : status;
+
+        updates[`attendance/${date}/${uid}`] = {
+            status: finalStatus,
+            reason: document.getElementById(`reason_${uid}`).value,
+            timestamp: serverTimestamp()
+        };
+    });
+
+    await update(ref(db), updates);
+    alert("✅ Attendance Locked for " + date);
+    calcProfitEngine();
+};
+
+window.calcProfitEngine = async () => {
+    const clientPay = parseFloat(document.getElementById("inpClientPay").value) || 0;
+    const reservePer = parseFloat(document.getElementById("inpReservePercent").value) || 0;
+    
+    // 1. Get Total Spent from current Balance Sheet logic
+    const financeSnap = await get(ref(db, "finance"));
+    let totalSpent = 0;
+    financeSnap.forEach(c => {
+        if(c.val().type === 'DEBIT' || c.val().type === 'EXPENSE') {
+            if(c.val().status === 'Approved') totalSpent += parseFloat(c.val().amount);
+        }
+    });
+    document.getElementById("dispPayrollSpent").innerText = `₹ ${totalSpent.toFixed(2)}`;
+
+    // 2. Net Profit Calculation
+    const netProfit = clientPay - totalSpent;
+    if(netProfit <= 0) {
+        document.getElementById("profitResultArea").classList.add("hidden");
+        return;
+    }
+    document.getElementById("profitResultArea").classList.remove("hidden");
+    
+    const reserveAmt = (netProfit * reservePer) / 100;
+    const distributableProfit = netProfit - reserveAmt;
+
+    document.getElementById("resNetProfit").innerText = `₹ ${netProfit.toFixed(2)}`;
+    document.getElementById("resReserveAmt").innerText = `₹ ${reserveAmt.toFixed(2)}`;
+
+    // 3. Attendance Weightage Calculation
+    const attSnap = await get(ref(db, "attendance"));
+    const userStats = {}; // UID -> {presentDays, totalDays}
+    
+    attSnap.forEach(daySnap => {
+        daySnap.forEach(userRecord => {
+            const uid = userRecord.key;
+            const stat = userRecord.val().status;
+            if(!userStats[uid]) userStats[uid] = { present: 0, total: 0 };
+            userStats[uid].total++;
+            if(stat === "Present" || stat === "Excused") userStats[uid].present++;
+        });
+    });
+
+    // 4. Render Payouts
+    const tbody = document.getElementById("payoutTableBody");
+    tbody.innerHTML = "";
+
+    // A. Admin Share (Fixed at a higher priority share, e.g., 40% of net or 2 shares)
+    const adminSharePercent = 40; 
+    const adminPayout = (distributableProfit * adminSharePercent) / 100;
+    const staffPool = distributableProfit - adminPayout;
+
+    tbody.innerHTML += `
+        <tr style="background:#fff7ed; font-weight:bold;">
+            <td>MANAGEMENT (ADMINS)</td>
+            <td>100%</td>
+            <td>${adminSharePercent}%</td>
+            <td style="color:green;">₹ ${adminPayout.toFixed(2)}</td>
+        </tr>
+    `;
+
+    // B. Non-Admin Shared based on Attendance %
+    let totalAttendanceScore = 0;
+    Object.values(userStats).forEach(s => totalAttendanceScore += (s.present / s.total));
+
+    const userSnap = await get(ref(db, "users"));
+    userSnap.forEach(c => {
+        const uid = c.key;
+        if(ADMIN_EMAILS.includes(c.val().email.toLowerCase())) return;
+        if(!userStats[uid]) return;
+
+        const attRatio = userStats[uid].present / userStats[uid].total;
+        const userShare = (attRatio / totalAttendanceScore) * staffPool;
+        const sharePercentOfTotal = (userShare / distributableProfit) * 100;
+
+        tbody.innerHTML += `
+            <tr>
+                <td>${c.val().name}</td>
+                <td>${(attRatio * 100).toFixed(0)}%</td>
+                <td>${sharePercentOfTotal.toFixed(1)}%</td>
+                <td style="font-weight:bold;">₹ ${userShare.toFixed(2)}</td>
+            </tr>
+        `;
+    });
+};
+
+window.finalizeProfitEntry = async () => {
+    const netProfit = document.getElementById("resNetProfit").innerText.replace("₹ ", "");
+    if(parseFloat(netProfit) <= 0) return alert("No profit to record.");
+
+    if(!confirm("Finalize Profit Distribution? This will add a Credit entry to Balance Sheet and Log the payout.")) return;
+
+    const profitData = {
+        type: "CREDIT",
+        amount: parseFloat(netProfit),
+        desc: "PROJECT PROFIT: Client Payout Received",
+        mode: "Company Settlement",
+        status: "Approved",
+        by: currentUser.email,
+        timestamp: serverTimestamp()
+    };
+
+    await push(ref(db, "finance"), profitData);
+    alert("✅ Balance Sheet Updated with Profit.");
+};
+  window.deleteAttendanceRecord = async (date) => {
+    if(confirm(`Wipe attendance for ${date}?`)) {
+        await remove(ref(db, `attendance/${date}`));
+        loadAttendanceList();
+    }
+}
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
