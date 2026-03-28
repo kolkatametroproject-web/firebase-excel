@@ -4773,6 +4773,20 @@ window.loadAdminPanel = () => {
                 <button class="secondary" onclick="resetUserName('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Name"><i class="fas fa-eraser"></i></button>
                 <button class="warning" onclick="resetUserFace('${uid}')" style="padding:4px 8px; font-size:10px; margin-right:2px;" title="Reset Face ID"><i class="fas fa-user-slash"></i></button>
             `;
+          // ADD THE DELETE BUTTON LOGIC HERE
+            if (!isSelf) {
+                actionBtns += `
+                    <button class="danger" onclick="window.deleteUserAccount('${uid}', '${u.name || u.email}')" style="padding:4px 8px; font-size:10px; margin-left:2px; background:#991b1b;" title="Delete User">
+                        <i class="fas fa-user-minus"></i>
+                    </button>
+                `;
+                
+                if (isBanned) {
+                    actionBtns += `<button class="success" onclick="unbanUser('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px; margin-left:2px;">♻ Unban</button>`;
+                } else {
+                    actionBtns += `<button class="danger" onclick="openBanModal('${uid}', '${encodeURIComponent(u.name || u.email)}')" style="padding:4px 8px; font-size:10px; margin-left:2px;">⛔ Ban</button>`;
+                }
+            }
 
             if (!isSelf) {
                 if (isBanned) {
@@ -4816,6 +4830,7 @@ window.loadAdminPanel = () => {
                 `;
             }
         });
+      
     };
 
     // 2. START LISTENERS
@@ -8847,6 +8862,58 @@ window.startVerificationScan = () => {
     } else {
         // If scanner already exists, just make sure it's visible
         console.log("Scanner already initialized, resuming...");
+    }
+};
+  // --- ADMIN: PERMANENT USER DELETION ---
+window.deleteUserAccount = async (uid, userName) => {
+    // 1. Security Check
+    if (!isAdmin) return alert("⛔ Unauthorized: Only System Oversight can delete users.");
+    
+    // 2. Self-Deletion Prevention
+    if (uid === currentUser.uid) return alert("❌ Action Denied: You cannot delete your own account while logged in.");
+
+    // 3. Confirmation Dialog
+    const confirmDelete = confirm(`⚠️ CRITICAL WARNING:
+    
+Are you sure you want to PERMANENTLY delete user "${userName}"?
+    
+This will wipe:
+- Their Profile & Biometrics
+- Their Task Assignments
+- Their Online Status
+    
+This action cannot be undone.`);
+
+    if (!confirmDelete) return;
+
+    try {
+        const updates = {};
+        
+        // Prepare paths to be wiped
+        updates[`users/${uid}`] = null;
+        updates[`status/${uid}`] = null;
+        updates[`assignments/${uid}`] = null;
+        updates[`pending_payouts/${uid}`] = null;
+
+        // Execute Multi-Path Wipe
+        await update(ref(db), updates);
+
+        // Log the deletion for Audit Trail
+        await push(ref(db, "logs"), {
+            type: "USER_DELETED",
+            details: `User ${userName} (UID: ${uid}) was removed from the system.`,
+            by: currentUser.name || currentUser.email,
+            time: serverTimestamp()
+        });
+
+        alert(`✅ User "${userName}" has been purged from the system.`);
+        
+        // Refresh the Admin Panel UI
+        if(typeof window.loadAdminPanel === "function") window.loadAdminPanel();
+
+    } catch (e) {
+        console.error(e);
+        alert("Delete failed: " + e.message);
     }
 };
 // =========================================================
