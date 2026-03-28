@@ -8940,8 +8940,15 @@ This action cannot be undone.`);
     }
 };
 // =========================================================
-// 💎 MRPSP MASTER ENGINE: NO-DUPLICATE & SYNCED DISTRIBUTION
+// 💎 MRPSP MASTER ENGINE: PRODUCTION READY (FIXED SCOPE)
 // =========================================================
+
+// 1. GLOBAL ACCESS: Define these first so HTML buttons never fail
+window.loadAttendanceLog = () => {
+    if (typeof window.calcProfitEngine === "function") {
+        window.calcProfitEngine();
+    }
+};
 
 const initAttendanceSystem = () => {
     let interviewQueue = [];
@@ -8951,7 +8958,6 @@ const initAttendanceSystem = () => {
     // --- 1. THE AUDITOR: RANGE-BASED PROFIT ENGINE ---
     window.calcProfitEngine = async () => {
         try {
-            // UI Inputs
             const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
             const reservePer = parseFloat(document.getElementById("inpReservePercent")?.value) || 0;
             const adminSharePer = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
@@ -8959,10 +8965,9 @@ const initAttendanceSystem = () => {
             const startDate = document.getElementById("expStartDate")?.value;
             const endDate = document.getElementById("expEndDate")?.value;
 
-            // Stop if dates are missing to prevent DB spam
             if (!startDate || !endDate) return;
 
-            // A. FETCH TOTAL SPENT FROM BALANCE SHEET (FINANCE NODE)
+            // A. FETCH EXPENSES FROM FINANCE
             const finSnap = await get(ref(db, "finance"));
             let totalSpentDB = 0;
             if (finSnap.exists()) {
@@ -8975,144 +8980,160 @@ const initAttendanceSystem = () => {
                 });
             }
 
-            // Sync with UI Card (Matches id="dispPayrollSpent" in your HTML)
             const spentDisplay = document.getElementById("dispPayrollSpent");
             if (spentDisplay) spentDisplay.innerText = `₹ ${totalSpentDB.toLocaleString('en-IN')}`;
 
-            // B. WATERFALL MATH (ZERO-LOSS PROTECTED)
+            // B. WATERFALL MATH
             const grossProfit = clientPay - totalSpentDB;
             const isLoss = grossProfit <= 0;
-
             const reserveAmt = !isLoss ? (grossProfit * reservePer / 100) : 0;
             const netAfterReserve = !isLoss ? (grossProfit - reserveAmt) : 0;
             const adminAmt = !isLoss ? (netAfterReserve * adminSharePer / 100) : 0;
             const staffPool = !isLoss ? (netAfterReserve - adminAmt) : 0;
 
-            // C. UPDATE DASHBOARD DISPLAY
-            const resNet = document.getElementById("resNetProfit");
-            const resRes = document.getElementById("resReserveAmt");
+            // C. UI UPDATE
             const resArea = document.getElementById("profitResultArea");
-
-            if (resNet && resRes) {
+            if (resArea) {
                 resArea.classList.remove("hidden");
-                resNet.innerText = `₹ ${grossProfit.toLocaleString('en-IN')}`;
-                resRes.innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
+                document.getElementById("resNetProfit").innerText = `₹ ${grossProfit.toLocaleString('en-IN')}`;
+                document.getElementById("resReserveAmt").innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
                 resArea.style.background = isLoss ? "#be123c" : "#0f172a";
             }
 
-            // D. RENDER STAKEHOLDER TABLE (MAP LOGIC PREVENTS DUPLICATES)
+            // D. RENDER STAKEHOLDERS (FIXED: NO DUPLICATES)
             const pBody = document.getElementById("payoutTableBody");
             if (!pBody) return;
-            pBody.innerHTML = ""; // FULL WIPE
+            pBody.innerHTML = ""; 
 
-            // 1. ADMIN ROW (Always first, listed once)
+            // Admin Row
             pBody.innerHTML += `
                 <tr style="background:#f8fafc; font-weight:bold; border-left: 4px solid #8b5cf6;">
                     <td style="padding:15px;">ADMIN (MANAGEMENT)</td>
                     <td style="text-align:center;">---</td>
                     <td style="text-align:center;">${adminSharePer}%</td>
-                    <td style="text-align:right; color:#1e293b;">₹ ${adminAmt.toFixed(2)}</td>
-                    <td style="text-align:center;">
-                        <button class="success" style="font-size:10px; padding:4px 8px;" onclick="window.postAdminPayout(${adminAmt})">POST</button>
-                    </td>
+                    <td style="text-align:right;">₹ ${adminAmt.toFixed(2)}</td>
+                    <td style="text-align:center;"><button class="success" style="font-size:10px; padding:4px 8px;" onclick="window.postAdminPayout(${adminAmt})">POST</button></td>
                 </tr>`;
 
-            // 2. STAFF CALCULATION (USING UID AS UNIQUE KEY)
+            // Staff Map (UID as key prevents duplicates)
             const attSnap = await get(ref(db, "attendance"));
             let globalPts = 0; 
-            let userStats = {}; // This prevents double entries!
+            let userStats = {};
 
             if (attSnap.exists()) {
                 const allAt = attSnap.val();
                 const usersSnap = await get(ref(db, "users"));
-                
                 usersSnap.forEach(uS => {
                     const uid = uS.key;
                     if (ADMIN_EMAILS.includes(uS.val().email.toLowerCase())) return;
-
                     let pts = 0; let days = 0;
                     Object.keys(allAt).forEach(d => {
-                        // Only count attendance within the selected project range
                         if (d >= startDate && d <= endDate && allAt[d][uid]) {
                             days++;
                             if (allAt[d][uid].status === "Present") pts += 1;
                         }
                     });
-
                     if (days > 0) {
-                        // If user was found again, this simply updates the same object
                         userStats[uid] = { name: uS.val().name, pts, total: days };
                         if (!isLoss) globalPts += pts;
                     }
                 });
             }
 
-            // 3. RENDER ROWS FROM UNIQUE MAP
             Object.entries(userStats).forEach(([uid, d]) => {
                 const shareAmt = (isLoss || globalPts === 0) ? 0 : (d.pts / globalPts) * staffPool;
-                const attPercent = ((d.pts / d.total) * 100).toFixed(0);
-                const sharePercent = ((shareAmt / (netAfterReserve || 1)) * 100).toFixed(1);
-
                 pBody.innerHTML += `
                     <tr>
                         <td style="padding:12px;">${d.name}</td>
-                        <td style="text-align:center;">${attPercent}%</td>
-                        <td style="text-align:center;">${sharePercent}%</td>
+                        <td style="text-align:center;">${((d.pts/d.total)*100).toFixed(0)}%</td>
+                        <td style="text-align:center;">${((shareAmt/(netAfterReserve||1))*100).toFixed(1)}%</td>
                         <td style="text-align:right; font-weight:bold; color:#2563eb;">₹ ${shareAmt.toFixed(2)}</td>
                         <td style="text-align:center;">
-                            <input type="text" id="utr_${uid}" placeholder="UTR" style="width:45px; font-size:9px; border:1px solid #ddd;">
+                            <input type="text" id="utr_${uid}" placeholder="UTR" style="width:40px; font-size:9px;">
                             <button onclick="window.initiatePayoutHandshake('${uid}', ${shareAmt}, '${d.name}')" class="info" style="font-size:9px; padding:2px 5px;">SEND</button>
                         </td>
                     </tr>`;
             });
 
-            // E. MASTER BUTTON SAFETY
-            const masterBtn = document.getElementById("btnPostFinalBalance");
-            if (masterBtn) {
-                masterBtn.disabled = isLoss;
-                masterBtn.style.opacity = isLoss ? "0.5" : "1";
-                masterBtn.innerText = isLoss ? "⚠️ LOSS: CANNOT POST" : "POST TOTAL PROFIT TO BALANCE SHEET";
-            }
-
         } catch (err) { console.error("Profit Engine Error:", err); }
     };
 
-    // --- 2. THE MASTER POSTER (FINAL SETTLEMENT) ---
-    window.postProfitToBalance = async () => {
-        const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
-        const totalSpent = parseFloat(document.getElementById("dispPayrollSpent")?.innerText.replace(/[^\d.]/g, '')) || 0;
-        const netProfit = clientPay - totalSpent;
+    // --- 2. ATTENDANCE LIST LOADER (FIXED WINDOW ATTACHMENT) ---
+    window.loadAttendanceList = async () => {
+        const date = document.getElementById("attDate")?.value;
+        const tbody = document.getElementById("attTableBody");
+        if (!date || !tbody) return;
 
-        if (netProfit <= 0) return alert("Profit must be greater than zero to settle.");
-
-        if (confirm(`Finalize Project? ₹${netProfit.toLocaleString('en-IN')} will be posted to Balance Sheet.`)) {
-            await push(ref(db, "finance"), {
-                type: "INCOME",
-                category: "Project Settlement",
-                amount: netProfit,
-                desc: `Settlement: ${document.getElementById("expStartDate").value} to ${document.getElementById("expEndDate").value}`,
-                status: "Approved",
-                timestamp: serverTimestamp()
-            });
-            alert("✅ Project Settled.");
-            window.calcProfitEngine();
+        const snap = await get(ref(db, `attendance/${date}`));
+        tbody.innerHTML = "";
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'>No data for this date.</td></tr>";
+            return;
         }
-    };
 
-    // --- 3. INTERNAL HELPERS ---
-    window.postAdminPayout = async (amt) => {
-        await push(ref(db, "finance"), { 
-            type: "EXPENSE", 
-            amount: amt, 
-            desc: "Admin Management Share", 
-            status: "Approved", 
-            date: new Date().toISOString().split('T')[0],
-            timestamp: serverTimestamp() 
+        snap.forEach(uS => {
+            const v = uS.val();
+            const s = (v.status || 'ABSENT').toUpperCase();
+            tbody.innerHTML += `
+                <tr>
+                    <td>${date}</td>
+                    <td><b>${v.userName || 'Unknown'}</b></td>
+                    <td style="color:${s==='PRESENT'?'#10b981':'#e11d48'}; font-weight:bold;">${s}</td>
+                    <td><button onclick="window.calcProfitEngine()" class="secondary" style="font-size:9px;">RE-SYNC</button></td>
+                    <td style="text-align:center;"><button onclick="window.deleteSingleAtt('${date}','${uS.key}')" style="color:red; background:none; border:none; cursor:pointer;"><i class="fas fa-trash"></i></button></td>
+                </tr>`;
         });
-        alert("✅ Admin share posted.");
     };
 
-    window.loadAttendanceLog = () => window.calcProfitEngine();
+    // --- 3. ATTENDANCE BATCH (INTERVIEW MODE) ---
+    window.submitAttendanceBatch = async () => {
+        const date = document.getElementById("attDate")?.value;
+        if (!date) return alert("Select Working Date.");
+        
+        const userSnap = await get(ref(db, "users"));
+        interviewQueue = [];
+        userSnap.forEach(c => {
+            if(!ADMIN_EMAILS.includes(c.val().email.toLowerCase())) {
+                interviewQueue.push({ uid: c.key, name: c.val().name || c.val().email });
+            }
+        });
+
+        interviewDate = date;
+        currentInterviewIndex = 0;
+        document.getElementById("attTableBody").innerHTML = `<tr><td colspan="5" id="interviewUI"></td></tr>`;
+        window.nextInterviewStep();
+    };
+
+    window.nextInterviewStep = () => {
+        const ui = document.getElementById("interviewUI");
+        if (currentInterviewIndex >= interviewQueue.length) {
+            ui.innerHTML = `<div style="text-align:center; padding:20px;"><h3>✅ Session Complete</h3><button class="success" onclick="window.loadAttendanceList()">SAVE & FINISH</button></div>`;
+            return;
+        }
+        const u = interviewQueue[currentInterviewIndex];
+        ui.innerHTML = `
+            <div style="background:#fff; padding:20px; border-radius:10px; text-align:center; border:1px solid #ddd;">
+                <p style="font-size:10px; color:#94a3b8;">${currentInterviewIndex + 1}/${interviewQueue.length}</p>
+                <h2 style="margin:10px 0;">Is <b>${u.name}</b> Present?</h2>
+                <div style="display:flex; gap:10px; justify-content:center;">
+                    <button class="success" onclick="window.recordStep('${u.uid}', 'Present')" style="padding:10px 30px;">YES</button>
+                    <button class="danger" onclick="window.recordStep('${u.uid}', 'Absent')" style="padding:10px 30px;">NO</button>
+                </div>
+            </div>`;
+    };
+
+    window.recordStep = async (uid, status) => {
+        await set(ref(db, `attendance/${interviewDate}/${uid}`), { 
+            status, userName: interviewQueue[currentInterviewIndex].name, timestamp: serverTimestamp() 
+        });
+        currentInterviewIndex++; window.nextInterviewStep();
+    };
+
+    window.deleteSingleAtt = async (d, u) => { if (confirm("Delete?")) { await remove(ref(db, `attendance/${d}/${u}`)); window.loadAttendanceList(); } };
+    window.postAdminPayout = async (amt) => { 
+        await push(ref(db, "finance"), { type: "EXPENSE", amount: amt, desc: "Admin Share", status: "Approved", date: new Date().toISOString().split('T')[0], timestamp: serverTimestamp() });
+        alert("✅ Posted."); 
+    };
 };
 
 initAttendanceSystem();
