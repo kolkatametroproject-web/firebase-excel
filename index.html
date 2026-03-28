@@ -8931,9 +8931,8 @@ const initAttendanceSystem = () => {
         if (!dateEl || !dateEl.value) return alert("⚠️ Select Working Date First.");
         const date = dateEl.value;
         
-        // Check if records already exist to prevent accidental overwrites
         const check = await get(ref(db, `attendance/${date}`));
-        if (check.exists() && !confirm("Records already exist for this date. Start interview to overwrite?")) return;
+        if (check.exists() && !confirm("Records already exist for this date. Overwrite?")) return;
 
         const userSnap = await get(ref(db, "users"));
         interviewQueue = [];
@@ -8946,7 +8945,6 @@ const initAttendanceSystem = () => {
 
         interviewDate = date;
         currentInterviewIndex = 0;
-        // Target the table body to show the interview UI
         document.getElementById("attTableBody").innerHTML = `<tr><td colspan="6" id="interviewContainer"></td></tr>`;
         window.nextInterviewStep();
     };
@@ -8957,7 +8955,6 @@ const initAttendanceSystem = () => {
             container.innerHTML = `
                 <div style="text-align:center; padding:30px; background:#f0fdf4; border-radius:10px;">
                     <h3 style="color:#166534;">✅ Daily Interview Complete</h3>
-                    <p>All personnel for ${interviewDate} have been processed.</p>
                     <button class="success" onclick="window.loadAttendanceList()" style="padding:10px 20px;">FINISH & VIEW LOGS</button>
                 </div>`;
             return;
@@ -8965,12 +8962,12 @@ const initAttendanceSystem = () => {
 
         const u = interviewQueue[currentInterviewIndex];
         container.innerHTML = `
-            <div style="background:#f8fafc; padding:25px; border:2px solid var(--metro-blue); border-radius:12px; animation: fadeIn 0.3s ease;">
+            <div style="background:#f8fafc; padding:25px; border:2px solid var(--metro-blue); border-radius:12px;">
                 <span style="font-size:11px; color:var(--metro-blue); font-weight:bold;">PERSONNEL ${currentInterviewIndex + 1} OF ${interviewQueue.length}</span>
-                <h2 style="margin:15px 0; color:#1e293b;">Is <span style="color:var(--metro-blue);">${u.name}</span> Present today?</h2>
+                <h2 style="margin:15px 0;">Is <span style="color:var(--metro-blue);">${u.name}</span> Present?</h2>
                 <div style="display:flex; gap:15px;">
-                    <button class="success" onclick="window.recordInterviewStep('${u.uid}', 'Present')" style="flex:1; padding:15px; font-weight:900;">YES (PRESENT)</button>
-                    <button class="danger" onclick="window.recordInterviewStep('${u.uid}', 'Absent')" style="flex:1; padding:15px; font-weight:900;">NO (ABSENT)</button>
+                    <button class="success" onclick="window.recordInterviewStep('${u.uid}', 'Present')" style="flex:1; padding:15px; font-weight:900;">YES</button>
+                    <button class="danger" onclick="window.recordInterviewStep('${u.uid}', 'Absent')" style="flex:1; padding:15px; font-weight:900;">NO</button>
                 </div>
             </div>`;
     };
@@ -8993,13 +8990,11 @@ const initAttendanceSystem = () => {
         const date = dateEl.value;
         
         const tbody = document.getElementById("attTableBody");
-        tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing...</td></tr>";
+        tbody.innerHTML = ""; 
 
         const snap = await get(ref(db, `attendance/${date}`));
-        tbody.innerHTML = ""; // Clear loader
-
         if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px;'>No records found for this date. Click 'Create Day Record' to start.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; padding:20px;'>No records found.</td></tr>";
             return;
         }
 
@@ -9016,20 +9011,20 @@ const initAttendanceSystem = () => {
                     <td style="font-weight:900; color:${color};">${s}</td>
                     <td style="font-size:10px; color:#64748b;">${v.userReason || '---'}</td>
                     <td style="text-align:center;">
-                        ${isAdmin && (s.includes("ABSENT") || s.includes("PENDING")) && v.userReason ? `
+                        ${isAdmin && s.includes("ABSENT") && v.userReason ? `
                             <button class="success" style="font-size:9px; padding:4px;" onclick="window.adminSetStatus('${date}','${uid}','Excused')">EXCUSE</button>
                             <button class="danger" style="font-size:9px; padding:4px;" onclick="window.adminSetStatus('${date}','${uid}','Absent')">REJECT</button>
-                        ` : '<i class="fas fa-lock" style="color:#eee;"></i>'}
+                        ` : '-'}
                     </td>
                     <td style="text-align:center;">
-                        ${isAdmin ? `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:red; background:none; border:none; cursor:pointer;"><i class="fas fa-trash-alt"></i></button>` : '-'}
+                        <button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:red; background:none; border:none;"><i class="fas fa-trash-alt"></i></button>
                     </td>
                 </tr>`;
         });
         window.calcProfitEngine();
     };
 
-    // --- 3. PROFIT ENGINE: DATE-SPECIFIC SPENDING ---
+    // --- 3. PROFIT ENGINE (FIXED TYPO) ---
     window.calcProfitEngine = async () => {
         const dateEl = document.getElementById("attDate");
         const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
@@ -9039,7 +9034,6 @@ const initAttendanceSystem = () => {
         if (!dateEl || !dateEl.value) return; 
         const selDate = dateEl.value;
 
-        // FILTERED SPENDING: Count expenses matching the project date
         const finSnap = await get(ref(db, "finance"));
         let dateSpent = 0;
         if (finSnap.exists()) {
@@ -9063,7 +9057,6 @@ const initAttendanceSystem = () => {
         document.getElementById("resNetProfit").innerText = `₹ ${netProfit.toFixed(2)}`;
         document.getElementById("resReserveAmt").innerText = `₹ ${(netProfit * reservePer / 100).toFixed(2)}`;
 
-        // Consecutive Penalty Point System
         const attSnap = await get(ref(db, "attendance"));
         const userStats = {}; let globalPts = 0;
 
@@ -9078,13 +9071,13 @@ const initAttendanceSystem = () => {
 
                 let pts = 0; let combo = 0; let days = 0;
                 dates.forEach(d => {
-                    if (allData[d][uid]) {
+                    if (allData[d] && allData[d][uid]) {
                         days++;
-                        const s = allAttStatus = allData[d][uid].status;
+                        const s = allData[d][uid].status; // <--- FIXED LINE
                         if (s === "Present") { pts += 1; combo = 0; }
                         else if (s === "Excused") {
                             combo++;
-                            if (combo === 2) { pts += 0; combo = 0; } // Penalty: 2 Consecutive = 0
+                            if (combo === 2) { pts += 0; combo = 0; }
                             else { pts += 1; }
                         } else { combo = 0; }
                     }
@@ -9124,10 +9117,10 @@ const initAttendanceSystem = () => {
         });
     };
 
-    // --- 4. SECURE HANDSHAKE & TOOLS ---
+    // --- 4. SECURE HANDSHAKE ---
     window.initiatePayoutHandshake = async (uid, amt, name) => {
         const utr = document.getElementById(`utr_admin_${uid}`).value;
-        if (utr.length !== 4) return alert("Enter last 4 digits of UTR.");
+        if (utr.length !== 4) return alert("Enter 4 digits.");
         await set(ref(db, `pending_payouts/${uid}`), {
             amount: amt, targetName: name, utrSuffix: utr, status: "AWAITING_CONFIRMATION", initiatedBy: currentUser.name, time: serverTimestamp()
         });
@@ -9147,17 +9140,10 @@ const initAttendanceSystem = () => {
     };
 
     window.postAdminPayout = async (amt) => {
-        await push(ref(db, "finance"), { type: "EXPENSE", amount: amt, desc: "Admin Management Payout", status: "Approved", timestamp: serverTimestamp() });
+        await push(ref(db, "finance"), { type: "EXPENSE", amount: amt, desc: "Admin Share", status: "Approved", timestamp: serverTimestamp() });
         alert("✅ Posted.");
     };
 
-    window.finalizeProfitEntry = async () => {
-        const net = parseFloat(document.getElementById("resNetProfit").innerText.replace("₹ ", ""));
-        await push(ref(db, "finance"), { type: "CREDIT", amount: net, desc: "Project Profit Settlement", status: "Approved", timestamp: serverTimestamp() });
-        alert("✅ Settled.");
-    };
-
-    // Auto-refresh hook
     window.loadAttendanceLog = () => window.calcProfitEngine();
 };
 
