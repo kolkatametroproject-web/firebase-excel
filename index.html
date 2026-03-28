@@ -8940,10 +8940,14 @@ This action cannot be undone.`);
     }
 };
 // =========================================================
-// 💎 MRPSP MASTER ENGINE: FINAL REVISED & DEBUGGED
+// 💎 MRPSP MASTER ENGINE: NO-DUPLICATE & SYNCED DISTRIBUTION
 // =========================================================
 
 const initAttendanceSystem = () => {
+    let interviewQueue = [];
+    let currentInterviewIndex = 0;
+    let interviewDate = "";
+
     // --- 1. THE AUDITOR: RANGE-BASED PROFIT ENGINE ---
     window.calcProfitEngine = async () => {
         try {
@@ -8956,10 +8960,7 @@ const initAttendanceSystem = () => {
             const endDate = document.getElementById("expEndDate")?.value;
 
             // Stop if dates are missing to prevent DB spam
-            if (!startDate || !endDate) {
-                console.log("Waiting for Project Date Range...");
-                return;
-            }
+            if (!startDate || !endDate) return;
 
             // A. FETCH TOTAL SPENT FROM BALANCE SHEET (FINANCE NODE)
             const finSnap = await get(ref(db, "finance"));
@@ -8967,7 +8968,6 @@ const initAttendanceSystem = () => {
             if (finSnap.exists()) {
                 finSnap.forEach(c => {
                     const v = c.val();
-                    // Match Approved DEBIT/EXPENSE within the selected date range
                     if ((v.type === 'DEBIT' || v.type === 'EXPENSE') && v.status === 'Approved') {
                         const d = v.date || (v.timestamp ? new Date(v.timestamp).toISOString().split('T')[0] : null);
                         if (d >= startDate && d <= endDate) totalSpentDB += parseFloat(v.amount || 0);
@@ -8975,7 +8975,7 @@ const initAttendanceSystem = () => {
                 });
             }
 
-            // FIXED ID: Match your HTML 'dispPayrollSpent'
+            // Sync with UI Card (Matches id="dispPayrollSpent" in your HTML)
             const spentDisplay = document.getElementById("dispPayrollSpent");
             if (spentDisplay) spentDisplay.innerText = `₹ ${totalSpentDB.toLocaleString('en-IN')}`;
 
@@ -8984,11 +8984,11 @@ const initAttendanceSystem = () => {
             const isLoss = grossProfit <= 0;
 
             const reserveAmt = !isLoss ? (grossProfit * reservePer / 100) : 0;
-            const netPool = !isLoss ? (grossProfit - reserveAmt) : 0;
-            const adminAmt = !isLoss ? (netPool * adminSharePer / 100) : 0;
-            const staffPool = !isLoss ? (netPool - adminAmt) : 0;
+            const netAfterReserve = !isLoss ? (grossProfit - reserveAmt) : 0;
+            const adminAmt = !isLoss ? (netAfterReserve * adminSharePer / 100) : 0;
+            const staffPool = !isLoss ? (netAfterReserve - adminAmt) : 0;
 
-            // C. UPDATE DASHBOARD UI
+            // C. UPDATE DASHBOARD DISPLAY
             const resNet = document.getElementById("resNetProfit");
             const resRes = document.getElementById("resReserveAmt");
             const resArea = document.getElementById("profitResultArea");
@@ -8997,17 +8997,17 @@ const initAttendanceSystem = () => {
                 resArea.classList.remove("hidden");
                 resNet.innerText = `₹ ${grossProfit.toLocaleString('en-IN')}`;
                 resRes.innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
-                resArea.style.background = isLoss ? "#be123c" : "#0f172a"; // Red if loss
+                resArea.style.background = isLoss ? "#be123c" : "#0f172a";
             }
 
-            // D. RENDER STAKEHOLDER TABLE
+            // D. RENDER STAKEHOLDER TABLE (MAP LOGIC PREVENTS DUPLICATES)
             const pBody = document.getElementById("payoutTableBody");
             if (!pBody) return;
-            pBody.innerHTML = ""; 
+            pBody.innerHTML = ""; // FULL WIPE
 
-            // 1. ADMIN ROW (First Stakeholder)
+            // 1. ADMIN ROW (Always first, listed once)
             pBody.innerHTML += `
-                <tr style="background:#f8fafc; font-weight:bold;">
+                <tr style="background:#f8fafc; font-weight:bold; border-left: 4px solid #8b5cf6;">
                     <td style="padding:15px;">ADMIN (MANAGEMENT)</td>
                     <td style="text-align:center;">---</td>
                     <td style="text-align:center;">${adminSharePer}%</td>
@@ -9017,36 +9017,41 @@ const initAttendanceSystem = () => {
                     </td>
                 </tr>`;
 
-            // 2. STAFF ROWS (BY ATTENDANCE POINTS)
+            // 2. STAFF CALCULATION (USING UID AS UNIQUE KEY)
             const attSnap = await get(ref(db, "attendance"));
             let globalPts = 0; 
-            let userStats = {};
+            let userStats = {}; // This prevents double entries!
 
             if (attSnap.exists()) {
                 const allAt = attSnap.val();
                 const usersSnap = await get(ref(db, "users"));
+                
                 usersSnap.forEach(uS => {
                     const uid = uS.key;
                     if (ADMIN_EMAILS.includes(uS.val().email.toLowerCase())) return;
-                    
+
                     let pts = 0; let days = 0;
                     Object.keys(allAt).forEach(d => {
+                        // Only count attendance within the selected project range
                         if (d >= startDate && d <= endDate && allAt[d][uid]) {
                             days++;
                             if (allAt[d][uid].status === "Present") pts += 1;
                         }
                     });
+
                     if (days > 0) {
+                        // If user was found again, this simply updates the same object
                         userStats[uid] = { name: uS.val().name, pts, total: days };
                         if (!isLoss) globalPts += pts;
                     }
                 });
             }
 
+            // 3. RENDER ROWS FROM UNIQUE MAP
             Object.entries(userStats).forEach(([uid, d]) => {
                 const shareAmt = (isLoss || globalPts === 0) ? 0 : (d.pts / globalPts) * staffPool;
                 const attPercent = ((d.pts / d.total) * 100).toFixed(0);
-                const sharePercent = ((shareAmt / (netPool || 1)) * 100).toFixed(1);
+                const sharePercent = ((shareAmt / (netAfterReserve || 1)) * 100).toFixed(1);
 
                 pBody.innerHTML += `
                     <tr>
@@ -9061,32 +9066,52 @@ const initAttendanceSystem = () => {
                     </tr>`;
             });
 
-            // E. SAFETY LOCK FOR MASTER BUTTON
+            // E. MASTER BUTTON SAFETY
             const masterBtn = document.getElementById("btnPostFinalBalance");
             if (masterBtn) {
                 masterBtn.disabled = isLoss;
                 masterBtn.style.opacity = isLoss ? "0.5" : "1";
-                masterBtn.innerText = isLoss ? "⚠️ CANNOT SETTLE PROJECT LOSS" : "POST TOTAL PROFIT TO BALANCE SHEET";
+                masterBtn.innerText = isLoss ? "⚠️ LOSS: CANNOT POST" : "POST TOTAL PROFIT TO BALANCE SHEET";
             }
 
         } catch (err) { console.error("Profit Engine Error:", err); }
     };
 
-    // Helper for Admin Payout Posting
+    // --- 2. THE MASTER POSTER (FINAL SETTLEMENT) ---
+    window.postProfitToBalance = async () => {
+        const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
+        const totalSpent = parseFloat(document.getElementById("dispPayrollSpent")?.innerText.replace(/[^\d.]/g, '')) || 0;
+        const netProfit = clientPay - totalSpent;
+
+        if (netProfit <= 0) return alert("Profit must be greater than zero to settle.");
+
+        if (confirm(`Finalize Project? ₹${netProfit.toLocaleString('en-IN')} will be posted to Balance Sheet.`)) {
+            await push(ref(db, "finance"), {
+                type: "INCOME",
+                category: "Project Settlement",
+                amount: netProfit,
+                desc: `Settlement: ${document.getElementById("expStartDate").value} to ${document.getElementById("expEndDate").value}`,
+                status: "Approved",
+                timestamp: serverTimestamp()
+            });
+            alert("✅ Project Settled.");
+            window.calcProfitEngine();
+        }
+    };
+
+    // --- 3. INTERNAL HELPERS ---
     window.postAdminPayout = async (amt) => {
-        if(amt <= 0) return alert("Nothing to post.");
         await push(ref(db, "finance"), { 
             type: "EXPENSE", 
             amount: amt, 
             desc: "Admin Management Share", 
             status: "Approved", 
-            timestamp: serverTimestamp(),
-            date: new Date().toISOString().split('T')[0]
+            date: new Date().toISOString().split('T')[0],
+            timestamp: serverTimestamp() 
         });
-        alert("✅ Admin share posted to Ledger.");
+        alert("✅ Admin share posted.");
     };
 
-    // Safety Link for Tab Switching
     window.loadAttendanceLog = () => window.calcProfitEngine();
 };
 
