@@ -8917,19 +8917,21 @@ This action cannot be undone.`);
     }
 };
 // =========================================================
-// 📅 STABLE ATTENDANCE ENGINE (NO-GHOSTING VERSION)
+// 📅 ADMIN-STRICT ATTENDANCE SYSTEM (USER READ-ONLY)
 // =========================================================
 
 const setupGlobalAttendanceFunctions = () => {
 
-    // 1. LOAD PREVIEW
+    // 1. LOAD PREVIEW: (Admin Only) Interactive Draft
     window.loadAttendanceList = async () => {
+        if(!isAdmin) return alert("⛔ Access Denied: Admin Control Only.");
+        
         const dateEl = document.getElementById("attDate");
         if(!dateEl || !dateEl.value) return alert("⚠️ Select Date First.");
         const date = dateEl.value;
         
         const tbody = document.getElementById("attTableBody");
-        tbody.innerHTML = ""; // FORCE WIPE
+        tbody.innerHTML = ""; 
 
         try {
             const userSnap = await get(ref(db, "users"));
@@ -8939,58 +8941,60 @@ const setupGlobalAttendanceFunctions = () => {
 
                 tbody.innerHTML += `
                     <tr class="draft-att-row" data-uid="${c.key}" data-name="${u.name || u.email}">
-                        <td style="background:#fffbeb; font-weight:bold; color:#b45309;">${date} (NEW)</td>
+                        <td style="background:#fffbeb; font-weight:bold;">${date} (DRAFT)</td>
                         <td>${u.name || u.email}</td>
                         <td class="status-cell" style="font-weight:900; color:#10b981;">PRESENT</td>
                         <td><button class="warning" onclick="window.toggleDraftStatus(this)" style="font-size:10px; padding:5px;">TOGGLE</button></td>
-                        <td style="text-align:center;"><i class="fas fa-save" style="color:#ccc;"></i></td>
+                        <td style="text-align:center; color:#ccc;"><i class="fas fa-lock"></i></td>
                     </tr>`;
             });
             window.loadAttendanceLog(true); 
         } catch (e) { console.error(e); }
     };
 
-    // 2. TOGGLE STATUS
+    // 2. TOGGLE STATUS: (Admin Only UI)
     window.toggleDraftStatus = (btn) => {
+        if(!isAdmin) return;
         const cell = btn.closest('tr').querySelector('.status-cell');
         const isP = cell.innerText === "PRESENT";
         cell.innerText = isP ? "ABSENT" : "PRESENT";
         cell.style.color = isP ? "#e11d48" : "#10b981";
     };
 
-    // 3. SAVE
+    // 3. SAVE: (Admin Only)
     window.submitAttendanceBatch = async () => {
+        if(!isAdmin) return alert("⛔ Unauthorized.");
         const date = document.getElementById("attDate").value;
         const rows = document.querySelectorAll(".draft-att-row");
-        if(rows.length === 0) return alert("Nothing to save.");
+        if(rows.length === 0) return alert("No list loaded.");
 
         const updates = {};
         rows.forEach(r => {
             const uid = r.getAttribute("data-uid");
             updates[`attendance/${date}/${uid}`] = {
-                status: r.querySelector(".status-cell").innerText === "PRESENT" ? "Present" : "Absent",
+                status: r.querySelector(".status-cell").innerText === "Present" || r.querySelector(".status-cell").innerText === "PRESENT" ? "Present" : "Absent",
                 userName: r.getAttribute("data-name"),
                 timestamp: serverTimestamp()
             };
         });
 
         await update(ref(db), updates);
-        alert("✅ SAVED");
-        window.loadAttendanceLog(false); // Reloads the permanent table
+        alert("✅ ATTENDANCE SECURED");
+        window.loadAttendanceLog(false);
     };
 
-    // 4. LOG VIEWER (ONE-TIME FETCH - NO GHOSTING)
+    // 4. LOG VIEWER: (Admin gets controls, User gets view-only)
     window.loadAttendanceLog = async (append = false) => {
         const tbody = document.getElementById("attTableBody");
         if(!tbody) return;
-        if(!append) tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Loading...</td></tr>";
+        if(!append) tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>Loading Logs...</td></tr>";
 
         try {
             const snap = await get(ref(db, "attendance"));
             if(!append) tbody.innerHTML = ""; 
 
             if(!snap.exists()) {
-                if(!append) tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No records.</td></tr>";
+                if(!append) tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No records found.</td></tr>";
                 return;
             }
 
@@ -9001,17 +9005,22 @@ const setupGlobalAttendanceFunctions = () => {
                     const v = userSnap.val();
                     const isP = v.status === "Present";
 
+                    // ADMIN gets buttons, USER gets "N/A" text
+                    let controlCell = isAdmin ? 
+                        `<button class="info" style="font-size:9px; padding:4px;" onclick="window.quickToggle('${date}','${uid}','${isP?'Absent':'Present'}')">CHANGE</button>` : 
+                        `<span style="color:#ccc; font-size:10px;">LOCKED</span>`;
+
+                    let deleteCell = isAdmin ? 
+                        `<button onclick="window.deleteAttendanceRecord('${date}','${uid}')" style="color:red; background:none; border:none; cursor:pointer;"><i class="fas fa-trash-alt"></i></button>` : 
+                        `<i class="fas fa-shield-alt" style="color:#eee;"></i>`;
+
                     tbody.innerHTML += `
                         <tr style="border-left: 5px solid ${isP?'#10b981':'#e11d48'};">
                             <td>${date}</td>
                             <td style="font-weight:bold;">${v.userName}</td>
                             <td style="font-weight:900; color:${isP ? '#10b981' : '#e11d48'};">${v.status.toUpperCase()}</td>
-                            <td><button class="info" style="font-size:9px;" onclick="window.quickToggle('${date}','${uid}','${isP?'Absent':'Present'}')">CHANGE</button></td>
-                            <td style="text-align:center;">
-                                <button onclick="window.deleteAttendanceRecord('${date}','${uid}')" style="color:red; background:none; border:none; cursor:pointer;">
-                                    <i class="fas fa-trash-alt"></i>
-                                </button>
-                            </td>
+                            <td>${controlCell}</td>
+                            <td style="text-align:center;">${deleteCell}</td>
                         </tr>`;
                 });
             });
@@ -9019,22 +9028,24 @@ const setupGlobalAttendanceFunctions = () => {
         } catch(e) { console.error(e); }
     };
 
-    // 5. DELETE
-    window.deleteAttendanceRecord = async (date, uid) => {
-        if(!confirm(`Delete record?`)) return;
-        await remove(ref(db, `attendance/${date}/${uid}`));
-        const check = await get(ref(db, `attendance/${date}`));
-        if(!check.exists() || Object.keys(check.val()).length === 0) await remove(ref(db, `attendance/${date}`));
-        alert("🗑 Deleted.");
-        window.loadAttendanceLog(false);
-    };
-
+    // 5. QUICK ADMIN ACTIONS
     window.quickToggle = async (date, uid, next) => {
+        if(!isAdmin) return;
         await update(ref(db, `attendance/${date}/${uid}`), { status: next });
         window.loadAttendanceLog(false);
     };
+
+    window.deleteAttendanceRecord = async (date, uid) => {
+        if(!isAdmin || !confirm(`Delete record?`)) return;
+        await remove(ref(db, `attendance/${date}/${uid}`));
+        const check = await get(ref(db, `attendance/${date}`));
+        if(!check.exists() || Object.keys(check.val()).length === 0) await remove(ref(db, `attendance/${date}`));
+        window.loadAttendanceLog(false);
+    };
+
 };
 
+// Initialize system
 setupGlobalAttendanceFunctions();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
