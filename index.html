@@ -8942,7 +8942,7 @@ This action cannot be undone.`);
     }
 };
 // =========================================================
-// 💎 MRPSP MASTER ENGINE: STICKY PENALTY & APPROVAL SYSTEM
+// 💎 MRPSP MASTER ENGINE: STICKY PENALTY & REJECT LOGIC
 // =========================================================
 
 const initAttendanceSystem = () => {
@@ -8965,7 +8965,6 @@ const initAttendanceSystem = () => {
             if (!pBody) return;
             pBody.innerHTML = ""; 
 
-            // A. Fetch Expenses & Gross Math
             const finSnap = await get(ref(db, "finance"));
             let totalSpentDB = 0;
             if (finSnap.exists()) {
@@ -8986,7 +8985,6 @@ const initAttendanceSystem = () => {
             const adminAmt = !isLoss ? (netPool * adminSharePer / 100) : 0;
             const staffPool = !isLoss ? (netPool - adminAmt) : 0;
 
-            // B. Attendance Pts Calculation with Consecutive Penalty
             const attSnap = await get(ref(db, "attendance"));
             let globalPts = 0; 
             let userStats = {};
@@ -8994,38 +8992,24 @@ const initAttendanceSystem = () => {
             if (attSnap.exists()) {
                 const allAt = attSnap.val();
                 const usersSnap = await get(ref(db, "users"));
-                // Sort dates to track "consecutive" days correctly
                 const sortedDates = Object.keys(allAt).filter(d => d >= startDate && d <= endDate).sort();
 
                 usersSnap.forEach(uS => {
                     const uid = uS.key;
                     if (ADMIN_EMAILS.includes(uS.val().email.toLowerCase())) return;
-
                     let pts = 0; let combo = 0; let trackedDays = 0;
-
                     sortedDates.forEach(d => {
-                        if (allAt[d][uid]) {
+                        if (allAt[d] && allAt[d][uid]) {
                             trackedDays++;
                             const s = allAt[d][uid].status;
-                            
-                            if (s === "Present") {
-                                pts += 1;
-                                combo = 0; // Reset excuse counter
-                            } 
+                            if (s === "Present") { pts += 1; combo = 0; } 
                             else if (s === "Excused") {
                                 combo++;
-                                if (combo >= 2) {
-                                    pts += 0; // 2nd consecutive excuse = 0 pts
-                                    combo = 0; // Reset combo after penalty
-                                } else {
-                                    pts += 1; // 1st excuse = 1 pt
-                                }
-                            } else {
-                                combo = 0; // Absent or other resets combo
-                            }
+                                if (combo >= 2) { pts += 0; combo = 0; } 
+                                else { pts += 1; }
+                            } else { combo = 0; } // Absent or Rejected = 0 pts
                         }
                     });
-
                     if (trackedDays > 0) {
                         userStats[uid] = { name: uS.val().name, pts, total: trackedDays };
                         if (!isLoss) globalPts += pts;
@@ -9033,7 +9017,6 @@ const initAttendanceSystem = () => {
                 });
             }
 
-            // C. Render Admin Row
             pBody.innerHTML += `<tr style="background:#f8fafc; font-weight:bold;">
                 <td style="padding:15px;">ADMIN (MANAGEMENT)</td>
                 <td style="text-align:center;">---</td>
@@ -9042,7 +9025,6 @@ const initAttendanceSystem = () => {
                 <td style="text-align:center;"><button class="success" onclick="window.postAdminPayout(${adminAmt})">POST</button></td>
             </tr>`;
 
-            // D. Render Staff Rows
             Object.entries(userStats).forEach(([uid, d]) => {
                 const shareAmt = (isLoss || globalPts === 0) ? 0 : (d.pts / globalPts) * staffPool;
                 pBody.innerHTML += `<tr>
@@ -9056,21 +9038,22 @@ const initAttendanceSystem = () => {
         } catch (err) { console.error(err); }
     };
 
-    // --- 2. APPROVAL WORKFLOW ---
-    window.submitAbsentReason = async (date) => {
-        const reason = document.getElementById(`reason_inp_${date}`).value;
-        if (!reason) return alert("Enter reason.");
-        await update(ref(db, `attendance/${date}/${currentUser.uid}`), { userReason: reason });
-        alert("Reason sent to Admin.");
-        window.loadAttendanceList();
-    };
-
-    window.approveAsExcused = async (date, uid) => {
+    // --- 2. UPDATED STATUS HANDLER (WITH REJECT) ---
+    window.adminSetStatus = async (date, uid, newStatus) => {
         if (!isAdmin) return;
-        if (confirm("Approve Excuse? (Note: Consecutive excuses trigger penalty)")) {
-            await update(ref(db, `attendance/${date}/${uid}`), { status: "Excused" });
+        const msg = newStatus === 'Excused' ? "Approve this excuse?" : "REJECT this excuse? (Points will be deducted)";
+        if (!confirm(msg)) return;
+
+        try {
+            const updateRef = ref(db, `attendance/${date}/${uid}`);
+            // If rejected, mark status clearly so profit engine gives 0 pts
+            await update(updateRef, { 
+                status: newStatus === 'Excused' ? 'Excused' : 'Absent (Rejected)',
+                adminDecision: newStatus 
+            });
+            alert(`✅ Status marked as ${newStatus}`);
             window.loadAttendanceList();
-        }
+        } catch (e) { alert("Error: " + e.message); }
     };
 
     window.loadAttendanceList = async () => {
@@ -9080,35 +9063,47 @@ const initAttendanceSystem = () => {
 
         const snap = await get(ref(db, `attendance/${date}`));
         tbody.innerHTML = "";
-        if (!snap.exists()) { tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No data.</td></tr>"; return; }
+        if (!snap.exists()) { tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'>No records found for this date.</td></tr>"; return; }
 
         snap.forEach(uS => {
             const v = uS.val(); const uid = uS.key;
-            const s = (v.status || 'ABSENT').toUpperCase();
+            const rawStatus = (v.status || 'ABSENT').toUpperCase();
             const isMe = (uid === currentUser.uid);
 
+            // COLOR LOGIC
+            let statusColor = "#e11d48"; // Default Red
+            if (rawStatus === "PRESENT") statusColor = "#10b981";
+            if (rawStatus === "EXCUSED") statusColor = "#3b82f6";
+
             let reasonUI = v.userReason || "-";
-            if (isMe && s === "ABSENT" && !v.userReason) {
+            if (isMe && rawStatus.includes("ABSENT") && !v.userReason) {
                 reasonUI = `<div style="display:flex;gap:3px;"><input type="text" id="reason_inp_${date}" placeholder="Reason" style="font-size:10px;padding:2px;"><button onclick="window.submitAbsentReason('${date}')" style="font-size:9px;">GO</button></div>`;
             }
 
-            let action = isAdmin ? `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:red;background:none;border:none;">🗑</button>` : "-";
-            if (isAdmin && s === "ABSENT" && v.userReason) {
-                action = `<button onclick="window.approveAsExcused('${date}','${uid}')" style="background:#f59e0b;font-size:9px;padding:4px;">APPROVE</button>`;
+            // ADMIN ACTION COLUMN (The Fix)
+            let action = isAdmin ? `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:#cbd5e1;background:none;border:none;cursor:pointer;"><i class="fas fa-trash"></i></button>` : "-";
+            
+            // If User submitted a reason and it hasn't been decided yet
+            if (isAdmin && v.userReason && (rawStatus.includes("ABSENT") || v.adminDecision === "Pending")) {
+                action = `
+                    <div style="display:flex; gap:4px; justify-content:center;">
+                        <button onclick="window.adminSetStatus('${date}','${uid}','Excused')" class="success" style="font-size:9px; padding:4px 8px;">EXCUSE</button>
+                        <button onclick="window.adminSetStatus('${date}','${uid}','Rejected')" class="danger" style="font-size:9px; padding:4px 8px; background:#991b1b;">REJECT</button>
+                    </div>`;
             }
 
             tbody.innerHTML += `<tr>
                 <td>${date}</td>
                 <td><b>${v.userName}</b></td>
-                <td style="color:${s==='PRESENT'?'#10b981':(s==='EXCUSED'?'#3b82f6':'#e11d48')}; font-weight:bold;">${s}</td>
-                <td>${reasonUI}</td>
+                <td style="color:${statusColor}; font-weight:900;">${rawStatus}</td>
+                <td style="font-size:11px; color:#64748b;">${reasonUI}</td>
                 <td style="text-align:center;">${action}</td>
             </tr>`;
         });
         window.calcProfitEngine();
     };
 
-    // --- 3. ATTENDANCE BATCH ---
+    // --- 3. ATTENDANCE CREATION (INTERVIEW) ---
     window.submitAttendanceBatch = async () => {
         const date = document.getElementById("attDate")?.value;
         if (!date) return alert("Select Date.");
@@ -9126,20 +9121,26 @@ const initAttendanceSystem = () => {
     window.nextInterviewStep = () => {
         const ui = document.getElementById("interviewUI");
         if (currentInterviewIndex >= interviewQueue.length) {
-            ui.innerHTML = `<div style="text-align:center;"><button class="success" onclick="window.loadAttendanceList()">FINISH</button></div>`;
+            ui.innerHTML = `<div style="text-align:center; padding:20px;"><h3>✅ Session Complete</h3><button class="success" onclick="window.loadAttendanceList()">FINISH & SAVE</button></div>`;
             return;
         }
         const u = interviewQueue[currentInterviewIndex];
-        ui.innerHTML = `<div style="text-align:center;padding:15px;background:#f8fafc;border:1px solid #ddd;border-radius:8px;">
-            <h3>Is <b>${u.name}</b> Present?</h3>
-            <button class="success" onclick="window.recordStep('${u.uid}', 'Present')" style="margin-right:10px;">YES</button>
-            <button class="danger" onclick="window.recordStep('${u.uid}', 'Absent')">NO</button>
+        ui.innerHTML = `<div style="text-align:center;padding:25px;background:#fff;border:2px solid var(--metro-blue);border-radius:12px;box-shadow:var(--card-shadow);">
+            <p style="font-size:10px; color:#64748b;">PERSONNEL ${currentInterviewIndex+1}/${interviewQueue.length}</p>
+            <h2 style="margin:10px 0;">Is <b>${u.name}</b> Present?</h2>
+            <div style="display:flex; gap:10px; justify-content:center; margin-top:15px;">
+                <button class="success" onclick="window.recordStep('${u.uid}', 'Present')" style="padding:10px 30px;">YES</button>
+                <button class="danger" onclick="window.recordStep('${u.uid}', 'Absent')" style="padding:10px 30px;">NO</button>
+            </div>
         </div>`;
     };
 
     window.recordStep = async (uid, status) => {
         await set(ref(db, `attendance/${interviewDate}/${uid}`), { 
-            status, userName: interviewQueue[currentInterviewIndex].name, timestamp: serverTimestamp() 
+            status, 
+            userName: interviewQueue[currentInterviewIndex].name, 
+            timestamp: serverTimestamp(),
+            adminDecision: status === "Present" ? "Approved" : "Pending"
         });
         currentInterviewIndex++; window.nextInterviewStep();
     };
