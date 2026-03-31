@@ -9176,66 +9176,112 @@ if (dirTypeSelect && !Array.from(dirTypeSelect.options).some(opt => opt.value ==
     `;
 };
 
-// --- 2. GENERATE THE PRINTABLE DOCUMENT ---
 window.generateDirectivePrint = async function() {
     const type = document.getElementById("dirType").value;
     const content = document.getElementById("dirText").value.trim();
     const authority = document.getElementById("selDirAuthority").value;
-    
-    // Get the name from our new manual box
     const manualName = document.getElementById("dirManualUser")?.value.trim();
     
-    // Validations
-    if (!manualName) return alert("⚠️ Please enter a Recipient Name/Office in the provided box.");
-    if (!content) return alert("⚠️ Please enter the Directive content.");
+    if (!manualName) return alert("⚠️ Please enter Recipient Name/Office.");
 
     const reportContainer = document.getElementById("printableReportContainer");
-    const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-    const refNo = "MRPSP/DISPATCH/" + Date.now().toString().slice(-6);
+    const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const refNo = "MRPSP/OFFICIAL/" + Date.now().toString().slice(-6);
 
-    // Render the Official A4 Template
+    let financialSection = "";
+
+    // --- LOGIC: IF BALANCE SHEET IS SELECTED ---
+    if (type === "BALANCE SHEET") {
+        const finSnap = await get(ref(db, "finance"));
+        let rows = "";
+        let totalCredit = 0;
+        let totalDebit = 0;
+
+        if (finSnap.exists()) {
+            finSnap.forEach(c => {
+                const v = c.val();
+                if (v.status === "Approved") {
+                    const isCredit = v.type === "CREDIT";
+                    const amt = parseFloat(v.amount || 0);
+                    if (isCredit) totalCredit += amt; else totalDebit += amt;
+
+                    rows += `
+                        <tr style="border-bottom: 5pt solid black; font-size: 35pt; font-weight: 900;">
+                            <td style="padding: 20px 10px; text-align: left;">${(v.desc || v.productName || 'MISC').toUpperCase()}</td>
+                            <td style="text-align: right; padding-right: 15px;">${isCredit ? Math.round(amt) : '-'}</td>
+                            <td style="text-align: right; padding-right: 15px;">${!isCredit ? Math.round(amt) : '-'}</td>
+                        </tr>`;
+                }
+            });
+        }
+
+        financialSection = `
+            <div style="background: #000 !important; color: #fff !important; padding: 20px; font-size: 40pt; font-weight: 900; margin-top: 40px; text-align: center; -webkit-print-color-adjust: exact;">PROJECT FINANCIAL LEDGER</div>
+            <table style="width:100%; border-collapse: collapse; table-layout: fixed;">
+                <thead>
+                    <tr style="border-bottom: 10pt solid black; font-size: 30pt;">
+                        <th style="text-align: left; width: 50%;">PARTICULARS</th>
+                        <th style="text-align: right; width: 25%;">CREDIT</th>
+                        <th style="text-align: right; width: 25%; padding-right:15px;">DEBIT</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+            <div style="background: #000 !important; color: #fff !important; font-size: 50pt; font-weight: 900; padding: 30px; display: flex; justify-content: space-between; margin-top: 30px; -webkit-print-color-adjust: exact;">
+                <span>NET BALANCE:</span>
+                <span>₹ ${Math.round(totalCredit - totalDebit).toLocaleString('en-IN')}</span>
+            </div>`;
+    }
+
+    // --- FINAL TEMPLATE MATCHING YOUR OTHER PRINTS ---
     reportContainer.innerHTML = `
     <style>
-        @media print { @page { size: A4; margin: 15mm; } .no-print { display: none !important; } body { background: white !important; } }
-        .letter-wrap { width: 210mm; min-height: 297mm; padding: 20mm; margin: 0 auto; background: white; color: black; font-family: "Times New Roman", serif; box-sizing: border-box; border: 1px solid #ddd; }
-        .header-top { text-align: center; border-bottom: 4px double black; padding-bottom: 10px; margin-bottom: 25px; }
-        .doc-title { background: #000; color: #fff; padding: 12px; font-size: 20pt; text-align: center; margin: 25px 0; text-transform: uppercase; font-weight:bold; }
-        .body-letter { font-size: 14pt; line-height: 1.6; text-align: justify; white-space: pre-wrap; margin-top: 35px; text-transform: uppercase; }
+        @media print { 
+            @page { size: A4; margin: 0; } 
+            .no-print { display: none !important; } 
+            body { height: auto !important; -webkit-print-color-adjust: exact !important; } 
+        }
+        .invoice-wrapper { width: 95%; margin: 0 auto; font-family: "Arial Black", sans-serif; color: black; background: white; padding: 20px 40px; }
+        .header-title { font-size: 85pt; font-weight: 900; text-align: center; margin-bottom: 20px; line-height: 1; }
+        .inst-title { font-size: 45pt; font-weight: 900; text-align: center; line-height: 1.2; margin-bottom: 40px; border-top: 10pt solid black; padding-top: 20px; }
+        .doc-type-box { border: 15pt solid black; padding: 30px; display: inline-block; font-size: 60pt; font-weight: 900; text-align: center; width: 90%; margin: 0 auto 50px auto; text-transform: uppercase; }
+        .meta-row { display: block; font-size: 50pt; font-weight: 900; margin-bottom: 15px; text-transform: uppercase; text-align: left; }
     </style>
     
-    <div class="no-print" style="text-align:center; padding:20px; background:#f1f5f9; position:sticky; top:0; z-index:9999; border-bottom:2px solid #fbbf24;">
-        <button onclick="window.print()" style="background:#15803d; padding:12px 35px; cursor:pointer; color:white; border:none; border-radius:5px; font-weight:bold;">🖨️ PRINT OFFICIAL DOCUMENT</button>
-        <button class="danger" onclick="document.getElementById('printableReportContainer').classList.add('hidden')" style="margin-left:10px; padding:12px 35px; cursor:pointer;">CLOSE</button>
+    <div class="no-print" style="text-align:center; padding:30px; position:sticky; top:0; background:white; z-index:100; border-bottom: 2px solid #ddd;">
+        <button onclick="window.print()" style="padding:40px 80px; font-size:30pt; font-weight:900; background:green; color:white; border-radius:20px; cursor:pointer;">🖨️ PRINT DOCUMENT</button>
+        <button class="danger" onclick="closeReportPreview()" style="padding:40px 80px; font-size:30pt; font-weight:900; margin-left:20px; cursor:pointer;">CLOSE</button>
     </div>
 
-    <div class="letter-wrap">
-        <div class="header-top">
-            <div style="font-size: 26pt; font-weight: bold;">METRO RAILWAY PLATFORM SAFETY</div>
-            <div style="font-size: 13pt; margin-top: 5px; letter-spacing:1px;">INSTITUTE OF ENGINEERING & MANAGEMENT (IEM)</div>
+    <div class="invoice-wrapper">
+        <div class="header-title">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+        <div class="inst-title">INSTITUTE OF ENGINEERING AND MANAGEMENT<br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
+        
+        <div style="text-align:center;"><div class="doc-type-box">${type}</div></div>
+        
+        <div style="text-align: left; margin-bottom: 50px;">
+            <span class="meta-row">REF: ${refNo}</span>
+            <span class="meta-row">DATE: ${dateStr}</span>
+            <span class="meta-row">TO: ${manualName.toUpperCase()}</span>
         </div>
 
-        <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 12pt;">
-            <span>REF: ${refNo}</span>
-            <span>DATE: ${dateStr}</span>
+        <div style="font-size: 45pt; font-weight: 900; text-align: left; border-top: 10pt solid black; padding-top: 20px; line-height: 1.3;">
+            CONTENT:<br>
+            ${content.toUpperCase()}
         </div>
 
-        <div class="doc-title">${type}</div>
+        ${financialSection}
 
-        <div style="margin: 20px 0; font-size: 15pt; font-weight: bold;">
-            TO,<br>
-            <div style="padding-left: 20px; margin-top:8px; border-left: 4px solid #000; padding-bottom:5px;">
-                ${manualName.toUpperCase()}
+        <div style="display: flex; justify-content: space-between; margin-top: 120px;">
+            <div style="width: 50%; text-align: left;">
+                <div style="border-top: 10pt solid black; width: 90%; margin-bottom: 10px;"></div>
+                <div style="font-size: 50pt; font-weight: 900;">${authority.toUpperCase()}</div>
+                <div style="font-size: 28pt; font-weight: 900;">AUTHORIZED ISSUING AUTHORITY</div>
             </div>
         </div>
 
-        <div class="body-letter">${content}</div>
-
-        <div style="margin-top: 80px; font-size: 14pt; font-weight: bold;">
-            <div style="border-top: 2px solid black; width: 300px; padding-top: 10px;">
-                ${authority.toUpperCase()}<br>
-                <span style="font-size: 11pt; font-weight: normal;">Authorized Issuing Authority</span><br>
-                <span style="font-size: 10pt; font-weight: normal;">Metro Railway Platform Safety Project</span>
-            </div>
+        <div style="margin-top: 100px; text-align: center; font-size: 30pt; border-top: 5pt dashed black; padding-top: 30px; font-weight: 900;">
+            OFFICIAL SYSTEM GENERATED RECORD
         </div>
     </div>`;
 
