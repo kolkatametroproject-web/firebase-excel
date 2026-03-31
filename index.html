@@ -8942,7 +8942,7 @@ This action cannot be undone.`);
     }
 };
 // =========================================================
-// 💎 MRPSP MASTER ENGINE: STICKY PENALTY & REJECT LOGIC
+// 🔒 MRPSP SECURE ATTENDANCE: ADMIN EDIT | USER VIEW ONLY
 // =========================================================
 
 const initAttendanceSystem = () => {
@@ -8950,170 +8950,23 @@ const initAttendanceSystem = () => {
     let currentInterviewIndex = 0;
     let interviewDate = "";
 
-    // --- 1. CORE MATH: PROFIT ENGINE & PENALTY LOGIC ---
-    window.calcProfitEngine = async () => {
-        try {
-            const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
-            const reservePer = parseFloat(document.getElementById("inpReservePercent")?.value) || 0;
-            const adminSharePer = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
-            const startDate = document.getElementById("expStartDate")?.value;
-            const endDate = document.getElementById("expEndDate")?.value;
-
-            if (!startDate || !endDate) return;
-
-            const pBody = document.getElementById("payoutTableBody");
-            if (!pBody) return;
-            pBody.innerHTML = ""; 
-
-            const finSnap = await get(ref(db, "finance"));
-            let totalSpentDB = 0;
-            if (finSnap.exists()) {
-                finSnap.forEach(c => {
-                    const v = c.val();
-                    if ((v.type === 'DEBIT' || v.type === 'EXPENSE') && v.status === 'Approved') {
-                        const d = v.date || (v.timestamp ? new Date(v.timestamp).toISOString().split('T')[0] : null);
-                        if (d >= startDate && d <= endDate) totalSpentDB += parseFloat(v.amount || 0);
-                    }
-                });
-            }
-            document.getElementById("dispPayrollSpent").innerText = `₹ ${totalSpentDB.toLocaleString('en-IN')}`;
-
-            const grossProfit = clientPay - totalSpentDB;
-            const isLoss = grossProfit <= 0;
-            const reserveAmt = !isLoss ? (grossProfit * reservePer / 100) : 0;
-            const netPool = !isLoss ? (grossProfit - reserveAmt) : 0;
-            const adminAmt = !isLoss ? (netPool * adminSharePer / 100) : 0;
-            const staffPool = !isLoss ? (netPool - adminAmt) : 0;
-
-            const attSnap = await get(ref(db, "attendance"));
-            let globalPts = 0; 
-            let userStats = {};
-
-            if (attSnap.exists()) {
-                const allAt = attSnap.val();
-                const usersSnap = await get(ref(db, "users"));
-                const sortedDates = Object.keys(allAt).filter(d => d >= startDate && d <= endDate).sort();
-
-                usersSnap.forEach(uS => {
-                    const uid = uS.key;
-                    if (ADMIN_EMAILS.includes(uS.val().email.toLowerCase())) return;
-                    let pts = 0; let combo = 0; let trackedDays = 0;
-                    sortedDates.forEach(d => {
-                        if (allAt[d] && allAt[d][uid]) {
-                            trackedDays++;
-                            const s = allAt[d][uid].status;
-                            if (s === "Present") { pts += 1; combo = 0; } 
-                            else if (s === "Excused") {
-                                combo++;
-                                if (combo >= 2) { pts += 0; combo = 0; } 
-                                else { pts += 1; }
-                            } else { combo = 0; } // Absent or Rejected = 0 pts
-                        }
-                    });
-                    if (trackedDays > 0) {
-                        userStats[uid] = { name: uS.val().name, pts, total: trackedDays };
-                        if (!isLoss) globalPts += pts;
-                    }
-                });
-            }
-
-            pBody.innerHTML += `<tr style="background:#f8fafc; font-weight:bold;">
-                <td style="padding:15px;">ADMIN (MANAGEMENT)</td>
-                <td style="text-align:center;">---</td>
-                <td style="text-align:center;">${adminSharePer}%</td>
-                <td style="text-align:right;">₹ ${adminAmt.toFixed(2)}</td>
-                <td style="text-align:center;"><button class="success" onclick="window.postAdminPayout(${adminAmt})">POST</button></td>
-            </tr>`;
-
-            Object.entries(userStats).forEach(([uid, d]) => {
-                const shareAmt = (isLoss || globalPts === 0) ? 0 : (d.pts / globalPts) * staffPool;
-                pBody.innerHTML += `<tr>
-                    <td>${d.name}</td>
-                    <td style="text-align:center;">${((d.pts/d.total)*100).toFixed(0)}%</td>
-                    <td style="text-align:center;">${((shareAmt/(netPool||1))*100).toFixed(1)}%</td>
-                    <td style="text-align:right; font-weight:bold; color:#2563eb;">₹ ${shareAmt.toFixed(2)}</td>
-                    <td style="text-align:center;"><button onclick="window.initiatePayoutHandshake('${uid}', ${shareAmt}, '${d.name}')" class="info" style="font-size:9px;">SEND</button></td>
-                </tr>`;
-            });
-        } catch (err) { console.error(err); }
-    };
-
-    // --- 2. UPDATED STATUS HANDLER (WITH REJECT) ---
-    window.adminSetStatus = async (date, uid, newStatus) => {
-        if (!isAdmin) return;
-        const msg = newStatus === 'Excused' ? "Approve this excuse?" : "REJECT this excuse? (Points will be deducted)";
-        if (!confirm(msg)) return;
-
-        try {
-            const updateRef = ref(db, `attendance/${date}/${uid}`);
-            // If rejected, mark status clearly so profit engine gives 0 pts
-            await update(updateRef, { 
-                status: newStatus === 'Excused' ? 'Excused' : 'Absent (Rejected)',
-                adminDecision: newStatus 
-            });
-            alert(`✅ Status marked as ${newStatus}`);
-            window.loadAttendanceList();
-        } catch (e) { alert("Error: " + e.message); }
-    };
-
-    window.loadAttendanceList = async () => {
-        const date = document.getElementById("attDate")?.value;
-        const tbody = document.getElementById("attTableBody");
-        if (!date || !tbody) return;
-
-        const snap = await get(ref(db, `attendance/${date}`));
-        tbody.innerHTML = "";
-        if (!snap.exists()) { tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'>No records found for this date.</td></tr>"; return; }
-
-        snap.forEach(uS => {
-            const v = uS.val(); const uid = uS.key;
-            const rawStatus = (v.status || 'ABSENT').toUpperCase();
-            const isMe = (uid === currentUser.uid);
-
-            // COLOR LOGIC
-            let statusColor = "#e11d48"; // Default Red
-            if (rawStatus === "PRESENT") statusColor = "#10b981";
-            if (rawStatus === "EXCUSED") statusColor = "#3b82f6";
-
-            let reasonUI = v.userReason || "-";
-            if (isMe && rawStatus.includes("ABSENT") && !v.userReason) {
-                reasonUI = `<div style="display:flex;gap:3px;"><input type="text" id="reason_inp_${date}" placeholder="Reason" style="font-size:10px;padding:2px;"><button onclick="window.submitAbsentReason('${date}')" style="font-size:9px;">GO</button></div>`;
-            }
-
-            // ADMIN ACTION COLUMN (The Fix)
-            let action = isAdmin ? `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:#cbd5e1;background:none;border:none;cursor:pointer;"><i class="fas fa-trash"></i></button>` : "-";
-            
-            // If User submitted a reason and it hasn't been decided yet
-            if (isAdmin && v.userReason && (rawStatus.includes("ABSENT") || v.adminDecision === "Pending")) {
-                action = `
-                    <div style="display:flex; gap:4px; justify-content:center;">
-                        <button onclick="window.adminSetStatus('${date}','${uid}','Excused')" class="success" style="font-size:9px; padding:4px 8px;">EXCUSE</button>
-                        <button onclick="window.adminSetStatus('${date}','${uid}','Rejected')" class="danger" style="font-size:9px; padding:4px 8px; background:#991b1b;">REJECT</button>
-                    </div>`;
-            }
-
-            tbody.innerHTML += `<tr>
-                <td>${date}</td>
-                <td><b>${v.userName}</b></td>
-                <td style="color:${statusColor}; font-weight:900;">${rawStatus}</td>
-                <td style="font-size:11px; color:#64748b;">${reasonUI}</td>
-                <td style="text-align:center;">${action}</td>
-            </tr>`;
-        });
-        window.calcProfitEngine();
-    };
-
-    // --- 3. ATTENDANCE CREATION (INTERVIEW) ---
+    // --- 1. ADMIN ONLY: CREATE DAY (INTERVIEW MODE) ---
     window.submitAttendanceBatch = async () => {
+        if (!isAdmin) return alert("⛔ ACCESS DENIED: Admin Authorization Required.");
+        
         const date = document.getElementById("attDate")?.value;
-        if (!date) return alert("Select Date.");
+        if (!date) return alert("⚠️ Select Date First.");
+
         const userSnap = await get(ref(db, "users"));
         interviewQueue = [];
         userSnap.forEach(c => {
-            if(!ADMIN_EMAILS.includes(c.val().email.toLowerCase())) 
+            if(!ADMIN_EMAILS.includes(c.val().email.toLowerCase())) {
                 interviewQueue.push({ uid: c.key, name: c.val().name || c.val().email });
+            }
         });
-        interviewDate = date; currentInterviewIndex = 0;
+
+        interviewDate = date;
+        currentInterviewIndex = 0;
         document.getElementById("attTableBody").innerHTML = `<tr><td colspan="5" id="interviewUI"></td></tr>`;
         window.nextInterviewStep();
     };
@@ -9121,18 +8974,19 @@ const initAttendanceSystem = () => {
     window.nextInterviewStep = () => {
         const ui = document.getElementById("interviewUI");
         if (currentInterviewIndex >= interviewQueue.length) {
-            ui.innerHTML = `<div style="text-align:center; padding:20px;"><h3>✅ Session Complete</h3><button class="success" onclick="window.loadAttendanceList()">FINISH & SAVE</button></div>`;
+            ui.innerHTML = `<div style="text-align:center; padding:20px;"><h3>✅ Session Logged</h3><button class="success" onclick="window.loadAttendanceList()">SAVE & VIEW TABLE</button></div>`;
             return;
         }
         const u = interviewQueue[currentInterviewIndex];
-        ui.innerHTML = `<div style="text-align:center;padding:25px;background:#fff;border:2px solid var(--metro-blue);border-radius:12px;box-shadow:var(--card-shadow);">
-            <p style="font-size:10px; color:#64748b;">PERSONNEL ${currentInterviewIndex+1}/${interviewQueue.length}</p>
-            <h2 style="margin:10px 0;">Is <b>${u.name}</b> Present?</h2>
-            <div style="display:flex; gap:10px; justify-content:center; margin-top:15px;">
-                <button class="success" onclick="window.recordStep('${u.uid}', 'Present')" style="padding:10px 30px;">YES</button>
-                <button class="danger" onclick="window.recordStep('${u.uid}', 'Absent')" style="padding:10px 30px;">NO</button>
-            </div>
-        </div>`;
+        ui.innerHTML = `
+            <div style="background:#fff; padding:25px; border:2px solid var(--metro-blue); border-radius:12px; text-align:center;">
+                <p style="font-size:10px; color:#64748b; font-weight:bold;">MANAGEMENT INTERVIEW: ${currentInterviewIndex + 1}/${interviewQueue.length}</p>
+                <h2 style="margin:10px 0;">Is <b>${u.name}</b> Present?</h2>
+                <div style="display:flex; gap:10px; justify-content:center; margin-top:15px;">
+                    <button class="success" onclick="window.recordStep('${u.uid}', 'Present')" style="padding:10px 30px;">YES (PRESENT)</button>
+                    <button class="danger" onclick="window.recordStep('${u.uid}', 'Absent')" style="padding:10px 30px;">NO (ABSENT)</button>
+                </div>
+            </div>`;
     };
 
     window.recordStep = async (uid, status) => {
@@ -9142,10 +8996,111 @@ const initAttendanceSystem = () => {
             timestamp: serverTimestamp(),
             adminDecision: status === "Present" ? "Approved" : "Pending"
         });
-        currentInterviewIndex++; window.nextInterviewStep();
+        currentInterviewIndex++; 
+        window.nextInterviewStep();
     };
 
-    window.deleteSingleAtt = async (d, u) => { if (confirm("Delete?")) { await remove(ref(db, `attendance/${d}/${u}`)); window.loadAttendanceList(); } };
+    // --- 2. ADAPTIVE VIEW: ADMIN TOOLS vs USER DISPLAY ---
+    window.loadAttendanceList = async () => {
+        const date = document.getElementById("attDate")?.value;
+        const tbody = document.getElementById("attTableBody");
+        if (!date || !tbody) return;
+
+        const snap = await get(ref(db, `attendance/${date}`));
+        tbody.innerHTML = "";
+        
+        if (!snap.exists()) {
+            tbody.innerHTML = `<tr><td colspan='5' style='text-align:center; padding:30px; color:#64748b;'>
+                ${isAdmin ? 'No records found. Use "CREATE DAY RECORD" to begin.' : 'Attendance has not been marked yet for this date.'}
+            </td></tr>`;
+            return;
+        }
+
+        snap.forEach(uS => {
+            const v = uS.val(); 
+            const uid = uS.key;
+            const rawStatus = (v.status || 'ABSENT').toUpperCase();
+            const isMe = (uid === currentUser.uid);
+
+            // Visual Colors
+            let statusColor = "#e11d48"; // Absent Red
+            if (rawStatus === "PRESENT") statusColor = "#10b981";
+            if (rawStatus === "EXCUSED") statusColor = "#3b82f6";
+
+            // REASON LOGIC: User can enter reason IF they are absent and haven't sent one yet
+            let reasonContent = v.userReason || "---";
+            if (isMe && rawStatus.includes("ABSENT") && !v.userReason) {
+                reasonContent = `
+                    <div style="display:flex; gap:5px;">
+                        <input type="text" id="reason_inp_${date}" placeholder="Enter reason..." style="font-size:11px; padding:5px; margin:0;">
+                        <button onclick="window.submitAbsentReason('${date}')" class="info" style="padding:5px 10px; font-size:10px;">SEND</button>
+                    </div>`;
+            } else if (v.userReason) {
+                reasonContent = `<span style="font-size:11px; font-style:italic; color:#475569;">💬 ${v.userReason}</span>`;
+            }
+
+            // ACTION COLUMN LOGIC
+            let actionMarkup = "-";
+            if (isAdmin) {
+                if (v.userReason && (rawStatus.includes("ABSENT") || v.adminDecision === "Pending")) {
+                    // Admin sees decision buttons
+                    actionMarkup = `
+                        <div style="display:flex; gap:4px;">
+                            <button onclick="window.adminSetStatus('${date}','${uid}','Excused')" class="success" style="font-size:9px; padding:4px 6px;">EXCUSE</button>
+                            <button onclick="window.adminSetStatus('${date}','${uid}','Rejected')" class="danger" style="font-size:9px; padding:4px 6px; background:#991b1b;">REJECT</button>
+                        </div>`;
+                } else {
+                    // Admin sees generic delete option for cleanup
+                    actionMarkup = `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:#cbd5e1; background:none; border:none; cursor:pointer;"><i class="fas fa-trash"></i></button>`;
+                }
+            } else {
+                // Regular users see a lock icon to show they can't edit
+                actionMarkup = `<i class="fas fa-lock" style="color:#f1f5f9;"></i>`;
+            }
+
+            tbody.innerHTML += `
+                <tr>
+                    <td>${date}</td>
+                    <td><b>${v.userName}</b></td>
+                    <td style="color:${statusColor}; font-weight:900;">${rawStatus}</td>
+                    <td>${reasonContent}</td>
+                    <td style="text-align:center;">${actionMarkup}</td>
+                </tr>`;
+        });
+        window.calcProfitEngine();
+    };
+
+    // --- 3. HELPER FUNCTIONS (KEEPING STABLE) ---
+    window.submitAbsentReason = async (date) => {
+        const inp = document.getElementById(`reason_inp_${date}`);
+        const reason = inp.value.trim();
+        if (!reason) return alert("Please state your reason.");
+        await update(ref(db, `attendance/${date}/${currentUser.uid}`), { 
+            userReason: reason,
+            adminDecision: "Pending Review" 
+        });
+        alert("Excuse submitted for Admin approval.");
+        window.loadAttendanceList();
+    };
+
+    window.adminSetStatus = async (date, uid, newStatus) => {
+        if (!isAdmin) return;
+        const msg = newStatus === 'Excused' ? "Accept excuse?" : "Reject excuse? (0 points will be given)";
+        if (!confirm(msg)) return;
+        await update(ref(db, `attendance/${date}/${uid}`), { 
+            status: newStatus === 'Excused' ? 'Excused' : 'Absent (Rejected)',
+            adminDecision: newStatus 
+        });
+        window.loadAttendanceList();
+    };
+
+    window.deleteSingleAtt = async (d, u) => { 
+        if (isAdmin && confirm("Permanently delete this specific record?")) { 
+            await remove(ref(db, `attendance/${d}/${u}`)); 
+            window.loadAttendanceList(); 
+        } 
+    };
+
     window.loadAttendanceLog = () => window.calcProfitEngine();
 };
 
