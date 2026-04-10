@@ -9002,73 +9002,79 @@ const initAttendanceSystem = () => {
 
     // --- 2. ADAPTIVE VIEW: ADMIN TOOLS vs USER DISPLAY ---
     window.loadAttendanceList = async () => {
-        const date = document.getElementById("attDate")?.value;
-        const tbody = document.getElementById("attTableBody");
-        if (!date || !tbody) return;
+    const date = document.getElementById("attDate")?.value;
+    const tbody = document.getElementById("attTableBody");
+    if (!date || !tbody) return;
 
-        const snap = await get(ref(db, `attendance/${date}`));
-        tbody.innerHTML = "";
-        
-        if (!snap.exists()) {
-            tbody.innerHTML = `<tr><td colspan='5' style='text-align:center; padding:30px; color:#64748b;'>
-                ${isAdmin ? 'No records found. Use "CREATE DAY RECORD" to begin.' : 'Attendance has not been marked yet for this date.'}
-            </td></tr>`;
-            return;
+    const snap = await get(ref(db, `attendance/${date}`));
+    tbody.innerHTML = "";
+    
+    if (!snap.exists()) {
+        tbody.innerHTML = `<tr><td colspan='5' style='text-align:center; padding:30px; color:#64748b;'>
+            ${isAdmin ? 'No records found. Use "CREATE DAY RECORD" to begin.' : 'Attendance has not been marked yet for this date.'}
+        </td></tr>`;
+        return;
+    }
+
+    snap.forEach(uS => {
+        const v = uS.val(); 
+        const uid = uS.key;
+        const rawStatus = (v.status || 'ABSENT').toUpperCase();
+        const isMe = (uid === currentUser.uid);
+
+        // Define color based on final status
+        let statusColor = "#e11d48"; // Default Red
+        if (rawStatus === "PRESENT") statusColor = "#10b981";
+        if (rawStatus === "EXCUSED") statusColor = "#3b82f6";
+        if (rawStatus === "ABSENT (REJECTED)") statusColor = "#991b1b";
+
+        // Reason/Excuse Input Logic
+        let reasonContent = v.userReason || "---";
+        if (isMe && rawStatus.includes("ABSENT") && !v.userReason) {
+            reasonContent = `
+                <div style="display:flex; gap:5px;">
+                    <input type="text" id="reason_inp_${date}" placeholder="Enter reason..." style="font-size:11px; padding:5px; margin:0;">
+                    <button onclick="window.submitAbsentReason('${date}')" class="info" style="padding:5px 10px; font-size:10px;">SEND</button>
+                </div>`;
+        } else if (v.userReason) {
+            reasonContent = `<span style="font-size:11px; font-style:italic; color:#475569;">💬 ${v.userReason}</span>`;
         }
 
-        snap.forEach(uS => {
-            const v = uS.val(); 
-            const uid = uS.key;
-            const rawStatus = (v.status || 'ABSENT').toUpperCase();
-            const isMe = (uid === currentUser.uid);
-
-            // Visual Colors
-            let statusColor = "#e11d48"; // Absent Red
-            if (rawStatus === "PRESENT") statusColor = "#10b981";
-            if (rawStatus === "EXCUSED") statusColor = "#3b82f6";
-
-            // REASON LOGIC: User can enter reason IF they are absent and haven't sent one yet
-            let reasonContent = v.userReason || "---";
-            if (isMe && rawStatus.includes("ABSENT") && !v.userReason) {
-                reasonContent = `
-                    <div style="display:flex; gap:5px;">
-                        <input type="text" id="reason_inp_${date}" placeholder="Enter reason..." style="font-size:11px; padding:5px; margin:0;">
-                        <button onclick="window.submitAbsentReason('${date}')" class="info" style="padding:5px 10px; font-size:10px;">SEND</button>
+        // --- UPDATED ACTION COLUMN FOR REJECT OPTION ---
+        let actionMarkup = "-";
+        if (isAdmin) {
+            // Check if there is an unresolved excuse
+            if (v.userReason && (v.adminDecision === "Pending Review" || v.adminDecision === "Pending")) {
+                actionMarkup = `
+                    <div style="display:flex; gap:4px;">
+                        <button onclick="window.adminSetStatus('${date}','${uid}','Excused')" 
+                                class="success" style="font-size:9px; padding:6px 8px; background:#10b981;">
+                            <i class="fas fa-check"></i> APPROVE
+                        </button>
+                        <button onclick="window.adminSetStatus('${date}','${uid}','Rejected')" 
+                                class="danger" style="font-size:9px; padding:6px 8px; background:#991b1b;">
+                            <i class="fas fa-times"></i> REJECT
+                        </button>
                     </div>`;
-            } else if (v.userReason) {
-                reasonContent = `<span style="font-size:11px; font-style:italic; color:#475569;">💬 ${v.userReason}</span>`;
-            }
-
-            // ACTION COLUMN LOGIC
-            let actionMarkup = "-";
-            if (isAdmin) {
-                if (v.userReason && (rawStatus.includes("ABSENT") || v.adminDecision === "Pending")) {
-                    // Admin sees decision buttons
-                    actionMarkup = `
-                        <div style="display:flex; gap:4px;">
-                            <button onclick="window.adminSetStatus('${date}','${uid}','Excused')" class="success" style="font-size:9px; padding:4px 6px;">EXCUSE</button>
-                            <button onclick="window.adminSetStatus('${date}','${uid}','Rejected')" class="danger" style="font-size:9px; padding:4px 6px; background:#991b1b;">REJECT</button>
-                        </div>`;
-                } else {
-                    // Admin sees generic delete option for cleanup
-                    actionMarkup = `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:#cbd5e1; background:none; border:none; cursor:pointer;"><i class="fas fa-trash"></i></button>`;
-                }
             } else {
-                // Regular users see a lock icon to show they can't edit
-                actionMarkup = `<i class="fas fa-lock" style="color:#f1f5f9;"></i>`;
+                // Default delete option for Admin cleanup
+                actionMarkup = `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:#cbd5e1; background:none; border:none; cursor:pointer;"><i class="fas fa-trash"></i></button>`;
             }
+        } else {
+            actionMarkup = `<i class="fas fa-lock" style="color:#f1f5f9;"></i>`;
+        }
 
-            tbody.innerHTML += `
-                <tr>
-                    <td>${date}</td>
-                    <td><b>${v.userName}</b></td>
-                    <td style="color:${statusColor}; font-weight:900;">${rawStatus}</td>
-                    <td>${reasonContent}</td>
-                    <td style="text-align:center;">${actionMarkup}</td>
-                </tr>`;
-        });
-        window.calcProfitEngine();
-    };
+        tbody.innerHTML += `
+            <tr>
+                <td>${date}</td>
+                <td><b>${v.userName}</b></td>
+                <td style="color:${statusColor}; font-weight:900;">${rawStatus}</td>
+                <td>${reasonContent}</td>
+                <td style="text-align:center;">${actionMarkup}</td>
+            </tr>`;
+    });
+    window.calcProfitEngine();
+};
 
     // --- 3. HELPER FUNCTIONS (KEEPING STABLE) ---
     window.submitAbsentReason = async (date) => {
@@ -9082,18 +9088,47 @@ const initAttendanceSystem = () => {
         alert("Excuse submitted for Admin approval.");
         window.loadAttendanceList();
     };
+  window.adminSetStatus = async (date, uid, newStatus) => {
+    if (!isAdmin) return;
 
-    window.adminSetStatus = async (date, uid, newStatus) => {
-        if (!isAdmin) return;
-        const msg = newStatus === 'Excused' ? "Accept excuse?" : "Reject excuse? (0 points will be given)";
-        if (!confirm(msg)) return;
-        await update(ref(db, `attendance/${date}/${uid}`), { 
-            status: newStatus === 'Excused' ? 'Excused' : 'Absent (Rejected)',
-            adminDecision: newStatus 
+    // Custom confirmation message
+    const msg = newStatus === 'Excused' 
+        ? "Approve this excuse? (Personnel will be marked as EXCUSED)" 
+        : "Reject this excuse? (Personnel will remain ABSENT and excuse will be locked)";
+
+    if (!confirm(msg)) return;
+
+    try {
+        const updateData = {
+            // Set the decision flag
+            adminDecision: newStatus,
+            // Set the final status string
+            status: (newStatus === 'Excused') ? 'Excused' : 'Absent (Rejected)',
+            decisionTimestamp: serverTimestamp(),
+            decidedBy: currentUser.name || currentUser.email
+        };
+
+        // Update the specific attendance record
+        await update(ref(db, `attendance/${date}/${uid}`), updateData);
+
+        // Optional: Log the administrative action to master logs
+        await push(ref(db, "logs"), {
+            type: "ATTENDANCE_ACTION",
+            details: `${newStatus} excuse for ${uid} on ${date}`,
+            by: currentUser.name || currentUser.email,
+            time: serverTimestamp()
         });
-        window.loadAttendanceList();
-    };
 
+        alert(`✅ Excuse has been ${newStatus.toUpperCase()}.`);
+        
+        // Refresh the list to show the new status
+        window.loadAttendanceList();
+        
+    } catch (e) {
+        console.error("Status Update Error:", e);
+        alert("Database Error: " + e.message);
+    }
+};
     window.deleteSingleAtt = async (d, u) => { 
         if (isAdmin && confirm("Permanently delete this specific record?")) { 
             await remove(ref(db, `attendance/${d}/${u}`)); 
