@@ -8977,6 +8977,103 @@ This action cannot be undone.`);
         alert("Delete failed: " + e.message);
     }
 };
+  window.calcProfitEngine = async () => {
+    try {
+        const attSnap = await get(ref(db, "attendance"));
+        const userSnap = await get(ref(db, "users"));
+        
+        let userStats = {}; // Map to hold UID -> { name, points, totalDays }
+
+        // 1. INITIALIZE STATS
+        // Loop through users to build the list, excluding Admins from the payout list
+        userSnap.forEach(u => {
+            const userData = u.val();
+            const email = (userData.email || "").toLowerCase();
+            
+            if (!ADMIN_EMAILS.includes(email)) {
+                userStats[u.key] = {
+                    name: userData.name || userData.email,
+                    points: 0,
+                    totalDays: 0
+                };
+            }
+        });
+
+        // 2. AGGREGATE POINTS FROM ATTENDANCE
+        if (attSnap.exists()) {
+            attSnap.forEach(dateSnap => {
+                dateSnap.forEach(uAtt => {
+                    const uid = uAtt.key;
+                    const val = uAtt.val();
+                    const status = (val.status || "").toUpperCase();
+
+                    if (userStats[uid]) {
+                        userStats[uid].totalDays += 1;
+
+                        // APPLY WEIGHTED LOGIC
+                        if (status === "PRESENT" || status === "SPECIAL CASE") {
+                            userStats[uid].points += 1.0; // Full Credit
+                        } else if (status === "EXCUSED") {
+                            userStats[uid].points += 0.5; // Half Credit (2 Excused = 1 Absent)
+                        } 
+                        // Note: ABSENT and ABSENT (REJECTED) stay at 0 points
+                    }
+                });
+            });
+        }
+
+        // 3. RENDER TO PAYOUT TABLE
+        const tbody = document.getElementById("payoutTableBody");
+        if (!tbody) return;
+        tbody.innerHTML = "";
+
+        const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
+        const reservePercent = parseFloat(document.getElementById("inpReservePercent")?.value) || 0;
+        
+        // Calculate Payout Pool
+        const reserveAmt = (clientPay * reservePercent) / 100;
+        const netProfit = clientPay - reserveAmt;
+
+        // Calculate Total Points across all users for profit sharing
+        let totalSystemPoints = 0;
+        Object.values(userStats).forEach(u => totalSystemPoints += u.points);
+
+        Object.entries(userStats).forEach(([uid, data]) => {
+            // Calculate individual share
+            let individualPayout = 0;
+            if (totalSystemPoints > 0) {
+                individualPayout = (data.points / totalSystemPoints) * netProfit;
+            }
+
+            const attPercentage = data.totalDays > 0 ? ((data.points / data.totalDays) * 100).toFixed(1) : "0.0";
+
+            tbody.innerHTML += `
+                <tr>
+                    <td style="font-weight:bold; color:var(--metro-blue);">${data.name}</td>
+                    <td style="text-align:center;">
+                        <span style="padding:2px 8px; background:#f1f5f9; border-radius:10px; font-weight:bold;">${attPercentage}%</span>
+                    </td>
+                    <td style="text-align:center; font-family:monospace;">${data.points} / ${data.totalDays}</td>
+                    <td style="text-align:right; font-weight:900; color:#15803d;">₹ ${individualPayout.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                    <td style="text-align:center;">
+                        ${isAdmin ? `<button class="success" style="padding:2px 8px; font-size:10px;">RELEASE</button>` : `<i class="fas fa-lock" style="color:#cbd5e1;"></i>`}
+                    </td>
+                </tr>`;
+        });
+
+        // 4. UPDATE DASHBOARD CARDS
+        const resNet = document.getElementById("resNetProfit");
+        const resRes = document.getElementById("resReserveAmt");
+        if (resNet) resNet.innerText = `₹ ${netProfit.toLocaleString('en-IN')}`;
+        if (resRes) resRes.innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
+        
+        // Show result area if hidden
+        document.getElementById("profitResultArea")?.classList.remove("hidden");
+
+    } catch (e) {
+        console.error("Profit Engine Error:", e);
+    }
+};
 // =========================================================
 // 🔒 MRPSP SECURE ATTENDANCE: ADMIN EDIT | USER VIEW ONLY
 // =========================================================
