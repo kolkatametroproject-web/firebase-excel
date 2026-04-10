@@ -6034,11 +6034,11 @@ window.unbanUser = async (uid, name) => {
 };
 window.switchTab = (t) => {
     // 1. UI CLEANUP: Physically empty the attendance table body 
-    // This stops the "ghost" table from showing in other tabs.
+    // This prevents "ghost" rows from leaking into other views
     const attBody = document.getElementById("attTableBody");
     if(attBody) attBody.innerHTML = ""; 
 
-    // 2. Clear Report Previews
+    // 2. Clear all Report/Invoice Previews
     const reportContainer = document.getElementById("printableReportContainer");
     if (reportContainer) {
         reportContainer.classList.add("hidden");
@@ -6057,27 +6057,58 @@ window.switchTab = (t) => {
         if(el) el.classList.add("hidden");
     });
 
-    // 4. RESET BUTTONS
+    // 4. RESET NAVIGATION BUTTON STYLES
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
 
-    // 5. SHOW SELECTED TAB
+    // 5. SHOW SELECTED TAB & ACTIVATE BUTTON
     const targetTab = document.getElementById(`tab-${t}`);
     if(targetTab) targetTab.classList.remove("hidden");
 
     const activeBtn = document.getElementById('btn' + t.charAt(0).toUpperCase() + t.slice(1));
     if(activeBtn) activeBtn.classList.add("active");
 
-    // 6. TRIGGER LOADERS
+    // 6. --- SECURITY: READ-ONLY LOCKING LOGIC ---
+    // Targeted tabs that should be restricted for non-admins
+    const restrictedTabs = ['attendance', 'funds', 'purchase', 'billing', 'directives'];
+    
+    if (restrictedTabs.includes(t)) {
+        if (!isAdmin) {
+            // Find all interactive elements inside the target tab
+            const container = document.getElementById(`tab-${t}`);
+            const inputs = container.querySelectorAll('input, select, textarea, button:not(.nav-btn)');
+            
+            inputs.forEach(el => {
+                // ALLOW: Users must be able to click "LOAD PREVIEW" or "SYNC" to see data
+                const btnText = el.innerText.toUpperCase();
+                const isLoader = btnText.includes("LOAD") || btnText.includes("SYNC") || btnText.includes("VIEW");
+                
+                if (!isLoader) {
+                    el.disabled = true;
+                    el.style.opacity = "0.5";
+                    el.style.cursor = "not-allowed";
+                    // If it's a "Submit" or "Create" button, hide it for a cleaner UI
+                    if(btnText.includes("SUBMIT") || btnText.includes("CREATE") || btnText.includes("SAVE")) {
+                        el.style.display = "none";
+                    }
+                }
+            });
+        }
+    }
+
+    // 7. TRIGGER DATA LOADERS
     if (t === 'attendance') {
-        window.loadAttendanceLog(false); // Only load when explicitly clicking the tab
+        window.loadAttendanceLog(); 
     } else if (t === 'funds') {
         loadFinanceData();
     } else if (t === 'purchase') {
         loadPurchaseData();
+    } else if (t === 'directives') {
+        window.populateDirectiveUsers();
+    } else if (t === 'comments') {
+        window.populateCommentUsers();
     }
-    else if (t === 'directives') {
-        window.populateDirectiveUsers(); // This starts the input box logic
-    }
+
+    // Reset scroll to top of the panel
     window.scrollTo(0, 0);
 };
 
@@ -9016,7 +9047,7 @@ const initAttendanceSystem = () => {
     
     if (!snap.exists()) {
         tbody.innerHTML = `<tr><td colspan='5' style='text-align:center; padding:30px; color:#64748b;'>
-            ${isAdmin ? 'No records found. Use "CREATE DAY RECORD" to begin.' : 'Attendance has not been marked yet for this date.'}
+            ${isAdmin ? 'No records found. Use "CREATE DAY RECORD" to begin.' : 'Attendance not yet marked for this date.'}
         </td></tr>`;
         return;
     }
@@ -9027,53 +9058,65 @@ const initAttendanceSystem = () => {
         const rawStatus = (v.status || 'ABSENT').toUpperCase();
         const isMe = (uid === currentUser.uid);
 
-        // Define color based on final status
-        let statusColor = "#e11d48"; // Default Red
-        if (rawStatus === "PRESENT") statusColor = "#10b981";
-        if (rawStatus === "EXCUSED") statusColor = "#3b82f6";
-        if (rawStatus === "ABSENT (REJECTED)") statusColor = "#991b1b";
+        // --- VISUAL CONFIGURATION ---
+        let statusColor = "#e11d48"; 
+        let displayStatus = rawStatus;
 
-        // Reason/Excuse Input Logic
+        if (rawStatus === "PRESENT") {
+            statusColor = "#10b981";
+        } else if (rawStatus === "EXCUSED") {
+            statusColor = "#3b82f6";
+            displayStatus = "EXCUSED (0.5)";
+        } else if (rawStatus === "ABSENT (REJECTED)") {
+            statusColor = "#991b1b";
+        } else if (rawStatus === "SPECIAL CASE") {
+            statusColor = "#8b5cf6";
+            displayStatus = "⭐ SPECIAL CASE";
+        }
+
+        // --- REASON INPUT LOGIC (USER ONLY INTERACTS WITH OWN ABSENCE) ---
         let reasonContent = v.userReason || "---";
-        if (isMe && rawStatus.includes("ABSENT") && !v.userReason) {
+        // User can only input if: It's their row AND status is currently ABSENT AND no reason is submitted yet
+        if (!isAdmin && isMe && rawStatus === "ABSENT" && !v.userReason) {
             reasonContent = `
                 <div style="display:flex; gap:5px;">
-                    <input type="text" id="reason_inp_${date}" placeholder="Enter reason..." style="font-size:11px; padding:5px; margin:0;">
-                    <button onclick="window.submitAbsentReason('${date}')" class="info" style="padding:5px 10px; font-size:10px;">SEND</button>
+                    <input type="text" id="reason_inp_${date}" placeholder="State your reason..." style="font-size:11px; padding:5px; margin:0; border:1px solid #3b82f6;">
+                    <button onclick="window.submitAbsentReason('${date}')" class="info" style="padding:5px 10px; font-size:10px; background:#3b82f6;">SUBMIT</button>
                 </div>`;
         } else if (v.userReason) {
             reasonContent = `<span style="font-size:11px; font-style:italic; color:#475569;">💬 ${v.userReason}</span>`;
         }
 
-        // --- UPDATED ACTION COLUMN FOR REJECT OPTION ---
-        let actionMarkup = "-";
+        // --- ADMIN ACTION CONTROLS ---
+        let actionMarkup = `<i class="fas fa-lock" style="color:#cbd5e1; font-size:10px;"></i>`; // Default lock icon
         if (isAdmin) {
-            // Check if there is an unresolved excuse
-            if (v.userReason && (v.adminDecision === "Pending Review" || v.adminDecision === "Pending")) {
+            // Show decision buttons if an excuse is submitted OR if user is marked absent
+            if (v.userReason || rawStatus === "ABSENT") {
                 actionMarkup = `
-                    <div style="display:flex; gap:4px;">
+                    <div style="display:flex; flex-wrap:wrap; gap:4px; justify-content:center;">
                         <button onclick="window.adminSetStatus('${date}','${uid}','Excused')" 
-                                class="success" style="font-size:9px; padding:6px 8px; background:#10b981;">
-                            <i class="fas fa-check"></i> APPROVE
+                                class="success" style="font-size:9px; padding:5px 8px; background:#3b82f6;" title="2 Excused = 1 Absent">
+                            EXCUSE
+                        </button>
+                        <button onclick="window.adminSetStatus('${date}','${uid}','Special')" 
+                                class="info" style="font-size:9px; padding:5px 8px; background:#8b5cf6;" title="1.0 Present">
+                            SPECIAL
                         </button>
                         <button onclick="window.adminSetStatus('${date}','${uid}','Rejected')" 
-                                class="danger" style="font-size:9px; padding:6px 8px; background:#991b1b;">
-                            <i class="fas fa-times"></i> REJECT
+                                class="danger" style="font-size:9px; padding:5px 8px; background:#991b1b;">
+                            REJECT
                         </button>
                     </div>`;
             } else {
-                // Default delete option for Admin cleanup
-                actionMarkup = `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:#cbd5e1; background:none; border:none; cursor:pointer;"><i class="fas fa-trash"></i></button>`;
+                actionMarkup = `<button onclick="window.deleteSingleAtt('${date}','${uid}')" style="color:#94a3b8; background:none; border:none; cursor:pointer;"><i class="fas fa-trash"></i></button>`;
             }
-        } else {
-            actionMarkup = `<i class="fas fa-lock" style="color:#f1f5f9;"></i>`;
         }
 
         tbody.innerHTML += `
             <tr>
                 <td>${date}</td>
                 <td><b>${v.userName}</b></td>
-                <td style="color:${statusColor}; font-weight:900;">${rawStatus}</td>
+                <td style="color:${statusColor}; font-weight:900;">${displayStatus}</td>
                 <td>${reasonContent}</td>
                 <td style="text-align:center;">${actionMarkup}</td>
             </tr>`;
@@ -9094,44 +9137,36 @@ const initAttendanceSystem = () => {
         window.loadAttendanceList();
     };
   window.adminSetStatus = async (date, uid, newStatus) => {
-    if (!isAdmin) return;
+    if (!isAdmin) return alert("Security Violation: Admin only.");
 
-    // Custom confirmation message
-    const msg = newStatus === 'Excused' 
-        ? "Approve this excuse? (Personnel will be marked as EXCUSED)" 
-        : "Reject this excuse? (Personnel will remain ABSENT and excuse will be locked)";
+    let finalStatusString = "";
+    let confirmMsg = "";
 
-    if (!confirm(msg)) return;
+    if (newStatus === 'Excused') {
+        finalStatusString = "Excused";
+        confirmMsg = "Accept excuse? (0.5 Points)";
+    } else if (newStatus === 'Special') {
+        finalStatusString = "Special Case";
+        confirmMsg = "Mark as Special Case? (1.0 Points - treated as Present)";
+    } else {
+        finalStatusString = "Absent (Rejected)";
+        confirmMsg = "Reject excuse? (0 Points)";
+    }
+
+    if (!confirm(confirmMsg)) return;
 
     try {
-        const updateData = {
-            // Set the decision flag
+        await update(ref(db, `attendance/${date}/${uid}`), {
+            status: finalStatusString,
             adminDecision: newStatus,
-            // Set the final status string
-            status: (newStatus === 'Excused') ? 'Excused' : 'Absent (Rejected)',
-            decisionTimestamp: serverTimestamp(),
-            decidedBy: currentUser.name || currentUser.email
-        };
-
-        // Update the specific attendance record
-        await update(ref(db, `attendance/${date}/${uid}`), updateData);
-
-        // Optional: Log the administrative action to master logs
-        await push(ref(db, "logs"), {
-            type: "ATTENDANCE_ACTION",
-            details: `${newStatus} excuse for ${uid} on ${date}`,
-            by: currentUser.name || currentUser.email,
-            time: serverTimestamp()
+            decisionBy: currentUser.name,
+            decisionTime: serverTimestamp()
         });
 
-        alert(`✅ Excuse has been ${newStatus.toUpperCase()}.`);
-        
-        // Refresh the list to show the new status
+        alert("✅ Entry updated to " + finalStatusString);
         window.loadAttendanceList();
-        
     } catch (e) {
-        console.error("Status Update Error:", e);
-        alert("Database Error: " + e.message);
+        alert("Update Error: " + e.message);
     }
 };
     window.deleteSingleAtt = async (d, u) => { 
