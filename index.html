@@ -8989,56 +8989,117 @@ This action cannot be undone.`);
         const startTs = startDateVal ? new Date(startDateVal + "T00:00:00").getTime() : 0;
         const endTs = endDateVal ? new Date(endDateVal + "T23:59:59").getTime() : Infinity;
 
-        // 2. FETCH APPROVED EXPENSES
+        let userStats = {}; 
+        let totalUserPoints = 0;
+
+        // 2. INITIALIZE USERS (Excluding Admins)
+        userSnap.forEach(u => {
+            const userData = u.val();
+            const email = (userData.email || "").toLowerCase();
+            if (!ADMIN_EMAILS.includes(email)) {
+                userStats[u.key] = { name: userData.name || userData.email, points: 0, totalDays: 0 };
+            }
+        });
+
+        // 3. AGGREGATE ATTENDANCE POINTS (Weighting: Special=1.0, Excused=0.5)
+        if (attSnap.exists()) {
+            attSnap.forEach(dateSnap => {
+                dateSnap.forEach(uAtt => {
+                    const uid = uAtt.key;
+                    const status = (uAtt.val().status || "").toUpperCase();
+                    if (userStats[uid]) {
+                        userStats[uid].totalDays += 1;
+                        if (status === "PRESENT" || status === "SPECIAL CASE") userStats[uid].points += 1.0;
+                        else if (status === "EXCUSED") userStats[uid].points += 0.5;
+                    }
+                });
+            });
+        }
+
+        // 4. FETCH DATE-FILTERED EXPENSES
         let totalExpenses = 0;
         if (finSnap.exists()) {
             finSnap.forEach(c => {
                 const f = c.val();
                 const fTime = f.timestamp || 0;
                 if (f.status === "Approved" && (f.type === "DEBIT" || f.type === "EXPENSE")) {
-                    if (fTime >= startTs && fTime <= endTs) {
-                        totalExpenses += parseFloat(f.amount || 0);
-                    }
+                    if (fTime >= startTs && fTime <= endTs) totalExpenses += parseFloat(f.amount || 0);
                 }
             });
         }
         document.getElementById("dispPayrollSpent").innerText = `₹ ${totalExpenses.toLocaleString('en-IN')}`;
 
-        // 3. CORE MATH CORRECTION
+        // 5. CORE MATH: PROFIT-BASED WATERFALL
         const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
         const reservePercent = parseFloat(document.getElementById("inpReservePercent")?.value) || 0;
         const adminPercentEntry = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
 
-        // STEP A: Calculate Actual Surplus (Client Pay - Expenses)
-        const surplus = clientPay - totalExpenses;
+        // STEP A: Initial Surplus (Gross Profit)
+        const grossSurplus = clientPay - totalExpenses;
 
-        // STEP B: Calculate Reserve from the Total Client Pay (Standard Business Logic)
-        const reserveAmt = (clientPay * reservePercent) / 100;
+        // STEP B: Reserve Cut (Taken from the Profit, not the Total Pay)
+        const reserveAmt = grossSurplus > 0 ? (grossSurplus * reservePercent) / 100 : 0;
 
-        // STEP C: Net Profit for distribution (Surplus - Reserve)
-        const distributablePool = surplus - reserveAmt;
+        // STEP C: Net Distributable Profit
+        const distributablePool = grossSurplus - reserveAmt;
 
-        // STEP D: Admin & User Splits
+        // STEP D: Admin & User Splits (From the Distributable Pool)
         const totalAdminSharePool = distributablePool > 0 ? (distributablePool * adminPercentEntry) / 100 : 0;
         const totalUserSharePool = distributablePool > 0 ? distributablePool - totalAdminSharePool : 0;
 
-        // 4. UPDATE DASHBOARD UI
+        Object.values(userStats).forEach(u => totalUserPoints += u.points);
+
+        // 6. RENDER UI CARDS
         const profitEl = document.getElementById("resNetProfit");
-        if (distributablePool < 0) {
-            profitEl.innerText = `₹ ${distributablePool.toLocaleString('en-IN')} (LOSS)`;
-            profitEl.style.color = "#ff4444";
+        const reserveEl = document.getElementById("resReserveAmt");
+        
+        if (grossSurplus < 0) {
+            profitEl.innerText = `₹ ${grossSurplus.toLocaleString('en-IN')} (LOSS)`;
+            profitEl.style.color = "#e11d48"; // Metro Red
+            reserveEl.innerText = "₹ 0 (No Profit)";
         } else {
             profitEl.innerText = `₹ ${totalUserSharePool.toLocaleString('en-IN')}`;
-            profitEl.style.color = "#fbbf24";
+            profitEl.style.color = "#fbbf24"; // Metro Gold
+            reserveEl.innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
         }
-
-        document.getElementById("resReserveAmt").innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
         document.getElementById("profitResultArea")?.classList.remove("hidden");
 
-        // 5. RUN ATTENDANCE DISTRIBUTOR (Only if profit > 0)
-        // [Existing userStats loop and tbody.innerHTML logic here...]
+        // 7. RENDER PAYOUT TABLE
+        const tbody = document.getElementById("payoutTableBody");
+        if (tbody) {
+            tbody.innerHTML = "";
+            if (grossSurplus > 0) {
+                // Admin Row
+                if (totalAdminSharePool > 0) {
+                    tbody.innerHTML += `
+                        <tr style="background:#f8fafc; border-left:4px solid var(--metro-red);">
+                            <td><b>Admin Pool</b></td>
+                            <td style="text-align:center;">-</td>
+                            <td style="text-align:center;">${adminPercentEntry}%</td>
+                            <td style="text-align:right; font-weight:900;">₹ ${totalAdminSharePool.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                            <td style="text-align:center;"><small>System</small></td>
+                        </tr>`;
+                }
+                // User Rows
+                Object.entries(userStats).forEach(([uid, data]) => {
+                    let individualPayout = totalUserPoints > 0 ? (data.points / totalUserPoints) * totalUserSharePool : 0;
+                    let sharePercent = totalUserPoints > 0 ? (data.points / totalUserPoints) * 100 : 0;
 
-    } catch (e) { console.error("Math Error:", e); }
+                    tbody.innerHTML += `
+                        <tr>
+                            <td><b>${data.name}</b></td>
+                            <td style="text-align:center;">${data.totalDays > 0 ? ((data.points / data.totalDays)*100).toFixed(1) : 0}% Attd</td>
+                            <td style="text-align:center;">${sharePercent.toFixed(1)}% Share</td>
+                            <td style="text-align:right; font-weight:900; color:#15803d;">₹ ${individualPayout.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                            <td style="text-align:center;">${isAdmin ? `<button class="success" style="padding:2px 5px; font-size:10px;">RELEASE</button>` : '🔒'}</td>
+                        </tr>`;
+                });
+            } else {
+                tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px; color:#e11d48; font-weight:bold;'>NO DISTRIBUTABLE PROFIT (PROJECT AT LOSS)</td></tr>";
+            }
+        }
+
+    } catch (e) { console.error("Critical Math Error:", e); }
 };
 // =========================================================
 // 🔒 MRPSP SECURE ATTENDANCE: ADMIN EDIT | USER VIEW ONLY
