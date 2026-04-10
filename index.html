@@ -8981,15 +8981,15 @@ This action cannot be undone.`);
     try {
         const attSnap = await get(ref(db, "attendance"));
         const userSnap = await get(ref(db, "users"));
+        const finSnap = await get(ref(db, "finance"));
         
-        let userStats = {}; // Map to hold UID -> { name, points, totalDays }
+        let userStats = {}; 
+        let totalUserPoints = 0;
 
-        // 1. INITIALIZE STATS
-        // Loop through users to build the list, excluding Admins from the payout list
+        // 1. INITIALIZE USER LIST (Excluding Admins from the point-sharing pool)
         userSnap.forEach(u => {
             const userData = u.val();
             const email = (userData.email || "").toLowerCase();
-            
             if (!ADMIN_EMAILS.includes(email)) {
                 userStats[u.key] = {
                     name: userData.name || userData.email,
@@ -8999,79 +8999,105 @@ This action cannot be undone.`);
             }
         });
 
-        // 2. AGGREGATE POINTS FROM ATTENDANCE
+        // 2. AGGREGATE WEIGHTED ATTENDANCE
         if (attSnap.exists()) {
             attSnap.forEach(dateSnap => {
                 dateSnap.forEach(uAtt => {
                     const uid = uAtt.key;
-                    const val = uAtt.val();
-                    const status = (val.status || "").toUpperCase();
-
+                    const status = (uAtt.val().status || "").toUpperCase();
                     if (userStats[uid]) {
                         userStats[uid].totalDays += 1;
-
-                        // APPLY WEIGHTED LOGIC
                         if (status === "PRESENT" || status === "SPECIAL CASE") {
-                            userStats[uid].points += 1.0; // Full Credit
+                            userStats[uid].points += 1.0;
                         } else if (status === "EXCUSED") {
-                            userStats[uid].points += 0.5; // Half Credit (2 Excused = 1 Absent)
-                        } 
-                        // Note: ABSENT and ABSENT (REJECTED) stay at 0 points
+                            userStats[uid].points += 0.5; // Rule: 2 Excused = 1 Absent
+                        }
                     }
                 });
             });
         }
 
-        // 3. RENDER TO PAYOUT TABLE
-        const tbody = document.getElementById("payoutTableBody");
-        if (!tbody) return;
-        tbody.innerHTML = "";
+        // 3. FETCH & SYNC EXPENSES FROM MASTER LEDGER
+        let totalExpenses = 0;
+        if (finSnap.exists()) {
+            finSnap.forEach(c => {
+                const f = c.val();
+                // Only count Approved Debits/Expenses
+                if (f.status === "Approved" && (f.type === "DEBIT" || f.type === "EXPENSE")) {
+                    totalExpenses += parseFloat(f.amount || 0);
+                }
+            });
+        }
+        const spentEl = document.getElementById("dispPayrollSpent");
+        if(spentEl) spentEl.innerText = `₹ ${totalExpenses.toLocaleString('en-IN')}`;
 
+        // 4. FINANCIAL WATERFALL CALCULATION
         const clientPay = parseFloat(document.getElementById("inpClientPay")?.value) || 0;
         const reservePercent = parseFloat(document.getElementById("inpReservePercent")?.value) || 0;
-        
-        // Calculate Payout Pool
+        const adminPercentEntry = parseFloat(document.getElementById("manualAdminPercentInp")?.value) || 0;
+
+        // STEP A: Calculate Reserve Cut
         const reserveAmt = (clientPay * reservePercent) / 100;
-        const netProfit = clientPay - reserveAmt;
+        const poolAfterReserve = clientPay - reserveAmt;
 
-        // Calculate Total Points across all users for profit sharing
-        let totalSystemPoints = 0;
-        Object.values(userStats).forEach(u => totalSystemPoints += u.points);
+        // STEP B: Calculate Admin Share from the remaining pool
+        const totalAdminSharePool = (poolAfterReserve * adminPercentEntry) / 100;
+        
+        // STEP C: Auto-Adjust User Pool (The remainder)
+        const totalUserSharePool = poolAfterReserve - totalAdminSharePool;
 
-        Object.entries(userStats).forEach(([uid, data]) => {
-            // Calculate individual share
-            let individualPayout = 0;
-            if (totalSystemPoints > 0) {
-                individualPayout = (data.points / totalSystemPoints) * netProfit;
+        // STEP D: Calculate total points in the system to find 1-point value
+        Object.values(userStats).forEach(u => totalUserPoints += u.points);
+
+        // 5. RENDER PAYOUT TABLE & AUTO-ADJUST SHARES
+        const tbody = document.getElementById("payoutTableBody");
+        if (tbody) {
+            tbody.innerHTML = "";
+            
+            // Add Admin Summary Row (For transparency)
+            if(isAdmin && totalAdminSharePool > 0) {
+                tbody.innerHTML += `
+                    <tr style="background: #f8fafc; border-left: 4px solid var(--metro-red);">
+                        <td><i class="fas fa-user-shield"></i> <b>Admin Share (${adminPercentEntry}%)</b></td>
+                        <td style="text-align:center;">-</td>
+                        <td style="text-align:center;">Fixed</td>
+                        <td style="text-align:right; font-weight:900; color:var(--metro-red);">₹ ${totalAdminSharePool.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                        <td style="text-align:center;"><small>System</small></td>
+                    </tr>`;
             }
 
-            const attPercentage = data.totalDays > 0 ? ((data.points / data.totalDays) * 100).toFixed(1) : "0.0";
+            // Loop and distribute remaining funds based on attendance
+            Object.entries(userStats).forEach(([uid, data]) => {
+                let individualPayout = 0;
+                if (totalUserPoints > 0) {
+                    individualPayout = (data.points / totalUserPoints) * totalUserSharePool;
+                }
 
-            tbody.innerHTML += `
-                <tr>
-                    <td style="font-weight:bold; color:var(--metro-blue);">${data.name}</td>
-                    <td style="text-align:center;">
-                        <span style="padding:2px 8px; background:#f1f5f9; border-radius:10px; font-weight:bold;">${attPercentage}%</span>
-                    </td>
-                    <td style="text-align:center; font-family:monospace;">${data.points} / ${data.totalDays}</td>
-                    <td style="text-align:right; font-weight:900; color:#15803d;">₹ ${individualPayout.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
-                    <td style="text-align:center;">
-                        ${isAdmin ? `<button class="success" style="padding:2px 8px; font-size:10px;">RELEASE</button>` : `<i class="fas fa-lock" style="color:#cbd5e1;"></i>`}
-                    </td>
-                </tr>`;
-        });
+                tbody.innerHTML += `
+                    <tr>
+                        <td style="font-weight:bold;">${data.name}</td>
+                        <td style="text-align:center;">${data.totalDays > 0 ? ((data.points / data.totalDays)*100).toFixed(1) : 0}%</td>
+                        <td style="text-align:center; font-family:monospace;">${data.points} Pts</td>
+                        <td style="text-align:right; font-weight:900; color:#15803d;">₹ ${individualPayout.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                        <td style="text-align:center;">
+                            ${isAdmin ? `<button class="success" style="padding:2px 5px; font-size:10px;">RELEASE</button>` : '🔒'}
+                        </td>
+                    </tr>`;
+            });
+        }
 
-        // 4. UPDATE DASHBOARD CARDS
-        const resNet = document.getElementById("resNetProfit");
-        const resRes = document.getElementById("resReserveAmt");
-        if (resNet) resNet.innerText = `₹ ${netProfit.toLocaleString('en-IN')}`;
-        if (resRes) resRes.innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
+        // 6. UPDATE VISUAL DASHBOARD
+        const netProfitDisp = document.getElementById("resNetProfit");
+        const reserveDisp = document.getElementById("resReserveAmt");
         
-        // Show result area if hidden
-        document.getElementById("profitResultArea")?.classList.remove("hidden");
+        if (netProfitDisp) netProfitDisp.innerText = `₹ ${totalUserSharePool.toLocaleString('en-IN')}`;
+        if (reserveDisp) reserveDisp.innerText = `₹ ${reserveAmt.toLocaleString('en-IN')}`;
+        
+        const resultArea = document.getElementById("profitResultArea");
+        if (resultArea) resultArea.classList.remove("hidden");
 
     } catch (e) {
-        console.error("Profit Engine Error:", e);
+        console.error("Critical Engine Error:", e);
     }
 };
 // =========================================================
