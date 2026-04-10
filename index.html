@@ -6034,7 +6034,6 @@ window.unbanUser = async (uid, name) => {
 };
 window.switchTab = (t) => {
     // 1. UI CLEANUP: Physically empty the attendance table body 
-    // This prevents "ghost" rows from leaking into other views
     const attBody = document.getElementById("attTableBody");
     if(attBody) attBody.innerHTML = ""; 
 
@@ -6067,26 +6066,32 @@ window.switchTab = (t) => {
     const activeBtn = document.getElementById('btn' + t.charAt(0).toUpperCase() + t.slice(1));
     if(activeBtn) activeBtn.classList.add("active");
 
-    // 6. --- SECURITY: READ-ONLY LOCKING LOGIC ---
-    // Targeted tabs that should be restricted for non-admins
-    const restrictedTabs = ['attendance', 'funds', 'purchase', 'billing', 'directives'];
-    
-    if (restrictedTabs.includes(t)) {
-        if (!isAdmin) {
-            // Find all interactive elements inside the target tab
+    // 6. --- SECURITY & ACCESS LOGIC ---
+    if (!isAdmin) {
+        const restrictedTabs = ['attendance', 'funds', 'purchase', 'billing', 'directives'];
+        if (restrictedTabs.includes(t)) {
             const container = document.getElementById(`tab-${t}`);
-            const inputs = container.querySelectorAll('input, select, textarea, button:not(.nav-btn)');
+            const elements = container.querySelectorAll('input, select, textarea, button:not(.nav-btn)');
             
-            inputs.forEach(el => {
-                // ALLOW: Users must be able to click "LOAD PREVIEW" or "SYNC" to see data
+            elements.forEach(el => {
                 const btnText = el.innerText.toUpperCase();
-                const isLoader = btnText.includes("LOAD") || btnText.includes("SYNC") || btnText.includes("VIEW");
                 
-                if (!isLoader) {
+                // --- THE EXCEPTION RULE ---
+                // Allow users to select the date and click 'LOAD PREVIEW'
+                const isDateInput = el.id === "attDate";
+                const isLoader = btnText.includes("LOAD") || btnText.includes("SYNC") || btnText.includes("VIEW");
+
+                if (isDateInput || isLoader) {
+                    el.disabled = false;
+                    el.style.opacity = "1";
+                    el.style.cursor = "pointer";
+                } else {
+                    // Lock everything else
                     el.disabled = true;
                     el.style.opacity = "0.5";
                     el.style.cursor = "not-allowed";
-                    // If it's a "Submit" or "Create" button, hide it for a cleaner UI
+                    
+                    // Hide sensitive Admin-only action buttons
                     if(btnText.includes("SUBMIT") || btnText.includes("CREATE") || btnText.includes("SAVE")) {
                         el.style.display = "none";
                     }
@@ -6097,7 +6102,7 @@ window.switchTab = (t) => {
 
     // 7. TRIGGER DATA LOADERS
     if (t === 'attendance') {
-        window.loadAttendanceLog(); 
+        window.loadAttendanceLog(false); // Load payroll stats but don't force a list load
     } else if (t === 'funds') {
         loadFinanceData();
     } else if (t === 'purchase') {
@@ -6108,7 +6113,6 @@ window.switchTab = (t) => {
         window.populateCommentUsers();
     }
 
-    // Reset scroll to top of the panel
     window.scrollTo(0, 0);
 };
 
@@ -9171,7 +9175,7 @@ const initAttendanceSystem = () => {
     
     if (!snap.exists()) {
         tbody.innerHTML = `<tr><td colspan='5' style='text-align:center; padding:30px; color:#64748b;'>
-            ${isAdmin ? 'No records found. Use "CREATE DAY RECORD" to begin.' : 'Attendance not yet marked for this date.'}
+            ${isAdmin ? 'No records found. Use "CREATE DAY RECORD" to begin.' : 'No data found for this date. Check with Admin.'}
         </td></tr>`;
         return;
     }
@@ -9182,7 +9186,7 @@ const initAttendanceSystem = () => {
         const rawStatus = (v.status || 'ABSENT').toUpperCase();
         const isMe = (uid === currentUser.uid);
 
-        // --- Visual Styling ---
+        // Visual Setup
         let statusColor = "#e11d48"; 
         let displayStatus = rawStatus;
 
@@ -9191,39 +9195,31 @@ const initAttendanceSystem = () => {
         else if (rawStatus === "ABSENT (REJECTED)") statusColor = "#991b1b";
         else if (rawStatus === "SPECIAL CASE") { statusColor = "#8b5cf6"; displayStatus = "⭐ SPECIAL CASE"; }
 
-        // --- User Reason Input Logic ---
+        // User Reason Logic: Only show input to the specific user on their absent row
         let reasonContent = v.userReason || "---";
         if (!isAdmin && isMe && rawStatus === "ABSENT" && !v.userReason) {
             reasonContent = `
                 <div style="display:flex; gap:5px;">
-                    <input type="text" id="reason_inp_${date}" placeholder="State reason..." style="font-size:11px; padding:5px; margin:0;">
+                    <input type="text" id="reason_inp_${date}" placeholder="Reason..." style="font-size:11px; padding:5px; margin:0; border:1px solid #3b82f6;">
                     <button onclick="window.submitAbsentReason('${date}')" class="info" style="padding:5px 10px; font-size:10px; background:#3b82f6;">SUBMIT</button>
                 </div>`;
         } else if (v.userReason) {
             reasonContent = `<span style="font-size:11px; font-style:italic; color:#475569;">💬 ${v.userReason}</span>`;
         }
 
-        // --- Admin Action Column Logic ---
+        // Action Column Logic
         let actionMarkup = `<i class="fas fa-lock" style="color:#cbd5e1; font-size:10px;"></i>`;
-        
         if (isAdmin) {
-            // CONDITION: If user has given a comment/reason, show decision buttons
-            if (v.userReason && (v.adminDecision === "Pending Review" || v.adminDecision === "Pending" || rawStatus.includes("ABSENT"))) {
+            if (v.userReason && (v.adminDecision === "Pending Review" || v.adminDecision === "Pending" || rawStatus === "ABSENT")) {
                 actionMarkup = `
                     <div style="display:flex; gap:4px; justify-content:center;">
-                        <button onclick="window.adminSetStatus('${date}','${uid}','Excused')" 
-                                class="success" style="font-size:9px; padding:6px; background:#3b82f6; border-radius:4px; color:white;">EXCUSE</button>
-                        <button onclick="window.adminSetStatus('${date}','${uid}','Special')" 
-                                class="info" style="font-size:9px; padding:6px; background:#8b5cf6; border-radius:4px; color:white;">SPECIAL</button>
-                        <button onclick="window.adminSetStatus('${date}','${uid}','Rejected')" 
-                                class="danger" style="font-size:9px; padding:6px; background:#991b1b; border-radius:4px; color:white;">REJECT</button>
+                        <button onclick="window.adminSetStatus('${date}','${uid}','Excused')" class="success" style="font-size:9px; padding:5px; background:#3b82f6; color:white;">EXCUSE</button>
+                        <button onclick="window.adminSetStatus('${date}','${uid}','Special')" class="info" style="font-size:9px; padding:5px; background:#8b5cf6; color:white;">SPECIAL</button>
+                        <button onclick="window.adminSetStatus('${date}','${uid}','Rejected')" class="danger" style="font-size:9px; padding:5px; background:#991b1b; color:white;">REJECT</button>
                     </div>`;
             } else {
-                // If no comment yet, show EDIT button instead of Delete
                 actionMarkup = `
-                    <button onclick="window.editAttendanceInline('${date}','${uid}','${v.userName}')" 
-                            style="background:#f1f5f9; color:var(--metro-blue); border:1px solid #cbd5e1; padding:4px 10px; font-size:10px; border-radius:4px; cursor:pointer;" 
-                            title="Edit Status">
+                    <button onclick="window.editAttendanceInline('${date}','${uid}','${v.userName}')" style="background:#f1f5f9; color:var(--metro-blue); border:1px solid #cbd5e1; padding:4px 8px; font-size:10px; border-radius:4px; cursor:pointer;">
                         <i class="fas fa-edit"></i> EDIT
                     </button>`;
             }
