@@ -1532,6 +1532,8 @@ tr:hover { background: #fcfcfd; }
             <select id="selDirAuthority" style="margin-top:8px; height: 45px;">
                 <option value="Soham Pal (Principal Investigator)">Soham Pal (Principal Investigator)</option>
                 <option value="Prof. Heerok Banerjee (Co-Principal Investigator)">Prof. Heerok Banerjee (Co-Principal Investigator)</option>
+                <option value="Prof. Dr. Subhajit Kar">Prof. Dr. Subhajit Kar (HOD EE)</option>
+</select>
             </select>
 
             <button type="button" class="info" onclick="generateDirectivePrint()" style="margin-top:25px; width:100%; padding:18px; font-weight:900; font-size: 14px; letter-spacing: 1px;">
@@ -9361,7 +9363,8 @@ window.generateDirectivePrint = async function() {
     const type = document.getElementById("dirType").value;
     const content = document.getElementById("dirText").value; 
     const authority = document.getElementById("selDirAuthority").value;
-    let manualName = document.getElementById("dirManualUser")?.value.trim();
+    const manualName = document.getElementById("dirManualUser")?.value.trim();
+    const shouldPrintType = document.getElementById("chkPrintDocType").checked;
     
     if (!manualName) return alert("⚠️ Please enter Recipient Name/Office.");
 
@@ -9371,11 +9374,9 @@ window.generateDirectivePrint = async function() {
 
     let financialSection = "";
 
-    // --- LOGIC: IF BALANCE SHEET IS SELECTED (WITH DATE RANGE) ---
+    // --- LOGIC: BALANCE SHEET ---
     if (type === "BALANCE SHEET") {
         const finSnap = await get(ref(db, "finance"));
-        
-        // Fetch Date Range from the Payroll tab inputs
         const startDateVal = document.getElementById("expStartDate")?.value;
         const endDateVal = document.getElementById("expEndDate")?.value;
         const startTs = startDateVal ? new Date(startDateVal + "T00:00:00").getTime() : 0;
@@ -9389,24 +9390,15 @@ window.generateDirectivePrint = async function() {
             const txs = [];
             finSnap.forEach(c => {
                 const v = c.val();
-                const txTime = v.timestamp || 0;
-                // FILTER: Status must be Approved AND within timestamp range
-                if (v.status === "Approved" && txTime >= startTs && txTime <= endTs) {
-                    txs.push(v);
-                }
+                if (v.status === "Approved" && (v.timestamp || 0) >= startTs && (v.timestamp || 0) <= endTs) txs.push(v);
             });
-            
             txs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-
             txs.forEach(v => {
                 const isCredit = v.type === "CREDIT";
                 const amt = parseFloat(v.amount || 0);
                 const d = v.timestamp ? new Date(v.timestamp).toLocaleDateString('en-IN') : "-";
-                
                 if (isCredit) totalCredit += amt; else totalDebit += amt;
-
-                rows += `
-                    <tr style="border-bottom: 3pt solid black; font-size: 28pt; font-weight: 900;">
+                rows += `<tr style="border-bottom: 3pt solid black; font-size: 28pt; font-weight: 900;">
                         <td style="padding: 15px 5px;">${d}</td>
                         <td style="padding: 15px 5px; text-align: left;">${(v.desc || v.productName || 'MISC').toUpperCase()}<br><small style="font-size:18pt; opacity:0.8;">MODE: ${v.mode || 'N/A'}</small></td>
                         <td style="text-align: right; color: green;">${isCredit ? Math.round(amt) : '-'}</td>
@@ -9414,30 +9406,26 @@ window.generateDirectivePrint = async function() {
                     </tr>`;
             });
         }
-
         const rangeHeading = startDateVal ? `PERIOD: ${startDateVal} TO ${endDateVal || 'PRESENT'}` : "CUMULATIVE PROJECT LEDGER";
-
-        financialSection = `
-            <div style="background: #000 !important; color: #fff !important; padding: 10px; font-size: 24pt; font-weight: 900; margin-top: 30px; text-align: center; -webkit-print-color-adjust: exact;">${rangeHeading}</div>
-            <div style="background: #000 !important; color: #fff !important; padding: 20px; font-size: 40pt; font-weight: 900; margin-top: 5px; text-align: center; -webkit-print-color-adjust: exact;">OFFICIAL PROJECT LEDGER</div>
-            <table style="width:100%; border-collapse: collapse; table-layout: fixed;">
-                <thead>
-                    <tr style="border-bottom: 10pt solid black; font-size: 24pt;">
-                        <th style="text-align: left; width: 20%;">DATE</th>
-                        <th style="text-align: left; width: 45%;">PARTICULARS</th>
-                        <th style="text-align: right; width: 17%;">CREDIT</th>
-                        <th style="text-align: right; width: 18%; padding-right:10px;">DEBIT</th>
-                    </tr>
-                </thead>
-                <tbody>${rows || '<tr><td colspan="4" style="text-align:center; padding:50px;">NO DATA FOUND IN THIS RANGE</td></tr>'}</tbody>
-            </table>
-            <div style="background: #000 !important; color: #fff !important; font-size: 50pt; font-weight: 900; padding: 30px; display: flex; justify-content: space-between; margin-top: 30px; -webkit-print-color-adjust: exact;">
-                <span>NET BALANCE:</span>
-                <span>₹ ${Math.round(totalCredit - totalDebit).toLocaleString('en-IN')}</span>
-            </div>`;
+        financialSection = `<div style="background: #000 !important; color: #fff !important; padding: 10px; font-size: 24pt; font-weight: 900; margin-top: 30px; text-align: center; -webkit-print-color-adjust: exact;">${rangeHeading}</div><div style="background: #000 !important; color: #fff !important; padding: 20px; font-size: 40pt; font-weight: 900; margin-top: 5px; text-align: center; -webkit-print-color-adjust: exact;">OFFICIAL PROJECT LEDGER</div><table style="width:100%; border-collapse: collapse; table-layout: fixed;"><thead><tr style="border-bottom: 10pt solid black; font-size: 24pt;"><th style="text-align: left; width: 20%;">DATE</th><th style="text-align: left; width: 45%;">PARTICULARS</th><th style="text-align: right; width: 17%;">CREDIT</th><th style="text-align: right; width: 18%; padding-right:10px;">DEBIT</th></tr></thead><tbody>${rows || '<tr><td colspan="4">NO DATA</td></tr>'}</tbody></table><div style="background: #000 !important; color: #fff !important; font-size: 50pt; font-weight: 900; padding: 30px; display: flex; justify-content: space-between; margin-top: 30px; -webkit-print-color-adjust: exact;"><span>NET BALANCE:</span><span>₹ ${Math.round(totalCredit - totalDebit).toLocaleString('en-IN')}</span></div>`;
     }
 
-    const displayAuthority = authority.includes("Soham Pal") ? "Soham Pal (Project Head)" : authority;
+    // --- SIGNATURE LOGIC ---
+    let signatureName = authority;
+    let signatureDesignation = "AUTHORIZED ISSUING AUTHORITY";
+
+    if (authority.includes("Subhajit Kar")) {
+        signatureName = "PROF. DR. SUBHAJIT KAR";
+        signatureDesignation = "HEAD OF THE DEPARTMENT<br>ELECTRICAL ENGINEERING, IEM KOLKATA";
+    } else if (authority.includes("Soham Pal")) {
+        signatureName = "SOHAM PAL";
+        signatureDesignation = "PROJECT HEAD<br>METRO RAILWAY PLATFORM SAFETY PROJECT";
+    } else if (authority.includes("Heerok")) {
+        signatureName = "PROF. HEEROK BANERJEE";
+        signatureDesignation = "CO-PRINCIPAL INVESTIGATOR";
+    }
+
+    const printClass = shouldPrintType ? "" : "no-print";
 
     reportContainer.innerHTML = `
     <style>
@@ -9458,7 +9446,8 @@ window.generateDirectivePrint = async function() {
     <div class="invoice-wrapper">
         <div class="header-title">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
         <div class="inst-title">INSTITUTE OF ENGINEERING AND MANAGEMENT<br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
-        <div style="text-align:center;"><div class="doc-type-box">${type}</div></div>
+        
+        <div class="${printClass}" style="text-align:center;"><div class="doc-type-box">${type}</div></div>
         
         <div style="text-align: left; margin-bottom: 50px;">
             <span class="meta-row">REF: ${refNo}</span>
@@ -9470,10 +9459,10 @@ window.generateDirectivePrint = async function() {
         ${financialSection}
 
         <div style="display: flex; justify-content: space-between; margin-top: 120px;">
-            <div style="width: 60%; text-align: left;">
+            <div style="width: 70%; text-align: left;">
                 <div style="border-top: 10pt solid black; width: 90%; margin-bottom: 10px;"></div>
-                <div style="font-size: 50pt; font-weight: 900;">${displayAuthority.toUpperCase()}</div>
-                <div style="font-size: 28pt; font-weight: 900;">AUTHORIZED ISSUING AUTHORITY</div>
+                <div style="font-size: 50pt; font-weight: 900;">${signatureName.toUpperCase()}</div>
+                <div style="font-size: 26pt; font-weight: 900; line-height: 1.2;">${signatureDesignation.toUpperCase()}</div>
             </div>
         </div>
         <div style="margin-top: 100px; text-align: center; font-size: 30pt; border-top: 5pt dashed black; padding-top: 30px; font-weight: 900;">OFFICIAL SYSTEM GENERATED RECORD</div>
