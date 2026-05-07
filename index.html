@@ -9589,39 +9589,107 @@ window.generateDirectivePrint = async function() {
 
     reportContainer.classList.remove("hidden");
 };
-// --- SOP MISSION ENGINE: EXCLUSIVE LOCK + AUTO-DELETE PROOF ---
-let sopAssetsGiven = [];
-let currentStepProofUploaded = false;
+// =========================================================
+// 🚀 MRPSP MISSION CONTROL: EXCLUSIVE DEPLOYMENT ENGINE
+// =========================================================
 
-// 1. DISPATCH MISSION (With Exclusive Station Lock)
+// --- 1. GLOBAL SOP DATA LIBRARY ---
+const SOP_GUIDE_BOOK = {
+    "IR_POWER": { title: "IR Sensor Powering", instr: "Connect VCC/GND to 5V bus. Check if Power LED is stable.", caution: "DO NOT reverse polarity. 5V Only." },
+    "CHANNEL_FIX": { title: "Channel Fixing", instr: "Secure PVC channels along the yellow line. Use industrial adhesive.", caution: "DO NOT leave gaps. Cables must be 100% enclosed." },
+    "CLAMPING": { title: "Clamping", instr: "Mount stainless steel clamps over sensor housings.", caution: "DO NOT crack housings by over-tightening." },
+    "BED_PI_CODE": { title: "Bed Pi Coding", instr: "Flash 'Local_Detection.py' via SSH. Test GPIO interrupts.", caution: "DO NOT disconnect power during flashing." },
+    "MASTER_PI_CODE": { title: "Master Pi Coding", instr: "Configure central IP. Initialize WebSocket listener.", caution: "Verify common Ground (GND) across all nodes." },
+    "BOXING": { title: "System Boxing", instr: "Mount controller inside IP65 enclosure. Seal gaskets.", caution: "DO NOT leave open. Track dust causes shorts." },
+    "POWER_230V": { title: "230V Mains Connection", instr: "Wire main AC input to system MCB. Check Earthing.", caution: "STRICTLY PROHIBITED: Do not work live." },
+    "SMPS_SET": { title: "SMPS Setting", instr: "Adjust SMPS output to exactly 5.1V.", caution: "DO NOT exceed 5.25V. High voltage kills the Pi." },
+    "BED_PI_SET": { title: "Bed Pi Setting", instr: "Position Pi in rack. Secure micro-SD card lock.", caution: "DO NOT block heatsink airflow." },
+    "MASTER_PI_SET": { title: "Master Pi Setting", instr: "Set up Master Pi at Control Point. Join Subnet.", caution: "DO NOT use public internet; use safety VLAN." },
+    "WIRING": { title: "Main System Wiring", instr: "Route all cables through fixed channels.", caution: "DO NOT bundle Signal wires with AC power." },
+    "SWITCHING": { title: "Switching Control", instr: "Test relay logic. Bed Pi must toggle alarm.", caution: "DO NOT switch heavy loads without flyback diodes." },
+    "MCB_FIX": { title: "MCB Fixing", instr: "Mount 6A MCB. Label as 'PLATFORM SAFETY'.", caution: "DO NOT use bypassed breakers." },
+    "SOUND_CAL": { title: "Sound Calibration", instr: "Calibrate siren to 95dB at 1 meter.", caution: "Notify station staff before testing." },
+    "DISPLAY_SET": { title: "Display Setup", instr: "Configure LED Matrix: 'CLEAR' / 'STAY BACK'.", caution: "Visibility check required from 20 meters." }
+};
+
+window.sopAssetsGiven = [];
+let sopMissionTimer = null;
+
+// --- 2. INITIALIZATION (CALLED BY switchTab) ---
+window.initSopModule = () => {
+    const lineSel = document.getElementById("sopLineSelect");
+    const userSel = document.getElementById("sopAssignUser");
+    if (!lineSel || !userSel) return;
+
+    // Fill Dropdowns
+    lineSel.innerHTML = "<option value=''>-- Select Corridor --</option>";
+    Object.keys(METRO_STATIONS).forEach(line => {
+        lineSel.innerHTML += `<option value="${line}">${line}</option>`;
+    });
+
+    userSel.innerHTML = "<option value=''>-- Select Student Lead --</option>";
+    get(ref(db, "users")).then(snap => {
+        snap.forEach(c => {
+            const u = c.val();
+            if(!ADMIN_EMAILS.includes(u.email.toLowerCase())) {
+                userSel.innerHTML += `<option value="${c.key}">${(u.name || u.email).toUpperCase()}</option>`;
+            }
+        });
+    });
+
+    if (isAdmin) {
+        document.getElementById("sopAdminPanel").classList.remove("hidden");
+        document.getElementById("sopStudentPanel").classList.add("hidden");
+        document.getElementById("adminGlobalStats").classList.remove("hidden");
+        window.monitorFleetProgress(); 
+    } else {
+        document.getElementById("sopAdminPanel").classList.add("hidden");
+        window.loadStudentActiveMission();
+    }
+};
+
+window.handleSopLineChange = () => {
+    const line = document.getElementById("sopLineSelect").value;
+    const stnSel = document.getElementById("sopStationSelect");
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    if (line && METRO_STATIONS[line]) {
+        METRO_STATIONS[line].forEach(stn => {
+            stnSel.innerHTML += `<option value="${stn}">${stn}</option>`;
+        });
+        stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+    }
+};
+
+// --- 3. ADMIN: DISPATCH & EXCLUSIVITY LOCK ---
 window.dispatchExclusiveSop = async () => {
     const line = document.getElementById("sopLineSelect").value;
     const stn = document.getElementById("sopStationSelect").value;
     const targetUid = document.getElementById("sopAssignUser").value;
     const stationId = `${stn}_${line}`.replace(/\s+/g, '_');
 
-    if (!stn || !targetUid) return alert("Select Station and Student!");
+    if (!stn || !targetUid) return alert("Select Station and Student Lead!");
 
     // Check Lock
     const lockSnap = await get(ref(db, `station_locks/${stationId}`));
     if (lockSnap.exists() && lockSnap.val().status === "Active") {
-        return alert(`⛔ LOCKED: ${stn} is assigned to ${lockSnap.val().studentName}.`);
+        return alert(`⛔ LOCKED: ${stn} is currently assigned to ${lockSnap.val().studentName}.`);
     }
 
-    const tasks = [];
-    document.querySelectorAll(".sop-task:checked").forEach(cb => tasks.push(cb.value));
-    if (tasks.length === 0) return alert("Check tasks!");
+    const selectedTasks = [];
+    document.querySelectorAll(".sop-task:checked").forEach(cb => selectedTasks.push(cb.value));
+    if (selectedTasks.length === 0) return alert("Select at least one task!");
 
     const missionData = {
         site: `${stn} (${line})`,
         stationId: stationId,
-        tasks: tasks,
+        tasks: selectedTasks,
         currentStep: 0,
         progress: 0,
         startTime: Date.now(),
         status: "IN PROGRESS",
-        assets: sopAssetsGiven,
-        proofs: {} // To store temp base64
+        assets: window.sopAssetsGiven,
+        currentStepProofUploaded: false
     };
 
     try {
@@ -9633,92 +9701,126 @@ window.dispatchExclusiveSop = async () => {
             studentName: document.getElementById("sopAssignUser").options[document.getElementById("sopAssignUser").selectedIndex].text 
         };
         await update(ref(db), updates);
-        alert("🚀 MISSION DISPATCHED");
-        sopAssetsGiven = [];
+        alert("🚀 MISSION DISPATCHED & STATION LOCKED");
+        window.sopAssetsGiven = [];
         document.getElementById("sopAssetBoxList").innerHTML = "";
-    } catch(e) { alert(e.message); }
+    } catch(e) { alert("Error: " + e.message); }
 };
 
-// 2. MANDATORY PROOF HANDLER
-window.uploadCapturedEvidence = async () => {
-    if(!capturedEvidenceBlob) return alert("Capture photo first.");
-    const isSop = !document.getElementById("tab-fieldSOP").classList.contains("hidden");
-    
-    if(isSop) {
-        try {
-            const uid = currentUser.uid;
-            const snap = await get(ref(db, `active_deployments/${uid}`));
-            const mission = snap.val();
-            const stepKey = mission.tasks[mission.currentStep];
-
-            // Save Proof temporarily into mission node
-            await update(ref(db, `active_deployments/${uid}/proofs`), { [stepKey]: capturedEvidenceBlob });
-            
-            // Unlock UI
-            currentStepProofUploaded = true;
-            document.getElementById("btnNextStep").disabled = false;
-            document.getElementById("btnNextStep").className = "success";
-            document.getElementById("proofStatusBox").style.background = "#dcfce7";
-            document.getElementById("proofText").innerText = "✅ PROOF UPLOADED. NEXT UNLOCKED.";
-            alert("Proof Saved.");
-            stopEvidenceCamera();
-        } catch(e) { alert(e.message); }
-    } else {
-        // Fallback to your original file upload for Compliance Docs
-        processUpload(capturedEvidenceBlob, "image/jpeg", "Evidence.jpg");
-    }
-};
-
-// 3. ADMIN VERIFICATION & AUTO-DELETE LOGIC
-window.adminVerifySop = async (uid, stationId) => {
-    if(!confirm("Verify Mission? This will wipe the temporary photo data and clear the lock.")) return;
-
-    try {
-        // 1. Move to Master History (Metadata only, no base64)
-        const snap = await get(ref(db, `active_deployments/${uid}`));
+// --- 4. STUDENT: GUIDED WORK & MANDATORY PROOF ---
+window.loadStudentActiveMission = () => {
+    onValue(ref(db, `active_deployments/${currentUser.uid}`), (snap) => {
+        if(!snap.exists()) {
+            document.getElementById("sopStudentPanel").classList.add("hidden");
+            document.getElementById("sopStatusHeader").innerText = "NO ACTIVE MISSION";
+            return;
+        }
         const data = snap.val();
-        
-        await push(ref(db, "completed_deployments"), {
-            site: data.site,
-            completedBy: data.assignedBy,
-            duration: Date.now() - data.startTime,
-            verifiedAt: serverTimestamp()
-        });
+        document.getElementById("sopStudentPanel").classList.remove("hidden");
+        document.getElementById("sopStatusHeader").innerText = data.status;
+        document.getElementById("sopLiveLocation").innerText = data.site;
+        document.getElementById("sopProgressBar").style.width = data.progress + "%";
 
-        // 2. AUTO-DELETE: Wipe mission and release lock
-        const updates = {};
-        updates[`active_deployments/${uid}`] = null; // Wipes all base64 proofs
-        updates[`station_locks/${stationId}`] = null;
+        if(data.status === "COMPLETED") {
+            document.getElementById("sopStepCard").innerHTML = `<div style="text-align:center;padding:30px;"><i class="fas fa-check-circle" style="font-size:60px;color:#10b981;"></i><h2>DONE</h2><p>Wait for Admin Verification.</p></div>`;
+            return;
+        }
+
+        const taskKey = data.tasks[data.currentStep];
+        const guide = SOP_GUIDE_BOOK[taskKey] || {title: "Work Module", instr: "Install hardware.", caution: "Be safe."};
         
-        await update(ref(db), updates);
-        alert("✅ DEPLOYMENT FINALIZED. Temporary storage cleared.");
-    } catch(e) { alert(e.message); }
+        document.getElementById("stepNumDisplay").innerText = `STEP ${data.currentStep + 1} OF ${data.tasks.length}`;
+        document.getElementById("sopStepTitle").innerText = guide.title.toUpperCase();
+        document.getElementById("sopStepInstruction").innerText = guide.instr;
+        document.getElementById("sopStepCaution").innerText = guide.caution;
+
+        // Logic Gate for Next Button
+        const nextBtn = document.getElementById("btnNextStep");
+        const statusBox = document.getElementById("proofStatusBox");
+        if(data.currentStepProofUploaded) {
+            nextBtn.disabled = false;
+            nextBtn.className = "success";
+            statusBox.style.background = "#dcfce7";
+            document.getElementById("proofText").innerText = "✅ PROOF UPLOADED. NEXT UNLOCKED.";
+        } else {
+            nextBtn.disabled = true;
+            nextBtn.className = "secondary";
+            statusBox.style.background = "#fff1f2";
+            document.getElementById("proofText").innerText = "MANDATORY: UPLOAD PHOTO TO UNLOCK";
+        }
+        window.startSopLiveClock(data.startTime);
+    });
 };
 
-// 4. FLEET MONITOR (Admin View)
+window.nextSopStep = async () => {
+    const uid = currentUser.uid;
+    const snap = await get(ref(db, `active_deployments/${uid}`));
+    const data = snap.val();
+    const nextIdx = data.currentStep + 1;
+    const newProg = Math.round((nextIdx / data.tasks.length) * 100);
+
+    const updates = {};
+    if (nextIdx >= data.tasks.length) {
+        updates[`active_deployments/${uid}/status`] = "COMPLETED";
+        updates[`active_deployments/${uid}/progress`] = 100;
+    } else {
+        updates[`active_deployments/${uid}/currentStep`] = nextIdx;
+        updates[`active_deployments/${uid}/progress`] = newProg;
+        updates[`active_deployments/${uid}/currentStepProofUploaded`] = false;
+    }
+    await update(ref(db), updates);
+};
+
+// --- 5. ADMIN: MONITORING & CLEANUP ---
 window.monitorFleetProgress = () => {
+    const fleetDiv = document.getElementById("adminSopFleetMonitor");
     onValue(ref(db, "active_deployments"), (snap) => {
-        const fleetDiv = document.getElementById("adminSopFleetMonitor");
         fleetDiv.innerHTML = "";
+        let active = 0, pending = 0;
         snap.forEach(child => {
             const d = child.val();
             const uid = child.key;
+            if(d.status === "IN PROGRESS") active++;
+            if(d.status === "COMPLETED") pending++;
+
             fleetDiv.innerHTML += `
-                <div class="panel" style="border-left:5px solid ${d.progress === 100 ? '#10b981' : '#fbbf24'};">
+                <div class="panel" style="border-left:8px solid ${d.progress === 100 ? '#10b981' : '#fbbf24'}; padding:15px; margin-bottom:10px;">
                     <div style="display:flex; justify-content:space-between;">
                         <strong>Lead UID: ${uid.substring(0,6)}</strong>
-                        <b>${d.site}</b>
+                        <b style="color:var(--metro-blue);">${d.site}</b>
                     </div>
                     <div style="margin:10px 0; height:8px; background:#eee; border-radius:5px; overflow:hidden;">
                         <div style="width:${d.progress}%; height:100%; background:#10b981;"></div>
                     </div>
-                    <div style="display:flex; justify-content:space-between;">
-                        <small>${d.status} (${d.progress}%)</small>
-                        ${d.progress === 100 ? `<button class="success" onclick="adminVerifySop('${uid}', '${d.stationId}')">VERIFY & DELETE STORAGE</button>` : `<small>In Field</small>`}
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <small>STATUS: ${d.status} | PROOF: ${d.currentStepProofUploaded ? '✅' : '❌'}</small>
+                        ${d.progress === 100 ? `<button class="success" onclick="window.adminVerifyAndCleanup('${uid}', '${d.stationId}')">VERIFY & WIPE DATA</button>` : ''}
                     </div>
                 </div>`;
         });
+        document.getElementById("statActive").innerText = active;
+        document.getElementById("statDone").innerText = pending;
     });
+};
+
+window.adminVerifyAndCleanup = async (uid, stationId) => {
+    if(!confirm("Verify and Release Station? This permanently deletes all temporary photo proofs.")) return;
+    const updates = {};
+    updates[`active_deployments/${uid}`] = null; // Nukes mission and heavy Base64 data
+    updates[`station_locks/${stationId}`] = null; // Unlocks station
+    await update(ref(db), updates);
+    alert("✅ DEPLOYMENT FINALIZED. STORAGE CLEARED.");
+};
+
+window.startSopLiveClock = (start) => {
+    if(sopMissionTimer) clearInterval(sopMissionTimer);
+    sopMissionTimer = setInterval(() => {
+        const diff = Date.now() - start;
+        const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
+        const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
+        const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+        document.getElementById("sopLiveTimer").innerText = `${h}:${m}:${s}`;
+    }, 1000);
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
