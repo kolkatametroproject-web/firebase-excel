@@ -9639,17 +9639,42 @@ window.captureSopPhoto = () => {
 };
 
 window.uploadSopProof = async () => {
-    if(!sopCapturedBlob) return;
-    const uid = currentUser.uid;
-    const snap = await get(ref(db, `active_deployments/${uid}`));
-    if(snap.exists()){
+    if(!sopCapturedBlob) return alert("No photo captured.");
+    const btn = document.getElementById("btnUploadSopProof");
+    if(btn) { btn.innerText = "⏳ UPLOADING..."; btn.disabled = true; }
+
+    try {
+        const uid = currentUser.uid;
+        const snap = await get(ref(db, `active_deployments/${uid}`));
+        if(!snap.exists()) return;
+        
         const m = snap.val();
         const stepKey = m.tasks[m.currentStep];
+
+        // 1. Save photo to the proofs node
         await update(ref(db, `active_deployments/${uid}/proofs`), { [stepKey]: sopCapturedBlob });
+        
+        // 2. CRITICAL: Mark this step as proofed in the database
         await update(ref(db, `active_deployments/${uid}`), { currentStepProofUploaded: true });
-        alert("✅ PROOF SAVED. STEP UNLOCKED.");
+        
+        alert("✅ PROOF VERIFIED. STEP UNLOCKED.");
+
+        // 3. UI UNLOCK (Force change the button state)
+        const nextBtn = document.getElementById("btnNextStep");
+        if(nextBtn) {
+            nextBtn.disabled = false;
+            nextBtn.className = "success"; // Turn it green
+            nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
+        }
+
+        // Hide upload/retry buttons
         document.getElementById("btnUploadSopProof")?.classList.add("hidden");
         document.getElementById("btnRetrySopProof")?.classList.add("hidden");
+        
+    } catch(e) { 
+        alert("Upload failed: " + e.message); 
+    } finally {
+        if(btn) { btn.innerText = "UPLOAD & UNLOCK"; btn.disabled = false; }
     }
 };
 
