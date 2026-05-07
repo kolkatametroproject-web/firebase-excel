@@ -9582,9 +9582,10 @@ window.generateDirectivePrint = async function() {
     reportContainer.classList.remove("hidden");
 };
 // =========================================================
-// 🚀 MRPSP MISSION CONTROL: INDEPENDENT DEPLOYMENT ENGINE
+// 🚀 MRPSP MISSION CONTROL: FIXED & STABILIZED ENGINE
 // =========================================================
-// --- GLOBAL SOP DEFINITIONS (KEEP AT TOP) ---
+
+// 1. DATA & GLOBALS (Must be first)
 const SOP_GUIDE_BOOK = {
     "IR_POWER": { title: "IR Sensor Powering", instr: "Connect VCC/GND to 5V bus bar. Verify each sensor LED status.", caution: "DO NOT reverse polarity. Reversing VCC/GND will blow the sensor IC immediately." },
     "CHANNEL_FIX": { title: "Channel Fixing", instr: "Secure PVC channels along the marked perimeter using industrial adhesive or screws.", caution: "DO NOT leave gaps between channel joints. Cables must be 100% enclosed." },
@@ -9607,143 +9608,196 @@ window.sopAssetsGiven = [];
 let sopMissionTimer = null;
 let activeAuditUid = null;
 
-// --- 1. INITIALIZATION ---
-window.initSopModule = async () => {
-    const lineSel = document.getElementById("sopLineSelect");
-    const userSel = document.getElementById("sopAssignUser");
-    if (!lineSel || !userSel) return;
-
-    // A. Populate Corridor Dropdown
-    lineSel.innerHTML = "<option value=''>-- Select Corridor --</option>";
-    Object.keys(METRO_STATIONS).forEach(line => {
-        const opt = document.createElement("option");
-        opt.value = line; opt.innerText = line;
-        lineSel.appendChild(opt);
-    });
-
-    // B. Populate Student Dropdown (Includes "SELF")
-    userSel.innerHTML = `<option value="${currentUser.uid}">Assign to Myself (${currentUser.name || 'Admin'})</option>`;
-    const userSnap = await get(ref(db, "users"));
-    userSnap.forEach(c => {
-        const u = c.val();
-        if (c.key !== currentUser.uid && !ADMIN_EMAILS.includes(u.email.toLowerCase())) {
-            const opt = document.createElement("option");
-            opt.value = c.key; opt.innerText = (u.name || u.email).toUpperCase();
-            userSel.appendChild(opt);
-        }
-    });
-
-    if (isAdmin) {
-        document.getElementById("sopAdminPanel")?.classList.remove("hidden");
-        document.getElementById("sopStudentPanel")?.classList.add("hidden");
-        document.getElementById("adminGlobalStats")?.classList.remove("hidden");
-        window.monitorFleetProgress();
-        window.refreshAvailableTasks(); // Force refresh checklist
-    } else {
-        document.getElementById("sopAdminPanel")?.classList.add("hidden");
-        window.loadStudentActiveMission();
-    }
+// 2. HELPER: TIMER
+window.startSopLiveClock = (start) => {
+    if(sopMissionTimer) clearInterval(sopMissionTimer);
+    sopMissionTimer = setInterval(() => {
+        const diff = Date.now() - start;
+        const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
+        const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
+        const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+        const el = document.getElementById("sopLiveTimer");
+        if(el) el.innerText = `${h}:${m}:${s}`;
+    }, 1000);
 };
 
-// --- 2. EXCLUSIVE TASK FILTER (THE "WHERE THIS" FIX) ---
+// 3. HELPER: TASK FILTER (The "Where This" Logic)
 window.refreshAvailableTasks = async () => {
     const taskContainer = document.getElementById("sopTaskChecklist");
     const line = document.getElementById("sopLineSelect")?.value;
     const stn = document.getElementById("sopStationSelect")?.value;
-    
     if (!taskContainer) return;
-    if (!stn) {
-        taskContainer.innerHTML = "<p style='color:#94a3b8; padding:10px;'>Select a Station to see available work.</p>";
-        return;
-    }
+    if (!stn) { taskContainer.innerHTML = "<p style='color:#94a3b8;padding:10px;'>Select Station first.</p>"; return; }
 
-    // Fetch what tasks are already being worked on at this station
     const activeSnap = await get(ref(db, "active_deployments"));
     let takenTasks = [];
     if (activeSnap.exists()) {
         activeSnap.forEach(child => {
             const d = child.val();
-            if (d.site === `${stn} (${line})`) {
-                takenTasks = takenTasks.concat(d.tasks);
-            }
+            if (d.site === `${stn} (${line})`) takenTasks = takenTasks.concat(d.tasks);
         });
     }
 
-    // Re-render the checklist
     taskContainer.innerHTML = "";
     Object.keys(SOP_GUIDE_BOOK).forEach(key => {
         if (!takenTasks.includes(key)) {
-            taskContainer.innerHTML += `
-                <label class="checkbox-item">
-                    <input type="checkbox" class="sop-task" value="${key}"> 
-                    ${SOP_GUIDE_BOOK[key].title}
-                </label>`;
+            taskContainer.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="sop-task" value="${key}"> ${SOP_GUIDE_BOOK[key].title}</label>`;
+        }
+    });
+    if (taskContainer.innerHTML === "") taskContainer.innerHTML = "<p style='color:red;font-weight:bold;padding:10px;'>ALL TASKS ASSIGNED.</p>";
+};
+
+// 4. STUDENT MODULE (Defined before Init)
+window.loadStudentActiveMission = () => {
+    onValue(ref(db, `active_deployments/${currentUser.uid}`), (snap) => {
+        const panel = document.getElementById("sopStudentPanel");
+        if (!snap.exists()) { if(panel) panel.classList.add("hidden"); return; }
+        if(panel) panel.classList.remove("hidden");
+        
+        const d = snap.val();
+        const guide = SOP_GUIDE_BOOK[d.tasks[d.currentStep]] || { title: "Task", instr: "Install" };
+        
+        document.getElementById("sopStepTitle").innerText = guide.title;
+        document.getElementById("sopStepInstruction").innerText = guide.instr;
+        document.getElementById("stepNumDisplay").innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
+
+        const nextBtn = document.getElementById("btnNextStep");
+        if (d.currentStepProofUploaded) {
+            nextBtn.disabled = false; nextBtn.className = "success";
+            document.getElementById("proofStatusBox").style.background = "#dcfce7";
+            document.getElementById("proofText").innerText = "✅ PROOF UPLOADED. UNLOCKED.";
+        } else {
+            nextBtn.disabled = true; nextBtn.className = "secondary";
+            document.getElementById("proofStatusBox").style.background = "#fff1f2";
+            document.getElementById("proofText").innerText = "UPLOAD PHOTO TO UNLOCK";
+        }
+        window.startSopLiveClock(d.startTime);
+    });
+};
+
+// 5. MAIN INITIALIZER
+window.initSopModule = async () => {
+    const lineSel = document.getElementById("sopLineSelect");
+    const userSel = document.getElementById("sopAssignUser");
+    if (!lineSel || !userSel) return;
+
+    lineSel.innerHTML = "<option value=''>-- Select Corridor --</option>";
+    Object.keys(METRO_STATIONS).forEach(line => {
+        lineSel.innerHTML += `<option value="${line}">${line}</option>`;
+    });
+
+    userSel.innerHTML = `<option value="${currentUser.uid}">Assign to Myself (${currentUser.name})</option>`;
+    const snap = await get(ref(db, "users"));
+    snap.forEach(c => {
+        if (c.key !== currentUser.uid && !ADMIN_EMAILS.includes(c.val().email.toLowerCase())) {
+            userSel.innerHTML += `<option value="${c.key}">${(c.val().name || c.val().email).toUpperCase()}</option>`;
         }
     });
 
-    if (taskContainer.innerHTML === "") {
-        taskContainer.innerHTML = "<p style='color:#e11d48; font-weight:bold; padding:10px;'>⚠️ ALL WORK MODULES ARE CURRENTLY ASSIGNED.</p>";
+    if (isAdmin) {
+        document.getElementById("sopAdminPanel").classList.remove("hidden");
+        document.getElementById("sopStudentPanel").classList.add("hidden");
+        document.getElementById("adminGlobalStats").classList.remove("hidden");
+        window.monitorFleetProgress();
+        window.refreshAvailableTasks();
+    } else {
+        document.getElementById("sopAdminPanel").classList.add("hidden");
+        window.loadStudentActiveMission();
     }
 };
 
-// --- 3. DISPATCH MISSION ---
+// 6. OTHER ACTIONS
+window.handleSopLineChange = () => {
+    const line = document.getElementById("sopLineSelect").value;
+    const stnSel = document.getElementById("sopStationSelect");
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    if (line && METRO_STATIONS[line]) {
+        METRO_STATIONS[line].forEach(stn => stnSel.innerHTML += `<option value="${stn}">${stn}</option>`);
+        stnSel.disabled = false;
+        stnSel.onchange = window.refreshAvailableTasks;
+    }
+};
+
 window.dispatchSopMission = async () => {
     const line = document.getElementById("sopLineSelect").value;
     const stn = document.getElementById("sopStationSelect").value;
     const targetUid = document.getElementById("sopAssignUser").value;
-    const stationId = `${stn}_${line}`.replace(/\s+/g, '_');
-
     const tasks = [];
     document.querySelectorAll(".sop-task:checked").forEach(cb => tasks.push(cb.value));
+    if (!stn || tasks.length === 0) return alert("Select Station & Tasks!");
 
-    if (!stn || tasks.length === 0) return alert("Select Station and Tasks!");
-
-    const missionData = {
+    const data = {
         site: `${stn} (${line})`,
-        stationId: stationId,
         tasks: tasks,
-        currentStep: 0,
-        progress: 0,
+        currentStep: 0, progress: 0,
         startTime: Date.now(),
         status: "IN PROGRESS",
-        assets: window.sopAssetsGiven,
         studentName: document.getElementById("sopAssignUser").options[document.getElementById("sopAssignUser").selectedIndex].text,
         currentStepProofUploaded: false
     };
 
-    try {
-        const updates = {};
-        updates[`active_deployments/${targetUid}`] = missionData;
-        updates[`station_locks/${stationId}`] = { status: "Active", studentName: missionData.studentName, studentUid: targetUid };
-
-        await update(ref(db), updates);
-        alert("🚀 MISSION DISPATCHED & TASKS LOCKED");
-        
-        window.sopAssetsGiven = [];
-        document.getElementById("sopAssetBoxList").innerHTML = "";
-        window.refreshAvailableTasks(); // Remove tasks from list immediately
-        
-        if (targetUid === currentUser.uid) window.loadStudentActiveMission();
-    } catch(e) { alert(e.message); }
+    await set(ref(db, `active_deployments/${targetUid}`), data);
+    alert("🚀 MISSION DISPATCHED");
+    window.refreshAvailableTasks();
+    if(targetUid === currentUser.uid) window.loadStudentActiveMission();
 };
 
-// --- 4. INDEPENDENT DROPDOWN HANDLER ---
-window.handleSopLineChange = () => {
-    const line = document.getElementById("sopLineSelect").value;
-    const stnSel = document.getElementById("sopStationSelect");
-    if (!stnSel) return;
-    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
-    if (line && METRO_STATIONS[line]) {
-        METRO_STATIONS[line].forEach(stn => {
-            const opt = document.createElement("option");
-            opt.value = stn; opt.innerText = stn;
-            stnSel.appendChild(opt);
+window.monitorFleetProgress = () => {
+    onValue(ref(db, "active_deployments"), (snap) => {
+        const fleetDiv = document.getElementById("adminSopFleetMonitor");
+        if (!fleetDiv) return;
+        fleetDiv.innerHTML = "";
+        snap.forEach(child => {
+            const d = child.val();
+            fleetDiv.innerHTML += `
+                <div class="panel" style="border-left:10px solid #fbbf24; padding:15px; margin-bottom:10px;">
+                    <b>${d.studentName}</b> @ <b>${d.site}</b>
+                    <div style="background:#eee; height:8px; border-radius:5px; margin:10px 0;"><div style="width:${d.progress}%; background:#10b981; height:100%;"></div></div>
+                    <small>Progress: ${d.progress}%</small>
+                    ${d.progress === 100 ? `<button class="success" onclick="window.adminVerifySop('${child.key}')">VERIFY & WIPE</button>` : ''}
+                </div>`;
         });
-        stnSel.disabled = false;
-        stnSel.style.background = "#fff";
-        stnSel.onchange = window.refreshAvailableTasks; // Link task filter to station change
+    });
+};
+
+window.adminVerifySop = async (uid) => {
+    if (confirm("Verify and Wipe?")) {
+        await remove(ref(db, `active_deployments/${uid}`));
+        alert("Wiped.");
     }
-    window.refreshAvailableTasks();
+};
+
+window.nextSopStep = async () => {
+    const uid = currentUser.uid;
+    const snap = await get(ref(db, `active_deployments/${uid}`));
+    const data = snap.val();
+    const nextIdx = data.currentStep + 1;
+    const newProg = Math.round((nextIdx / data.tasks.length) * 100);
+    const updates = {};
+    if (nextIdx >= data.tasks.length) {
+        updates[`active_deployments/${uid}/status`] = "COMPLETED";
+        updates[`active_deployments/${uid}/progress`] = 100;
+    } else {
+        updates[`active_deployments/${uid}/currentStep`] = nextIdx;
+        updates[`active_deployments/${uid}/progress`] = newProg;
+        updates[`active_deployments/${uid}/currentStepProofUploaded`] = false;
+    }
+    await update(ref(db), updates);
+};
+
+// MANDATORY OVERRIDE FOR UPLOAD
+const originalUpload = window.uploadCapturedEvidence;
+window.uploadCapturedEvidence = async () => {
+    if(!capturedEvidenceBlob) return alert("No photo.");
+    const isSop = !document.getElementById("tab-fieldSOP").classList.contains("hidden");
+    if(isSop) {
+        const uid = currentUser.uid;
+        await update(ref(db, `active_deployments/${uid}`), { currentStepProofUploaded: true });
+        alert("Proof Saved locally. Step Unlocked.");
+        stopEvidenceCamera();
+    } else {
+        if (typeof originalUpload === "function") originalUpload();
+    }
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
