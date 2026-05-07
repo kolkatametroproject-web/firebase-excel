@@ -9640,63 +9640,34 @@ window.captureSopPhoto = () => {
 };
 
 window.uploadSopProof = async () => {
-    if (!sopCapturedBlob) {
-        alert("No photo captured.");
-        return;
-    }
+    if(!sopCapturedBlob) return alert("Capture photo first.");
+    
+    // Ask the student for field remarks before uploading
+    const remarks = prompt("Enter Field Remarks for this step (e.g. 'Tightened screws', 'Wiring color matched'):");
+    if(remarks === null) return; // Cancel if they hit cancel
 
     const btn = document.getElementById("btnUploadSopProof");
-    if (btn) {
-        btn.innerText = "⏳ UPLOADING...";
-        btn.disabled = true;
-    }
+    if(btn) { btn.innerText = "⏳ UPLOADING..."; btn.disabled = true; }
 
     try {
         const uid = currentUser.uid;
-        // 1. Fetch mission data
         const snap = await get(ref(db, `active_deployments/${uid}`));
-        
-        if (!snap.exists()) {
-            alert("No active mission found.");
-            return;
-        }
-
         const m = snap.val();
         const stepKey = m.tasks[m.currentStep];
 
-        // 2. Update DB: Save photo and Set Proof Flag to true
-        const updates = {};
-        updates[`active_deployments/${uid}/proofs/${stepKey}`] = sopCapturedBlob;
-        updates[`active_deployments/${uid}/currentStepProofUploaded`] = true;
+        // Save photo AND remarks together
+        const proofData = {
+            image: sopCapturedBlob,
+            remarks: remarks || "No remarks provided.",
+            timestamp: serverTimestamp()
+        };
 
-        await update(ref(db), updates);
+        await update(ref(db, `active_deployments/${uid}/proofs`), { [stepKey]: proofData });
+        await update(ref(db, `active_deployments/${uid}`), { currentStepProofUploaded: true });
         
-        alert("✅ PROOF VERIFIED. STEP UNLOCKED.");
-
-        // 3. UI UNLOCK
-        const nextBtn = document.getElementById("btnNextStep");
-        if (nextBtn) {
-            nextBtn.disabled = false;
-            nextBtn.className = "success"; 
-            nextBtn.style.opacity = "1";
-            nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
-        }
-
-        // Hide camera controls
-        const upBtn = document.getElementById("btnUploadSopProof");
-        const reBtn = document.getElementById("btnRetrySopProof");
-        if(upBtn) upBtn.classList.add("hidden");
-        if(reBtn) reBtn.classList.add("hidden");
-
-    } catch (e) {
-        console.error(e);
-        alert("Upload Failed: " + e.message);
-    } finally {
-        if (btn) {
-            btn.innerText = "UPLOAD & UNLOCK";
-            btn.disabled = false;
-        }
-    }
+        alert("✅ PROOF & REMARKS SAVED.");
+        if(btn) btn.classList.add("hidden");
+    } catch(e) { console.error(e); }
 };
 // --- 3. RAPID SCANNER (GREEN FEEDBACK) ---
 window.openContinuousScanner = () => {
@@ -9719,7 +9690,79 @@ window.openContinuousScanner = () => {
         }, (err) => {});
     }
 };
+// --- UPDATED AUDIT VIEW (Render Function) ---
+window.openAuditView = async (uid) => {
+    activeAuditUid = uid;
+    const snap = await get(ref(db, `active_deployments/${uid}`));
+    if(!snap.exists()) return;
+    const data = snap.val();
+    activeAuditStationId = data.stationId;
 
+    document.getElementById("sopVerifyModal").classList.remove("hidden");
+    document.getElementById("verifyModalTitle").innerText = `Audit: ${data.studentName}`;
+
+    const triDiv = document.getElementById("triAngleProofContainer");
+    triDiv.innerHTML = ""; // Clear loader
+
+    const proofs = data.proofs || {};
+
+    data.tasks.forEach((taskKey, index) => {
+        const proof = proofs[taskKey]; // This now contains {image, remarks}
+        const isVerified = data.verifiedTasks && data.verifiedTasks[taskKey];
+        
+        // Industrial Audit Card UI
+        triDiv.innerHTML += `
+            <div class="panel" style="display: flex; gap: 20px; align-items: start; border-left: 10px solid ${isVerified ? '#10b981' : '#fbbf24'}; padding: 20px; margin-bottom: 15px; background: ${isVerified ? '#f0fdf4' : '#fff'};">
+                
+                <div style="flex: 1; min-width: 250px;">
+                    <small style="font-weight: 800; color: #64748b;">STEP ${index + 1}: ${taskKey.replace(/_/g, ' ')}</small>
+                    ${proof ? `
+                        <img src="${proof.image}" style="width: 100%; border-radius: 8px; border: 3px solid #eee; cursor: zoom-in; margin-top: 10px;" onclick="window.open('${proof.image}')">
+                    ` : `
+                        <div style="height: 150px; background: #f1f5f9; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-style: italic; margin-top: 10px;">Pending Field Photo...</div>
+                    `}
+                </div>
+
+                <div style="flex: 2;">
+                    <h4 style="margin: 0; color: var(--metro-blue); border: none; padding: 0;">Lead Remarks:</h4>
+                    <div style="background: #f8fafc; padding: 15px; border-radius: 8px; margin: 10px 0; border: 1px solid #e2e8f0; font-family: monospace; font-size: 13px; color: #334155;">
+                        "${proof ? proof.remarks : 'No data yet.'}"
+                    </div>
+
+                    <div style="display: flex; gap: 10px; margin-top: 20px;">
+                        <button onclick="verifySingleTask('${uid}', '${taskKey}')" class="success" style="flex: 1; padding: 12px;" ${isVerified || !proof ? 'disabled' : ''}>
+                            <i class="fas fa-check-circle"></i> ${isVerified ? 'APPROVED' : 'APPROVE WORK'}
+                        </button>
+                        <button onclick="rejectTask('${uid}', '${taskKey}', ${index})" class="danger" style="flex: 1; padding: 12px;" ${!proof ? 'disabled' : ''}>
+                            <i class="fas fa-redo"></i> REJECT (REDO)
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+    });
+};
+  window.rejectTask = async (uid, taskKey, stepIndex) => {
+    const feedback = prompt("REJECTION REASON (Sent to student):");
+    if (!feedback) return;
+
+    if (confirm(`Reject this step? Student will be forced back to Step ${stepIndex + 1}.`)) {
+        const updates = {};
+        // 1. Point student to this step
+        updates[`active_deployments/${uid}/currentStep`] = stepIndex;
+        // 2. Relock the step
+        updates[`active_deployments/${uid}/currentStepProofUploaded`] = false;
+        // 3. Clear existing proof
+        updates[`active_deployments/${uid}/proofs/${taskKey}`] = null;
+        // 4. Record Admin Feedback
+        updates[`active_deployments/${uid}/adminFeedback`] = feedback;
+        // 5. Update Status
+        updates[`active_deployments/${uid}/status`] = "REDO REQUIRED";
+
+        await update(ref(db), updates);
+        alert("Task rejected. Student terminal has been reset to this step.");
+        window.openAuditView(uid); // Refresh the Admin screen
+    }
+};
 window.renderAdminAssetBox = () => {
     const box = document.getElementById("sopAssetBoxList");
     if (box) box.innerHTML = window.sopAssetsGiven.map((a, i) => `<span style="background:#e0f2fe; padding:5px 12px; border-radius:50px; font-size:10px; font-weight:900; border:1px solid #7dd3fc; margin:2px;">📦 ${a.name} <i class="fas fa-times" onclick="window.sopAssetsGiven.splice(${i},1);window.renderAdminAssetBox();" style="cursor:pointer;color:red;margin-left:5px;"></i></span>`).join("");
