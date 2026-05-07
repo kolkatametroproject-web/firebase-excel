@@ -9807,46 +9807,37 @@ window.loadStudentActiveMission = () => {
     const uid = currentUser.uid;
     onValue(ref(db, `active_deployments/${uid}`), (snap) => {
         const panel = document.getElementById("sopStudentPanel");
-        if (!snap.exists()) { 
-            if(panel) panel.classList.add("hidden"); 
-            return; 
-        }
-        if(panel) panel.classList.remove("hidden");
+        if (!snap.exists()) { if(panel) panel.classList.add("hidden"); return; }
         
         const d = snap.val();
-        const taskKey = d.tasks && d.tasks[d.currentStep] ? d.tasks[d.currentStep] : null;
-        const guide = SOP_GUIDE_BOOK[taskKey] || { title: "Work Module", instr: "Install hardware." };
-        
-        // --- THE SHIELDED UPDATES ---
-        const elTitle = document.getElementById("sopStepTitle");
-        const elInstr = document.getElementById("sopStepInstruction");
-        const elStepNum = document.getElementById("stepNumDisplay");
-        const elNextBtn = document.getElementById("btnNextStep");
-        const elStatusBox = document.getElementById("proofStatusBox");
-        const elProofText = document.getElementById("proofText");
+        if(panel) panel.classList.remove("hidden");
 
-        if(elTitle) elTitle.innerText = guide.title;
-        if(elInstr) elInstr.innerText = guide.instr;
-        if(elStepNum) elStepNum.innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
+        // 1. Update Text
+        const taskKey = d.tasks[d.currentStep];
+        const guide = SOP_GUIDE_BOOK[taskKey] || { title: "Task", instr: "Install" };
+        document.getElementById("sopStepTitle").innerText = guide.title;
+        document.getElementById("sopStepInstruction").innerText = guide.instr;
+        document.getElementById("stepNumDisplay").innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
 
-        if(elNextBtn && elStatusBox && elProofText) {
-            if (d.currentStepProofUploaded) {
-                elNextBtn.disabled = false; 
-                elNextBtn.className = "success";
-                elStatusBox.style.background = "#dcfce7";
-                elProofText.innerText = "✅ PROOF UPLOADED. NEXT UNLOCKED.";
-            } else {
-                elNextBtn.disabled = true; 
-                elNextBtn.className = "secondary";
-                elStatusBox.style.background = "#fff1f2";
-                elProofText.innerText = "UPLOAD PHOTO TO UNLOCK";
-            }
+        // 2. FORCED RESET OF CAMERA UI FOR EACH STEP
+        const nextBtn = document.getElementById("btnNextStep");
+        const startCamBtn = document.getElementById("btnStartSopCam");
+        const previewImg = document.getElementById("sopEvidencePreview");
+
+        if (d.currentStepProofUploaded === true) {
+            // Step is ready to move
+            if(nextBtn) { nextBtn.disabled = false; nextBtn.className = "success"; }
+            if(previewImg) previewImg.style.borderColor = "#10b981";
+        } else {
+            // Step is LOCKED - Reset everything
+            if(nextBtn) { nextBtn.disabled = true; nextBtn.className = "secondary"; }
+            if(previewImg) { previewImg.style.display = "none"; previewImg.src = ""; }
+            if(startCamBtn) { startCamBtn.classList.remove("hidden"); startCamBtn.disabled = false; startCamBtn.innerText = "📸 OPEN CAMERA"; }
         }
         
-        if(d.startTime) window.startSopLiveClock(d.startTime);
+        window.startSopLiveClock(d.startTime);
     });
 };
-
 window.monitorFleetProgress = () => {
     const fleetDiv = document.getElementById("adminSopFleetMonitor");
     if (!fleetDiv) return; // Exit if the container isn't on screen
@@ -9926,19 +9917,35 @@ window.nextSopStep = async () => {
     const uid = currentUser.uid;
     const snap = await get(ref(db, `active_deployments/${uid}`));
     const data = snap.val();
+    
     const nextIdx = data.currentStep + 1;
     const newProg = Math.round((nextIdx / data.tasks.length) * 100);
+
     const updates = {};
+    
     if (nextIdx >= data.tasks.length) {
+        // --- MISSION COMPLETE ---
         updates[`active_deployments/${uid}/status`] = "COMPLETED";
         updates[`active_deployments/${uid}/progress`] = 100;
+        
+        // Show Fullscreen Green Tick
+        const overlay = document.getElementById("scanSuccessOverlay");
+        const itemText = document.getElementById("scanSuccessItem");
+        if(overlay && itemText) {
+            itemText.innerText = "MISSION ACCOMPLISHED";
+            overlay.classList.remove("hidden");
+            if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+            setTimeout(() => overlay.classList.add("hidden"), 3000);
+        }
     } else {
+        // --- MOVE TO NEXT STEP & FORCE NEW LOCK ---
         updates[`active_deployments/${uid}/currentStep`] = nextIdx;
         updates[`active_deployments/${uid}/progress`] = newProg;
-        updates[`active_deployments/${uid}/currentStepProofUploaded`] = false;
-        document.getElementById("sopEvidencePreview").style.display = "none";
-        document.getElementById("btnStartSopCam").innerText = "📸 OPEN CAMERA";
+        
+        // CRITICAL FIX: This forces the "Open Camera" button to reappear for the next task
+        updates[`active_deployments/${uid}/currentStepProofUploaded`] = false; 
     }
+
     await update(ref(db), updates);
 };
 
