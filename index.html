@@ -2137,33 +2137,41 @@ tr:hover { background: #fcfcfd; }
     <div class="panel" style="background: var(--metro-blue); color: white; border-bottom: 5px solid var(--metro-gold);">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <div>
-                <small style="color:var(--metro-gold); font-weight:800; letter-spacing:1px;">DEPLOYMENT CONTROL CENTER</small>
-                <h2 id="sopAutoSite" style="margin:0;">-- SELECT SITE IN FIELD TAB --</h2>
-                <div id="sopAutoDate" style="font-size:12px; opacity:0.8; margin-top:5px;"></div>
+                <small style="color:var(--metro-gold); font-weight:800; letter-spacing:1px;">INDUSTRIAL DEPLOYMENT COMMAND</small>
+                <h2 style="margin:0;">SOP DISPATCH CONSOLE</h2>
             </div>
             <div style="text-align:right;">
                 <div id="sopLiveTimer" style="font-size:32px; font-weight:900; font-family:monospace; color:var(--metro-gold);">00:00:00</div>
-                <small id="timerLabel">READY TO DISPATCH</small>
+                <small>MISSION ELAPSED TIME</small>
             </div>
         </div>
     </div>
 
-    <div id="sopAdminPanel" class="panel hidden" style="border-top: 4px solid var(--metro-gold);">
-        <h3><i class="fas fa-tasks"></i> 1. Assign Team & Link Hardware</h3>
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:20px; margin-bottom:20px;">
+    <div class="panel" style="border-top: 4px solid var(--metro-gold);">
+        <h3><i class="fas fa-map-location-dot"></i> 1. Location & Team Assignment</h3>
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:15px; margin-bottom:20px;">
             <div>
-                <label style="font-weight:bold; font-size:11px;">SELECT TEAM LEAD / STUDENT</label>
-                <select id="sopAssignUser" style="margin-top:5px; border:2px solid var(--metro-blue);"></select>
+                <label style="font-weight:bold; font-size:11px;">SELECT CORRIDOR</label>
+                <select id="sopLineSelect" onchange="handleSopLineChange()" style="border:2px solid var(--metro-blue);"></select>
             </div>
             <div>
-                <label style="font-weight:bold; font-size:11px;">COMPONENT BATCH QR</label>
-                <button onclick="openBarcodeScanner('SOP_ISSUE')" class="warning" style="width:100%; height:45px; margin-top:5px;">
-                    <i class="fas fa-qrcode"></i> LINK ASSETS
-                </button>
+                <label style="font-weight:bold; font-size:11px;">SELECT STATION</label>
+                <select id="sopStationSelect" disabled style="background:#f1f5f9;"></select>
+            </div>
+            <div>
+                <label style="font-weight:bold; font-size:11px;">ASSIGN TEAM LEAD</label>
+                <select id="sopAssignUser"></select>
             </div>
         </div>
 
-        <h3 style="border-top:1px solid #eee; padding-top:20px;"><i class="fas fa-list-check"></i> 2. Select Work Modules (SOPs)</h3>
+        <div style="margin-bottom:20px;">
+             <label style="font-weight:bold; font-size:11px;">HARDWARE BINDING (SCAN QR)</label>
+             <button onclick="openBarcodeScanner('SOP_ISSUE')" class="warning" style="width:100%; height:45px; margin-top:5px;">
+                <i class="fas fa-qrcode"></i> LINK COMPONENT BATCH TO THIS DEPLOYMENT
+             </button>
+        </div>
+
+        <h3 style="border-top:1px solid #eee; padding-top:20px;"><i class="fas fa-list-check"></i> 2. Operational Work Modules</h3>
         <div class="checkbox-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:10px; max-height:none; background:#f8fafc;">
             <label class="checkbox-item"><input type="checkbox" class="sop-task" value="IR_POWER"> IR Sensor Powering</label>
             <label class="checkbox-item"><input type="checkbox" class="sop-task" value="CHANNEL_FIX"> Channel Fixing</label>
@@ -2182,16 +2190,9 @@ tr:hover { background: #fcfcfd; }
             <label class="checkbox-item"><input type="checkbox" class="sop-task" value="DISPLAY_SET"> Display Setup</label>
         </div>
 
-        <button id="btnDispatchSop" onclick="dispatchDeployment()" class="success" style="width:100%; padding:20px; font-weight:900; font-size:16px; margin-top:25px; letter-spacing:1.5px; box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3);">
-            <i class="fas fa-paper-plane"></i> DISPATCH MISSION & START TIMER
+        <button onclick="dispatchDeploymentSOP()" class="success" style="width:100%; padding:20px; font-weight:900; font-size:16px; margin-top:25px; letter-spacing:1px;">
+            🚀 INITIATE DEPLOYMENT & START TRACKING
         </button>
-    </div>
-    
-    <div id="sopStudentView" class="hidden">
-         <div class="panel" style="text-align:center; border-left:10px solid var(--metro-gold);">
-             <h3 id="studentStepTitle">Waiting for Step 1...</h3>
-             <p id="studentStepDesc">Your Admin will assign tasks shortly.</p>
-         </div>
     </div>
 </div>
 </section>
@@ -9573,118 +9574,120 @@ window.generateDirectivePrint = async function() {
 
     reportContainer.classList.remove("hidden");
 };
-  // --- FIELD DEPLOYMENT SOP ENGINE ---
-let sopTimerInterval;
-let currentSopData = null;
-let currentStepIndex = 0;
+// =========================================================
+// 🚀 MRPSP FIELD DEPLOYMENT SOP ENGINE (UNIFIED)
+// =========================================================
 
+// --- 1. GLOBAL SOP REFERENCE DATA (THE 15 WORK MODULES) ---
 const SOP_GUIDE_BOOK = {
     "IR_POWER": {
         title: "IR Sensor Powering",
-        instr: "Connect the VCC and GND of the IR sensors to the 5V bus bar. Ensure all sensors light up red.",
-        caution: "DO NOT reverse polarity. Doing so will blow the sensor IC immediately."
+        instr: "Connect the VCC and GND of the IR sensors to the 5V bus bar. Verify each sensor LED status.",
+        caution: "DO NOT reverse polarity. Reversing VCC/GND will blow the sensor IC immediately."
     },
-    "WIRING": {
-        title: "Main System Wiring",
-        instr: "Route the signal wires through the provided channels. Use zip-ties every 10cm.",
-        caution: "DO NOT leave loose wires hanging near the platform edge. It violates safety code."
+    "CHANNEL_FIX": {
+        title: "Channel Fixing",
+        instr: "Secure the PVC casing/channels along the marked yellow line perimeter using industrial adhesive or screws.",
+        caution: "DO NOT leave gaps between channel joints. Cables must be 100% enclosed."
+    },
+    "CLAMPING": {
+        title: "Clamping",
+        instr: "Install stainless steel clamps over the sensor housings to ensure zero vibration during train movement.",
+        caution: "DO NOT over-tighten clamps on plastic housings to avoid structural cracking."
+    },
+    "BED_PI_CODE": {
+        title: "Bed Pi Coding",
+        instr: "Flash the 'Local_Detection.py' script to the Bed Raspberry Pi. Test GPIO interrupt responses.",
+        caution: "DO NOT disconnect power during the flashing process. Ensure static protection is worn."
+    },
+    "MASTER_PI_CODE": {
+        title: "Master Pi Coding",
+        instr: "Configure the Master Pi with the central IP. Initialize the WebSocket listener for all Bed nodes.",
+        caution: "DO NOT run scripts without verifying the common Ground (GND) across the network."
+    },
+    "BOXING": {
+        title: "System Boxing",
+        instr: "Mount the controller inside the IP65 rated enclosure. Ensure all gaskets are seated correctly.",
+        caution: "DO NOT leave the enclosure open. Dust from the metro tracks will cause short circuits."
     },
     "POWER_230V": {
         title: "230V Mains Connection",
-        instr: "Connect the incoming AC cable to the MCB input terminals.",
-        caution: "STRICTLY PROHIBITED: Do not work on this step while the main breaker is ON."
+        instr: "Wire the main AC input to the system MCB. Ensure proper earthing/grounding.",
+        caution: "STRICTLY PROHIBITED: Do not touch live terminals. Work only when the main feeder is LOCKED-OFF."
+    },
+    "SMPS_SET": {
+        title: "SMPS Setting",
+        instr: "Adjust the SMPS potentiometer to output exactly 5.1V for the Raspberry Pi nodes.",
+        caution: "DO NOT exceed 5.25V. High voltage will cause permanent hardware failure on the Pi."
+    },
+    "BED_PI_SET": {
+        title: "Bed Pi Setting",
+        instr: "Position the Bed Pi in the designated rack. Secure the micro-SD card lock.",
+        caution: "DO NOT block the heatsink. Ensure sufficient airflow within the box."
+    },
+    "MASTER_PI_SET": {
+        title: "Master Pi Setting",
+        instr: "Set up the Master Pi at the Station Control Point. Connect to the local VLAN.",
+        caution: "DO NOT use public internet; use only the dedicated safety subnet."
+    },
+    "WIRING": {
+        title: "Main System Wiring",
+        instr: "Route all signal and power cables through the fixed channels. Use color-coded heat shrink for joints.",
+        caution: "DO NOT cross-talk signal wires with high-voltage AC lines. Maintain 10cm distance."
+    },
+    "SWITCHING": {
+        title: "Switching Control",
+        instr: "Test the relay switching logic. Confirm that the Bed Pi can toggle the alarm circuit.",
+        caution: "DO NOT switch heavy inductive loads without a flyback diode in place."
+    },
+    "MCB_FIX": {
+        title: "MCB Fixing",
+        instr: "Din-rail mount the 6A MCB. Label it as 'PLATFORM SAFETY SYSTEM'.",
+        caution: "DO NOT use a bypassed MCB. Safety trip logic must remain functional."
+    },
+    "SOUND_CAL": {
+        title: "Sound Calibration",
+        instr: "Calibrate the buzzer/siren volume to 95dB measured at 1 meter distance.",
+        caution: "DO NOT calibrate during peak hours without notifying station staff."
+    },
+    "DISPLAY_SET": {
+        title: "Display Setup",
+        instr: "Configure the LED Matrix display to show 'CLEAR' or 'STAY BACK' based on sensor input.",
+        caution: "DO NOT mount the display in direct sunlight; visibility must be checked from 20 meters."
     }
-    // Add logic for all 15 tasks here...
 };
 
-window.dispatchSOPTask = async () => {
-    const station = document.getElementById("sopStationSelect").value;
-    const team = document.getElementById("sopTeamSelect").value;
-    const startTime = Date.now();
-    
-    // Get checked tasks
-    const tasks = [];
-    document.querySelectorAll("#sopTaskChecklist input:checked").forEach(cb => tasks.push(cb.value));
+let sopTimerInterval;
+let currentSopData = null;
 
-    if(!station || tasks.length === 0) return alert("Select Station & Tasks");
+// ==========================================
+// 🛠️ ADMIN: DISPATCH & MANAGEMENT
+// ==========================================
 
-    const assignment = {
-        station,
-        team,
-        tasks,
-        startTime,
-        status: "In Progress",
-        currentStep: 0,
-        assignedBy: currentUser.email
-    };
-
-    await set(ref(db, `deployments/${station}`), assignment);
-    alert("Assignment Dispatched to Team.");
-};
-
-window.loadDeploymentSOP = (stationId) => {
-    onValue(ref(db, `deployments/${stationId}`), (snap) => {
-        if(!snap.exists()) return;
-        currentSopData = snap.val();
-        renderStep();
-        startSopTimer(currentSopData.startTime);
-    });
-};
-
-function startSopTimer(startTime) {
-    if(sopTimerInterval) clearInterval(sopTimerInterval);
-    sopTimerInterval = setInterval(() => {
-        const diff = Date.now() - startTime;
-        const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
-        const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
-        const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
-        document.getElementById("sopLiveTimer").innerText = `${h}:${m}:${s}`;
-    }, 1000);
-}
-
-function renderStep() {
-    const stepKey = currentSopData.tasks[currentSopData.currentStep];
-    const guide = SOP_GUIDE_BOOK[stepKey] || { title: stepKey, instr: "Proceed with installation.", caution: "Follow general safety rules." };
-    
-    document.getElementById("guidedSiteName").innerText = currentSopData.station;
-    document.getElementById("stepTitle").innerText = `STEP ${currentSopData.currentStep + 1}: ${guide.title}`;
-    document.getElementById("stepInstruction").innerText = guide.instr;
-    document.getElementById("stepCaution").innerText = guide.caution;
-
-    const btn = document.getElementById("btnStepAction");
-    btn.onclick = async () => {
-        const nextStep = currentSopData.currentStep + 1;
-        if(nextStep >= currentSopData.tasks.length) {
-            await update(ref(db, `deployments/${currentSopData.station}`), { status: "Completed", endTime: Date.now() });
-            alert("ALL STEPS COMPLETED. Awaiting Admin physical verification.");
-            clearInterval(sopTimerInterval);
-        } else {
-            await update(ref(db, `deployments/${currentSopData.station}`), { currentStep: nextStep });
-        }
-    };
-}
-  // --- ADMIN SOP ENGINE ---
-
-// 1. THE AUTO-CATCHER
-window.syncSopAdminData = () => {
-    const site = document.getElementById("stationSelect").value;
-    const line = document.getElementById("lineSelect").value;
-    const display = document.getElementById("sopAutoSite");
-    const dateDisp = document.getElementById("sopAutoDate");
-
-    if (site && line) {
-        display.innerText = `${site} (${line})`.toUpperCase();
-        dateDisp.innerText = "DEPLOYMENT DATE: " + new Date().toLocaleDateString('en-IN');
-        display.style.color = "var(--metro-gold)";
-        if(isAdmin) document.getElementById("sopAdminPanel").classList.remove("hidden");
-    } else {
-        display.innerText = "⚠️ GO TO 'FIELD INSPECTION' TAB & SELECT SITE";
-        display.style.color = "#ef4444";
-        document.getElementById("sopAdminPanel").classList.add("hidden");
+// 1. Independent Initialization
+window.initSopIndependentTab = () => {
+    const lineSel = document.getElementById("sopLineSelect");
+    if(lineSel) {
+        lineSel.innerHTML = "<option value=''>-- Select Line --</option>";
+        Object.keys(METRO_STATIONS).forEach(line => {
+            lineSel.innerHTML += `<option value="${line}">${line}</option>`;
+        });
     }
-    
-    // Fill student dropdown
     populateSopUserDropdown();
+};
+
+window.handleSopLineChange = () => {
+    const line = document.getElementById("sopLineSelect").value;
+    const stnSel = document.getElementById("sopStationSelect");
+    if (!stnSel) return;
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    if (line && METRO_STATIONS[line]) {
+        METRO_STATIONS[line].forEach(stn => {
+            stnSel.innerHTML += `<option value="${stn}">${stn}</option>`;
+        });
+        stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+    }
 };
 
 async function populateSopUserDropdown() {
@@ -9694,63 +9697,117 @@ async function populateSopUserDropdown() {
     const snap = await get(ref(db, "users"));
     snap.forEach(c => {
         const u = c.val();
-        // Don't show Admins in the student list
         if(!ADMIN_EMAILS.includes(u.email.toLowerCase())) {
-            const opt = document.createElement("option");
-            opt.value = c.key; 
-            opt.innerText = (u.name || u.email).toUpperCase();
-            sel.appendChild(opt);
+            sel.innerHTML += `<option value="${c.key}">${(u.name || u.email).toUpperCase()}</option>`;
         }
     });
 }
 
-// 2. DISPATCHER
-window.dispatchDeployment = async () => {
-    const site = document.getElementById("sopAutoSite").innerText;
+// 2. Dispatch Deployment
+window.dispatchDeploymentSOP = async () => {
+    const line = document.getElementById("sopLineSelect").value;
+    const stn = document.getElementById("sopStationSelect").value;
     const studentUid = document.getElementById("sopAssignUser").value;
     
-    if (site.includes("SELECT SITE")) return alert("Station not detected.");
-    if (!studentUid) return alert("Select a student lead.");
+    if (!line || !stn || !studentUid) return alert("Fill Line, Station, and Assignee.");
 
     const tasks = [];
     document.querySelectorAll(".sop-task:checked").forEach(cb => tasks.push(cb.value));
     if (tasks.length === 0) return alert("Select at least one task module.");
 
     const startTime = Date.now();
-    const deploymentData = {
-        site: site,
+    const data = {
+        site: `${stn} (${line})`,
         tasks: tasks,
         currentStep: 0,
         startTime: startTime,
         status: "In Progress",
-        assignedBy: currentUser.name || currentUser.email
+        assignedBy: currentUser.name || currentUser.email,
+        dispatchDate: new Date().toLocaleDateString('en-IN')
     };
 
     try {
-        await set(ref(db, `active_deployments/${studentUid}`), deploymentData);
+        // Assign to the specific student's node
+        await set(ref(db, `active_deployments/${studentUid}`), data);
         
+        // Log globally
         await push(ref(db, "logs"), {
             type: "SOP_DISPATCHED",
-            site: site,
+            site: data.site,
             to: studentUid,
             time: startTime
         });
 
-        alert("🚀 SOP DISPATCHED SUCCESSFULLY");
+        alert("✅ DEPLOYMENT MISSION DISPATCHED");
         startSopLiveClock(startTime);
-    } catch(e) { alert(e.message); }
+    } catch(e) { alert("Dispatch Error: " + e.message); }
 };
 
-let sopClock;
+// ==========================================
+// 🧑‍🎓 STUDENT: GUIDED EXECUTION
+// ==========================================
+
+window.loadDeploymentSOP = (uid) => {
+    onValue(ref(db, `active_deployments/${uid}`), (snap) => {
+        if(!snap.exists()) {
+            document.getElementById("sopStudentPanel").classList.add("hidden");
+            return;
+        }
+        currentSopData = snap.val();
+        document.getElementById("sopStudentPanel").classList.remove("hidden");
+        renderSopStep();
+        startSopLiveClock(currentSopData.startTime);
+    });
+};
+
+function renderSopStep() {
+    const stepKey = currentSopData.tasks[currentSopData.currentStep];
+    const guide = SOP_GUIDE_BOOK[stepKey] || { title: "Unknown Task", instr: "Proceed with caution.", caution: "Wear safety gear." };
+    
+    document.getElementById("guidedSiteName").innerText = currentSopData.site;
+    document.getElementById("stepTitle").innerText = `STEP ${currentSopData.currentStep + 1}: ${guide.title}`;
+    document.getElementById("stepInstruction").innerText = guide.instr;
+    document.getElementById("stepCaution").innerText = guide.caution;
+
+    const btn = document.getElementById("btnStepAction");
+    btn.innerText = (currentSopData.currentStep + 1 === currentSopData.tasks.length) ? "FINALIZE DEPLOYMENT" : "MARK STEP COMPLETE";
+    
+    btn.onclick = async () => {
+        const nextStep = currentSopData.currentStep + 1;
+        const studentUid = currentUser.uid;
+
+        if(nextStep >= currentSopData.tasks.length) {
+            if(confirm("Confirm: Are all physical installations verified?")) {
+                await update(ref(db, `active_deployments/${studentUid}`), { 
+                    status: "Completed", 
+                    endTime: Date.now() 
+                });
+                alert("MISSION ACCOMPLISHED. Awaiting Admin Final Sign-off.");
+                if(sopTimerInterval) clearInterval(sopTimerInterval);
+            }
+        } else {
+            await update(ref(db, `active_deployments/${studentUid}`), { currentStep: nextStep });
+        }
+    };
+}
+
+// ==========================================
+// ⏱️ SHARED: LIVE TIMER ENGINE
+// ==========================================
+
 function startSopLiveClock(start) {
-    if(sopClock) clearInterval(sopClock);
-    document.getElementById("timerLabel").innerText = "⏱️ MISSION IN PROGRESS";
-    sopClock = setInterval(() => {
+    if(sopTimerInterval) clearInterval(sopTimerInterval);
+    const timerDisplay = document.getElementById("sopLiveTimer");
+    const label = document.getElementById("timerLabel");
+    
+    if(label) label.innerText = "⏱️ MISSION IN PROGRESS";
+
+    sopTimerInterval = setInterval(() => {
         const diff = Date.now() - start;
         const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
         const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
         const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
-        document.getElementById("sopLiveTimer").innerText = `${h}:${m}:${s}`;
+        if(timerDisplay) timerDisplay.innerText = `${h}:${m}:${s}`;
     }, 1000);
 }
 </script>
