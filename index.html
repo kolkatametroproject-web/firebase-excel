@@ -9585,109 +9585,123 @@ window.generateDirectivePrint = async function() {
 // =========================================================
 // 🚀 MRPSP MISSION CONTROL: INDEPENDENT DEPLOYMENT ENGINE
 // =========================================================
-
-// --- SOP ENGINE CORE ---
+// --- GLOBAL SOP DEFINITIONS (KEEP AT TOP) ---
 const SOP_GUIDE_BOOK = {
-    "IR_POWER": { title: "IR Sensor Powering", instr: "Connect VCC/GND to 5V bus. Check if Power LED is stable.", caution: "DO NOT reverse polarity." },
-    "CHANNEL_FIX": { title: "Channel Fixing", instr: "Secure PVC channels along marked lines.", caution: "No gaps in joints." },
-    "CLAMPING": { title: "Clamping", instr: "Snug fit stainless clamps over housings.", caution: "Do not crack plastic." },
-    "BED_PI_CODE": { title: "Bed Pi Coding", instr: "Flash detection script. Test GPIO.", caution: "Do not cut power while flashing." },
-    "MASTER_PI_CODE": { title: "Master Pi Coding", instr: "Configure IPs. Init Websockets.", caution: "Check GND continuity." },
-    "BOXING": { title: "Boxing", instr: "Mount in IP65 box. Seal gaskets.", caution: "Keep dust out." },
-    "POWER_230V": { title: "230V Mains", instr: "Wire AC input to MCB.", caution: "DANGER: Work with main OFF." },
-    "SMPS_SET": { title: "SMPS Setting", instr: "Set output to 5.1V.", caution: "Max 5.25V only." },
-    "BED_PI_SET": { title: "Bed Pi Setting", instr: "Rack position. Lock SD card.", caution: "Ensure airflow." },
-    "MASTER_PI_SET": { title: "Master Pi Setting", instr: "Setup at Control. Join VLAN.", caution: "No public internet." },
-    "WIRING": { title: "Wiring", instr: "Route cables through channels.", caution: "Separate AC and DC lines." },
-    "SWITCHING": { title: "Switching", instr: "Test relay trigger logic.", caution: "Use flyback diode." },
-    "MCB_FIX": { title: "MCB Fixing", instr: "Rail mount 6A MCB. Label correctly.", caution: "No bypass allowed." },
-    "SOUND_CAL": { title: "Sound Calib.", instr: "Set siren to 95dB.", caution: "Avoid peak hour testing." },
-    "DISPLAY_SET": { title: "Display Set", instr: "Config LED Matrix strings.", caution: "Check 20m visibility." }
+    "IR_POWER": { title: "IR Sensor Powering", instr: "Connect VCC/GND to 5V bus bar. Verify each sensor LED status.", caution: "DO NOT reverse polarity. Reversing VCC/GND will blow the sensor IC immediately." },
+    "CHANNEL_FIX": { title: "Channel Fixing", instr: "Secure PVC channels along the marked perimeter using industrial adhesive or screws.", caution: "DO NOT leave gaps between channel joints. Cables must be 100% enclosed." },
+    "CLAMPING": { title: "Clamping", instr: "Install stainless steel clamps over sensor housings to ensure zero vibration.", caution: "DO NOT crack housings by over-tightening. Ensure a snug, secure fit." },
+    "BED_PI_CODE": { title: "Bed Pi Coding", instr: "Flash the 'Local_Detection.py' script via SSH. Test GPIO interrupt responses.", caution: "DO NOT disconnect power during flashing. Ensure static protection is worn." },
+    "MASTER_PI_CODE": { title: "Master Pi Coding", instr: "Configure central IP and initialize WebSocket listener for all Bed nodes.", caution: "Verify common Ground (GND) across the entire network before execution." },
+    "BOXING": { title: "System Boxing", instr: "Mount controller inside IP65 enclosure. Ensure all gaskets are seated correctly.", caution: "DO NOT leave the enclosure open. Track dust will cause short circuits." },
+    "POWER_230V": { title: "230V Mains Connection", instr: "Wire main AC input to the system MCB. Ensure proper earthing.", caution: "STRICTLY PROHIBITED: Do not touch live terminals. Work only when main is LOCKED-OFF." },
+    "SMPS_SET": { title: "SMPS Setting", instr: "Adjust SMPS output to exactly 5.1V for the Raspberry Pi nodes.", caution: "DO NOT exceed 5.25V. Over-voltage will cause permanent CPU failure." },
+    "BED_PI_SET": { title: "Bed Pi Setting", instr: "Position Pi in the designated rack. Secure the micro-SD card physical lock.", caution: "DO NOT block the heatsink. Ensure sufficient airflow within the enclosure." },
+    "MASTER_PI_SET": { title: "Master Pi Setting", instr: "Set up Master Pi at Station Control. Join the dedicated safety subnet.", caution: "DO NOT use public internet; use only the authorized railway VLAN." },
+    "WIRING": { title: "Main System Wiring", instr: "Route all signal cables through fixed channels. Use color-coded heat shrink.", caution: "DO NOT route signal wires parallel to high-voltage lines. Maintain 10cm gap." },
+    "SWITCHING": { title: "Switching Control", instr: "Test relay switching logic. Confirm Bed Pi can toggle the alarm circuit.", caution: "DO NOT switch heavy inductive loads without a flyback diode protection." },
+    "MCB_FIX": { title: "MCB Fixing", instr: "Mount 6A MCB on DIN rail. Label as 'PLATFORM SAFETY SYSTEM'.", caution: "DO NOT use a bypassed MCB. Trip logic must remain functional." },
+    "SOUND_CAL": { title: "Sound Calibration", instr: "Calibrate siren volume to 95dB at 1 meter distance.", caution: "Notify station master before testing high-decibel alarms." },
+    "DISPLAY_SET": { title: "Display Setup", instr: "Configure LED Matrix to show 'CLEAR' or 'STAY BACK' messages.", caution: "DO NOT mount in direct sunlight; verify visibility from 20 meters." }
 };
 
 window.sopAssetsGiven = [];
 let sopMissionTimer = null;
+let activeAuditUid = null;
 
-// 1. INITIALIZE (WINDOW ATTACHED)
+// --- 1. INITIALIZATION ---
 window.initSopModule = async () => {
     const lineSel = document.getElementById("sopLineSelect");
     const userSel = document.getElementById("sopAssignUser");
-    const adminPanel = document.getElementById("sopAdminPanel");
-    const studentPanel = document.getElementById("sopStudentPanel");
+    if (!lineSel || !userSel) return;
 
-    if (lineSel) {
-        lineSel.innerHTML = "<option value=''>-- Select Corridor --</option>";
-        Object.keys(METRO_STATIONS).forEach(line => {
-            lineSel.innerHTML += `<option value="${line}">${line}</option>`;
-        });
-    }
+    // A. Populate Corridor Dropdown
+    lineSel.innerHTML = "<option value=''>-- Select Corridor --</option>";
+    Object.keys(METRO_STATIONS).forEach(line => {
+        const opt = document.createElement("option");
+        opt.value = line; opt.innerText = line;
+        lineSel.appendChild(opt);
+    });
 
-    if (userSel) {
-        userSel.innerHTML = `<option value="${currentUser.uid}">Assign to Myself (${currentUser.name})</option>`;
-        const snap = await get(ref(db, "users"));
-        snap.forEach(c => {
-            if (c.key !== currentUser.uid && !ADMIN_EMAILS.includes(c.val().email.toLowerCase())) {
-                userSel.innerHTML += `<option value="${c.key}">${(c.val().name || c.val().email).toUpperCase()}</option>`;
-            }
-        });
-    }
+    // B. Populate Student Dropdown (Includes "SELF")
+    userSel.innerHTML = `<option value="${currentUser.uid}">Assign to Myself (${currentUser.name || 'Admin'})</option>`;
+    const userSnap = await get(ref(db, "users"));
+    userSnap.forEach(c => {
+        const u = c.val();
+        if (c.key !== currentUser.uid && !ADMIN_EMAILS.includes(u.email.toLowerCase())) {
+            const opt = document.createElement("option");
+            opt.value = c.key; opt.innerText = (u.name || u.email).toUpperCase();
+            userSel.appendChild(opt);
+        }
+    });
 
     if (isAdmin) {
-        if (adminPanel) adminPanel.classList.remove("hidden");
-        if (studentPanel) studentPanel.classList.add("hidden");
-        document.getElementById("adminGlobalStats").classList.remove("hidden");
+        document.getElementById("sopAdminPanel")?.classList.remove("hidden");
+        document.getElementById("sopStudentPanel")?.classList.add("hidden");
+        document.getElementById("adminGlobalStats")?.classList.remove("hidden");
         window.monitorFleetProgress();
+        window.refreshAvailableTasks(); // Force refresh checklist
     } else {
-        if (adminPanel) adminPanel.classList.add("hidden");
+        document.getElementById("sopAdminPanel")?.classList.add("hidden");
         window.loadStudentActiveMission();
     }
 };
 
-// 2. RAPID SCANNER WITH FEEDBACK
-window.openContinuousScanner = () => {
-    scanMode = 'SOP_ASSET_GIVE';
-    document.getElementById("barcodeModal").classList.remove("hidden");
-    if (!scanner) {
-        scanner = new Html5QrcodeScanner("reader", { fps: 20, qrbox: 280 });
-        scanner.render(onScanSuccessSOP, (err) => {});
+// --- 2. EXCLUSIVE TASK FILTER (THE "WHERE THIS" FIX) ---
+window.refreshAvailableTasks = async () => {
+    const taskContainer = document.getElementById("sopTaskChecklist");
+    const line = document.getElementById("sopLineSelect")?.value;
+    const stn = document.getElementById("sopStationSelect")?.value;
+    
+    if (!taskContainer) return;
+    if (!stn) {
+        taskContainer.innerHTML = "<p style='color:#94a3b8; padding:10px;'>Select a Station to see available work.</p>";
+        return;
+    }
+
+    // Fetch what tasks are already being worked on at this station
+    const activeSnap = await get(ref(db, "active_deployments"));
+    let takenTasks = [];
+    if (activeSnap.exists()) {
+        activeSnap.forEach(child => {
+            const d = child.val();
+            if (d.site === `${stn} (${line})`) {
+                takenTasks = takenTasks.concat(d.tasks);
+            }
+        });
+    }
+
+    // Re-render the checklist
+    taskContainer.innerHTML = "";
+    Object.keys(SOP_GUIDE_BOOK).forEach(key => {
+        if (!takenTasks.includes(key)) {
+            taskContainer.innerHTML += `
+                <label class="checkbox-item">
+                    <input type="checkbox" class="sop-task" value="${key}"> 
+                    ${SOP_GUIDE_BOOK[key].title}
+                </label>`;
+        }
+    });
+
+    if (taskContainer.innerHTML === "") {
+        taskContainer.innerHTML = "<p style='color:#e11d48; font-weight:bold; padding:10px;'>⚠️ ALL WORK MODULES ARE CURRENTLY ASSIGNED.</p>";
     }
 };
 
-async function onScanSuccessSOP(decodedText) {
-    if (window.sopAssetsGiven.some(a => a.tag === decodedText)) return;
-    const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(decodedText));
-    const snap = await get(q);
-    if (snap.exists()) {
-        let item; snap.forEach(c => item = c.val());
-        window.sopAssetsGiven.push({ tag: decodedText, name: item.item });
-        const ov = document.getElementById("scanSuccessOverlay");
-        document.getElementById("scanSuccessItem").innerText = item.item;
-        ov.classList.remove("hidden");
-        setTimeout(() => { ov.classList.add("hidden"); window.renderAdminAssetBox(); }, 800);
-    }
-}
-
-window.renderAdminAssetBox = () => {
-    const box = document.getElementById("sopAssetBoxList");
-    if (!box) return;
-    box.innerHTML = window.sopAssetsGiven.map((a, i) => `
-        <span style="background:#e0f2fe; color:#0369a1; padding:5px 12px; border-radius:50px; font-size:10px; font-weight:900; border:1px solid #7dd3fc;">
-            📦 ${a.name} <i class="fas fa-times" onclick="window.sopAssetsGiven.splice(${i},1);window.renderAdminAssetBox();" style="cursor:pointer;color:red;"></i>
-        </span>`).join("");
-};
-
-// 3. EXCLUSIVE DISPATCH
+// --- 3. DISPATCH MISSION ---
 window.dispatchSopMission = async () => {
     const line = document.getElementById("sopLineSelect").value;
     const stn = document.getElementById("sopStationSelect").value;
     const targetUid = document.getElementById("sopAssignUser").value;
+    const stationId = `${stn}_${line}`.replace(/\s+/g, '_');
+
     const tasks = [];
     document.querySelectorAll(".sop-task:checked").forEach(cb => tasks.push(cb.value));
 
-    if (!stn || tasks.length === 0) return alert("Station and Tasks Required!");
+    if (!stn || tasks.length === 0) return alert("Select Station and Tasks!");
 
     const missionData = {
         site: `${stn} (${line})`,
+        stationId: stationId,
         tasks: tasks,
         currentStep: 0,
         progress: 0,
@@ -9698,129 +9712,39 @@ window.dispatchSopMission = async () => {
         currentStepProofUploaded: false
     };
 
-    await update(ref(db, `active_deployments/${targetUid}`), missionData);
-    alert("🚀 MISSION DISPATCHED");
-    window.sopAssetsGiven = [];
-    window.renderAdminAssetBox();
-    window.initSopModule();
-};
+    try {
+        const updates = {};
+        updates[`active_deployments/${targetUid}`] = missionData;
+        updates[`station_locks/${stationId}`] = { status: "Active", studentName: missionData.studentName, studentUid: targetUid };
 
-// 4. STUDENT SIDE: MANDATORY PROOF GATE
-window.loadStudentActiveMission = () => {
-    onValue(ref(db, `active_deployments/${currentUser.uid}`), (snap) => {
-        if (!snap.exists()) {
-            document.getElementById("sopStudentPanel")?.classList.add("hidden");
-            return;
-        }
-        document.getElementById("sopStudentPanel")?.classList.remove("hidden");
-        const d = snap.val();
-        const guide = SOP_GUIDE_BOOK[d.tasks[d.currentStep]] || { title: "Task", instr: "Install" };
+        await update(ref(db), updates);
+        alert("🚀 MISSION DISPATCHED & TASKS LOCKED");
         
-        document.getElementById("sopStepTitle").innerText = guide.title;
-        document.getElementById("sopStepInstruction").innerText = guide.instr;
-        document.getElementById("stepNumDisplay").innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
-
-        const nextBtn = document.getElementById("btnNextStep");
-        const statusBox = document.getElementById("proofStatusBox");
-        if (d.currentStepProofUploaded) {
-            nextBtn.disabled = false; nextBtn.className = "success";
-            statusBox.style.background = "#dcfce7"; 
-            document.getElementById("proofText").innerText = "✅ PROOF UPLOADED. NEXT UNLOCKED.";
-        } else {
-            nextBtn.disabled = true; nextBtn.className = "secondary";
-            statusBox.style.background = "#fff1f2";
-            document.getElementById("proofText").innerText = "UPLOAD PHOTO TO UNLOCK";
-        }
-        window.startSopLiveClock(d.startTime);
-    });
+        window.sopAssetsGiven = [];
+        document.getElementById("sopAssetBoxList").innerHTML = "";
+        window.refreshAvailableTasks(); // Remove tasks from list immediately
+        
+        if (targetUid === currentUser.uid) window.loadStudentActiveMission();
+    } catch(e) { alert(e.message); }
 };
 
-window.nextSopStep = async () => {
-    const uid = currentUser.uid;
-    const snap = await get(ref(db, `active_deployments/${uid}`));
-    const data = snap.val();
-    const nextIdx = data.currentStep + 1;
-    const newProg = Math.round((nextIdx / data.tasks.length) * 100);
-
-    const updates = {};
-    if (nextIdx >= data.tasks.length) {
-        updates[`active_deployments/${uid}/status`] = "COMPLETED";
-        updates[`active_deployments/${uid}/progress`] = 100;
-        alert("🎉 Mission Accomplished!");
-    } else {
-        updates[`active_deployments/${uid}/currentStep`] = nextIdx;
-        updates[`active_deployments/${uid}/progress`] = newProg;
-        updates[`active_deployments/${uid}/currentStepProofUploaded`] = false;
-    }
-    await update(ref(db), updates);
-};
-
-// 5. MONITOR & AUTO-DELETE BASE64
-window.monitorFleetProgress = () => {
-    onValue(ref(db, "active_deployments"), (snap) => {
-        const fleetDiv = document.getElementById("adminSopFleetMonitor");
-        if (!fleetDiv) return;
-        fleetDiv.innerHTML = "";
-        let active = 0, done = 0;
-        snap.forEach(child => {
-            const d = child.val();
-            if(d.status === "IN PROGRESS") active++; else done++;
-            fleetDiv.innerHTML += `
-                <div class="panel" style="border-left:10px solid #fbbf24; padding:15px; margin-bottom:10px;">
-                    <b>${d.studentName}</b> @ <b>${d.site}</b>
-                    <div style="background:#eee; height:8px; border-radius:5px; margin:10px 0;"><div style="width:${d.progress}%; background:#10b981; height:100%;"></div></div>
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <small>${d.progress}% COMPLETED</small>
-                        ${d.progress === 100 ? `<button class="success" onclick="window.adminVerifySop('${child.key}')">VERIFY & WIPE PHOTOS</button>` : ''}
-                    </div>
-                </div>`;
-        });
-        document.getElementById("statActive").innerText = active;
-        document.getElementById("statDone").innerText = done;
-    });
-};
-
-window.adminVerifySop = async (uid) => {
-    if (!confirm("Finalize & Wipe Proof Data? This permanently deletes the photo bytes to save storage.")) return;
-    await remove(ref(db, `active_deployments/${uid}`));
-    alert("✅ Storage Cleaned.");
-};
-
+// --- 4. INDEPENDENT DROPDOWN HANDLER ---
 window.handleSopLineChange = () => {
     const line = document.getElementById("sopLineSelect").value;
     const stnSel = document.getElementById("sopStationSelect");
-    stnSel.innerHTML = "<option value=''>-- Station --</option>";
+    if (!stnSel) return;
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
     if (line && METRO_STATIONS[line]) {
-        METRO_STATIONS[line].forEach(stn => stnSel.innerHTML += `<option value="${stn}">${stn}</option>`);
+        METRO_STATIONS[line].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = stn; opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
         stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+        stnSel.onchange = window.refreshAvailableTasks; // Link task filter to station change
     }
-};
-
-window.startSopLiveClock = (start) => {
-    if(sopMissionTimer) clearInterval(sopMissionTimer);
-    sopMissionTimer = setInterval(() => {
-        const diff = Date.now() - start;
-        const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
-        const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
-        const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
-        document.getElementById("sopLiveTimer").innerText = `${h}:${m}:${s}`;
-    }, 1000);
-};
-
-// MANDATORY OVERRIDE FOR UPLOAD
-window.uploadCapturedEvidence = async () => {
-    if(!capturedEvidenceBlob) return alert("No photo.");
-    const uid = currentUser.uid;
-    const snap = await get(ref(db, `active_deployments/${uid}`));
-    if(snap.exists()) {
-        const m = snap.val();
-        const stepKey = m.tasks[m.currentStep];
-        await update(ref(db, `active_deployments/${uid}/proofs`), { [stepKey]: capturedEvidenceBlob });
-        await update(ref(db, `active_deployments/${uid}`), { currentStepProofUploaded: true });
-        alert("Proof Saved."); stopEvidenceCamera();
-    } else {
-        processUpload(capturedEvidenceBlob, "image/jpeg", "Evidence.jpg");
-    }
+    window.refreshAvailableTasks();
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
