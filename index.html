@@ -9640,34 +9640,55 @@ window.captureSopPhoto = () => {
 };
 
 window.uploadSopProof = async () => {
-    if(!sopCapturedBlob) return alert("Capture photo first.");
+    if (!sopCapturedBlob) return alert("Capture photo first.");
     
-    // Ask the student for field remarks before uploading
-    const remarks = prompt("Enter Field Remarks for this step (e.g. 'Tightened screws', 'Wiring color matched'):");
-    if(remarks === null) return; // Cancel if they hit cancel
+    // Capture user remarks for the Admin to see
+    const remarks = prompt("Enter Field Remarks / Observations for this step:");
+    if (remarks === null) return; // Exit if user cancels prompt
 
     const btn = document.getElementById("btnUploadSopProof");
-    if(btn) { btn.innerText = "⏳ UPLOADING..."; btn.disabled = true; }
+    if (btn) { btn.innerText = "⏳ UPLOADING..."; btn.disabled = true; }
 
     try {
         const uid = currentUser.uid;
         const snap = await get(ref(db, `active_deployments/${uid}`));
+        if (!snap.exists()) return;
+        
         const m = snap.val();
         const stepKey = m.tasks[m.currentStep];
 
-        // Save photo AND remarks together
+        // Prepare combined data object
         const proofData = {
             image: sopCapturedBlob,
             remarks: remarks || "No remarks provided.",
             timestamp: serverTimestamp()
         };
 
-        await update(ref(db, `active_deployments/${uid}/proofs`), { [stepKey]: proofData });
-        await update(ref(db, `active_deployments/${uid}`), { currentStepProofUploaded: true });
-        
+        const updates = {};
+        updates[`active_deployments/${uid}/proofs/${stepKey}`] = proofData;
+        updates[`active_deployments/${uid}/currentStepProofUploaded`] = true;
+
+        await update(ref(db), updates);
+
         alert("✅ PROOF & REMARKS SAVED.");
-        if(btn) btn.classList.add("hidden");
-    } catch(e) { console.error(e); }
+        
+        // --- THE UI UNLOCK TRIGGER ---
+        const nextBtn = document.getElementById("btnNextStep");
+        if(nextBtn) {
+            nextBtn.disabled = false;
+            nextBtn.className = "success";
+            nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
+        }
+        
+        // Hide Camera Controls
+        document.getElementById("btnUploadSopProof")?.classList.add("hidden");
+        document.getElementById("btnRetrySopProof")?.classList.add("hidden");
+        document.getElementById("btnStartSopCam")?.classList.remove("hidden");
+
+    } catch (e) { 
+        alert("Upload error: " + e.message); 
+        if(btn) { btn.innerText = "RETRY UPLOAD"; btn.disabled = false; }
+    }
 };
 // --- 3. RAPID SCANNER (GREEN FEEDBACK) ---
 window.openContinuousScanner = () => {
@@ -9695,46 +9716,50 @@ window.openAuditView = async (uid) => {
     activeAuditUid = uid;
     const snap = await get(ref(db, `active_deployments/${uid}`));
     if(!snap.exists()) return;
+    
     const data = snap.val();
     activeAuditStationId = data.stationId;
 
-    document.getElementById("sopVerifyModal").classList.remove("hidden");
-    document.getElementById("verifyModalTitle").innerText = `Audit: ${data.studentName}`;
+    const modal = document.getElementById("sopVerifyModal");
+    if(modal) modal.classList.remove("hidden");
+    
+    const titleEl = document.getElementById("verifyModalTitle");
+    if(titleEl) titleEl.innerText = `Audit Terminal: ${data.studentName}`;
 
     const triDiv = document.getElementById("triAngleProofContainer");
-    triDiv.innerHTML = ""; // Clear loader
+    if(!triDiv) return;
+    triDiv.innerHTML = ""; 
 
     const proofs = data.proofs || {};
 
     data.tasks.forEach((taskKey, index) => {
-        const proof = proofs[taskKey]; // This now contains {image, remarks}
+        const proof = proofs[taskKey]; // Contains {image, remarks}
         const isVerified = data.verifiedTasks && data.verifiedTasks[taskKey];
         
-        // Industrial Audit Card UI
         triDiv.innerHTML += `
-            <div class="panel" style="display: flex; gap: 20px; align-items: start; border-left: 10px solid ${isVerified ? '#10b981' : '#fbbf24'}; padding: 20px; margin-bottom: 15px; background: ${isVerified ? '#f0fdf4' : '#fff'};">
+            <div class="panel" style="display: flex; gap: 20px; align-items: start; border-left: 10px solid ${isVerified ? '#10b981' : '#fbbf24'}; padding: 20px; margin-bottom: 15px; background: ${isVerified ? '#f0fdf4' : '#fff'}; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                 
-                <div style="flex: 1; min-width: 250px;">
-                    <small style="font-weight: 800; color: #64748b;">STEP ${index + 1}: ${taskKey.replace(/_/g, ' ')}</small>
+                <div style="flex: 1; min-width: 200px;">
+                    <small style="font-weight: 800; color: #64748b; text-transform: uppercase;">STEP ${index + 1}: ${taskKey.replace(/_/g, ' ')}</small>
                     ${proof ? `
-                        <img src="${proof.image}" style="width: 100%; border-radius: 8px; border: 3px solid #eee; cursor: zoom-in; margin-top: 10px;" onclick="window.open('${proof.image}')">
+                        <img src="${proof.image}" style="width: 100%; border-radius: 8px; border: 2px solid #ddd; cursor: zoom-in; margin-top: 10px;" onclick="window.open('${proof.image}')">
                     ` : `
-                        <div style="height: 150px; background: #f1f5f9; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-style: italic; margin-top: 10px;">Pending Field Photo...</div>
+                        <div style="height: 120px; background: #f1f5f9; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-style: italic; margin-top: 10px; border: 1px dashed #cbd5e1;">Pending...</div>
                     `}
                 </div>
 
                 <div style="flex: 2;">
-                    <h4 style="margin: 0; color: var(--metro-blue); border: none; padding: 0;">Lead Remarks:</h4>
-                    <div style="background: #f8fafc; padding: 15px; border-radius: 8px; margin: 10px 0; border: 1px solid #e2e8f0; font-family: monospace; font-size: 13px; color: #334155;">
-                        "${proof ? proof.remarks : 'No data yet.'}"
+                    <h4 style="margin: 0; color: var(--metro-blue); border: none; padding: 0; font-size: 14px;">FIELD REMARKS:</h4>
+                    <div style="background: #f8fafc; padding: 12px; border-radius: 6px; margin: 8px 0; border: 1px solid #e2e8f0; font-family: 'Courier New', monospace; font-size: 13px; color: #334155; min-height: 40px;">
+                        ${proof ? `"${proof.remarks}"` : '<span style="color:#94a3b8;">No data received yet.</span>'}
                     </div>
 
-                    <div style="display: flex; gap: 10px; margin-top: 20px;">
-                        <button onclick="verifySingleTask('${uid}', '${taskKey}')" class="success" style="flex: 1; padding: 12px;" ${isVerified || !proof ? 'disabled' : ''}>
-                            <i class="fas fa-check-circle"></i> ${isVerified ? 'APPROVED' : 'APPROVE WORK'}
+                    <div style="display: flex; gap: 10px; margin-top: 15px;">
+                        <button onclick="window.verifySingleTask('${uid}', '${taskKey}')" class="success" style="flex: 1; padding: 10px; font-size: 11px;" ${isVerified || !proof ? 'disabled' : ''}>
+                            <i class="fas fa-check-circle"></i> ${isVerified ? 'VERIFIED' : 'APPROVE'}
                         </button>
-                        <button onclick="rejectTask('${uid}', '${taskKey}', ${index})" class="danger" style="flex: 1; padding: 12px;" ${!proof ? 'disabled' : ''}>
-                            <i class="fas fa-redo"></i> REJECT (REDO)
+                        <button onclick="window.rejectTask('${uid}', '${taskKey}', ${index})" class="danger" style="flex: 1; padding: 10px; font-size: 11px;" ${!proof ? 'disabled' : ''}>
+                            <i class="fas fa-redo"></i> REJECT / REDO
                         </button>
                     </div>
                 </div>
@@ -9745,22 +9770,21 @@ window.openAuditView = async (uid) => {
     const feedback = prompt("REJECTION REASON (Sent to student):");
     if (!feedback) return;
 
-    if (confirm(`Reject this step? Student will be forced back to Step ${stepIndex + 1}.`)) {
+    if (confirm(`Reject Step ${stepIndex + 1}? Student will be reset to this task.`)) {
         const updates = {};
-        // 1. Point student to this step
+        // 1. Reset student position
         updates[`active_deployments/${uid}/currentStep`] = stepIndex;
-        // 2. Relock the step
+        // 2. Lock progress
         updates[`active_deployments/${uid}/currentStepProofUploaded`] = false;
-        // 3. Clear existing proof
+        // 3. Wipe specific proof
         updates[`active_deployments/${uid}/proofs/${taskKey}`] = null;
-        // 4. Record Admin Feedback
-        updates[`active_deployments/${uid}/adminFeedback`] = feedback;
-        // 5. Update Status
+        // 4. Status update
         updates[`active_deployments/${uid}/status`] = "REDO REQUIRED";
+        updates[`active_deployments/${uid}/adminFeedback`] = feedback;
 
         await update(ref(db), updates);
-        alert("Task rejected. Student terminal has been reset to this step.");
-        window.openAuditView(uid); // Refresh the Admin screen
+        alert("Task rejected. Student terminal updated.");
+        window.openAuditView(uid); // Refresh admin screen
     }
 };
 window.renderAdminAssetBox = () => {
@@ -9848,37 +9872,65 @@ window.dispatchSopMission = async () => {
 // --- 5. STUDENT & FLEET MONITOR ---
 window.loadStudentActiveMission = () => {
     const uid = currentUser.uid;
+    // Clear any previous listener to prevent data jumping
+    off(ref(db, `active_deployments/${uid}`));
+
     onValue(ref(db, `active_deployments/${uid}`), (snap) => {
         const panel = document.getElementById("sopStudentPanel");
-        if (!snap.exists()) { if(panel) panel.classList.add("hidden"); return; }
+        const sopTab = document.getElementById("tab-fieldSOP");
         
+        // --- FIX: TAB AWARENESS ---
+        // Only show if the mission exists AND the user is currently looking at the fieldSOP tab
+        const isSopTabActive = sopTab && !sopTab.classList.contains("hidden");
+
+        if (!snap.exists()) {
+            if (panel) panel.classList.add("hidden");
+            return;
+        }
+
         const d = snap.val();
-        if(panel) panel.classList.remove("hidden");
+        
+        if (panel) {
+            if (isSopTabActive) {
+                panel.classList.remove("hidden");
+            } else {
+                panel.classList.add("hidden");
+            }
+        }
 
-        // 1. Update Text
-        const taskKey = d.tasks[d.currentStep];
-        const guide = SOP_GUIDE_BOOK[taskKey] || { title: "Task", instr: "Install" };
-        document.getElementById("sopStepTitle").innerText = guide.title;
-        document.getElementById("sopStepInstruction").innerText = guide.instr;
-        document.getElementById("stepNumDisplay").innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
+        // --- UPDATE TEXT CONTENT ---
+        const taskKey = d.tasks && d.tasks[d.currentStep] ? d.tasks[d.currentStep] : null;
+        const guide = SOP_GUIDE_BOOK[taskKey] || { title: "Work Module", instr: "Follow standard procedure." };
+        
+        const elTitle = document.getElementById("sopStepTitle");
+        const elInstr = document.getElementById("sopStepInstruction");
+        const elStepNum = document.getElementById("stepNumDisplay");
+        const elNextBtn = document.getElementById("btnNextStep");
+        const elCamBtn = document.getElementById("btnStartSopCam");
+        const elPreview = document.getElementById("sopEvidencePreview");
 
-        // 2. FORCED RESET OF CAMERA UI FOR EACH STEP
-        const nextBtn = document.getElementById("btnNextStep");
-        const startCamBtn = document.getElementById("btnStartSopCam");
-        const previewImg = document.getElementById("sopEvidencePreview");
+        if(elTitle) elTitle.innerText = guide.title;
+        if(elInstr) elInstr.innerText = guide.instr;
+        if(elStepNum) elStepNum.innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
 
-        if (d.currentStepProofUploaded === true) {
-            // Step is ready to move
-            if(nextBtn) { nextBtn.disabled = false; nextBtn.className = "success"; }
-            if(previewImg) previewImg.style.borderColor = "#10b981";
-        } else {
-            // Step is LOCKED - Reset everything
-            if(nextBtn) { nextBtn.disabled = true; nextBtn.className = "secondary"; }
-            if(previewImg) { previewImg.style.display = "none"; previewImg.src = ""; }
-            if(startCamBtn) { startCamBtn.classList.remove("hidden"); startCamBtn.disabled = false; startCamBtn.innerText = "📸 OPEN CAMERA"; }
+        // --- MANAGE BUTTON LOCKS ---
+        if (elNextBtn) {
+            if (d.currentStepProofUploaded === true) {
+                elNextBtn.disabled = false;
+                elNextBtn.className = "success"; 
+                elNextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
+                if(elPreview) elPreview.style.borderColor = "#10b981";
+            } else {
+                elNextBtn.disabled = true;
+                elNextBtn.className = "secondary";
+                elNextBtn.innerHTML = 'NEXT STEP <i class="fas fa-lock"></i>';
+                // Reset Preview for fresh step
+                if(elPreview) { elPreview.style.display = "none"; elPreview.src = ""; }
+                if(elCamBtn) { elCamBtn.classList.remove("hidden"); elCamBtn.disabled = false; }
+            }
         }
         
-        window.startSopLiveClock(d.startTime);
+        if(d.startTime) window.startSopLiveClock(d.startTime);
     });
 };
 window.monitorFleetProgress = () => {
