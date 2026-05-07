@@ -9582,10 +9582,10 @@ window.generateDirectivePrint = async function() {
     reportContainer.classList.remove("hidden");
 };
 // =========================================================
-// 🚀 MRPSP MISSION CONTROL: FIXED & STABILIZED ENGINE
+// 🚀 MRPSP MISSION CONTROL: STABILIZED & SHIELDED ENGINE
 // =========================================================
 
-// 1. DATA & GLOBALS (Must be first)
+// --- 1. GLOBAL SOP DATA LIBRARY ---
 const SOP_GUIDE_BOOK = {
     "IR_POWER": { title: "IR Sensor Powering", instr: "Connect VCC/GND to 5V bus bar. Verify each sensor LED status.", caution: "DO NOT reverse polarity. Reversing VCC/GND will blow the sensor IC immediately." },
     "CHANNEL_FIX": { title: "Channel Fixing", instr: "Secure PVC channels along the marked perimeter using industrial adhesive or screws.", caution: "DO NOT leave gaps between channel joints. Cables must be 100% enclosed." },
@@ -9606,76 +9606,80 @@ const SOP_GUIDE_BOOK = {
 
 window.sopAssetsGiven = [];
 let sopMissionTimer = null;
-let activeAuditUid = null;
+let sopLocalStream = null;
+let sopCapturedBlob = null;
 
-// 2. HELPER: TIMER
-window.startSopLiveClock = (start) => {
-    if(sopMissionTimer) clearInterval(sopMissionTimer);
-    sopMissionTimer = setInterval(() => {
-        const diff = Date.now() - start;
-        const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
-        const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
-        const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
-        const el = document.getElementById("sopLiveTimer");
-        if(el) el.innerText = `${h}:${m}:${s}`;
-    }, 1000);
+// --- 2. CAMERA & PROOF LOGIC (FIXED ReferenceError) ---
+window.openSopCamera = async () => {
+    const video = document.getElementById("sopEvidenceVideo");
+    const wrapper = document.getElementById("sopVideoWrapper");
+    const preview = document.getElementById("sopEvidencePreview");
+    
+    if(wrapper) wrapper.style.display = "block";
+    if(preview) preview.style.display = "none";
+    
+    const startBtn = document.getElementById("btnStartSopCam");
+    if(startBtn) startBtn.classList.add("hidden");
+
+    try {
+        sopLocalStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        if(video) video.srcObject = sopLocalStream;
+    } catch(err) { alert("Camera Error: " + err.message); }
 };
 
-// 3. HELPER: TASK FILTER (The "Where This" Logic)
-window.refreshAvailableTasks = async () => {
-    const taskContainer = document.getElementById("sopTaskChecklist");
-    const line = document.getElementById("sopLineSelect")?.value;
-    const stn = document.getElementById("sopStationSelect")?.value;
-    if (!taskContainer) return;
-    if (!stn) { taskContainer.innerHTML = "<p style='color:#94a3b8;padding:10px;'>Select Station first.</p>"; return; }
-
-    const activeSnap = await get(ref(db, "active_deployments"));
-    let takenTasks = [];
-    if (activeSnap.exists()) {
-        activeSnap.forEach(child => {
-            const d = child.val();
-            if (d.site === `${stn} (${line})`) takenTasks = takenTasks.concat(d.tasks);
-        });
+window.captureSopPhoto = () => {
+    const video = document.getElementById("sopEvidenceVideo");
+    const canvas = document.createElement("canvas");
+    if(!video) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    
+    sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.8);
+    
+    const preview = document.getElementById("sopEvidencePreview");
+    if(preview) {
+        preview.src = sopCapturedBlob;
+        preview.style.display = "block";
     }
+    const wrapper = document.getElementById("sopVideoWrapper");
+    if(wrapper) wrapper.style.display = "none";
+    
+    document.getElementById("btnUploadSopProof")?.classList.remove("hidden");
+    document.getElementById("btnRetrySopProof")?.classList.remove("hidden");
 
-    taskContainer.innerHTML = "";
-    Object.keys(SOP_GUIDE_BOOK).forEach(key => {
-        if (!takenTasks.includes(key)) {
-            taskContainer.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="sop-task" value="${key}"> ${SOP_GUIDE_BOOK[key].title}</label>`;
-        }
-    });
-    if (taskContainer.innerHTML === "") taskContainer.innerHTML = "<p style='color:red;font-weight:bold;padding:10px;'>ALL TASKS ASSIGNED.</p>";
+    if(sopLocalStream) {
+        sopLocalStream.getTracks().forEach(t => t.stop());
+    }
 };
 
-// 4. STUDENT MODULE (Defined before Init)
-window.loadStudentActiveMission = () => {
-    onValue(ref(db, `active_deployments/${currentUser.uid}`), (snap) => {
-        const panel = document.getElementById("sopStudentPanel");
-        if (!snap.exists()) { if(panel) panel.classList.add("hidden"); return; }
-        if(panel) panel.classList.remove("hidden");
-        
-        const d = snap.val();
-        const guide = SOP_GUIDE_BOOK[d.tasks[d.currentStep]] || { title: "Task", instr: "Install" };
-        
-        document.getElementById("sopStepTitle").innerText = guide.title;
-        document.getElementById("sopStepInstruction").innerText = guide.instr;
-        document.getElementById("stepNumDisplay").innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
+window.uploadSopProof = async () => {
+    if(!sopCapturedBlob) return;
+    const btn = document.getElementById("btnUploadSopProof");
+    if(btn) { btn.innerText = "⏳ UPLOADING..."; btn.disabled = true; }
 
-        const nextBtn = document.getElementById("btnNextStep");
-        if (d.currentStepProofUploaded) {
-            nextBtn.disabled = false; nextBtn.className = "success";
-            document.getElementById("proofStatusBox").style.background = "#dcfce7";
-            document.getElementById("proofText").innerText = "✅ PROOF UPLOADED. UNLOCKED.";
-        } else {
-            nextBtn.disabled = true; nextBtn.className = "secondary";
-            document.getElementById("proofStatusBox").style.background = "#fff1f2";
-            document.getElementById("proofText").innerText = "UPLOAD PHOTO TO UNLOCK";
+    try {
+        const uid = currentUser.uid;
+        const snap = await get(ref(db, `active_deployments/${uid}`));
+        const m = snap.val();
+        const stepKey = m.tasks[m.currentStep];
+
+        await update(ref(db, `active_deployments/${uid}/proofs`), { [stepKey]: sopCapturedBlob });
+        await update(ref(db, `active_deployments/${uid}`), { currentStepProofUploaded: true });
+        
+        alert("✅ PROOF UPLOADED. NEXT STEP UNLOCKED.");
+        document.getElementById("btnUploadSopProof")?.classList.add("hidden");
+        document.getElementById("btnRetrySopProof")?.classList.add("hidden");
+        const startBtn = document.getElementById("btnStartSopCam");
+        if(startBtn) {
+            startBtn.classList.remove("hidden");
+            startBtn.innerText = "📸 PHOTO CAPTURED";
+            startBtn.disabled = true;
         }
-        window.startSopLiveClock(d.startTime);
-    });
+    } catch(e) { console.error(e); }
 };
 
-// 5. MAIN INITIALIZER
+// --- 3. ADMIN: DISPATCH & FLEET MONITOR ---
 window.initSopModule = async () => {
     const lineSel = document.getElementById("sopLineSelect");
     const userSel = document.getElementById("sopAssignUser");
@@ -9686,93 +9690,71 @@ window.initSopModule = async () => {
         lineSel.innerHTML += `<option value="${line}">${line}</option>`;
     });
 
-    userSel.innerHTML = `<option value="${currentUser.uid}">Assign to Myself (${currentUser.name})</option>`;
+    userSel.innerHTML = `<option value="${currentUser.uid}">Assign to Myself</option>`;
     const snap = await get(ref(db, "users"));
     snap.forEach(c => {
-        if (c.key !== currentUser.uid && !ADMIN_EMAILS.includes(c.val().email.toLowerCase())) {
-            userSel.innerHTML += `<option value="${c.key}">${(c.val().name || c.val().email).toUpperCase()}</option>`;
+        const u = c.val();
+        if(!ADMIN_EMAILS.includes(u.email.toLowerCase())) {
+            userSel.innerHTML += `<option value="${c.key}">${(u.name || u.email).toUpperCase()}</option>`;
         }
     });
 
     if (isAdmin) {
-        document.getElementById("sopAdminPanel").classList.remove("hidden");
-        document.getElementById("sopStudentPanel").classList.add("hidden");
-        document.getElementById("adminGlobalStats").classList.remove("hidden");
-        window.monitorFleetProgress();
-        window.refreshAvailableTasks();
+        document.getElementById("sopAdminPanel")?.classList.remove("hidden");
+        document.getElementById("sopStudentPanel")?.classList.add("hidden");
+        document.getElementById("adminGlobalStats")?.classList.remove("hidden");
+        window.monitorFleetProgress(); 
     } else {
-        document.getElementById("sopAdminPanel").classList.add("hidden");
         window.loadStudentActiveMission();
     }
 };
 
-// 6. OTHER ACTIONS
-window.handleSopLineChange = () => {
-    const line = document.getElementById("sopLineSelect").value;
-    const stnSel = document.getElementById("sopStationSelect");
-    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
-    if (line && METRO_STATIONS[line]) {
-        METRO_STATIONS[line].forEach(stn => stnSel.innerHTML += `<option value="${stn}">${stn}</option>`);
-        stnSel.disabled = false;
-        stnSel.onchange = window.refreshAvailableTasks;
-    }
-};
-
-window.dispatchSopMission = async () => {
-    const line = document.getElementById("sopLineSelect").value;
-    const stn = document.getElementById("sopStationSelect").value;
-    const targetUid = document.getElementById("sopAssignUser").value;
-    const tasks = [];
-    document.querySelectorAll(".sop-task:checked").forEach(cb => tasks.push(cb.value));
-    if (!stn || tasks.length === 0) return alert("Select Station & Tasks!");
-
-    const data = {
-        site: `${stn} (${line})`,
-        tasks: tasks,
-        currentStep: 0, progress: 0,
-        startTime: Date.now(),
-        status: "IN PROGRESS",
-        studentName: document.getElementById("sopAssignUser").options[document.getElementById("sopAssignUser").selectedIndex].text,
-        currentStepProofUploaded: false
-    };
-
-    await set(ref(db, `active_deployments/${targetUid}`), data);
-    alert("🚀 MISSION DISPATCHED");
-    window.refreshAvailableTasks();
-    if(targetUid === currentUser.uid) window.loadStudentActiveMission();
-};
-
 window.monitorFleetProgress = () => {
+    const fleetDiv = document.getElementById("adminSopFleetMonitor");
+    if (!fleetDiv) return;
+    
     onValue(ref(db, "active_deployments"), (snap) => {
-        const fleetDiv = document.getElementById("adminSopFleetMonitor");
-        if (!fleetDiv) return;
-        fleetDiv.innerHTML = "";
+        // Double check existence of the DIV before writing style
+        const container = document.getElementById("adminSopFleetMonitor");
+        if(!container) return; 
+
+        container.innerHTML = "";
+        let active = 0, awaiting = 0;
+
         snap.forEach(child => {
             const d = child.val();
-            fleetDiv.innerHTML += `
-                <div class="panel" style="border-left:10px solid #fbbf24; padding:15px; margin-bottom:10px;">
-                    <b>${d.studentName}</b> @ <b>${d.site}</b>
-                    <div style="background:#eee; height:8px; border-radius:5px; margin:10px 0;"><div style="width:${d.progress}%; background:#10b981; height:100%;"></div></div>
-                    <small>Progress: ${d.progress}%</small>
-                    ${d.progress === 100 ? `<button class="success" onclick="window.adminVerifySop('${child.key}')">VERIFY & WIPE</button>` : ''}
+            const uid = child.key;
+            if(d.status === "IN PROGRESS") active++;
+            if(d.status === "COMPLETED") awaiting++;
+
+            container.innerHTML += `
+                <div class="panel" style="border-left:10px solid ${d.progress === 100 ? '#10b981' : '#fbbf24'}; padding:15px; margin-bottom:10px;">
+                    <b>${d.studentName}</b> lead at <b>${d.site}</b>
+                    <div style="background:#eee; height:10px; border-radius:5px; margin:10px 0; overflow:hidden;">
+                        <div style="width:${d.progress || 0}%; background:#10b981; height:100%; transition:width 0.8s;"></div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <small>STATUS: ${d.status} (${d.progress}%)</small>
+                        ${d.progress === 100 ? `<button class="success" onclick="window.adminVerifySop('${uid}', '${d.stationId}')" style="font-size:10px;">VERIFY & WIPE DATA</button>` : ''}
+                    </div>
                 </div>`;
         });
+        
+        const actEl = document.getElementById("statActive");
+        const donEl = document.getElementById("statDone");
+        if(actEl) actEl.innerText = active;
+        if(donEl) donEl.innerText = awaiting;
     });
 };
 
-window.adminVerifySop = async (uid) => {
-    if (confirm("Verify and Wipe?")) {
-        await remove(ref(db, `active_deployments/${uid}`));
-        alert("Wiped.");
-    }
-};
-
+// --- 4. SHARED MISSION LOGIC ---
 window.nextSopStep = async () => {
     const uid = currentUser.uid;
     const snap = await get(ref(db, `active_deployments/${uid}`));
     const data = snap.val();
     const nextIdx = data.currentStep + 1;
     const newProg = Math.round((nextIdx / data.tasks.length) * 100);
+
     const updates = {};
     if (nextIdx >= data.tasks.length) {
         updates[`active_deployments/${uid}/status`] = "COMPLETED";
@@ -9781,23 +9763,59 @@ window.nextSopStep = async () => {
         updates[`active_deployments/${uid}/currentStep`] = nextIdx;
         updates[`active_deployments/${uid}/progress`] = newProg;
         updates[`active_deployments/${uid}/currentStepProofUploaded`] = false;
+        // UI RESET
+        const preview = document.getElementById("sopEvidencePreview");
+        if(preview) preview.style.display = "none";
+        const startBtn = document.getElementById("btnStartSopCam");
+        if(startBtn) { startBtn.disabled = false; startBtn.innerText = "📸 OPEN CAMERA"; }
     }
     await update(ref(db), updates);
 };
 
-// MANDATORY OVERRIDE FOR UPLOAD
-const originalUpload = window.uploadCapturedEvidence;
-window.uploadCapturedEvidence = async () => {
-    if(!capturedEvidenceBlob) return alert("No photo.");
-    const isSop = !document.getElementById("tab-fieldSOP").classList.contains("hidden");
-    if(isSop) {
-        const uid = currentUser.uid;
-        await update(ref(db, `active_deployments/${uid}`), { currentStepProofUploaded: true });
-        alert("Proof Saved locally. Step Unlocked.");
-        stopEvidenceCamera();
-    } else {
-        if (typeof originalUpload === "function") originalUpload();
-    }
+window.startSopLiveClock = (start) => {
+    if(sopMissionTimer) clearInterval(sopMissionTimer);
+    sopMissionTimer = setInterval(() => {
+        const el = document.getElementById("sopLiveTimer");
+        if(!el) return; // Prevent "null" error if user switched tabs
+        const diff = Date.now() - start;
+        const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
+        const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
+        const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+        el.innerText = `${h}:${m}:${s}`;
+    }, 1000);
+};
+
+// Ensure this is properly linked to the dispatcher
+window.dispatchSopMission = async () => {
+    const line = document.getElementById("sopLineSelect").value;
+    const stn = document.getElementById("sopStationSelect").value;
+    const targetUid = document.getElementById("sopAssignUser").value;
+    const stationId = `${stn}_${line}`.replace(/\s+/g, '_');
+    if (!stn || !targetUid) return alert("Missing Info!");
+
+    const lockSnap = await get(ref(db, `station_locks/${stationId}`));
+    if (lockSnap.exists() && lockSnap.val().status === "Active") return alert("⛔ SITE LOCKED");
+
+    const tasks = [];
+    document.querySelectorAll(".sop-task:checked").forEach(cb => tasks.push(cb.value));
+    if (tasks.length === 0) return alert("Select tasks!");
+
+    const missionData = {
+        site: `${stn} (${line})`,
+        stationId: stationId,
+        tasks: tasks,
+        currentStep: 0, progress: 0,
+        startTime: Date.now(),
+        status: "IN PROGRESS",
+        studentName: document.getElementById("sopAssignUser").options[document.getElementById("sopAssignUser").selectedIndex].text,
+        currentStepProofUploaded: false
+    };
+
+    const updates = {};
+    updates[`active_deployments/${targetUid}`] = missionData;
+    updates[`station_locks/${stationId}`] = { status: "Active", studentName: missionData.studentName };
+    await update(ref(db), updates);
+    alert("🚀 DISPATCHED");
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
