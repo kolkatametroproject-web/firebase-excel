@@ -9642,8 +9642,12 @@ window.captureSopPhoto = () => {
 window.uploadSopProof = async () => {
     if (!sopCapturedBlob) return alert("Capture photo first.");
     
+    // 1. Simple Comment Prompt
+    const remarks = prompt("Enter Field Remarks for this step:");
+    if (remarks === null) return; // Stop if user hits cancel
+
     const btn = document.getElementById("btnUploadSopProof");
-    if (btn) { btn.innerText = "⏳ PROCESSING..."; btn.disabled = true; }
+    if (btn) { btn.innerText = "⏳ UPLOADING..."; btn.disabled = true; }
 
     try {
         const uid = currentUser.uid;
@@ -9651,34 +9655,30 @@ window.uploadSopProof = async () => {
         const m = snap.val();
         const stepKey = m.tasks[m.currentStep];
 
-        const proofData = {
-            image: sopCapturedBlob,
-            remarks: "Field verification captured.",
-            timestamp: serverTimestamp()
-        };
-
+        // 2. Save to Database
         const updates = {};
-        updates[`active_deployments/${uid}/proofs/${stepKey}`] = proofData;
+        updates[`active_deployments/${uid}/proofs/${stepKey}`] = { 
+            image: sopCapturedBlob, 
+            remarks: remarks || "N/A" 
+        };
         updates[`active_deployments/${uid}/currentStepProofUploaded`] = true;
 
         await update(ref(db), updates);
 
-        // --- IMMEDIATE UI RECOVERY ---
+        // 3. Simple UI Unlock
+        alert("✅ PROOF SAVED");
         const nextBtn = document.getElementById("btnNextStep");
         if(nextBtn) {
             nextBtn.disabled = false;
             nextBtn.className = "success";
-            nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-check-circle"></i>';
+            nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
         }
         
-        document.getElementById("btnUploadSopProof").classList.add("hidden");
-        document.getElementById("btnRetrySopProof").classList.add("hidden");
-        alert("✅ STEP VERIFIED");
+        // Hide camera controls so they don't click twice
+        document.getElementById("btnUploadSopProof")?.classList.add("hidden");
+        document.getElementById("btnRetrySopProof")?.classList.add("hidden");
 
-    } catch (e) { 
-        alert("Sync Error: " + e.message); 
-        if(btn) btn.disabled = false;
-    }
+    } catch (e) { alert("Error: " + e.message); if(btn) btn.disabled = false; }
 };
 // --- 3. RAPID SCANNER (GREEN FEEDBACK) ---
 window.openContinuousScanner = () => {
@@ -10006,30 +10006,31 @@ window.nextSopStep = async () => {
     const nextIdx = data.currentStep + 1;
     const newProg = Math.round((nextIdx / data.tasks.length) * 100);
 
-    // --- NUCLEAR LOCAL RESET ---
-    sopCapturedBlob = null; // Clear the previous photo from memory
+    // --- CRITICAL RESET FOR NEXT STEP ---
+    window.sopCapturedBlob = null; // Clear the photo from memory
     const previewImg = document.getElementById("sopEvidencePreview");
     if(previewImg) {
-        previewImg.src = "";
-        previewImg.style.display = "none";
+        previewImg.src = ""; // Wipe the image source
+        previewImg.style.display = "none"; // Hide the preview box
     }
 
     const updates = {};
     if (nextIdx >= data.tasks.length) {
+        // FINISH MISSION
         updates[`active_deployments/${uid}/status`] = "COMPLETED";
         updates[`active_deployments/${uid}/progress`] = 100;
         
-        // Show Green Success Overlay
         const overlay = document.getElementById("scanSuccessOverlay");
         if(overlay) {
-            document.getElementById("scanSuccessItem").innerText = "MISSION COMPLETE";
+            document.getElementById("scanSuccessItem").innerText = "MISSION ACCOMPLISHED";
             overlay.classList.remove("hidden");
             setTimeout(() => overlay.classList.add("hidden"), 3000);
         }
     } else {
+        // MOVE TO NEXT
         updates[`active_deployments/${uid}/currentStep`] = nextIdx;
         updates[`active_deployments/${uid}/progress`] = newProg;
-        // FORCE THE LOCK FOR THE NEW STEP
+        // FORCE LOCK FOR NEW STEP
         updates[`active_deployments/${uid}/currentStepProofUploaded`] = false; 
     }
 
