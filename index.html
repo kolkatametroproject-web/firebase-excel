@@ -9729,46 +9729,81 @@ window.dispatchSopMission = async () => {
 
 // --- 5. STUDENT & FLEET MONITOR ---
 window.loadStudentActiveMission = () => {
-    onValue(ref(db, `active_deployments/${currentUser.uid}`), (snap) => {
+    const uid = currentUser.uid;
+    onValue(ref(db, `active_deployments/${uid}`), (snap) => {
         const panel = document.getElementById("sopStudentPanel");
-        if (!snap.exists()) { panel?.classList.add("hidden"); return; }
-        panel?.classList.remove("hidden");
-        const d = snap.val();
-        const guide = SOP_GUIDE_BOOK[d.tasks[d.currentStep]] || { title: "Work", instr: "Install" };
-        document.getElementById("sopStepTitle").innerText = guide.title;
-        document.getElementById("sopStepInstruction").innerText = guide.instr;
-        document.getElementById("stepNumDisplay").innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
-        const nextBtn = document.getElementById("btnNextStep");
-        if (d.currentStepProofUploaded) {
-            nextBtn.disabled = false; nextBtn.className = "success";
-            document.getElementById("proofText").innerText = "✅ PROOF UPLOADED. NEXT UNLOCKED.";
-        } else {
-            nextBtn.disabled = true; nextBtn.className = "secondary";
-            document.getElementById("proofText").innerText = "UPLOAD PHOTO TO UNLOCK";
+        if (!snap.exists()) { 
+            if(panel) panel.classList.add("hidden"); 
+            return; 
         }
-        window.startSopLiveClock(d.startTime);
+        if(panel) panel.classList.remove("hidden");
+        
+        const d = snap.val();
+        const taskKey = d.tasks && d.tasks[d.currentStep] ? d.tasks[d.currentStep] : null;
+        const guide = SOP_GUIDE_BOOK[taskKey] || { title: "Work Module", instr: "Install hardware." };
+        
+        // --- THE SHIELDED UPDATES ---
+        const elTitle = document.getElementById("sopStepTitle");
+        const elInstr = document.getElementById("sopStepInstruction");
+        const elStepNum = document.getElementById("stepNumDisplay");
+        const elNextBtn = document.getElementById("btnNextStep");
+        const elStatusBox = document.getElementById("proofStatusBox");
+        const elProofText = document.getElementById("proofText");
+
+        if(elTitle) elTitle.innerText = guide.title;
+        if(elInstr) elInstr.innerText = guide.instr;
+        if(elStepNum) elStepNum.innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
+
+        if(elNextBtn && elStatusBox && elProofText) {
+            if (d.currentStepProofUploaded) {
+                elNextBtn.disabled = false; 
+                elNextBtn.className = "success";
+                elStatusBox.style.background = "#dcfce7";
+                elProofText.innerText = "✅ PROOF UPLOADED. NEXT UNLOCKED.";
+            } else {
+                elNextBtn.disabled = true; 
+                elNextBtn.className = "secondary";
+                elStatusBox.style.background = "#fff1f2";
+                elProofText.innerText = "UPLOAD PHOTO TO UNLOCK";
+            }
+        }
+        
+        if(d.startTime) window.startSopLiveClock(d.startTime);
     });
 };
 
 window.monitorFleetProgress = () => {
+    const fleetDiv = document.getElementById("adminSopFleetMonitor");
+    if (!fleetDiv) return; // Exit if the container isn't on screen
+
     onValue(ref(db, "active_deployments"), (snap) => {
-        const fleetDiv = document.getElementById("adminSopFleetMonitor");
-        if (!fleetDiv) return;
-        fleetDiv.innerHTML = "";
+        const container = document.getElementById("adminSopFleetMonitor");
+        if(!container) return; // Exit if user switched tabs mid-update
+
+        container.innerHTML = "";
         let active = 0, done = 0;
+
         snap.forEach(child => {
             const d = child.val();
             if(d.status === "IN PROGRESS") active++; else done++;
-            fleetDiv.innerHTML += `
+            
+            container.innerHTML += `
                 <div class="panel" style="border-left:10px solid #fbbf24; padding:15px; margin-bottom:10px;">
-                    <b>${d.studentName}</b> @ <b>${d.site}</b>
-                    <div style="background:#eee; height:8px; border-radius:5px; margin:10px 0;"><div style="width:${d.progress}%; background:#10b981; height:100%;"></div></div>
-                    <small>Progress: ${d.progress}% | ${d.status}</small>
-                    ${d.progress === 100 ? `<button class="success" onclick="window.adminVerifySop('${child.key}')">VERIFY & WIPE DATA</button>` : ''}
+                    <b>${d.studentName || 'Unknown'}</b> @ <b>${d.site || 'Site'}</b>
+                    <div style="background:#eee; height:8px; border-radius:5px; margin:10px 0;">
+                        <div style="width:${d.progress || 0}%; background:#10b981; height:100%;"></div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <small>Progress: ${d.progress || 0}% | ${d.status}</small>
+                        ${d.progress === 100 ? `<button class="success" onclick="window.adminVerifySop('${child.key}')" style="font-size:10px;">VERIFY & WIPE DATA</button>` : ''}
+                    </div>
                 </div>`;
         });
-        document.getElementById("statActive").innerText = active;
-        document.getElementById("statDone").innerText = done;
+
+        const actS = document.getElementById("statActive");
+        const donS = document.getElementById("statDone");
+        if(actS) actS.innerText = active;
+        if(donS) donS.innerText = done;
     });
 };
 
