@@ -9642,25 +9642,18 @@ window.captureSopPhoto = () => {
 window.uploadSopProof = async () => {
     if (!sopCapturedBlob) return alert("Capture photo first.");
     
-    // Capture user remarks for the Admin to see
-    const remarks = prompt("Enter Field Remarks / Observations for this step:");
-    if (remarks === null) return; // Exit if user cancels prompt
-
     const btn = document.getElementById("btnUploadSopProof");
-    if (btn) { btn.innerText = "⏳ UPLOADING..."; btn.disabled = true; }
+    if (btn) { btn.innerText = "⏳ PROCESSING..."; btn.disabled = true; }
 
     try {
         const uid = currentUser.uid;
         const snap = await get(ref(db, `active_deployments/${uid}`));
-        if (!snap.exists()) return;
-        
         const m = snap.val();
         const stepKey = m.tasks[m.currentStep];
 
-        // Prepare combined data object
         const proofData = {
             image: sopCapturedBlob,
-            remarks: remarks || "No remarks provided.",
+            remarks: "Field verification captured.",
             timestamp: serverTimestamp()
         };
 
@@ -9670,24 +9663,21 @@ window.uploadSopProof = async () => {
 
         await update(ref(db), updates);
 
-        alert("✅ PROOF & REMARKS SAVED.");
-        
-        // --- THE UI UNLOCK TRIGGER ---
+        // --- IMMEDIATE UI RECOVERY ---
         const nextBtn = document.getElementById("btnNextStep");
         if(nextBtn) {
             nextBtn.disabled = false;
             nextBtn.className = "success";
-            nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
+            nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-check-circle"></i>';
         }
         
-        // Hide Camera Controls
-        document.getElementById("btnUploadSopProof")?.classList.add("hidden");
-        document.getElementById("btnRetrySopProof")?.classList.add("hidden");
-        document.getElementById("btnStartSopCam")?.classList.remove("hidden");
+        document.getElementById("btnUploadSopProof").classList.add("hidden");
+        document.getElementById("btnRetrySopProof").classList.add("hidden");
+        alert("✅ STEP VERIFIED");
 
     } catch (e) { 
-        alert("Upload error: " + e.message); 
-        if(btn) { btn.innerText = "RETRY UPLOAD"; btn.disabled = false; }
+        alert("Sync Error: " + e.message); 
+        if(btn) btn.disabled = false;
     }
 };
 // --- 3. RAPID SCANNER (GREEN FEEDBACK) ---
@@ -10016,28 +10006,30 @@ window.nextSopStep = async () => {
     const nextIdx = data.currentStep + 1;
     const newProg = Math.round((nextIdx / data.tasks.length) * 100);
 
+    // --- NUCLEAR LOCAL RESET ---
+    sopCapturedBlob = null; // Clear the previous photo from memory
+    const previewImg = document.getElementById("sopEvidencePreview");
+    if(previewImg) {
+        previewImg.src = "";
+        previewImg.style.display = "none";
+    }
+
     const updates = {};
-    
     if (nextIdx >= data.tasks.length) {
-        // --- MISSION COMPLETE ---
         updates[`active_deployments/${uid}/status`] = "COMPLETED";
         updates[`active_deployments/${uid}/progress`] = 100;
         
-        // Show Fullscreen Green Tick
+        // Show Green Success Overlay
         const overlay = document.getElementById("scanSuccessOverlay");
-        const itemText = document.getElementById("scanSuccessItem");
-        if(overlay && itemText) {
-            itemText.innerText = "MISSION ACCOMPLISHED";
+        if(overlay) {
+            document.getElementById("scanSuccessItem").innerText = "MISSION COMPLETE";
             overlay.classList.remove("hidden");
-            if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
             setTimeout(() => overlay.classList.add("hidden"), 3000);
         }
     } else {
-        // --- MOVE TO NEXT STEP & FORCE NEW LOCK ---
         updates[`active_deployments/${uid}/currentStep`] = nextIdx;
         updates[`active_deployments/${uid}/progress`] = newProg;
-        
-        // CRITICAL FIX: This forces the "Open Camera" button to reappear for the next task
+        // FORCE THE LOCK FOR THE NEW STEP
         updates[`active_deployments/${uid}/currentStepProofUploaded`] = false; 
     }
 
