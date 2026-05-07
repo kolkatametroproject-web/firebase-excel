@@ -9685,21 +9685,43 @@ window.refreshAvailableTasks = async () => {
     const taskContainer = document.getElementById("sopTaskChecklist");
     const line = document.getElementById("sopLineSelect")?.value;
     const stn = document.getElementById("sopStationSelect")?.value;
-    if (!taskContainer || !stn) return;
+    
+    if (!taskContainer) return;
+    if (!stn || !line) {
+        taskContainer.innerHTML = "<p style='color:#94a3b8; padding:10px;'>Select a Station to see available work.</p>";
+        return;
+    }
+
+    // Fetch all active missions from the database
     const activeSnap = await get(ref(db, "active_deployments"));
     let takenTasks = [];
+    const currentSite = `${stn} (${line})`;
+
     if (activeSnap.exists()) {
         activeSnap.forEach(child => {
             const d = child.val();
-            if (d.site === `${stn} (${line})`) takenTasks = takenTasks.concat(d.tasks);
+            // If someone is already working at this specific station
+            if (d.site === currentSite) {
+                takenTasks = takenTasks.concat(d.tasks);
+            }
         });
     }
+
+    // Re-render the checklist, only showing tasks NOT in the 'takenTasks' array
     taskContainer.innerHTML = "";
     Object.keys(SOP_GUIDE_BOOK).forEach(key => {
         if (!takenTasks.includes(key)) {
-            taskContainer.innerHTML += `<label class="checkbox-item"><input type="checkbox" class="sop-task" value="${key}"> ${SOP_GUIDE_BOOK[key].title}</label>`;
+            taskContainer.innerHTML += `
+                <label class="checkbox-item" style="display:flex; align-items:center; gap:10px; padding:8px; border-radius:6px; border:1px solid #eee; margin-bottom:5px;">
+                    <input type="checkbox" class="sop-task" value="${key}" style="width:18px; height:18px;"> 
+                    <span style="font-weight:700; font-size:13px;">${SOP_GUIDE_BOOK[key].title}</span>
+                </label>`;
         }
     });
+
+    if (taskContainer.innerHTML === "") {
+        taskContainer.innerHTML = "<div style='background:#fff1f2; color:#be123c; padding:15px; border-radius:8px; font-weight:bold;'>⚠️ ALL TASKS FOR THIS STATION ARE CURRENTLY ASSIGNED.</div>";
+    }
 };
 
 window.dispatchSopMission = async () => {
@@ -9708,23 +9730,31 @@ window.dispatchSopMission = async () => {
     const targetUid = document.getElementById("sopAssignUser").value;
     const tasks = [];
     document.querySelectorAll(".sop-task:checked").forEach(cb => tasks.push(cb.value));
-    if (!stn || tasks.length === 0) return alert("Select Station & Tasks!");
+    
+    if (!stn || tasks.length === 0) return alert("Select Station and Tasks!");
 
-    const data = {
+    const missionData = {
         site: `${stn} (${line})`,
-        stationId: `${stn}_${line}`.replace(/\s+/g, '_'),
         tasks: tasks,
-        currentStep: 0, progress: 0,
+        currentStep: 0, 
+        progress: 0,
         startTime: Date.now(),
         status: "IN PROGRESS",
         studentName: document.getElementById("sopAssignUser").options[document.getElementById("sopAssignUser").selectedIndex].text,
         currentStepProofUploaded: false,
         assets: window.sopAssetsGiven
     };
-    await update(ref(db, `active_deployments/${targetUid}`), data);
-    alert("🚀 MISSION DISPATCHED & TASKS LOCKED");
-    window.sopAssetsGiven = [];
-    window.initSopModule();
+
+    try {
+        await update(ref(db, `active_deployments/${targetUid}`), missionData);
+        alert("🚀 MISSION DISPATCHED");
+        
+        // --- ADD THESE TWO LINES TO REFRESH THE UI ---
+        window.sopAssetsGiven = [];
+        window.refreshAvailableTasks(); 
+        
+        if (targetUid === currentUser.uid) window.loadStudentActiveMission();
+    } catch(e) { alert(e.message); }
 };
 
 // --- 5. STUDENT & FLEET MONITOR ---
@@ -9843,6 +9873,7 @@ window.handleSopLineChange = () => {
     if (line && METRO_STATIONS[line]) {
         METRO_STATIONS[line].forEach(stn => stnSel.innerHTML += `<option value="${stn}">${stn}</option>`);
         stnSel.disabled = false;
+        stnSel.onchange = window.refreshAvailableTasks;
     }
 };
 
