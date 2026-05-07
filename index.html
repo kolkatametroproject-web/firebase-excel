@@ -9640,53 +9640,64 @@ window.captureSopPhoto = () => {
 };
 
 window.uploadSopProof = async () => {
-    if(!sopCapturedBlob) return alert("No photo captured.");
+    if (!sopCapturedBlob) {
+        alert("No photo captured.");
+        return;
+    }
+
     const btn = document.getElementById("btnUploadSopProof");
-    if(btn) { btn.innerText = "⏳ UPLOADING..."; btn.disabled = true; }
+    if (btn) {
+        btn.innerText = "⏳ UPLOADING...";
+        btn.disabled = true;
+    }
 
     try {
         const uid = currentUser.uid;
-        // 1. Fetch the mission data manually
+        // 1. Fetch mission data
         const snap = await get(ref(db, `active_deployments/${uid}`));
         
-        if(!snap.exists()) {
+        if (!snap.exists()) {
             alert("No active mission found.");
             return;
         }
 
-        const m = snap.val(); // We use 'm' here for mission data
+        const m = snap.val();
         const stepKey = m.tasks[m.currentStep];
 
-        // 2. Save the photo to the specific step
-        await update(ref(db, `active_deployments/${uid}/proofs`), { [stepKey]: sopCapturedBlob });
-        
-        // 3. Mark the step as proofed (This unlocks the Next button)
-        await update(ref(db, `active_deployments/${uid}`), { currentStepProofUploaded: true });
+        // 2. Update DB: Save photo and Set Proof Flag to true
+        const updates = {};
+        updates[`active_deployments/${uid}/proofs/${stepKey}`] = sopCapturedBlob;
+        updates[`active_deployments/${uid}/currentStepProofUploaded`] = true;
+
+        await update(ref(db), updates);
         
         alert("✅ PROOF VERIFIED. STEP UNLOCKED.");
 
-        // 4. Force the button to turn Green immediately
+        // 3. UI UNLOCK
         const nextBtn = document.getElementById("btnNextStep");
-        if(nextBtn) {
+        if (nextBtn) {
             nextBtn.disabled = false;
-            nextBtn.className = "success"; // Turns green
-            nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
+            nextBtn.className = "success"; 
             nextBtn.style.opacity = "1";
+            nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
         }
 
-        // Hide the camera controls
-        document.getElementById("btnUploadSopProof")?.classList.add("hidden");
-        document.getElementById("btnRetrySopProof")?.classList.add("hidden");
-        document.getElementById("sopEvidencePreview")?.style.borderColor = "#10b981";
+        // Hide camera controls
+        const upBtn = document.getElementById("btnUploadSopProof");
+        const reBtn = document.getElementById("btnRetrySopProof");
+        if(upBtn) upBtn.classList.add("hidden");
+        if(reBtn) reBtn.classList.add("hidden");
 
     } catch (e) {
         console.error(e);
         alert("Upload Failed: " + e.message);
     } finally {
-        if(btn) { btn.innerText = "UPLOAD & UNLOCK"; btn.disabled = false; }
+        if (btn) {
+            btn.innerText = "UPLOAD & UNLOCK";
+            btn.disabled = false;
+        }
     }
 };
-
 // --- 3. RAPID SCANNER (GREEN FEEDBACK) ---
 window.openContinuousScanner = () => {
     scanMode = 'SOP_ASSET_GIVE';
