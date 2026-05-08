@@ -9604,6 +9604,7 @@ const SOP_GUIDE_BOOK = {
 // --- CRITICAL GLOBAL STATE VARIABLES ---
 let sopLocalStream = null;
 let sopCapturedBlob = null;
+  let sopMissionTimer = null;
 window.sopStepPhotos = []; // For the 2-photo logic
 let activeAuditUid = null;
 let activeAuditStationId = null;
@@ -10077,6 +10078,43 @@ window.captureSopPhoto = () => {
 
     if(sopLocalStream) {
         sopLocalStream.getTracks().forEach(track => track.stop());
+    }
+};
+  window.rejectTask = async (uid, taskKey, stepIndex) => {
+    const feedback = prompt("REJECTION REASON (This will be shown to the student):");
+    if (!feedback) return; // Cancel if no reason given
+
+    const confirmAction = confirm(`REJECT STEP ${stepIndex + 1}?\n\nThe student will be reset to this task and existing photos will be deleted.`);
+    
+    if (confirmAction) {
+        try {
+            const updates = {};
+            
+            // 1. Move student back to the specific step index
+            updates[`active_deployments/${uid}/currentStep`] = stepIndex;
+            
+            // 2. Lock the 'Next' button for them
+            updates[`active_deployments/${uid}/currentStepProofUploaded`] = false;
+            
+            // 3. Delete the faulty photos from the database
+            updates[`active_deployments/${uid}/proofs/${taskKey}`] = null;
+            
+            // 4. Update mission status to notify student
+            updates[`active_deployments/${uid}/status`] = "REDO REQUIRED";
+            updates[`active_deployments/${uid}/adminFeedback`] = feedback;
+
+            await update(ref(db), updates);
+            
+            alert("❌ Task Rejected. Student terminal has been reset to this step.");
+            
+            // Refresh the Admin Audit view to show the change
+            if (typeof window.openAuditView === 'function') {
+                window.openAuditView(uid);
+            }
+            
+        } catch (e) {
+            alert("Error rejecting task: " + e.message);
+        }
     }
 };
 </script>
