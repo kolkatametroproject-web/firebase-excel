@@ -9699,52 +9699,69 @@ window.nextSopStep = async () => {
 // =========================================================
 
 window.openAuditView = async (uid) => {
-    // 1. Declare Global Uid
     window.activeAuditUid = uid;
-
     const snap = await get(ref(db, `active_deployments/${uid}`));
     if(!snap.exists()) return;
     const data = snap.val();
 
-    // 2. Safety Check for Modal Elements
     const modal = document.getElementById("sopVerifyModal");
     const container = document.getElementById("triAngleProofContainer");
+    if(!modal || !container) return;
 
-    if(!modal || !container) {
-        console.error("AUDIT ERROR: Modal elements 'sopVerifyModal' or 'triAngleProofContainer' are missing from HTML.");
-        return alert("UI Error: Audit Modal not found in HTML.");
-    }
-
-    // 3. Show Modal and Reset Container
     modal.classList.remove("hidden");
     container.innerHTML = ""; 
 
-    // 4. Render Tasks
     data.tasks.forEach((taskKey, index) => {
         const proof = data.proofs ? data.proofs[taskKey] : null;
         const isVerified = data.verifiedTasks && data.verifiedTasks[taskKey];
-        const isRedo = data.status === "REDO REQUIRED" && data.currentStep === index;
 
         container.innerHTML += `
-            <div class="panel" style="border-left: 12px solid ${isVerified ? '#10b981' : (isRedo ? '#e11d48' : '#fbbf24')}; margin-bottom: 20px; background:#fff; padding:15px; border-radius:10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-                <h3 style="margin:0 0 10px 0; border:none; font-size:14px; color:#1e293b;">STEP ${index+1}: ${taskKey.replace(/_/g, ' ')}</h3>
+            <div class="panel" style="border-left: 12px solid ${isVerified ? '#10b981' : '#fbbf24'}; margin-bottom: 20px; background:#fff;">
+                <h3 style="margin:0 0 10px 0;">STEP ${index+1}: ${taskKey.replace(/_/g, ' ')}</h3>
                 ${proof ? `
                     <div style="display:flex; gap:10px; margin:10px 0;">
-                        <img src="${proof.img1}" style="width:48%; height:150px; object-fit:cover; border:2px solid #eee; border-radius:8px; cursor:zoom-in;" onclick="window.open('${proof.img1}')">
-                        <img src="${proof.img2}" style="width:48%; height:150px; object-fit:cover; border:2px solid #eee; border-radius:8px; cursor:zoom-in;" onclick="window.open('${proof.img2}')">
+                        <img src="${proof.img1 || proof.image}" style="width:48%; height:150px; object-fit:cover; border-radius:8px; border:1px solid #ddd;" onclick="window.open(this.src)">
+                        <img src="${proof.img2 || proof.image}" style="width:48%; height:150px; object-fit:cover; border-radius:8px; border:1px solid #ddd;" onclick="window.open(this.src)">
                     </div>
-                    <div style="background:#f8fafc; padding:8px; border-radius:6px; border:1px solid #e2e8f0; margin-bottom:12px; font-size:12px;">
-                        <b>Field Remarks:</b> "${proof.remarks}"
+                    <div style="background:#f8fafc; padding:8px; border-radius:6px; font-size:12px; margin-bottom:10px;">
+                        <b>Remarks:</b> ${proof.remarks}
                     </div>
                     <div style="display:flex; gap:8px;">
-                        <button onclick="verifySingleTask('${uid}', '${taskKey}')" class="success" style="flex:1; padding:8px; font-size:11px;" ${isVerified ? 'disabled' : ''}>
+                        <button onclick="verifySingleTask('${uid}', '${taskKey}')" class="success" style="flex:1;" ${isVerified ? 'disabled' : ''}>
                             ${isVerified ? '✅ VERIFIED' : 'APPROVE'}
                         </button>
-                        <button onclick="rejectTask('${uid}', '${taskKey}', ${index})" class="danger" style="flex:1; padding:8px; font-size:11px;">REJECT</button>
+                        <button onclick="rejectTask('${uid}', '${taskKey}', ${index})" class="danger" style="flex:1;">REJECT</button>
                     </div>
-                ` : `<p style="color:#94a3b8; font-style:italic; font-size:12px; padding:10px;">Awaiting photos from field terminal...</p>`}
+                ` : `<p style="color:#94a3b8; font-style:italic;">Awaiting data...</p>`}
             </div>`;
     });
+};
+  window.verifySingleTask = async (uid, taskKey) => {
+    try {
+        // 1. Mark this specific task as verified
+        await update(ref(db, `active_deployments/${uid}/verifiedTasks`), { [taskKey]: true });
+
+        // 2. Check if MISSION IS COMPLETE
+        const snap = await get(ref(db, `active_deployments/${uid}`));
+        const data = snap.val();
+        
+        const totalTasks = data.tasks.length;
+        const verifiedCount = Object.keys(data.verifiedTasks || {}).length;
+
+        if (verifiedCount >= totalTasks) {
+            // --- NUCLEAR WIPE: MISSION FINISHED ---
+            alert("🎊 ALL STEPS VERIFIED!\n\nMission data is now being cleared from the live database.");
+            await remove(ref(db, `active_deployments/${uid}`));
+            
+            // Close the modal and refresh
+            document.getElementById("sopVerifyModal").classList.add("hidden");
+        } else {
+            // Just refresh the view for the remaining tasks
+            window.openAuditView(uid);
+        }
+    } catch (e) {
+        alert("Verification Error: " + e.message);
+    }
 };
 
 window.verifySingleTask = async (uid, taskKey) => {
