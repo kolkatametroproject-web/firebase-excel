@@ -9956,6 +9956,76 @@ window.initSopModule = async () => {
         btn.innerText = "DISPATCH MISSION";
     }
 };
+  window.loadStudentActiveMission = () => {
+    const uid = currentUser.uid;
+    // Clear any previous listener to prevent data jumping
+    off(ref(db, `active_deployments/${uid}`));
+
+    onValue(ref(db, `active_deployments/${uid}`), (snap) => {
+        const panel = document.getElementById("sopStudentPanel");
+        const sopTab = document.getElementById("tab-fieldSOP");
+        
+        // Only show if mission exists and user is on the correct tab
+        const isSopTabActive = sopTab && !sopTab.classList.contains("hidden");
+
+        if (!snap.exists()) {
+            if (panel) panel.classList.add("hidden");
+            const header = document.getElementById("sopStatusHeader");
+            if(header) header.innerText = "FLEET STANDBY";
+            return;
+        }
+
+        const d = snap.val();
+        if (panel && isSopTabActive) panel.classList.remove("hidden");
+
+        // --- UPDATE TEXT CONTENT ---
+        const taskKey = d.tasks && d.tasks[d.currentStep] ? d.tasks[d.currentStep] : null;
+        const guide = SOP_GUIDE_BOOK[taskKey] || { title: "Module", instr: "Follow procedure." };
+        
+        const elTitle = document.getElementById("sopStepTitle");
+        const elInstr = document.getElementById("sopStepInstruction");
+        const elStepNum = document.getElementById("stepNumDisplay");
+        const elNextBtn = document.getElementById("btnNextStep");
+        const elStatus = document.getElementById("sopStatusHeader");
+
+        if(elTitle) elTitle.innerText = guide.title;
+        if(elInstr) elInstr.innerText = guide.instr;
+        if(elStepNum) elStepNum.innerText = `STEP ${d.currentStep + 1} OF ${d.tasks.length}`;
+        if(elStatus) elStatus.innerText = "MISSION: " + d.site;
+
+        // --- MANAGE BUTTON LOCKS ---
+        if (elNextBtn) {
+            if (d.currentStepProofUploaded === true) {
+                elNextBtn.disabled = false;
+                elNextBtn.className = "success"; 
+                elNextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
+            } else {
+                elNextBtn.disabled = true;
+                elNextBtn.className = "secondary";
+                elNextBtn.innerHTML = 'NEXT STEP <i class="fas fa-lock"></i>';
+                // Reset Preview for fresh step
+                const elPreview = document.getElementById("sopEvidencePreview");
+                if(elPreview) { elPreview.style.display = "none"; elPreview.src = ""; }
+                document.getElementById("btnStartSopCam")?.classList.remove("hidden");
+            }
+        }
+        
+        if(d.startTime) window.startSopLiveClock(d.startTime);
+    });
+};
+
+window.startSopLiveClock = (start) => {
+    if(sopMissionTimer) clearInterval(sopMissionTimer);
+    sopMissionTimer = setInterval(() => {
+        const el = document.getElementById("sopLiveTimer");
+        if(!el) return;
+        const diff = Date.now() - start;
+        const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
+        const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
+        const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+        el.innerText = `${h}:${m}:${s}`;
+    }, 1000);
+};
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
