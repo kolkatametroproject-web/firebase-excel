@@ -9612,27 +9612,17 @@ let activeAuditStationId = null;
 window.uploadSopProof = async () => {
     if (!sopCapturedBlob) return alert("Capture photo first.");
     
-    // Stage the current photo
-    window.sopStepPhotos.push(sopCapturedBlob);
-    
-    if (window.sopStepPhotos.length < 2) {
-        alert("📸 Photo 1 Staged. Now capture Photo 2 (Different Angle).");
-        
-        // Reset Camera UI for the second capture
-        const preview = document.getElementById("sopEvidencePreview");
-        if(preview) preview.style.display = "none";
-        document.getElementById("btnStartSopCam")?.classList.remove("hidden");
-        document.getElementById("btnUploadSopProof")?.classList.add("hidden");
-        window.sopCapturedBlob = null; // Ready for next snap
-        return;
-    }
-
-    // Both photos exist, ask for remarks
-    const remarks = prompt("Both photos staged. Enter Field Remarks for this task:");
-    if (remarks === null) { window.sopStepPhotos = []; return; }
+    // 1. Mandatory Comment Prompt
+    const remarks = prompt("Enter Field Remarks for this step:");
+    if (remarks === null) return; // Stop if user hits cancel
 
     const btn = document.getElementById("btnUploadSopProof");
-    if (btn) { btn.innerText = "⏳ SAVING BOTH..."; btn.disabled = true; }
+    const nextBtn = document.getElementById("btnNextStep");
+    
+    if (btn) { 
+        btn.innerText = "⏳ UPLOADING..."; 
+        btn.disabled = true; 
+    }
 
     try {
         const uid = currentUser.uid;
@@ -9640,27 +9630,37 @@ window.uploadSopProof = async () => {
         const m = snap.val();
         const stepKey = m.tasks[m.currentStep];
 
+        // 2. Save to Database
         const updates = {};
         updates[`active_deployments/${uid}/proofs/${stepKey}`] = { 
-            img1: window.sopStepPhotos[0], 
-            img2: window.sopStepPhotos[1], 
+            image: sopCapturedBlob, 
             remarks: remarks || "N/A" 
         };
         updates[`active_deployments/${uid}/currentStepProofUploaded`] = true;
 
         await update(ref(db), updates);
+
+        // --- THE FIX: RESET UI AFTER SUCCESS ---
+        alert("✅ PROOF SAVED");
         
-        window.sopStepPhotos = []; // Clear temp array
-        alert("✅ TASK VERIFIED. Press 'Next Step'.");
-        
-        const nextBtn = document.getElementById("btnNextStep");
+        // Unlock the Next Button immediately
         if(nextBtn) {
             nextBtn.disabled = false;
             nextBtn.className = "success";
             nextBtn.innerHTML = 'NEXT STEP <i class="fas fa-arrow-right"></i>';
         }
+        
+        // Hide the upload/retry buttons so they can't click twice
+        if (btn) btn.classList.add("hidden");
+        document.getElementById("btnRetrySopProof")?.classList.add("hidden");
 
-    } catch (e) { alert("Sync Error: " + e.message); }
+    } catch (e) { 
+        alert("Error: " + e.message); 
+        if(btn) {
+            btn.innerText = "UPLOAD & UNLOCK";
+            btn.disabled = false;
+        }
+    }
 };
 
 window.nextSopStep = async () => {
@@ -9696,38 +9696,50 @@ window.nextSopStep = async () => {
 // =========================================================
 
 window.openAuditView = async (uid) => {
-    activeAuditUid = uid;
+    // 1. Declare Global Uid
+    window.activeAuditUid = uid;
+
     const snap = await get(ref(db, `active_deployments/${uid}`));
     if(!snap.exists()) return;
     const data = snap.val();
 
-    document.getElementById("sopVerifyModal").classList.remove("hidden");
+    // 2. Safety Check for Modal Elements
+    const modal = document.getElementById("sopVerifyModal");
     const container = document.getElementById("triAngleProofContainer");
+
+    if(!modal || !container) {
+        console.error("AUDIT ERROR: Modal elements 'sopVerifyModal' or 'triAngleProofContainer' are missing from HTML.");
+        return alert("UI Error: Audit Modal not found in HTML.");
+    }
+
+    // 3. Show Modal and Reset Container
+    modal.classList.remove("hidden");
     container.innerHTML = ""; 
 
+    // 4. Render Tasks
     data.tasks.forEach((taskKey, index) => {
         const proof = data.proofs ? data.proofs[taskKey] : null;
         const isVerified = data.verifiedTasks && data.verifiedTasks[taskKey];
         const isRedo = data.status === "REDO REQUIRED" && data.currentStep === index;
 
         container.innerHTML += `
-            <div class="panel" style="border-left: 12px solid ${isVerified ? '#10b981' : (isRedo ? '#e11d48' : '#fbbf24')}; margin-bottom: 20px;">
-                <h3 style="margin:0; border:none;">STEP ${index+1}: ${taskKey.replace(/_/g, ' ')}</h3>
+            <div class="panel" style="border-left: 12px solid ${isVerified ? '#10b981' : (isRedo ? '#e11d48' : '#fbbf24')}; margin-bottom: 20px; background:#fff; padding:15px; border-radius:10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+                <h3 style="margin:0 0 10px 0; border:none; font-size:14px; color:#1e293b;">STEP ${index+1}: ${taskKey.replace(/_/g, ' ')}</h3>
                 ${proof ? `
-                    <div style="display:flex; gap:10px; margin:15px 0;">
-                        <img src="${proof.img1}" style="width:48%; height:180px; object-fit:cover; border:2px solid #000; border-radius:8px; cursor:pointer;" onclick="window.open('${proof.img1}')">
-                        <img src="${proof.img2}" style="width:48%; height:180px; object-fit:cover; border:2px solid #000; border-radius:8px; cursor:pointer;" onclick="window.open('${proof.img2}')">
+                    <div style="display:flex; gap:10px; margin:10px 0;">
+                        <img src="${proof.img1}" style="width:48%; height:150px; object-fit:cover; border:2px solid #eee; border-radius:8px; cursor:zoom-in;" onclick="window.open('${proof.img1}')">
+                        <img src="${proof.img2}" style="width:48%; height:150px; object-fit:cover; border:2px solid #eee; border-radius:8px; cursor:zoom-in;" onclick="window.open('${proof.img2}')">
                     </div>
-                    <div style="background:#f8fafc; padding:10px; border-radius:6px; border:1px solid #ddd; margin-bottom:15px; font-family:monospace;">
-                        " ${proof.remarks} "
+                    <div style="background:#f8fafc; padding:8px; border-radius:6px; border:1px solid #e2e8f0; margin-bottom:12px; font-size:12px;">
+                        <b>Field Remarks:</b> "${proof.remarks}"
                     </div>
-                    <div style="display:flex; gap:10px;">
-                        <button onclick="verifySingleTask('${uid}', '${taskKey}')" class="success" style="flex:1;" ${isVerified ? 'disabled' : ''}>
+                    <div style="display:flex; gap:8px;">
+                        <button onclick="verifySingleTask('${uid}', '${taskKey}')" class="success" style="flex:1; padding:8px; font-size:11px;" ${isVerified ? 'disabled' : ''}>
                             ${isVerified ? '✅ VERIFIED' : 'APPROVE'}
                         </button>
-                        <button onclick="rejectTask('${uid}', '${taskKey}', ${index})" class="danger" style="flex:1;">REJECT (REDO)</button>
+                        <button onclick="rejectTask('${uid}', '${taskKey}', ${index})" class="danger" style="flex:1; padding:8px; font-size:11px;">REJECT</button>
                     </div>
-                ` : `<p style="color:#64748b; font-style:italic; padding:10px;">Awaiting field data...</p>`}
+                ` : `<p style="color:#94a3b8; font-style:italic; font-size:12px; padding:10px;">Awaiting photos from field terminal...</p>`}
             </div>`;
     });
 };
@@ -9990,6 +10002,16 @@ window.initSopModule = async () => {
                 <i class="fas fa-print"></i> PRINT THERMAL TAG
             </button>
         </div>
+    </div>
+</div>
+  <div id="sopVerifyModal" class="modal-overlay hidden">
+    <div class="panel" style="width:600px; max-width:95%; max-height:90vh; overflow-y:auto; position:relative;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:2px solid #eee; padding-bottom:10px;">
+            <h2 style="margin:0; font-size:18px;"><i class="fas fa-shield-check"></i> Field Audit Terminal</h2>
+            <button onclick="document.getElementById('sopVerifyModal').classList.add('hidden')" class="danger" style="padding:5px 15px;">CLOSE</button>
+        </div>
+        
+        <div id="triAngleProofContainer"></div>
     </div>
 </div>
 </body>
