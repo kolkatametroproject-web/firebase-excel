@@ -10482,64 +10482,56 @@ window.captureSopPhoto = () => {
   window.addShipmentItem = async () => {
     const inputEl = document.getElementById('packScanInput') || document.getElementById('shipScanInput');
     const tag = inputEl ? inputEl.value.trim() : null;
+    
     if (!tag) return;
 
-    // 1. CRITICAL: Check if Firebase Database is ready
-    if (!window.db) {
-        alert("Database connection not ready. Please refresh.");
+    // 1. ENSURE ARRAY EXISTS
+    window.shipCart = window.shipCart || [];
+
+    // 2. CHECK FOR DUPLICATES (Strict Case Sensitive)
+    const alreadyInCart = window.shipCart.some(item => item.barcode === tag);
+    
+    if (alreadyInCart) {
+        showScanFeedback("ALREADY IN CART", "#f59e0b", tag);
+        inputEl.value = ""; // Clear immediately so the next scan works
         return;
     }
 
-    if ((window.shipCart || []).some(i => i.barcode === tag)) {
-        if (typeof showScanFeedback === 'function') showScanFeedback("DUPLICATE TAG", "#f59e0b", tag);
-        inputEl.value = "";
+    // 3. DATABASE LOOKUP
+    if (!window.db) {
+        showScanFeedback("DB OFFLINE", "#ef4444");
         return;
     }
 
     try {
-        // 2. Destructure imports correctly from the ES module
-        const fbDB = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        const { get, ref, query, orderByChild, equalTo } = fbDB;
-
-        // 3. Ensure window.db is passed as the first argument
-        const dbRef = ref(window.db, "inventory"); 
-        const q = query(dbRef, orderByChild("barcode"), equalTo(tag));
-        
+        const { get, ref, query, orderByChild, equalTo } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        const q = query(ref(window.db, "inventory"), orderByChild("barcode"), equalTo(tag));
         const snap = await get(q);
 
         if (!snap.exists()) {
-            if (typeof showScanFeedback === 'function') showScanFeedback("NOT FOUND", "#ef4444", tag);
-            return;
-        }
-
-        let item; 
-        snap.forEach(c => { item = { key: c.key, ...c.val() }; });
-
-        // Check if item is already dispatched
-        if (item.status === "In Transit" || item.status === "Sold Out") {
-            if (typeof showScanFeedback === 'function') showScanFeedback(`ALREADY ${item.status}`, "#ef4444", tag);
+            showScanFeedback("NOT IN SYSTEM", "#ef4444", tag);
             inputEl.value = "";
             return;
         }
 
-        window.shipCart = window.shipCart || [];
+        let item;
+        snap.forEach(c => { item = { key: c.key, ...c.val() }; });
+
+        // 4. REGISTER & UPDATE UI
         window.shipCart.push(item);
-        
-        inputEl.value = "";
+        inputEl.value = ""; // Ready for next batch scan
         
         if (window.renderShipCart) window.renderShipCart();
         if (window.renderPackCart) window.renderPackCart();
 
-        if (typeof showScanFeedback === 'function') {
-            showScanFeedback(`ADDED: ${item.item}`, "#10b981", tag);
-        }
+        // 🟢 Success Feedback
+        showScanFeedback(`ADDED: ${item.item}`, "#10b981", tag);
 
     } catch (e) {
-        console.error("Firebase Error:", e);
-        if (typeof showScanFeedback === 'function') showScanFeedback("DB ERROR", "#ef4444");
+        console.error("Scan Error:", e);
+        showScanFeedback("SCAN ERROR", "#ef4444");
     }
 };
-
 window.manualAddPackItem = window.addShipmentItem;
 // Map both names to the same function for compatibility
 window.manualAddPackItem = window.addShipmentItem;
