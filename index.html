@@ -2206,54 +2206,56 @@ tr:hover { background: #fcfcfd; }
 </div>
   <div id="tab-delivery" class="hidden">
     <div style="margin-bottom:20px; display:flex; gap:10px; padding:10px; background:#e2e8f0; border-radius:8px;">
-        <button onclick="window.logisticsRouter('pack')" class="info"><i class="fas fa-box"></i> PACKING</button>
-        <button onclick="window.logisticsRouter('unbox')" class="success"><i class="fas fa-box-open"></i> UNBOXING</button>
-        <button onclick="window.logisticsRouter('manage')" class="danger"><i class="fas fa-trash"></i> DELETE LOGS</button>
+        <button onclick="window.logRouter('pack')" class="info"><i class="fas fa-box"></i> 1. PACKING</button>
+        <button onclick="window.logRouter('unbox')" class="success"><i class="fas fa-box-open"></i> 2. UNBOXING</button>
+        <button onclick="window.logRouter('manage')" class="danger"><i class="fas fa-trash"></i> 3. MANAGE LOGS</button>
     </div>
 
     <div id="log-pack" class="panel">
-        <h3><i class="fas fa-barcode"></i> High-Speed Packing</h3>
+        <h3><i class="fas fa-truck-loading"></i> Create New Manifest</h3>
         <div style="background:#f8fafc; padding:20px; border:2px dashed #0f172a; border-radius:12px; margin-bottom:20px;">
-            <label style="font-weight:900; font-size:11px;">DESTINATION</label>
-            <input id="logDest" placeholder="e.g. Esplanade Station / Lab B" style="border:2px solid #0f172a; height:45px; font-weight:bold;">
+            <label style="font-weight:900; font-size:11px;">DESTINATION (MANUAL TYPE)</label>
+            <input id="manualDest" placeholder="Type Station Name (e.g. Park Street)" style="border:2px solid #0f172a; height:45px; font-weight:bold;">
             
-            <label style="font-weight:900; font-size:11px;">SCAN ASSETS (BATCH MODE)</label>
+            <label style="font-weight:900; font-size:11px;">SCAN OR TYPE ASSET TAGS</label>
             <div style="display:flex; gap:10px;">
-                <input id="logScanInput" placeholder="Scanner Active..." style="margin:0; height:50px; font-size:18px; font-family:monospace; font-weight:bold;">
-                <button onclick="openBarcodeScanner('LOG_PACK_MODE')" class="warning" style="width:70px;"><i class="fas fa-qrcode"></i></button>
-                <button onclick="window.addLogItem()" class="info">ADD</button>
+                <input id="manualTagInp" placeholder="Enter Asset ID..." style="margin:0; height:50px; font-size:18px; font-family:monospace; font-weight:bold;">
+                <button onclick="openBarcodeScanner('MANUAL_PACK')" class="warning" style="width:70px;"><i class="fas fa-qrcode"></i></button>
+                <button onclick="window.addToManualCart()" class="info">ADD</button>
             </div>
         </div>
 
         <div class="table-wrapper">
-            <table style="width:100%">
+            <table>
                 <thead style="background:#0f172a; color:white;">
                     <tr><th>#</th><th>Asset Tag ID</th><th style="text-align:center;">Action</th></tr>
                 </thead>
-                <tbody id="logCartBody"></tbody>
+                <tbody id="manualCartBody">
+                    <tr><td colspan="3" style="text-align:center; padding:20px;">No items added.</td></tr>
+                </tbody>
             </table>
         </div>
-        <button onclick="window.finalizeLogShipment()" class="success" style="width:100%; margin-top:20px; padding:20px; font-weight:900; font-size:18px;">
-            GENERATE & PRINT SHIPMENT MANIFEST
+        <button onclick="window.finalizeManualDispatch()" class="success" style="width:100%; margin-top:20px; padding:20px; font-weight:900; font-size:18px;">
+            🚀 DISPATCH & PRINT A4 MANIFEST
         </button>
     </div>
 
     <div id="log-unbox" class="panel hidden">
-        <h3><i class="fas fa-scanner"></i> Unboxing Verification</h3>
+        <h3><i class="fas fa-box-open"></i> Physical Unboxing Verify</h3>
         <div style="display:flex; gap:10px; margin-bottom:20px;">
-            <input id="unboxInp" placeholder="Scan Manifest ID..." style="margin:0; height:50px;">
-            <button onclick="openBarcodeScanner('LOG_UNBOX_MODE')" class="warning"><i class="fas fa-qrcode"></i> SCAN</button>
+            <input id="unboxManualInp" placeholder="Type or Scan Manifest ID..." style="margin:0; height:50px; border:2px solid #10b981;">
+            <button onclick="window.loadManualUnbox()" class="success">FETCH</button>
         </div>
-        <div id="unboxDetails" class="hidden" style="background:#f1f5f9; padding:20px; border-radius:10px;">
-            <h2 id="unboxTitle" style="margin:0;"></h2>
-            <div id="unboxList" style="margin:20px 0; display:flex; flex-direction:column; gap:10px;"></div>
-            <button onclick="window.completeUnbox()" class="success" style="width:100%; padding:15px; font-weight:900;">MARK AS UNBOXED</button>
+        <div id="unboxDisplayArea" class="hidden" style="background:#f1f5f9; padding:20px; border-radius:10px;">
+            <h2 id="unboxDestTitle"></h2>
+            <div id="unboxChecklist" style="margin:20px 0; display:flex; flex-direction:column; gap:10px;"></div>
+            <button onclick="window.completeManualUnbox()" class="success" style="width:100%; padding:15px; font-weight:900;">MARK AS UNBOXED</button>
         </div>
     </div>
 
     <div id="log-manage" class="panel hidden">
-        <h3><i class="fas fa-history"></i> Log Management</h3>
-        <div id="logRegistry" style="display:grid; gap:10px;"></div>
+        <h3><i class="fas fa-database"></i> Manifest Registry</h3>
+        <div id="manualRegistryList" style="display:grid; gap:10px;"></div>
     </div>
 </div>
 </section>
@@ -10373,158 +10375,154 @@ window.captureSopPhoto = () => {
         }
     }
 };
-  (function initAmazonLogistics() {
-    window.logCart = [];
+  (function initManualLogistics() {
+    window.manualCart = [];
 
-    // --- 1. Navigation ---
-    window.logisticsRouter = (mode) => {
+    // 1. Navigation Router
+    window.logRouter = (mode) => {
         ['pack', 'unbox', 'manage'].forEach(m => document.getElementById(`log-${m}`).classList.add('hidden'));
         document.getElementById(`log-${mode}`).classList.remove('hidden');
-        if(mode === 'manage') window.loadLogRegistry();
+        if(mode === 'manage') window.refreshManualRegistry();
     };
 
-    // --- 2. Scanner Routing (Batch Scan Supported) ---
-    const baseScan = window.onScanSuccess;
+    // 2. Scanner Router (No Auto-Close for Packing)
+    const baseOnScan = window.onScanSuccess;
     window.onScanSuccess = async (text) => {
         if (!text) return;
-        const decoded = text.trim();
+        const val = text.trim();
 
-        if (scanMode === 'LOG_PACK_MODE') {
-            // Camera stays open for fast packing
-            document.getElementById('logScanInput').value = decoded;
-            window.addLogItem();
-        } else if (scanMode === 'LOG_UNBOX_MODE') {
+        if (scanMode === 'MANUAL_PACK') {
+            document.getElementById('manualTagInp').value = val;
+            window.addToManualCart();
+        } else if (scanMode === 'MANUAL_UNBOX') {
             closeBarcodeScanner();
-            document.getElementById('unboxInp').value = decoded;
-            window.loadUnboxManifest(decoded);
-        } else if (baseScan) {
-            baseScan(text);
+            document.getElementById('unboxManualInp').value = val;
+            window.loadManualUnbox();
+        } else if (baseOnScan) {
+            baseOnScan(text);
         }
     };
 
-    // --- 3. Packing Logic ---
-    window.addLogItem = () => {
-        const inp = document.getElementById('logScanInput');
+    // 3. Packing Logic
+    window.addToManualCart = () => {
+        const inp = document.getElementById('manualTagInp');
         const tag = inp.value.trim().toUpperCase();
         if(!tag) return;
 
-        if (window.logCart.includes(tag)) {
+        if (window.manualCart.includes(tag)) {
             if(window.showScanFeedback) window.showScanFeedback("DUPLICATE", "#f59e0b", tag);
             inp.value = ""; return;
         }
 
-        window.logCart.push(tag);
+        window.manualCart.push(tag);
         inp.value = "";
-        window.renderLogCart();
-        if(window.showScanFeedback) window.showScanFeedback("SCANNED", "#10b981", tag);
+        window.renderManualCart();
+        if(window.showScanFeedback) window.showScanFeedback("REGISTERED", "#10b981", tag);
     };
 
-    window.renderLogCart = () => {
-        const b = document.getElementById("logCartBody");
-        b.innerHTML = window.logCart.length ? "" : "<tr><td colspan='3' style='text-align:center; padding:20px;'>Cart Empty</td></tr>";
-        window.logCart.forEach((tag, i) => {
-            b.innerHTML += `<tr><td>${i+1}</td><td style="font-family:monospace; font-weight:bold;">${tag}</td><td style="text-align:center;"><button onclick="window.logCart.splice(${i},1); window.renderLogCart();" class="danger">X</button></td></tr>`;
+    window.renderManualCart = () => {
+        const b = document.getElementById("manualCartBody");
+        b.innerHTML = window.manualCart.length ? "" : "<tr><td colspan='3' style='text-align:center;'>Cart Empty</td></tr>";
+        window.manualCart.forEach((tag, i) => {
+            b.innerHTML += `<tr><td>${i+1}</td><td style="font-family:monospace; font-weight:bold; font-size:16px;">${tag}</td>
+            <td style="text-align:center;"><button onclick="window.manualCart.splice(${i},1); window.renderManualCart();" class="danger">X</button></td></tr>`;
         });
     };
 
-    // --- 4. Dispatch & Manifest Printing ---
-    window.finalizeLogShipment = async () => {
-        const dest = document.getElementById("logDest").value.trim();
-        if(!dest || window.logCart.length === 0) return alert("Missing Destination or Assets.");
+    // 4. Finalize & Print A4
+    window.finalizeManualDispatch = async () => {
+        const dest = document.getElementById("manualDest").value.trim();
+        if(!dest || window.manualCart.length === 0) return alert("Please enter a Destination and scan items.");
 
-        const id = "AWB-" + Math.floor(100000 + Math.random() * 900000);
-        const logData = { id: id, dest: dest, items: window.logCart, time: Date.now(), status: "SHIPPED", user: currentUser.name || "Agent" };
+        const id = "MTR-" + Date.now().toString().slice(-6);
+        const data = { id: id, dest: dest, items: window.manualCart, time: Date.now(), user: currentUser.name || "Officer" };
 
         try {
             const { set, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            await set(ref(window.db, `standalone_logs/${id}`), logData);
+            await set(ref(window.db, `manual_shipments/${id}`), data);
             
-            window.printAmazonManifest(logData);
-            window.logCart = []; window.renderLogCart();
-            document.getElementById("logDest").value = "";
+            window.printA4Manifest(data);
+            window.manualCart = []; window.renderManualCart();
+            document.getElementById("manualDest").value = "";
         } catch(e) { alert(e.message); }
     };
 
-    // --- 5. Unboxing Logic ---
-    window.loadUnboxManifest = async (id) => {
+    // 5. Unboxing Logic
+    window.loadManualUnbox = async () => {
+        const id = document.getElementById("unboxManualInp").value.trim().toUpperCase();
         const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        const snap = await get(ref(window.db, `standalone_logs/${id}`));
-        if(!snap.exists()) return alert("Invalid Manifest ID");
+        const snap = await get(ref(window.db, `manual_shipments/${id}`));
+        
+        if(!snap.exists()) return alert("Manifest ID Not Found");
         
         const d = snap.val();
-        document.getElementById("unboxDetails").classList.remove("hidden");
-        document.getElementById("unboxTitle").innerText = d.dest;
-        document.getElementById("unboxList").innerHTML = d.items.map(it => `
-            <label style="background:#fff; padding:10px; border:1px solid #ddd; display:flex; gap:10px; border-radius:5px;">
-                <input type="checkbox" class="unbox-chk"> ${it}
+        window.activeUnboxId = id;
+        document.getElementById("unboxDisplayArea").classList.remove("hidden");
+        document.getElementById("unboxDestTitle").innerText = "UNBOXING: " + d.dest.toUpperCase();
+        document.getElementById("unboxChecklist").innerHTML = d.items.map(it => `
+            <label style="background:#fff; padding:15px; border:1px solid #ddd; display:flex; gap:12px; border-radius:8px; font-weight:bold;">
+                <input type="checkbox" class="manual-unbox-chk" style="width:20px; height:20px;"> ${it}
             </label>
         `).join('');
-        window.activeUnboxId = id;
     };
 
-    window.completeUnbox = async () => {
-        const checks = document.querySelectorAll('.unbox-chk');
-        if(!Array.from(checks).every(c => c.checked)) return alert("Check all items.");
+    window.completeManualUnbox = async () => {
+        const checks = document.querySelectorAll('.manual-unbox-chk');
+        if(!Array.from(checks).every(c => c.checked)) return alert("Check all items physically before closing.");
         
-        const { update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        await update(ref(window.db, `standalone_logs/${window.activeUnboxId}`), { status: "UNBOXED" });
-        alert("✅ Manifest marked as Unboxed.");
-        document.getElementById("unboxDetails").classList.add("hidden");
+        const { remove, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        await remove(ref(window.db, `manual_shipments/${window.activeUnboxId}`));
+        alert("✅ Package Successfully Unboxed and Logged.");
+        document.getElementById("unboxDisplayArea").classList.add("hidden");
+        document.getElementById("unboxManualInp").value = "";
     };
 
-    // --- 6. Registry & Deletion ---
-    window.loadLogRegistry = async () => {
+    // 6. Registry
+    window.refreshManualRegistry = async () => {
         const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        const snap = await get(ref(window.db, "standalone_logs"));
-        const reg = document.getElementById("logRegistry");
-        reg.innerHTML = "";
+        const snap = await get(ref(window.db, "manual_shipments"));
+        const list = document.getElementById("manualRegistryList");
+        list.innerHTML = "";
         if(snap.exists()){
             snap.forEach(c => {
                 const d = c.val();
-                reg.innerHTML += `
-                <div class="panel" style="display:flex; justify-content:space-between; align-items:center; background:#fff;">
-                    <div><b>${d.id}</b><br><small>${d.dest} | ${d.status}</small></div>
-                    <div>
-                        <button onclick='window.printAmazonManifest(${JSON.stringify(d)})' class="info">Print</button>
-                        <button onclick="window.deleteManifest('${d.id}')" class="danger">Delete</button>
-                    </div>
+                list.innerHTML += `<div class="panel" style="display:flex; justify-content:space-between; background:white;">
+                    <div><b>${d.id}</b><br><small>${d.dest}</small></div>
+                    <button class="info" onclick='window.printA4Manifest(${JSON.stringify(d)})'>RE-PRINT</button>
                 </div>`;
             });
         }
     };
 
-    window.deleteManifest = async (id) => {
-        if(!confirm("Erase log permanently?")) return;
-        const { remove, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        await remove(ref(window.db, `standalone_logs/${id}`));
-        window.loadLogRegistry();
-    };
-
-    window.printAmazonManifest = (d) => {
+    // 7. A4 PRINT ENGINE
+    window.printA4Manifest = (d) => {
         const container = document.getElementById("printableReportContainer");
-        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${d.id}`;
-        let rows = d.items.map((it, i) => `<tr><td>${i+1}</td><td style="font-family:monospace;">${it}</td></tr>`).join('');
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${d.id}`;
+        let rows = d.items.map((it, i) => `<tr><td style="padding:10px; border:1px solid #000;">${i+1}</td><td style="padding:10px; border:1px solid #000; font-family:monospace; font-weight:bold;">${it}</td></tr>`).join('');
         
         container.innerHTML = `
-            <div class="no-print" style="padding:20px; text-align:center; background:#eee;">
-                <button onclick="window.print()" style="padding:15px 40px; background:green; color:white; font-weight:bold;">PRINT</button>
-                <button onclick="closeReportPreview()" style="padding:15px 40px; margin-left:10px;">CLOSE</button>
+            <div class="no-print" style="padding:20px; background:#334155; text-align:center;">
+                <button onclick="window.print()" style="padding:15px 40px; background:#10b981; color:white; font-weight:bold;">🖨️ PRINT A4 MANIFEST</button>
+                <button onclick="closeReportPreview()" style="padding:15px 40px; margin-left:10px; background:red; color:white;">CLOSE</button>
             </div>
-            <div style="padding:40px; color:black; background:white; font-family:sans-serif;">
-                <div style="display:flex; justify-content:space-between; border-bottom:4px solid #000; padding-bottom:10px;">
-                    <div><h1 style="margin:0;">METRO SAFETY</h1><h2>LOGISTICS MANIFEST</h2></div>
-                    <img src="${qrUrl}" style="width:120px;">
+            <div style="width:210mm; min-height:297mm; margin:0 auto; padding:20mm; background:white; color:black; font-family:sans-serif;">
+                <div style="display:flex; justify-content:space-between; border-bottom:5px solid #000; padding-bottom:10px;">
+                    <div><h1 style="margin:0; font-size:35pt;">METRO RAILWAY</h1><h3 style="margin:0;">LOGISTICS & FULFILLMENT</h3></div>
+                    <img src="${qrUrl}" style="width:120px; border:2px solid #000;">
                 </div>
-                <div style="margin:20px 0; font-size:18px;">
+                <div style="margin:30px 0; font-size:16pt;">
                     <b>MANIFEST ID:</b> ${d.id}<br>
                     <b>DESTINATION:</b> ${d.dest.toUpperCase()}<br>
-                    <b>DATE:</b> ${new Date(d.time).toLocaleString()}
+                    <b>DATE:</b> ${new Date(d.time).toLocaleString('en-IN')}
                 </div>
-                <table style="width:100%; border-collapse:collapse;" border="1">
-                    <thead><tr style="background:#eee;"><th>#</th><th>ASSET TAG ID</th></tr></thead>
+                <table style="width:100%; border-collapse:collapse; border:2px solid #000;">
+                    <thead><tr style="background:#eee;"><th style="padding:10px; border:1px solid #000;">#</th><th style="padding:10px; border:1px solid #000; text-align:left;">ASSET TAG ID</th></tr></thead>
                     <tbody>${rows}</tbody>
                 </table>
-                <div style="margin-top:50px; border-top:2px solid #000; width:40%; text-align:center;">OFFICER SIGNATURE</div>
+                <div style="margin-top:100px; display:flex; justify-content:space-between;">
+                    <div style="border-top:2px solid #000; width:40%; text-align:center; padding-top:5px;">DISPATCHER</div>
+                    <div style="border-top:2px solid #000; width:40%; text-align:center; padding-top:5px;">RECEIVER</div>
+                </div>
             </div>`;
         container.classList.remove("hidden");
     };
