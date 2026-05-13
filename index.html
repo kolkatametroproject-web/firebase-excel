@@ -10440,233 +10440,103 @@ window.captureSopPhoto = () => {
     }
 };
 // =========================================================
-// 🚀 UNIFIED METRO LOGISTICS ENGINE
+// 🚀 CONSOLIDATED LOGISTICS & SCANNER ROUTER
+// Fixes "already declared" errors and unifies SHIP/DEL modes
 // =========================================================
 
-(function initMetroLogisticsSystem() {
-    // 1. SHARED STATE
-    window.shipCart = [];
+(function initMetroLogistics() {
+    // 1. SAFE SCANNER CAPTURE (Prevents SyntaxErrors on re-run)
+    if (!window.originalOnScanSuccess) {
+        window.originalOnScanSuccess = window.onScanSuccess || function(t){ console.log("Base scanner active", t); };
+    }
+
+    // 2. STATE INITIALIZATION
+    window.shipCart = window.shipCart || [];
     window.currentUnboxPkg = null;
 
-    // 2. INJECT CSS FOR PRINT & UI
-    const logisticsStyle = document.createElement('style');
-    logisticsStyle.innerHTML = `
-        @media print {
-            @page { margin: 0mm; size: auto; }
-            body * { visibility: hidden; }
-            #printableReportContainer, #printableReportContainer * { visibility: visible; }
-            #printableReportContainer { position: absolute; left: 0; top: 0; width: 100%; }
-            .no-print { display: none !important; }
-        }
-        .track-card { transition: transform 0.2s; cursor: pointer; }
-        .track-card:hover { transform: translateY(-2px); border-color: var(--metro-blue) !important; }
-        .unbox-chk:checked + div { text-decoration: line-through; opacity: 0.6; }
-    `;
-    document.head.appendChild(logisticsStyle);
-
-    // 3. UNIFIED NAVIGATION & TAB TOGGLE
-    window.toggleDelMode = (mode) => {
-        const sections = ['packing', 'transit', 'tracking', 'unboxing', 'erase'];
-        sections.forEach(s => {
-            const el = document.getElementById(`del-${s}`);
-            if (el) el.classList.add('hidden');
+    // 3. THE UNIFIED NAVIGATION ENGINE
+    // Maps both toggleShipMode and toggleDelMode to a single logic stream
+    const syncNav = (mode) => {
+        const panels = ['packing', 'transit', 'tracking', 'returns', 'unboxing', 'erase'];
+        panels.forEach(p => {
+            ['ship-', 'del-'].forEach(prefix => {
+                const el = document.getElementById(prefix + p);
+                if (el) el.classList.add('hidden');
+            });
         });
-        
-        const target = document.getElementById(`del-${mode}`);
+
+        const target = document.getElementById(`del-${mode}`) || document.getElementById(`ship-${mode}`);
         if (target) target.classList.remove('hidden');
 
-        // Contextual Data Loading
-        if (mode === 'tracking') window.loadTrackingData();
-        if (mode === 'erase') window.loadErasePackages();
+        // Contextual Loading
+        if (mode === 'tracking' && typeof window.loadTrackingData === 'function') window.loadTrackingData();
+        if (mode === 'erase' && typeof window.loadErasePackages === 'function') window.loadErasePackages();
     };
+    
+    window.toggleShipMode = syncNav;
+    window.toggleDelMode = syncNav;
 
-    // 4. SMART SCANNER ROUTER
-    const originalOnScanSuccess = window.onScanSuccess;
+    // 4. THE MASTER SCANNER ROUTER
     window.onScanSuccess = async function (decodedText) {
         if (!decodedText) return;
         const scanned = decodedText.trim();
-        
-        // Handling Delivery specific scan modes
-        if (typeof scanMode !== 'undefined' && scanMode.startsWith('DEL_')) {
-            closeBarcodeScanner();
-            
-            const mapping = {
-                'DEL_PACK_SCAN': { input: 'packScanInput', action: () => window.manualAddPackItem() },
-                'DEL_TRANSIT_SCAN': { input: 'transitPkgInput', action: null },
-                'DEL_UNBOX_SCAN': { input: 'unboxPkgInput', action: (val) => window.loadUnboxData(val) },
-                'DEL_TRACK_SCAN': { input: 'trackSearchInput', action: () => window.filterTrackingList() }
-            };
+        const mode = typeof scanMode !== 'undefined' ? scanMode : "";
 
-            const route = mapping[scanMode];
-            if (route) {
-                const el = document.getElementById(route.input);
-                if (el) {
-                    el.value = scanned;
-                    if (route.action) route.action(scanned);
+        // Detect if the current mode belongs to Logistics
+        if (mode.startsWith('SHIP_') || mode.startsWith('DEL_')) {
+            if (typeof closeBarcodeScanner === 'function') closeBarcodeScanner();
+
+            // Routing Logic
+            if (mode.includes('PACK')) {
+                const inp = document.getElementById('packScanInput') || document.getElementById('shipScanInput');
+                if (inp) { 
+                    inp.value = scanned; 
+                    // Support both function names used in your different versions
+                    if (window.manualAddPackItem) window.manualAddPackItem();
+                    else if (window.addShipmentItem) window.addShipmentItem();
+                }
+            } 
+            else if (mode.includes('TRANSIT')) {
+                const inp = document.getElementById('transitPkgInput') || document.getElementById('shipTransitInput');
+                if (inp) inp.value = scanned;
+            } 
+            else if (mode.includes('TRACK')) {
+                const inp = document.getElementById('trackSearchInput') || document.getElementById('shipTrackInput');
+                if (inp) {
+                    inp.value = scanned;
+                    if (window.filterTrackingList) window.filterTrackingList();
+                    if (window.trackShipment) window.trackShipment();
+                }
+            } 
+            else if (mode.includes('UNBOX')) {
+                const inp = document.getElementById('unboxPkgInput');
+                if (inp) {
+                    inp.value = scanned;
+                    if (window.loadUnboxData) window.loadUnboxData(scanned);
                 }
             }
-            return;
-        }
-        
-        // Fallback to global inventory scanner
-        if (typeof originalOnScanSuccess === "function") originalOnScanSuccess(decodedText);
-    };
-
-    // 5. PACKING & ASSEMBLY
-    window.manualAddPackItem = async () => {
-        const input = document.getElementById('packScanInput');
-        const tag = input.value.trim();
-        if (!tag) return;
-        
-        if (window.shipCart.some(i => i.barcode === tag)) {
-            input.value = "";
-            return alert("Asset already in cart.");
+            return; // Exit: Do not pass to inventory
         }
 
-        try {
-            const { get, ref, query, orderByChild, equalTo } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            const q = query(ref(window.db, "inventory"), orderByChild("barcode"), equalTo(tag));
-            const snap = await get(q);
-
-            if (!snap.exists()) return alert("Asset Not Found.");
-            let item; snap.forEach(c => item = { key: c.key, ...c.val() });
-
-            if (item.status === "Sold Out" || item.status === "In Transit") {
-                return alert(`Status Conflict: ${item.status}`);
-            }
-
-            window.shipCart.push(item);
-            input.value = "";
-            renderPackCart();
-            
-            // Sync with billing if available
-            if (window.billCart && !window.billCart.some(i => i.tag === item.barcode)) {
-                const price = (parseFloat(item.purchasePrice) || 0) * 1.30;
-                window.billCart.push({ name: item.item, tag: item.barcode, dbKey: item.key, qty: 1, rate: price, net: price });
-                if(window.renderBillCartUI) window.renderBillCartUI();
-            }
-        } catch (e) { alert(e.message); }
+        // Pass to original Inventory/Warranty system if not a logistics scan
+        if (typeof window.originalOnScanSuccess === "function") {
+            window.originalOnScanSuccess(decodedText);
+        }
     };
 
-    function renderPackCart() {
-        const tbody = document.getElementById("packCartBody");
-        if (!tbody) return;
-        tbody.innerHTML = window.shipCart.length === 0 ? '<tr><td colspan="4" style="text-align:center;">Empty</td></tr>' : "";
-        
-        window.shipCart.forEach((it, i) => {
-            tbody.innerHTML += `
-                <tr>
-                    <td style="text-align:center;">${i+1}</td>
-                    <td><b>${it.item}</b></td>
-                    <td style="font-family:monospace; color:var(--metro-blue);">${it.barcode}</td>
-                    <td style="text-align:center;"><button onclick="window.shipCart.splice(${i},1); renderPackCart();" class="danger">X</button></td>
-                </tr>`;
-        });
+    // 5. HELPER: RE-INITIALIZE BUTTONS
+    const navBar = document.querySelector('.nav-bar');
+    const logisticsBtn = document.getElementById('btnDelivery');
+    if (navBar && !logisticsBtn) {
+        const btn = document.createElement('button');
+        btn.id = 'btnDelivery';
+        btn.className = 'nav-btn';
+        btn.onclick = () => { switchTab('delivery'); window.toggleDelMode('packing'); };
+        btn.innerHTML = '<i class="fas fa-truck"></i> Logistics';
+        navBar.appendChild(btn);
     }
-
-    window.finalizePackage = async () => {
-        if (window.shipCart.length === 0) return alert("Cart is empty.");
-        const stn = document.getElementById("packTargetStation").value;
-        if (!stn) return alert("Select Station.");
-
-        const pkgId = "PKG-" + Date.now().toString().slice(-6);
-        const user = window.currentUser?.name || "Field Agent";
-
-        const pkgData = {
-            id: pkgId, awb: pkgId,
-            station: stn, destination: stn,
-            status: 'Packed',
-            items: window.shipCart.map(i => ({ name: i.item, tag: i.barcode, key: i.key })),
-            packedBy: user,
-            time: Date.now(),
-            history: [{ status: 'Packed & Sealed', time: Date.now(), location: 'Dispatch Hub', by: user }]
-        };
-
-        try {
-            const { update, set, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            // Write to both paths for legacy compatibility
-            await set(ref(window.db, `packages/${pkgId}`), pkgData);
-            await set(ref(window.db, `shipments/${pkgId}`), pkgData);
-
-            const updates = {};
-            window.shipCart.forEach(it => {
-                updates[`inventory/${it.key}/status`] = "In Transit";
-                updates[`inventory/${it.key}/location`] = `In ${pkgId}`;
-                updates[`inventory/${it.key}/assignedStation`] = stn;
-            });
-            await update(ref(window.db), updates);
-
-            window.generatePackageBillPrint(pkgId, window.shipCart, stn, user);
-            window.shipCart = [];
-            renderPackCart();
-        } catch (e) { alert(e.message); }
-    };
-
-    // 6. TRANSIT & UPDATES
-    window.updateTransitStatus = async (newStatus) => {
-        const pkgId = document.getElementById("transitPkgInput").value.trim().toUpperCase();
-        if (!pkgId) return alert("Scan ID.");
-
-        const updateFn = async (gps = "Hub Location") => {
-            try {
-                const { get, update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-                const snap = await get(ref(window.db, `packages/${pkgId}`));
-                if (!snap.exists()) return alert("Not Found");
-
-                const pkg = snap.val();
-                let hist = Array.isArray(pkg.history) ? pkg.history : [];
-                hist.push({ status: newStatus, time: Date.now(), location: gps, by: window.currentUser?.name || "Agent" });
-
-                await update(ref(window.db, `packages/${pkgId}`), { status: newStatus, history: hist });
-                alert(`Updated: ${newStatus}`);
-                document.getElementById("transitPkgInput").value = "";
-            } catch (e) { alert(e.message); }
-        };
-
-        if (newStatus === 'Delivered' && navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                (p) => updateFn(`https://maps.google.com/?q=${p.coords.latitude},${p.coords.longitude}`),
-                () => updateFn("Location Hidden")
-            );
-        } else { updateFn(); }
-    };
-
-    // 7. UNBOXING LOGIC
-    window.loadUnboxData = async (pkgId) => {
-        try {
-            const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            const snap = await get(ref(window.db, `packages/${pkgId}`));
-            if (!snap.exists()) return alert("Invalid PKG");
-            
-            const pkg = snap.val();
-            if (pkg.status === "Unboxed") return alert("Already unboxed.");
-
-            window.currentUnboxPkg = pkg;
-            document.getElementById("unboxArea").classList.remove("hidden");
-            document.getElementById("unboxStationName").innerText = pkg.station || "Unknown";
-            
-            const list = document.getElementById("unboxItemsList");
-            list.innerHTML = (pkg.items || []).map(it => `
-                <label style="display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #ddd; background:white;">
-                    <input type="checkbox" class="unbox-chk">
-                    <div><b>${it.name}</b><br><small>${it.tag}</small></div>
-                </label>
-            `).join('');
-        } catch (e) { alert(e.message); }
-    };
-
-    // Initialization: Populate stations once
-    setTimeout(() => {
-        const sel = document.getElementById("packTargetStation");
-        if (sel && typeof METRO_STATIONS !== 'undefined') {
-            let opts = "<option value=''>-- Select Destination --</option>";
-            for (const [line, stns] of Object.entries(METRO_STATIONS)) {
-                stns.forEach(s => opts += `<option value="${s} (${line})">${s}</option>`);
-            }
-            sel.innerHTML = opts;
-        }
-    }, 1000);
-
+    
+    console.log("✅ Logistics Engine (Fixed) initialized.");
 })();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
