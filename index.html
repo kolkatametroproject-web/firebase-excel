@@ -10390,7 +10390,6 @@ window.captureSopPhoto = () => {
     window.onScanSuccess = async (text) => {
         if (!text) return;
         const val = text.trim();
-
         if (scanMode === 'MANUAL_PACK') {
             document.getElementById('manualTagInp').value = val;
             window.addToManualCart();
@@ -10398,22 +10397,18 @@ window.captureSopPhoto = () => {
             closeBarcodeScanner();
             document.getElementById('unboxManualInp').value = val;
             window.loadManualUnbox();
-        } else if (baseOnScan) {
-            baseOnScan(text);
-        }
+        } else if (baseOnScan) baseOnScan(text);
     };
 
-    // 3. Packing Logic
+    // 3. Packing Logic (Manual Entry)
     window.addToManualCart = () => {
         const inp = document.getElementById('manualTagInp');
         const tag = inp.value.trim().toUpperCase();
         if(!tag) return;
-
         if (window.manualCart.includes(tag)) {
             if(window.showScanFeedback) window.showScanFeedback("DUPLICATE", "#f59e0b", tag);
             inp.value = ""; return;
         }
-
         window.manualCart.push(tag);
         inp.value = "";
         window.renderManualCart();
@@ -10429,55 +10424,117 @@ window.captureSopPhoto = () => {
         });
     };
 
-    // 4. Finalize & Print A4
+    // 4. Finalize & Print A4 (Styled like Audit Reports)
     window.finalizeManualDispatch = async () => {
         const dest = document.getElementById("manualDest").value.trim();
         if(!dest || window.manualCart.length === 0) return alert("Please enter a Destination and scan items.");
-
-        const id = "MTR-" + Date.now().toString().slice(-6);
+        const id = "MTR-LOG-" + Date.now().toString().slice(-6);
         const data = { id: id, dest: dest, items: window.manualCart, time: Date.now(), user: currentUser.name || "Officer" };
-
         try {
             const { set, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
             await set(ref(window.db, `manual_shipments/${id}`), data);
-            
             window.printA4Manifest(data);
             window.manualCart = []; window.renderManualCart();
             document.getElementById("manualDest").value = "";
         } catch(e) { alert(e.message); }
     };
 
-    // 5. Unboxing Logic
+    // 5. Official A4 Print Engine (Reference: Audit Report Style)
+    window.printA4Manifest = (d) => {
+        const container = document.getElementById("printableReportContainer");
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${d.id}`;
+        
+        let itemRows = d.items.map((it, i) => `
+            <tr style="border-bottom: 5pt solid black; font-size: 55pt; font-weight: 900;">
+                <td style="padding: 25px 15px; text-align: center;">${i+1}</td>
+                <td style="padding: 25px 15px; font-family: monospace; text-align: left;">${it}</td>
+            </tr>`).join('');
+
+        container.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:30px; background:#fff; position:sticky; top:0; width:100%; border-bottom:2px solid #ccc; z-index:99999;">
+            <button onclick="window.print()" style="padding:40px 80px; font-size:30pt; font-weight:900; background:#15803d; color:white; border-radius:20px; cursor:pointer;">
+                🖨️ PRINT MANIFEST
+            </button>
+            <button class="danger" onclick="closeReportPreview()" style="padding:40px 80px; font-size:30pt; font-weight:900; margin-left:20px; cursor:pointer;">
+                CLOSE
+            </button>
+        </div>
+        
+        <div class="a4-max-wrapper" style="background:white; color:black; margin:0 auto; font-family:'Arial Black', sans-serif; padding: 20mm; box-sizing: border-box; width: 210mm; min-height: 297mm;">
+            <div style="text-align:center; border-bottom: 12pt solid black; padding-bottom:20px; margin-bottom:40px;">
+                <div style="font-size: 55pt; font-weight: 900; line-height: 1;">METRO RAILWAY<br>LOGISTICS DIVISION</div>
+                <div style="font-size: 25pt; margin-top:10px;">IEM - UEM GROUP SAFETY PROJECT</div>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:60px;">
+                <div style="text-align: left;">
+                    <div style="font-size: 40pt; font-weight:900; background:black; color:white; padding:10px 20px; display:inline-block;">SHIPPING MANIFEST</div>
+                    <div style="font-size: 32pt; margin-top:40px;"><b>TO STATION:</b><br>${d.dest.toUpperCase()}</div>
+                    <div style="font-size: 24pt; margin-top:15px;"><b>DATE:</b> ${new Date(d.time).toLocaleDateString('en-IN')}</div>
+                    <div style="font-size: 24pt; margin-top:10px;"><b>DISPATCHER:</b> ${d.user.toUpperCase()}</div>
+                </div>
+                <div style="text-align:center; border: 8pt solid black; padding:20px;">
+                    <img src="${qrUrl}" style="width:280px; height:280px;">
+                    <div style="font-family:monospace; font-size:26pt; font-weight:900; margin-top:15px;">${d.id}</div>
+                </div>
+            </div>
+
+            <table style="width:100%; border-collapse:collapse; margin-bottom:80px;">
+                <thead style="background:black; color:white;">
+                    <tr>
+                        <th style="padding:15px; font-size:30pt; width:15%;">#</th>
+                        <th style="padding:15px; font-size:30pt; text-align:left;">ASSET TAG ID</th>
+                    </tr>
+                </thead>
+                <tbody>${itemRows}</tbody>
+            </table>
+
+            <div style="display:flex; justify-content:space-between; margin-top:150px;">
+                <div style="width:45%; text-align:center;">
+                    <div style="border-top:8pt solid black; margin-bottom:10px;"></div>
+                    <div style="font-size:25pt; font-weight:bold;">AUTHORIZED BY</div>
+                </div>
+                <div style="width:45%; text-align:center;">
+                    <div style="border-top:8pt solid black; margin-bottom:10px;"></div>
+                    <div style="font-size:25pt; font-weight:bold;">STATION RECEIVER</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 100px; text-align: center; font-size: 20pt; border-top: 5pt dashed black; padding-top: 20px; font-weight: 900;">
+                OFFICIAL SECURE LOGISTICS RECORD
+            </div>
+        </div>`;
+        
+        container.classList.remove("hidden");
+    };
+
+    // 6. Support Functions
     window.loadManualUnbox = async () => {
         const id = document.getElementById("unboxManualInp").value.trim().toUpperCase();
         const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
         const snap = await get(ref(window.db, `manual_shipments/${id}`));
-        
         if(!snap.exists()) return alert("Manifest ID Not Found");
-        
         const d = snap.val();
         window.activeUnboxId = id;
         document.getElementById("unboxDisplayArea").classList.remove("hidden");
-        document.getElementById("unboxDestTitle").innerText = "UNBOXING: " + d.dest.toUpperCase();
+        document.getElementById("unboxDestTitle").innerText = d.dest.toUpperCase();
         document.getElementById("unboxChecklist").innerHTML = d.items.map(it => `
-            <label style="background:#fff; padding:15px; border:1px solid #ddd; display:flex; gap:12px; border-radius:8px; font-weight:bold;">
-                <input type="checkbox" class="manual-unbox-chk" style="width:20px; height:20px;"> ${it}
+            <label style="background:#fff; padding:15px; border:1px solid #ddd; display:flex; gap:12px; border-radius:8px; font-weight:bold; font-size:18px;">
+                <input type="checkbox" class="manual-unbox-chk" style="width:25px; height:25px;"> ${it}
             </label>
         `).join('');
     };
 
     window.completeManualUnbox = async () => {
         const checks = document.querySelectorAll('.manual-unbox-chk');
-        if(!Array.from(checks).every(c => c.checked)) return alert("Check all items physically before closing.");
-        
+        if(!Array.from(checks).every(c => c.checked)) return alert("Physical verification of all items required.");
         const { remove, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
         await remove(ref(window.db, `manual_shipments/${window.activeUnboxId}`));
-        alert("✅ Package Successfully Unboxed and Logged.");
+        alert("✅ Package Unboxed. Record Cleared.");
         document.getElementById("unboxDisplayArea").classList.add("hidden");
         document.getElementById("unboxManualInp").value = "";
     };
 
-    // 6. Registry
     window.refreshManualRegistry = async () => {
         const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
         const snap = await get(ref(window.db, "manual_shipments"));
@@ -10486,45 +10543,12 @@ window.captureSopPhoto = () => {
         if(snap.exists()){
             snap.forEach(c => {
                 const d = c.val();
-                list.innerHTML += `<div class="panel" style="display:flex; justify-content:space-between; background:white;">
+                list.innerHTML += `<div class="panel" style="display:flex; justify-content:space-between; background:white; align-items:center;">
                     <div><b>${d.id}</b><br><small>${d.dest}</small></div>
                     <button class="info" onclick='window.printA4Manifest(${JSON.stringify(d)})'>RE-PRINT</button>
                 </div>`;
             });
         }
-    };
-
-    // 7. A4 PRINT ENGINE
-    window.printA4Manifest = (d) => {
-        const container = document.getElementById("printableReportContainer");
-        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${d.id}`;
-        let rows = d.items.map((it, i) => `<tr><td style="padding:10px; border:1px solid #000;">${i+1}</td><td style="padding:10px; border:1px solid #000; font-family:monospace; font-weight:bold;">${it}</td></tr>`).join('');
-        
-        container.innerHTML = `
-            <div class="no-print" style="padding:20px; background:#334155; text-align:center;">
-                <button onclick="window.print()" style="padding:15px 40px; background:#10b981; color:white; font-weight:bold;">🖨️ PRINT A4 MANIFEST</button>
-                <button onclick="closeReportPreview()" style="padding:15px 40px; margin-left:10px; background:red; color:white;">CLOSE</button>
-            </div>
-            <div style="width:210mm; min-height:297mm; margin:0 auto; padding:20mm; background:white; color:black; font-family:sans-serif;">
-                <div style="display:flex; justify-content:space-between; border-bottom:5px solid #000; padding-bottom:10px;">
-                    <div><h1 style="margin:0; font-size:35pt;">METRO RAILWAY</h1><h3 style="margin:0;">LOGISTICS & FULFILLMENT</h3></div>
-                    <img src="${qrUrl}" style="width:120px; border:2px solid #000;">
-                </div>
-                <div style="margin:30px 0; font-size:16pt;">
-                    <b>MANIFEST ID:</b> ${d.id}<br>
-                    <b>DESTINATION:</b> ${d.dest.toUpperCase()}<br>
-                    <b>DATE:</b> ${new Date(d.time).toLocaleString('en-IN')}
-                </div>
-                <table style="width:100%; border-collapse:collapse; border:2px solid #000;">
-                    <thead><tr style="background:#eee;"><th style="padding:10px; border:1px solid #000;">#</th><th style="padding:10px; border:1px solid #000; text-align:left;">ASSET TAG ID</th></tr></thead>
-                    <tbody>${rows}</tbody>
-                </table>
-                <div style="margin-top:100px; display:flex; justify-content:space-between;">
-                    <div style="border-top:2px solid #000; width:40%; text-align:center; padding-top:5px;">DISPATCHER</div>
-                    <div style="border-top:2px solid #000; width:40%; text-align:center; padding-top:5px;">RECEIVER</div>
-                </div>
-            </div>`;
-        container.classList.remove("hidden");
     };
 })();
 </script>
