@@ -10440,1073 +10440,232 @@ window.captureSopPhoto = () => {
     }
 };
 // =========================================================
-// 📦 COMPLETE NATIVE LOGISTICS & FULFILLMENT ENGINE
-// Fixes "is not defined" errors and hooks up all buttons
+// 🚀 UNIFIED METRO LOGISTICS ENGINE
 // =========================================================
 
-// 1. STATE VARIABLES
-window.shipCart = [];
-window.currentUnboxPkg = null;
+(function initMetroLogisticsSystem() {
+    // 1. SHARED STATE
+    window.shipCart = [];
+    window.currentUnboxPkg = null;
 
-// 2. THE MISSING TOGGLE FUNCTION (Fixes your current error)
-window.toggleShipMode = (mode) => {
-    // Hide all possible panels
-    const allModes = ['packing', 'transit', 'tracking', 'returns', 'unboxing', 'erase'];
-    allModes.forEach(m => {
-        const el1 = document.getElementById(`ship-${m}`);
-        const el2 = document.getElementById(`del-${m}`);
-        if (el1) el1.classList.add('hidden');
-        if (el2) el2.classList.add('hidden');
-    });
-    
-    // Show the target panel
-    const target = document.getElementById(`ship-${mode}`) || document.getElementById(`del-${mode}`);
-    if (target) target.classList.remove('hidden');
-
-    // Auto-load data if entering specific tabs
-    if (mode === 'tracking' && typeof window.loadTrackingData === 'function') window.loadTrackingData();
-    if (mode === 'erase' && typeof window.loadErasePackages === 'function') window.loadErasePackages();
-};
-
-// 3. UNIVERSAL SCANNER ROUTING
-const baseOnScanSuccess = window.onScanSuccess;
-window.onScanSuccess = async function (decodedText) {
-    if (!decodedText) return;
-    const scanned = decodedText.trim();
-    
-    // Check if it's a Logistics Scan
-    const shipModes = ['SHIP_PACK', 'DEL_PACK_SCAN', 'SHIP_TRANSIT', 'DEL_TRANSIT_SCAN', 'SHIP_TRACK', 'DEL_TRACK_SCAN', 'SHIP_RETURN', 'DEL_UNBOX_SCAN'];
-    
-    if (shipModes.includes(scanMode)) {
-        closeBarcodeScanner();
-        
-        if (scanMode === 'SHIP_PACK' || scanMode === 'DEL_PACK_SCAN') {
-            const inp = document.getElementById('shipScanInput') || document.getElementById('packScanInput');
-            if(inp) inp.value = scanned;
-            window.addShipmentItem();
-        } 
-        else if (scanMode === 'SHIP_TRANSIT' || scanMode === 'DEL_TRANSIT_SCAN') {
-            const inp = document.getElementById('shipTransitInput') || document.getElementById('transitPkgInput');
-            if(inp) inp.value = scanned;
-        } 
-        else if (scanMode === 'SHIP_TRACK' || scanMode === 'DEL_TRACK_SCAN') {
-            const inp = document.getElementById('shipTrackInput') || document.getElementById('trackSearchInput');
-            if(inp) inp.value = scanned;
-            if(typeof window.trackShipment === 'function') window.trackShipment();
-            if(typeof window.filterTrackingList === 'function') window.filterTrackingList();
-        } 
-        else if (scanMode === 'SHIP_RETURN') {
-            const inp = document.getElementById('shipReturnInput');
-            if(inp) inp.value = scanned;
-        }
-        else if (scanMode === 'DEL_UNBOX_SCAN') {
-            const inp = document.getElementById('unboxPkgInput');
-            if(inp) inp.value = scanned;
-            if(typeof window.loadUnboxData === 'function') window.loadUnboxData(scanned);
-        }
-        return;
-    }
-    
-    // If not a logistics scan, pass to existing Inventory/Warranty system
-    if (typeof baseOnScanSuccess === "function") baseOnScanSuccess(decodedText);
-};
-
-// 4. PACKING LOGIC
-window.addShipmentItem = async () => {
-    const inputEl = document.getElementById('shipScanInput') || document.getElementById('packScanInput');
-    const tag = inputEl.value.trim();
-    if (!tag) return alert("Please enter an Asset Tag ID.");
-    if (window.shipCart.some(i => i.barcode === tag)) return alert("Asset already in shipment cart.");
-    
-    try {
-        const { get, ref, query, orderByChild, equalTo } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        const q = query(ref(window.db, "inventory"), orderByChild("barcode"), equalTo(tag));
-        const snap = await get(q);
-        
-        if (!snap.exists()) return alert("Asset Tag Not Found in Inventory.");
-        let item; snap.forEach(c => item = { key: c.key, ...c.val() });
-        
-        if (item.status === "Sold Out" || item.status === "Packed" || item.status === "In Transit") {
-            return alert(`Cannot add: Asset is currently ${item.status}.`);
-        }
-
-        window.shipCart.push(item);
-        inputEl.value = "";
-        window.renderShipCart();
-        
-        // Auto-Sync to Billing Cart
-        if (typeof window.billCart !== 'undefined') {
-            const isAlreadyInBill = window.billCart.some(i => i.tag === item.barcode);
-            if (!isAlreadyInBill) {
-                const sellRate = (parseFloat(item.purchasePrice) || 0) * 1.30; 
-                window.billCart.push({ name: item.item, tag: item.barcode, dbKey: item.key, qty: 1, rate: sellRate, net: sellRate });
-                if(typeof window.renderBillCartUI === 'function') window.renderBillCartUI();
-            }
-        }
-    } catch (e) { alert("Error: " + e.message); }
-};
-
-window.renderShipCart = () => {
-    const tbody = document.getElementById("shipCartBody") || document.getElementById("packCartBody");
-    if(!tbody) return;
-    tbody.innerHTML = "";
-    
-    if (window.shipCart.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:30px; color:#64748b;">Cart is empty. Scan items.</td></tr>';
-        return;
-    }
-    
-    window.shipCart.forEach((it, i) => {
-        tbody.innerHTML += `
-        <tr style="border-bottom:1px solid #e2e8f0;">
-            <td style="text-align:center; font-weight:bold;">${i+1}</td>
-            <td style="font-weight:bold;">${it.item}</td>
-            <td style="font-family:monospace; font-weight:bold; color:var(--metro-blue); text-align:right;">${it.barcode}</td>
-            <td style="text-align:center;"><button onclick="window.shipCart.splice(${i},1); window.renderShipCart();" class="danger">X</button></td>
-        </tr>`;
-    });
-};
-
-window.dispatchShipment = async () => {
-    if (window.shipCart.length === 0) return alert("Add items to shipment first.");
-    const stnInput = document.getElementById("shipTarget") || document.getElementById("packTargetStation");
-    const stn = stnInput.value;
-    if (!stn) return alert("Select Destination.");
-
-    const priorityInput = document.getElementById("shipPriority");
-    const priority = priorityInput ? priorityInput.value : "STANDARD";
-
-    const awb = "AWB" + Math.floor(1000000000 + Math.random() * 9000000000); 
-    const userStr = (window.currentUser && window.currentUser.name) ? window.currentUser.name : "System User";
-
-    const shipData = {
-        awb: awb,
-        id: awb, // dual support
-        destination: stn,
-        station: stn, // dual support
-        priority: priority,
-        status: 'Order Placed & Packed',
-        items: window.shipCart.map(i => ({ name: i.item, tag: i.barcode, key: i.key })),
-        dispatchedBy: userStr,
-        packedBy: userStr,
-        createdAt: Date.now(),
-        time: Date.now(),
-        history: [{ status: 'Order Placed & Packed', time: Date.now(), location: 'Fulfillment Center', by: userStr }]
-    };
-
-    const btn = document.activeElement;
-    const origText = btn.innerHTML;
-    btn.innerText = "Processing..."; btn.disabled = true;
-
-    try {
-        const { update, set, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        
-        // Save to DB (Support both paths based on which HTML you use)
-        await set(ref(window.db, `shipments/${awb}`), shipData);
-        await set(ref(window.db, `packages/${awb}`), shipData); 
-        
-        const updates = {};
-        window.shipCart.forEach(it => {
-            updates[`inventory/${it.key}/status`] = "In Transit"; // Marks as sold/in transit so warranty works
-            updates[`inventory/${it.key}/location`] = `Tracking: ${awb}`;
-            updates[`inventory/${it.key}/assignedStation`] = stn;
-            updates[`inventory/${it.key}/soldAt`] = Date.now();
-            updates[`inventory/${it.key}/invoiceNo`] = awb;
-        });
-        await update(ref(window.db), updates);
-
-        if(typeof window.generateShippingLabel === 'function') {
-            window.generateShippingLabel(awb, window.shipCart, stn, priority, userStr);
-        } else if (typeof window.generatePackageBillPrint === 'function') {
-            window.generatePackageBillPrint(awb, window.shipCart, stn, userStr);
-        }
-        
-        window.shipCart = [];
-        window.renderShipCart();
-        stnInput.value = "";
-    } catch (e) { alert("Error: " + e.message); }
-    finally { btn.innerHTML = origText; btn.disabled = false; }
-};
-
-// 5. TRANSIT LOGIC
-window.updateShipStatus = async (newStatus) => {
-    // Check both possible HTML input IDs
-    const inp = document.getElementById("shipTransitInput") || document.getElementById("transitPkgInput");
-    const awb = inp.value.trim().toUpperCase();
-    if (!awb) return alert("Scan Tracking ID first.");
-
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(async (pos) => {
-            const gpsLink = `https://maps.google.com/?q=${pos.coords.latitude},${pos.coords.longitude}`;
-            try {
-                const { get, update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-                
-                // Check both database structures
-                let dbPath = `shipments/${awb}`;
-                let snap = await get(ref(window.db, dbPath));
-                if (!snap.exists()) {
-                    dbPath = `packages/${awb}`;
-                    snap = await get(ref(window.db, dbPath));
-                }
-                
-                if (!snap.exists()) return alert("AWB not found in system.");
-                
-                const ship = snap.val();
-                if(ship.status === 'Delivered' || ship.status === 'Cancelled / RTO') return alert("Shipment is closed.");
-
-                let hist = Array.isArray(ship.history) ? ship.history : [];
-                hist.push({ status: newStatus, time: Date.now(), location: gpsLink, by: window.currentUser?.name || "Agent" });
-
-                await update(ref(window.db, dbPath), { status: newStatus, history: hist });
-                
-                if(newStatus === 'Delivered') {
-                    const invUpdates = {};
-                    (ship.items || []).forEach(it => {
-                        if(it.key) {
-                            invUpdates[`inventory/${it.key}/status`] = "Sold Out";
-                            invUpdates[`inventory/${it.key}/location`] = "Delivered to Station";
-                        }
-                    });
-                    if (Object.keys(invUpdates).length > 0) await update(ref(window.db), invUpdates);
-                }
-
-                alert(`✅ AWB: ${awb}\nStatus Updated to: ${newStatus}`);
-                inp.value = "";
-            } catch (e) { alert("Error: " + e.message); }
-        }, () => alert("GPS Required for Logistics Tracking."), { enableHighAccuracy: true });
-    }
-};
-
-// 6. RETURNS LOGIC
-window.processReturn = async () => {
-    const inp = document.getElementById("shipReturnInput");
-    const awb = inp ? inp.value.trim().toUpperCase() : null;
-    if (!awb) return alert("Enter AWB ID to Cancel/Return.");
-
-    if(!confirm("Are you sure you want to CANCEL this shipment and Return to Origin (RTO)? Items will be restocked.")) return;
-
-    try {
-        const { get, update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        let dbPath = `shipments/${awb}`;
-        let snap = await get(ref(window.db, dbPath));
-        if (!snap.exists()) {
-            dbPath = `packages/${awb}`;
-            snap = await get(ref(window.db, dbPath));
-        }
-
-        if (!snap.exists()) return alert("AWB not found.");
-        
-        const ship = snap.val();
-        if(ship.status === 'Cancelled / RTO') return alert("Already cancelled.");
-
-        let hist = Array.isArray(ship.history) ? ship.history : [];
-        hist.push({ status: 'Cancelled / RTO', time: Date.now(), location: 'Fulfillment Return Hub', by: window.currentUser?.name || "System" });
-
-        await update(ref(window.db, dbPath), { status: 'Cancelled / RTO', history: hist });
-        
-        // Restock Items
-        const invUpdates = {};
-        (ship.items || []).forEach(it => {
-            if(it.key) {
-                invUpdates[`inventory/${it.key}/status`] = "In Stock";
-                invUpdates[`inventory/${it.key}/location`] = "RTO Hub / Main Lab";
-                invUpdates[`inventory/${it.key}/assignedStation`] = null;
-            }
-        });
-        if (Object.keys(invUpdates).length > 0) await update(ref(window.db), invUpdates);
-
-        alert(`✅ Shipment ${awb} Cancelled. All items restocked successfully.`);
-        if(inp) inp.value = "";
-    } catch (e) { alert("Error: " + e.message); }
-};
-
-// 7. TRACKING DATA
-window.trackShipment = async () => {
-    const awb = document.getElementById("shipTrackInput").value.trim().toUpperCase();
-    if (!awb) return alert("Enter AWB ID.");
-
-    try {
-        const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        let dbPath = `shipments/${awb}`;
-        let snap = await get(ref(window.db, dbPath));
-        if (!snap.exists()) {
-            dbPath = `packages/${awb}`;
-            snap = await get(ref(window.db, dbPath));
-        }
-        
-        if (!snap.exists()) return alert("AWB Tracking ID not found.");
-        
-        const ship = snap.val();
-        document.getElementById("trackResultArea").classList.remove("hidden");
-        document.getElementById("trackDisplayAwb").innerText = ship.awb || ship.id;
-        document.getElementById("trackDisplayDest").innerText = "Destination: " + (ship.destination || ship.station);
-        document.getElementById("trackDisplayDate").innerText = new Date(ship.createdAt || ship.time).toLocaleString('en-IN');
-        
-        const badge = document.getElementById("trackDisplayBadge");
-        badge.innerText = String(ship.status).toUpperCase();
-        if(ship.status === 'Delivered' || ship.status === 'Unboxed') badge.style.background = '#10b981';
-        else if(String(ship.status).includes('Cancelled') || String(ship.status).includes('Rejected')) badge.style.background = '#e11d48';
-        else badge.style.background = '#f59e0b';
-
-        // Items
-        const ul = document.getElementById("trackItemsList");
-        ul.innerHTML = "";
-        (ship.items || []).forEach(it => ul.innerHTML += `<li><b>${it.name}</b> (Tag: <span style="font-family:monospace;">${it.tag}</span>)</li>`);
-
-        // Timeline
-        const tl = document.getElementById("trackTimelineUI");
-        tl.innerHTML = "";
-        const historyList = Array.isArray(ship.history) ? ship.history : [];
-        [...historyList].reverse().forEach((h, i) => {
-            const dStr = new Date(h.time).toLocaleString('en-IN', { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short' });
-            const safeLoc = String(h.location || "Unknown Location");
-            const loc = safeLoc.startsWith('http') ? `<a href="${safeLoc}" target="_blank" style="color:#0ea5e9;">GPS Location</a>` : safeLoc;
-            
-            const dotColor = i === 0 ? "var(--metro-gold)" : "#cbd5e1";
-            const textColor = i === 0 ? "var(--metro-blue)" : "#64748b";
-            
-            tl.innerHTML += `
-            <div style="position:relative;">
-                <div style="position:absolute; left:-27px; top:3px; width:14px; height:14px; border-radius:50%; background:${dotColor}; border:2px solid white; box-shadow:0 0 0 1px ${dotColor};"></div>
-                <strong style="color:${textColor}; font-size:15px;">${h.status || 'Update'}</strong>
-                <div style="font-size:12px; color:#64748b; margin-top:2px;">${dStr} • ${loc}</div>
-                <div style="font-size:10px; color:#94a3b8;">Updated by: ${h.by || 'System'}</div>
-            </div>`;
-        });
-
-    } catch (e) { alert("Error: " + e.message); }
-};
-
-// 8. UNBOXING LOGIC
-window.loadUnboxData = async (pkgId) => {
-    try {
-        const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        let dbPath = `shipments/${pkgId}`;
-        let snap = await get(ref(window.db, dbPath));
-        if (!snap.exists()) {
-            dbPath = `packages/${pkgId}`;
-            snap = await get(ref(window.db, dbPath));
-        }
-
-        if (!snap.exists()) return alert("Invalid Package ID");
-        const pkg = snap.val();
-        
-        if(pkg.status === "Unboxed") return alert("This package has already been unboxed.");
-        
-        window.currentUnboxPkg = pkg;
-        window.currentUnboxDbPath = dbPath; // Save path to update later
-
-        document.getElementById("unboxArea").classList.remove("hidden");
-        document.getElementById("unboxStationName").innerText = "Destination: " + (pkg.station || pkg.destination || "Unknown");
-        
-        const list = document.getElementById("unboxItemsList");
-        list.innerHTML = "";
-        const items = Array.isArray(pkg.items) ? pkg.items : [];
-        
-        if(items.length === 0) list.innerHTML = "<p style='color:red;'>Package has no recorded items.</p>";
-
-        items.forEach((it) => {
-            list.innerHTML += `
-            <label style="display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #ccc; border-radius:4px; background:#fff; cursor:pointer;">
-                <input type="checkbox" class="unbox-chk" style="width:20px; height:20px;">
-                <div>
-                    <div style="font-weight:bold; font-size:14px;">${it.name || 'Unknown Item'}</div>
-                    <div style="font-family:monospace; color:#64748b; font-size:11px;">${it.tag || 'N/A'}</div>
-                </div>
-            </label>`;
-        });
-    } catch (e) { alert("Error: " + e.message); }
-};
-
-window.tearPackageSeal = async () => {
-    if(!window.currentUnboxPkg) return;
-    const checks = document.querySelectorAll('.unbox-chk');
-    const allChecked = Array.from(checks).every(c => c.checked);
-    
-    if(!allChecked && checks.length > 0) return alert("You must physically verify and check off EVERY item before breaking the seal.");
-    
-    if(confirm("Confirm asset matches the ID and Tear Package Seal?")) {
-        const dbPath = window.currentUnboxDbPath;
-        try {
-            const { update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            let hist = Array.isArray(window.currentUnboxPkg.history) ? window.currentUnboxPkg.history : [];
-            hist.push({ status: 'Seal Broken / Unboxed', time: Date.now(), location: 'On Site', by: window.currentUser?.name || "System" });
-            
-            await update(ref(window.db, dbPath), { status: 'Unboxed', history: hist });
-
-            const invUpdates = {};
-            const items = Array.isArray(window.currentUnboxPkg.items) ? window.currentUnboxPkg.items : [];
-            items.forEach(it => {
-                if(it.key) {
-                    invUpdates[`inventory/${it.key}/status`] = "In Stock"; // Or keep as Sold Out based on preference
-                    invUpdates[`inventory/${it.key}/location`] = "Installed at " + (window.currentUnboxPkg.station || window.currentUnboxPkg.destination);
-                }
-            });
-            if(Object.keys(invUpdates).length > 0) await update(ref(window.db), invUpdates);
-
-            alert("✅ Package successfully unboxed and assets recorded to site.");
-            document.getElementById("unboxArea").classList.add("hidden");
-            const inp = document.getElementById("unboxPkgInput");
-            if(inp) inp.value = "";
-            window.currentUnboxPkg = null;
-        } catch(e) { alert("Error: " + e.message); }
-    }
-};
-
-// 9. ERASE LOGS
-window.loadErasePackages = async () => {
-    const sel = document.getElementById("erasePkgSelect") || document.getElementById("eraseStationSelect");
-    if(!sel) return;
-    sel.innerHTML = "<option value=''>Loading...</option>";
-    try {
-        const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        
-        let opts = "<option value=''>-- Select Package/AWB to Delete --</option>";
-        
-        // Check both collections
-        const snapPack = await get(ref(window.db, "packages"));
-        if (snapPack.exists()) snapPack.forEach(c => opts += `<option value="packages/${c.key}">${c.key} (${c.val().station || 'Unknown'})</option>`);
-        
-        const snapShip = await get(ref(window.db, "shipments"));
-        if (snapShip.exists()) snapShip.forEach(c => opts += `<option value="shipments/${c.key}">${c.key} (${c.val().destination || 'Unknown'})</option>`);
-
-        sel.innerHTML = opts;
-    } catch(e) { sel.innerHTML = "<option value=''>Error</option>"; }
-}
-
-window.eraseSpecificPackage = async () => {
-    const sel = document.getElementById("erasePkgSelect") || document.getElementById("eraseStationSelect");
-    const dbPath = sel.value;
-    if(!dbPath) return alert("Select a Package/AWB ID first.");
-    
-    const pkgId = dbPath.split("/")[1];
-    if(!confirm(`⚠️ PERMANENTLY DELETE PACKAGE ${pkgId}?\nThis will erase its tracking history.`)) return;
-
-    try {
-        const { remove, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        await remove(ref(window.db, dbPath));
-        alert(`✅ Package ${pkgId} has been completely erased from the database.`);
-        window.loadErasePackages(); // Refresh dropdown
-    } catch(e) { alert("Error: " + e.message); }
-}
-
-(function initAdvancedDeliverySystem() {
-    // 1. INJECT FULL PAGE PRINT STYLES
-    const printStyle = document.createElement('style');
-    printStyle.innerHTML = `
+    // 2. INJECT CSS FOR PRINT & UI
+    const logisticsStyle = document.createElement('style');
+    logisticsStyle.innerHTML = `
         @media print {
-            @page { margin: 0mm !important; size: auto !important; }
-            html, body { width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important; background: white !important; }
-            #printableReportContainer { width: 100% !important; height: 100% !important; position: absolute !important; top: 0 !important; left: 0 !important; max-width: none !important; }
-            .a4-max-wrapper { width: 100vw !important; max-width: 100vw !important; min-height: 100vh !important; padding: 15mm !important; box-sizing: border-box !important; border: none !important; }
-            table { width: 100% !important; max-width: 100% !important; }
+            @page { margin: 0mm; size: auto; }
+            body * { visibility: hidden; }
+            #printableReportContainer, #printableReportContainer * { visibility: visible; }
+            #printableReportContainer { position: absolute; left: 0; top: 0; width: 100%; }
+            .no-print { display: none !important; }
         }
+        .track-card { transition: transform 0.2s; cursor: pointer; }
+        .track-card:hover { transform: translateY(-2px); border-color: var(--metro-blue) !important; }
+        .unbox-chk:checked + div { text-decoration: line-through; opacity: 0.6; }
     `;
-    document.head.appendChild(printStyle);
+    document.head.appendChild(logisticsStyle);
 
-    // 2. INJECT NAVIGATION BUTTON
-    const navBar = document.querySelector('.nav-bar');
-    if (navBar && !document.getElementById('btnDelivery')) {
-        const delBtn = document.createElement('button');
-        delBtn.className = 'nav-btn';
-        delBtn.id = 'btnDelivery';
-        delBtn.onclick = () => { switchTab('delivery'); toggleDelMode('packing'); };
-        delBtn.innerHTML = '<i class="fas fa-truck"></i> Logistics';
-        navBar.appendChild(delBtn);
-    }
+    // 3. UNIFIED NAVIGATION & TAB TOGGLE
+    window.toggleDelMode = (mode) => {
+        const sections = ['packing', 'transit', 'tracking', 'unboxing', 'erase'];
+        sections.forEach(s => {
+            const el = document.getElementById(`del-${s}`);
+            if (el) el.classList.add('hidden');
+        });
+        
+        const target = document.getElementById(`del-${mode}`);
+        if (target) target.classList.remove('hidden');
 
-    // 3. INJECT THE TABS HTML
-    const appScreen = document.getElementById('appScreen');
-    if (appScreen && !document.getElementById('tab-delivery')) {
-        const deliveryHTML = `
-        <div id="tab-delivery" class="hidden">
-            <div style="margin-bottom:20px; display:flex; gap:10px; flex-wrap:wrap; padding: 10px; background: #e2e8f0; border-radius: 6px;">
-                <button onclick="toggleDelMode('packing')" class="info"><i class="fas fa-box"></i> Pack Items</button>
-                <button onclick="toggleDelMode('transit')" class="warning"><i class="fas fa-motorcycle"></i> Field Transit</button>
-                <button onclick="toggleDelMode('tracking')" class="secondary"><i class="fas fa-list"></i> All Packages</button>
-                <button onclick="toggleDelMode('unboxing')" class="success"><i class="fas fa-box-open"></i> Unboxing</button>
-                <button onclick="toggleDelMode('erase')" class="danger" style="background:#be123c;"><i class="fas fa-trash"></i> Erase Logs</button>
-            </div>
-
-            <!-- PACKING TAB -->
-            <div id="del-packing" class="panel">
-                <h3><i class="fas fa-box"></i> Package Assembly (Multi-Item Supported)</h3>
-                <div style="background:#f8fafc; padding:20px; border-radius:8px; border:2px dashed var(--metro-blue); margin-bottom:20px;">
-                    <label style="font-weight:bold; font-size:11px;">1. DESTINATION STATION</label>
-                    <select id="packTargetStation" style="margin-bottom:15px; border: 2px solid var(--metro-blue); width:100%; height:40px;"></select>
-                    
-                    <label style="font-weight:bold; font-size:11px;">2. SCAN ASSETS INTO PACKAGE</label>
-                    <div style="display:flex; gap:10px;">
-                        <input id="packScanInput" placeholder="Scan Asset Tag..." style="margin:0; height:45px;">
-                        <button onclick="openBarcodeScanner('DEL_PACK_SCAN')" class="warning" style="height:45px; padding:0 20px;"><i class="fas fa-qrcode"></i></button>
-                        <button onclick="manualAddPackItem()" class="info" style="height:45px;">ADD</button>
-                    </div>
-                </div>
-                <div class="table-wrapper" style="border: 2px solid var(--metro-blue);">
-                    <table>
-                        <thead style="background:var(--metro-blue); color:white;">
-                            <tr><th>Sl.</th><th>Product Details</th><th>Asset ID (Tag)</th><th>Action</th></tr>
-                        </thead>
-                        <tbody id="packCartBody"><tr><td colspan="4" style="text-align:center;">Cart is empty. Scan items to add.</td></tr></tbody>
-                    </table>
-                </div>
-                <button onclick="finalizePackage()" class="success" style="width:100%; margin-top:20px; padding:15px; font-weight:900; font-size:16px;">
-                    <i class="fas fa-print"></i> SEAL PACKAGE & PRINT BILL
-                </button>
-            </div>
-
-            <!-- TRANSIT TAB -->
-            <div id="del-transit" class="panel hidden" style="border-top: 5px solid #f59e0b;">
-                <h3 style="color:#d97706;"><i class="fas fa-motorcycle"></i> Field Transit Agent</h3>
-                <div style="display:flex; gap:10px; margin-bottom:20px;">
-                    <input id="transitPkgInput" placeholder="Scan Package Tag ID (AWB)..." style="margin:0; height:50px; font-size:16px; font-weight:bold;">
-                    <button onclick="openBarcodeScanner('DEL_TRANSIT_SCAN')" class="danger" style="height:50px; padding:0 25px;"><i class="fas fa-qrcode"></i> SCAN</button>
-                </div>
-                
-                <!-- NEW 3-BUTTON LAYOUT -->
-                <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; margin-bottom:15px;">
-                    <button onclick="updateTransitStatus('Shipped')" style="padding:15px; font-weight:900; background:#3b82f6; color:white; border-radius:6px; border:none; cursor:pointer;"><i class="fas fa-box"></i> SHIPPED</button>
-                    <button onclick="updateTransitStatus('Out for Delivery')" style="padding:15px; font-weight:900; background:#f59e0b; color:white; border-radius:6px; border:none; cursor:pointer;"><i class="fas fa-truck"></i> OUT FOR DELIVERY</button>
-                    <button onclick="updateTransitStatus('Delivered')" style="padding:15px; font-weight:900; background:#10b981; color:white; border-radius:6px; border:none; cursor:pointer;"><i class="fas fa-check-circle"></i> DELIVERED</button>
-                </div>
-
-                <button onclick="routeToWarrantyReturn()" class="danger" style="width:100%; padding:15px; font-weight:900; background:#be123c;">
-                    <i class="fas fa-undo"></i> REJECTED / SEAL BROKEN -> SEND TO WARRANTY RETURN
-                </button>
-            </div>
-
-            <!-- GLOBAL TRACKING TAB -->
-            <div id="del-tracking" class="panel hidden">
-                <h3><i class="fas fa-search-location"></i> Global Tracking Dashboard</h3>
-                <input id="trackSearchInput" placeholder="Search by Asset ID, PKG ID, or Station..." style="border:2px solid var(--metro-blue); padding:12px; font-weight:bold; margin-bottom:20px; width: 100%;" onkeyup="filterTrackingList()">
-                <div id="trackingTimeline" style="display:flex; flex-direction:column; gap:15px; max-height: 600px; overflow-y: auto; padding-right:10px;">
-                    <p style="text-align:center; color:#64748b;">Loading packages...</p>
-                </div>
-            </div>
-
-            <!-- UNBOXING -->
-            <div id="del-unboxing" class="panel hidden" style="border-top: 5px solid var(--success-green);">
-                <h3 style="color:var(--success-green);"><i class="fas fa-box-open"></i> Safe Unboxing Verification</h3>
-                <div style="display:flex; gap:10px; margin-bottom:20px;">
-                    <input id="unboxPkgInput" placeholder="Scan Package to Unbox..." style="margin:0;">
-                    <button onclick="openBarcodeScanner('DEL_UNBOX_SCAN')" class="warning"><i class="fas fa-qrcode"></i> SCAN</button>
-                </div>
-                <div id="unboxArea" class="hidden">
-                    <div style="background:#fffbeb; padding:15px; border-left:4px solid #f59e0b; margin-bottom:20px;">
-                        <h4 id="unboxStationName" style="margin:0 0 5px 0; color:#b45309;">Station</h4>
-                        <small>Verify every item below physically before breaking the package seal entirely.</small>
-                    </div>
-                    <div id="unboxItemsList" class="checkbox-list" style="max-height:300px; display:flex; flex-direction:column; gap:8px;"></div>
-                    <button onclick="tearPackageSeal()" class="danger" style="width:100%; padding:15px; font-size:16px; margin-top:20px; font-weight:900;">
-                        <i class="fas fa-cut"></i> CONFIRM CONTENTS & TEAR SEAL
-                    </button>
-                </div>
-            </div>
-
-            <!-- ERASE LOGS BY PACKAGE ID -->
-            <div id="del-erase" class="panel hidden" style="border-top: 5px solid #be123c;">
-                <h3 style="color:#be123c;"><i class="fas fa-trash"></i> Erase Specific Package</h3>
-                <label style="font-weight:bold; font-size:12px;">Select Package ID to completely delete:</label>
-                <select id="erasePkgSelect" style="border:2px solid #be123c; margin-top:5px; margin-bottom:20px; width:100%; height:45px;"></select>
-                <button onclick="eraseSpecificPackage()" class="danger" style="width:100%; padding:15px; background:#be123c; font-weight:900;">
-                    <i class="fas fa-trash-alt"></i> PERMANENTLY DELETE PACKAGE
-                </button>
-            </div>
-        </div>`;
-        appScreen.insertAdjacentHTML('beforeend', deliveryHTML);
-        populateDelStations();
-    }
-
-    // 4. OVERRIDE `switchTab`
-    const baseSwitchTab = window.switchTab;
-    window.switchTab = (t) => {
-        baseSwitchTab(t);
-        const delTab = document.getElementById('tab-delivery');
-        const delBtn = document.getElementById('btnDelivery');
-        if (delTab && delBtn) {
-            if (t === 'delivery') {
-                delTab.classList.remove('hidden');
-                delBtn.classList.add('active');
-            } else {
-                delTab.classList.add('hidden');
-                delBtn.classList.remove('active');
-            }
-        }
+        // Contextual Data Loading
+        if (mode === 'tracking') window.loadTrackingData();
+        if (mode === 'erase') window.loadErasePackages();
     };
 
-    // 5. OVERRIDE SCANNER FOR DELIVERY MODES
-    const baseOnScanSuccess = window.onScanSuccess;
+    // 4. SMART SCANNER ROUTER
+    const originalOnScanSuccess = window.onScanSuccess;
     window.onScanSuccess = async function (decodedText) {
         if (!decodedText) return;
         const scanned = decodedText.trim();
         
-        if (['DEL_PACK_SCAN', 'DEL_TRACK_SCAN', 'DEL_TRANSIT_SCAN', 'DEL_UNBOX_SCAN'].includes(scanMode)) {
+        // Handling Delivery specific scan modes
+        if (typeof scanMode !== 'undefined' && scanMode.startsWith('DEL_')) {
             closeBarcodeScanner();
-            if (scanMode === 'DEL_PACK_SCAN') {
-                document.getElementById('packScanInput').value = scanned;
-                window.manualAddPackItem();
-            } else if (scanMode === 'DEL_TRANSIT_SCAN') {
-                document.getElementById('transitPkgInput').value = scanned;
-            } else if (scanMode === 'DEL_UNBOX_SCAN') {
-                document.getElementById('unboxPkgInput').value = scanned;
-                window.loadUnboxData(scanned);
-            } else if (scanMode === 'DEL_TRACK_SCAN') {
-                const searchInp = document.getElementById('trackSearchInput');
-                if(searchInp) {
-                    searchInp.value = scanned;
-                    window.filterTrackingList();
+            
+            const mapping = {
+                'DEL_PACK_SCAN': { input: 'packScanInput', action: () => window.manualAddPackItem() },
+                'DEL_TRANSIT_SCAN': { input: 'transitPkgInput', action: null },
+                'DEL_UNBOX_SCAN': { input: 'unboxPkgInput', action: (val) => window.loadUnboxData(val) },
+                'DEL_TRACK_SCAN': { input: 'trackSearchInput', action: () => window.filterTrackingList() }
+            };
+
+            const route = mapping[scanMode];
+            if (route) {
+                const el = document.getElementById(route.input);
+                if (el) {
+                    el.value = scanned;
+                    if (route.action) route.action(scanned);
                 }
             }
-            return; // Stop here if delivery mode
+            return;
         }
         
-        // Pass to existing inventory/warranty logic
-        if (typeof baseOnScanSuccess === "function") baseOnScanSuccess(decodedText);
+        // Fallback to global inventory scanner
+        if (typeof originalOnScanSuccess === "function") originalOnScanSuccess(decodedText);
     };
 
-    // ==========================================
-    // CORE DELIVERY FUNCTIONS
-    // ==========================================
-    window.packCart = [];
-    window.currentUnboxPkg = null;
-
-    window.toggleDelMode = (mode) => {
-        ['packing', 'transit', 'tracking', 'unboxing', 'erase'].forEach(m => {
-            const el = document.getElementById(`del-${m}`);
-            if (el) el.classList.add('hidden');
-        });
-        const activePanel = document.getElementById(`del-${mode}`);
-        if (activePanel) activePanel.classList.remove('hidden');
-        
-        if (mode === 'tracking') {
-            document.getElementById('trackSearchInput').value = ""; 
-            window.loadTrackingData(); 
-        } else if (mode === 'erase') {
-            window.loadErasePackages();
-        }
-    };
-
-    function populateDelStations() {
-        const packSel = document.getElementById("packTargetStation");
-        const eraseSel = document.getElementById("eraseStationSelect");
-        let opts = "<option value=''>-- Select Station --</option>";
-        if (typeof METRO_STATIONS !== 'undefined') {
-            for (const [line, stns] of Object.entries(METRO_STATIONS)) {
-                stns.forEach(stn => opts += `<option value="${stn} (${line})">${stn}</option>`);
-            }
-        }
-        if(packSel) packSel.innerHTML = opts;
-        if(eraseSel) eraseSel.innerHTML = opts;
-    }
-
-    // --- PACKING LOGIC ---
+    // 5. PACKING & ASSEMBLY
     window.manualAddPackItem = async () => {
-        const tag = document.getElementById('packScanInput').value.trim();
+        const input = document.getElementById('packScanInput');
+        const tag = input.value.trim();
         if (!tag) return;
         
-        if (window.packCart.some(i => i.barcode === tag)) {
-            document.getElementById('packScanInput').value = "";
-            return alert("Asset is already in the packing cart.");
+        if (window.shipCart.some(i => i.barcode === tag)) {
+            input.value = "";
+            return alert("Asset already in cart.");
         }
-        
+
         try {
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
+            const { get, ref, query, orderByChild, equalTo } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+            const q = query(ref(window.db, "inventory"), orderByChild("barcode"), equalTo(tag));
             const snap = await get(q);
-            
-            if (!snap.exists()) return alert("Asset Tag Not Found in Inventory.");
+
+            if (!snap.exists()) return alert("Asset Not Found.");
             let item; snap.forEach(c => item = { key: c.key, ...c.val() });
-            
-            if (item.status === "Sold Out" || item.status === "Packed") return alert("Asset is already Dispatched/Sold.");
 
-            window.packCart.push(item);
-            document.getElementById('packScanInput').value = "";
-            renderPackCart();
-
-            // Auto-Sync to Billing Tab
-            if (typeof window.billCart !== 'undefined') {
-                const isAlreadyInBill = window.billCart.some(i => i.tag === item.barcode);
-                if (!isAlreadyInBill) {
-                    const sellRate = (parseFloat(item.purchasePrice) || 0) * 1.30; 
-                    window.billCart.push({ name: item.item, tag: item.barcode, dbKey: item.key, qty: 1, rate: sellRate, net: sellRate });
-                    if(typeof window.renderBillCartUI === 'function') window.renderBillCartUI();
-                }
+            if (item.status === "Sold Out" || item.status === "In Transit") {
+                return alert(`Status Conflict: ${item.status}`);
             }
-        } catch (e) { alert("Error: " + e.message); }
+
+            window.shipCart.push(item);
+            input.value = "";
+            renderPackCart();
+            
+            // Sync with billing if available
+            if (window.billCart && !window.billCart.some(i => i.tag === item.barcode)) {
+                const price = (parseFloat(item.purchasePrice) || 0) * 1.30;
+                window.billCart.push({ name: item.item, tag: item.barcode, dbKey: item.key, qty: 1, rate: price, net: price });
+                if(window.renderBillCartUI) window.renderBillCartUI();
+            }
+        } catch (e) { alert(e.message); }
     };
 
     function renderPackCart() {
         const tbody = document.getElementById("packCartBody");
-        tbody.innerHTML = "";
-        if (window.packCart.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">Cart is empty. Scan items to add.</td></tr>';
-            return;
-        }
+        if (!tbody) return;
+        tbody.innerHTML = window.shipCart.length === 0 ? '<tr><td colspan="4" style="text-align:center;">Empty</td></tr>' : "";
         
-        window.packCart.forEach((it, i) => {
+        window.shipCart.forEach((it, i) => {
             tbody.innerHTML += `
-            <tr style="border-bottom:1px solid #e2e8f0;">
-                <td style="text-align:center;">${i+1}</td>
-                <td style="font-weight:bold;">${it.item}</td>
-                <td style="font-family:monospace; font-weight:bold; color:var(--metro-blue); text-align:right;">${it.barcode}</td>
-                <td style="text-align:center;"><button onclick="window.packCart.splice(${i},1); window.renderPackCart();" class="danger">X</button></td>
-            </tr>`;
+                <tr>
+                    <td style="text-align:center;">${i+1}</td>
+                    <td><b>${it.item}</b></td>
+                    <td style="font-family:monospace; color:var(--metro-blue);">${it.barcode}</td>
+                    <td style="text-align:center;"><button onclick="window.shipCart.splice(${i},1); renderPackCart();" class="danger">X</button></td>
+                </tr>`;
         });
     }
 
     window.finalizePackage = async () => {
-        if (window.packCart.length === 0) return alert("Add an item first.");
+        if (window.shipCart.length === 0) return alert("Cart is empty.");
         const stn = document.getElementById("packTargetStation").value;
-        if (!stn) return alert("Select Destination Station.");
+        if (!stn) return alert("Select Station.");
 
         const pkgId = "PKG-" + Date.now().toString().slice(-6);
-        const currentUserStr = (window.currentUser && window.currentUser.name) ? window.currentUser.name : "System User";
+        const user = window.currentUser?.name || "Field Agent";
 
         const pkgData = {
-            id: pkgId,
-            station: stn,
+            id: pkgId, awb: pkgId,
+            station: stn, destination: stn,
             status: 'Packed',
-            items: window.packCart.map(i => ({ name: i.item, tag: i.barcode, key: i.key })),
-            packedBy: currentUserStr,
+            items: window.shipCart.map(i => ({ name: i.item, tag: i.barcode, key: i.key })),
+            packedBy: user,
             time: Date.now(),
-            history: [{ status: 'Packed & Sealed', time: Date.now(), location: 'Dispatch HQ', by: currentUserStr }]
+            history: [{ status: 'Packed & Sealed', time: Date.now(), location: 'Dispatch Hub', by: user }]
         };
 
         try {
-            await set(ref(db, `packages/${pkgId}`), pkgData);
-            
-            const updates = {};
-            window.packCart.forEach(it => {
-                updates[`inventory/${it.key}/status`] = "Sold Out";
-                updates[`inventory/${it.key}/location`] = `Dispatched in ${pkgId}`;
-                updates[`inventory/${it.key}/assignedStation`] = stn;
-                updates[`inventory/${it.key}/soldAt`] = Date.now();
-                updates[`inventory/${it.key}/invoiceNo`] = pkgId; 
-            });
-            await update(ref(db), updates);
+            const { update, set, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+            // Write to both paths for legacy compatibility
+            await set(ref(window.db, `packages/${pkgId}`), pkgData);
+            await set(ref(window.db, `shipments/${pkgId}`), pkgData);
 
-            generatePackageBillPrint(pkgId, window.packCart, stn, currentUserStr);
-            
-            window.packCart = [];
+            const updates = {};
+            window.shipCart.forEach(it => {
+                updates[`inventory/${it.key}/status`] = "In Transit";
+                updates[`inventory/${it.key}/location`] = `In ${pkgId}`;
+                updates[`inventory/${it.key}/assignedStation`] = stn;
+            });
+            await update(ref(window.db), updates);
+
+            window.generatePackageBillPrint(pkgId, window.shipCart, stn, user);
+            window.shipCart = [];
             renderPackCart();
-            document.getElementById("packTargetStation").value = "";
-        } catch (e) { alert("DB Error: " + e.message); }
+        } catch (e) { alert(e.message); }
     };
 
-    // --- TRANSIT LOGIC (3 BUTTONS + GPS) ---
+    // 6. TRANSIT & UPDATES
     window.updateTransitStatus = async (newStatus) => {
         const pkgId = document.getElementById("transitPkgInput").value.trim().toUpperCase();
-        if (!pkgId) return alert("Scan Package AWB ID first.");
+        if (!pkgId) return alert("Scan ID.");
 
-        const pushStatusUpdate = async (gpsLink) => {
+        const updateFn = async (gps = "Hub Location") => {
             try {
-                const snap = await get(ref(db, `packages/${pkgId}`));
-                if (!snap.exists()) return alert("Package not found in delivery system.");
-                
+                const { get, update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+                const snap = await get(ref(window.db, `packages/${pkgId}`));
+                if (!snap.exists()) return alert("Not Found");
+
                 const pkg = snap.val();
                 let hist = Array.isArray(pkg.history) ? pkg.history : [];
-                hist.push({ status: newStatus, time: Date.now(), location: gpsLink, by: window.currentUser?.name || "System" });
+                hist.push({ status: newStatus, time: Date.now(), location: gps, by: window.currentUser?.name || "Agent" });
 
-                await update(ref(db, `packages/${pkgId}`), { status: newStatus, history: hist });
-                
-                if(newStatus === 'Delivered') {
-                    const invUpdates = {};
-                    const items = Array.isArray(pkg.items) ? pkg.items : [];
-                    items.forEach(it => {
-                        if(it.key) invUpdates[`inventory/${it.key}/status`] = "Delivered to Station";
-                    });
-                    if (Object.keys(invUpdates).length > 0) {
-                        await update(ref(db), invUpdates);
-                    }
-                }
-
-                alert(`✅ Marked as: ${newStatus}`);
+                await update(ref(window.db, `packages/${pkgId}`), { status: newStatus, history: hist });
+                alert(`Updated: ${newStatus}`);
                 document.getElementById("transitPkgInput").value = "";
-            } catch (e) { 
-                alert("Error: " + e.message); 
-            }
+            } catch (e) { alert(e.message); }
         };
 
-        // ONLY attempt GPS capture if marked as "Delivered"
         if (newStatus === 'Delivered' && navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
-                (pos) => pushStatusUpdate(`https://maps.google.com/?q=${pos.coords.latitude},${pos.coords.longitude}`), 
-                () => pushStatusUpdate("Location Disabled")
+                (p) => updateFn(`https://maps.google.com/?q=${p.coords.latitude},${p.coords.longitude}`),
+                () => updateFn("Location Hidden")
             );
-        } else {
-            pushStatusUpdate("Transit Hub");
-        }
+        } else { updateFn(); }
     };
 
-    window.routeToWarrantyReturn = () => {
-        const tag = document.getElementById("transitPkgInput").value.trim().toUpperCase();
-        if(!tag) return alert("⚠️ Scan the Package/Asset Tag ID first.");
-        
-        window.switchTab('warranty');
-        window.toggleWarMode('recovery');
-        window.addToRecoveryCart(tag);
-        
-        if (tag.startsWith("PKG-")) {
-            update(ref(db, `packages/${tag}`), { status: 'Rejected / Returned' }).catch(()=>{});
-        }
-        document.getElementById("transitPkgInput").value = "";
-    };
-
-    // --- GLOBAL TRACKING SYSTEM (CRASH PROOFED) ---
-    window.loadTrackingData = async () => {
-        const tl = document.getElementById("trackingTimeline");
-        tl.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading delivery grid...</p>";
-        
-        try {
-            const snap = await get(ref(db, `packages`));
-            if (!snap.exists()) { tl.innerHTML = "<p style='text-align:center;'>No packages found.</p>"; return; }
-            
-            const pkgs = [];
-            snap.forEach(c => pkgs.push(c.val()));
-            pkgs.sort((a,b) => (b.time || 0) - (a.time || 0)); // Newest first
-
-            let html = "";
-            pkgs.forEach(pkg => {
-                let histHtml = "";
-                const historyList = Array.isArray(pkg.history) ? pkg.history : [];
-                
-                // Bulletproof History Rendering
-                [...historyList].reverse().forEach(h => {
-                    const dStr = h.time ? new Date(h.time).toLocaleString('en-IN', { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short' }) : "N/A";
-                    const safeLoc = String(h.location || "Unknown Location");
-                    const loc = safeLoc.startsWith('http') ? `<a href="${safeLoc}" target="_blank" style="color:#0ea5e9;">Map Location</a>` : safeLoc;
-                    histHtml += `
-                    <div style="font-size:11px; padding:6px 0; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between;">
-                        <div><b>${h.status || 'Update'}</b><br><span style="color:#64748b;">${loc}</span></div>
-                        <div style="text-align:right; color:#64748b;">${dStr}<br><small>${h.by || 'System'}</small></div>
-                    </div>`;
-                });
-
-                const currentStatus = String(pkg.status || "Unknown");
-                let statusColor = '#3b82f6'; // Default Blue
-                if(currentStatus === 'Out for Delivery') statusColor = '#f59e0b'; // Orange
-                if(currentStatus === 'Delivered' || currentStatus === 'Unboxed') statusColor = '#10b981'; // Green
-                if(currentStatus.includes('Rejected')) statusColor = '#e11d48'; // Red
-
-                // Safely handle missing items array
-                const items = Array.isArray(pkg.items) ? pkg.items : [];
-                const itemName = items.map(i => i.name).join(', ') || "Unknown Item";
-                const itemTag = items.map(i => i.tag).join(', ') || pkg.id || "Unknown ID";
-                
-                // Bulletproof toLowerCase search string
-                const searchString = `${String(pkg.id || '')} ${String(itemTag)} ${String(pkg.station || '')} ${String(itemName)}`.toLowerCase();
-
-                html += `
-                <div class="track-card" data-search="${searchString}" style="background:white; border:1px solid #cbd5e1; padding:15px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid var(--metro-gold); padding-bottom:8px; margin-bottom:10px;">
-                        <strong style="color:var(--metro-blue); font-size:16px; font-family:monospace;">📦 ${pkg.id || 'N/A'}</strong>
-                        <span style="background:${statusColor}; color:white; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold;">${currentStatus.toUpperCase()}</span>
-                    </div>
-                    <div style="font-weight:900; font-size:13px; margin-bottom:5px; color:#1e293b;">TARGET: ${String(pkg.station || 'Unknown').toUpperCase()}</div>
-                    <div style="font-size:12px; color:#475569; margin-bottom:15px;">Assets: ${itemName} <br><span style="font-family:monospace; color:var(--metro-blue);">${itemTag}</span></div>
-                    
-                    <div style="background:#f8fafc; padding:10px; border-radius:6px; max-height:150px; overflow-y:auto; border:1px solid #e2e8f0;">
-                        ${histHtml || '<p style="font-size:11px; color:#666;">No tracking history</p>'}
-                    </div>
-                </div>`;
-            });
-            tl.innerHTML = html;
-            window.filterTrackingList(); 
-        } catch (e) { tl.innerHTML = "Error: " + e.message; }
-    };
-
-    window.filterTrackingList = () => {
-        const searchInput = document.getElementById("trackSearchInput");
-        if (!searchInput) return;
-        const query = String(searchInput.value || '').toLowerCase();
-        
-        const cards = document.querySelectorAll(".track-card");
-        cards.forEach(card => {
-            const dataSearch = String(card.getAttribute("data-search") || "");
-            if (dataSearch.toLowerCase().includes(query)) {
-                card.style.display = "block";
-            } else {
-                card.style.display = "none";
-            }
-        });
-    };
-
-    // --- UNBOXING (CRASH PROOFED) ---
+    // 7. UNBOXING LOGIC
     window.loadUnboxData = async (pkgId) => {
         try {
-            const snap = await get(ref(db, `packages/${pkgId}`));
-            if (!snap.exists()) return alert("Invalid Package ID");
+            const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+            const snap = await get(ref(window.db, `packages/${pkgId}`));
+            if (!snap.exists()) return alert("Invalid PKG");
+            
             const pkg = snap.val();
-            
-            if(pkg.status === "Unboxed") return alert("This package has already been unboxed.");
-            
+            if (pkg.status === "Unboxed") return alert("Already unboxed.");
+
             window.currentUnboxPkg = pkg;
             document.getElementById("unboxArea").classList.remove("hidden");
-            document.getElementById("unboxStationName").innerText = "Destination: " + String(pkg.station || "Unknown");
+            document.getElementById("unboxStationName").innerText = pkg.station || "Unknown";
             
             const list = document.getElementById("unboxItemsList");
-            list.innerHTML = "";
-            const items = Array.isArray(pkg.items) ? pkg.items : [];
-            
-            if(items.length === 0) {
-                list.innerHTML = "<p style='color:red;'>Package has no recorded items.</p>";
-            }
-
-            items.forEach((it) => {
-                list.innerHTML += `
-                <label style="display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #ccc; border-radius:4px; background:#fff; cursor:pointer;">
-                    <input type="checkbox" class="unbox-chk" style="width:20px; height:20px;">
-                    <div>
-                        <div style="font-weight:bold; font-size:14px;">${it.name || 'Unknown Item'}</div>
-                        <div style="font-family:monospace; color:#64748b; font-size:11px;">${it.tag || 'N/A'}</div>
-                    </div>
-                </label>`;
-            });
-        } catch (e) { alert("Error: " + e.message); }
+            list.innerHTML = (pkg.items || []).map(it => `
+                <label style="display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #ddd; background:white;">
+                    <input type="checkbox" class="unbox-chk">
+                    <div><b>${it.name}</b><br><small>${it.tag}</small></div>
+                </label>
+            `).join('');
+        } catch (e) { alert(e.message); }
     };
 
-    window.tearPackageSeal = async () => {
-        if(!window.currentUnboxPkg) return;
-        const checks = document.querySelectorAll('.unbox-chk');
-        const allChecked = Array.from(checks).every(c => c.checked);
-        
-        if(!allChecked && checks.length > 0) return alert("You must physically verify and check off EVERY item before breaking the seal.");
-        
-        if(confirm("Confirm asset matches the ID and Tear Package Seal?")) {
-            const pkgId = window.currentUnboxPkg.id;
-            try {
-                let hist = Array.isArray(window.currentUnboxPkg.history) ? window.currentUnboxPkg.history : [];
-                hist.push({ status: 'Seal Broken / Unboxed', time: Date.now(), location: 'On Site', by: window.currentUser?.name || "System" });
-                
-                await update(ref(db, `packages/${pkgId}`), { status: 'Unboxed', history: hist });
-
-                const invUpdates = {};
-                const items = Array.isArray(window.currentUnboxPkg.items) ? window.currentUnboxPkg.items : [];
-                items.forEach(it => {
-                    if(it.key) {
-                        invUpdates[`inventory/${it.key}/status`] = "In Stock";
-                        invUpdates[`inventory/${it.key}/location`] = "Installed at " + window.currentUnboxPkg.station;
-                    }
-                });
-                if(Object.keys(invUpdates).length > 0) await update(ref(db), invUpdates);
-
-                alert("✅ Package successfully unboxed and assets recorded to site.");
-                document.getElementById("unboxArea").classList.add("hidden");
-                document.getElementById("unboxPkgInput").value = "";
-                window.currentUnboxPkg = null;
-            } catch(e) { alert("Error: " + e.message); }
-        }
-    };
-
-    // --- ERASE SPECIFIC PACKAGE BY ID ---
-    window.loadErasePackages = async () => {
-        const sel = document.getElementById("erasePkgSelect");
-        if(!sel) return;
-        sel.innerHTML = "<option value=''>Loading...</option>";
-        try {
-            const snap = await get(ref(db, "packages"));
-            let opts = "<option value=''>-- Select Package ID to Delete --</option>";
-            if (snap.exists()) {
-                snap.forEach(c => opts += `<option value="${c.key}">${c.key} (${c.val().station || 'Unknown'})</option>`);
+    // Initialization: Populate stations once
+    setTimeout(() => {
+        const sel = document.getElementById("packTargetStation");
+        if (sel && typeof METRO_STATIONS !== 'undefined') {
+            let opts = "<option value=''>-- Select Destination --</option>";
+            for (const [line, stns] of Object.entries(METRO_STATIONS)) {
+                stns.forEach(s => opts += `<option value="${s} (${line})">${s}</option>`);
             }
             sel.innerHTML = opts;
-        } catch(e) { sel.innerHTML = "<option value=''>Error</option>"; }
-    }
-
-    window.eraseSpecificPackage = async () => {
-        const pkgId = document.getElementById("erasePkgSelect").value;
-        if(!pkgId) return alert("Select a Package ID first.");
-        if(!confirm(`⚠️ PERMANENTLY DELETE PACKAGE ${pkgId}?\nThis will erase its tracking history.`)) return;
-
-        try {
-            await remove(ref(db, `packages/${pkgId}`));
-            alert(`✅ Package ${pkgId} has been completely erased from the database.`);
-            window.loadErasePackages(); // Refresh dropdown
-            window.loadTrackingData(); // Refresh tracking list
-        } catch(e) { alert("Error: " + e.message); }
-    }
-
-    // --- PRINT BILL GENERATOR (Multi-Item Supported) ---
-    window.generatePackageBillPrint = (pkgId, items, station, userName) => {
-        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${pkgId}`;
-        const reportContainer = document.getElementById("printableReportContainer");
-        
-        let rowsHtml = "";
-        const safeItems = Array.isArray(items) ? items : [];
-        
-        safeItems.forEach((it, i) => {
-            rowsHtml += `
-            <tr style="border-bottom: 2pt solid #ccc; font-size:30pt;">
-                <td style="padding:15px; text-align:center;">${i+1}</td>
-                <td style="font-weight:bold; text-align:left; padding:25px 15px;">${String(it.item || '').toUpperCase()}</td>
-                <td style="font-family:monospace; font-weight:bold; text-align:right; padding:25px 15px;">${String(it.barcode || '')}</td>
-            </tr>`;
-        });
-
-        reportContainer.innerHTML = `
-        <div class="no-print" style="text-align:center; padding:20px; background:#fff; position:sticky; top:0; width:100%; border-bottom:2px solid #ccc; z-index:99999;">
-            <button onclick="window.print()" style="padding:20px 40px; font-size:20pt; font-weight:900; background:#15803d; color:white; border-radius:10px; cursor:pointer;">
-                🖨️ PRINT OFFICIAL PACKAGE BILL
-            </button>
-            <button class="danger" onclick="closeReportPreview()" style="padding:20px 40px; font-size:20pt; font-weight:900; margin-left:15px; cursor:pointer;">
-                CLOSE
-            </button>
-        </div>
-        
-        <div class="a4-max-wrapper" style="background:white; color:black; margin:0 auto; font-family:'Arial Black', sans-serif;">
-            <div style="text-align:center; border-bottom: 8pt solid black; padding-bottom:20px; margin-bottom:30px;">
-                <div style="font-size: 45pt; font-weight: 900; line-height: 1;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
-                <div style="font-size: 25pt; margin-top:10px;">IEM - UEM GROUP</div>
-            </div>
-
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:40px;">
-                <div>
-                    <div style="font-size: 35pt; font-weight:900; background:black; color:white; padding:10px 20px; display:inline-block;">PACKAGE MANIFEST</div>
-                    <div style="font-size: 25pt; margin-top:30px;"><b>TARGET STATION:</b><br>${String(station || '').toUpperCase()}</div>
-                    <div style="font-size: 20pt; margin-top:15px;"><b>DATE:</b> ${new Date().toLocaleDateString('en-IN')}</div>
-                    <div style="font-size: 20pt; margin-top:10px;"><b>PACKED BY:</b> ${String(userName || '').toUpperCase()}</div>
-                </div>
-                <div style="text-align:center; border: 6pt solid black; padding:20px;">
-                    <img src="${qrUrl}" style="width:250px; height:250px;">
-                    <div style="font-family:monospace; font-size:22pt; font-weight:900; margin-top:15px;">${pkgId}</div>
-                </div>
-            </div>
-
-            <table style="width:100%; border-collapse:collapse; margin-bottom:50px;">
-                <thead style="background:black; color:white; -webkit-print-color-adjust: exact;">
-                    <tr>
-                        <th style="padding:15px; font-size:24pt; width:10%; text-align:center;">#</th>
-                        <th style="padding:15px; font-size:24pt; text-align:left;">PRODUCT DESCRIPTION</th>
-                        <th style="padding:15px; font-size:24pt; text-align:right;">ASSET ID (TRACKING TAG)</th>
-                    </tr>
-                </thead>
-                <tbody>${rowsHtml}</tbody>
-            </table>
-
-            <div style="border: 8pt solid #b91c1c; padding:30px; text-align:center; margin-top:80px; background:#fff5f5; -webkit-print-color-adjust: exact;">
-                <div style="color:#b91c1c; font-size:40pt; font-weight:900; text-transform:uppercase;">⚠️ CRITICAL WARNING</div>
-                <div style="font-size:26pt; font-weight:bold; margin-top:15px; line-height:1.4; color:black;">
-                    IF THE PACKAGE SEAL IS PREVIOUSLY BROKEN WITHOUT PROPER AUTHORIZED JUSTIFICATION, <span style="text-decoration:underline;">DO NOT ACCEPT THIS DELIVERY</span>.
-                </div>
-            </div>
-
-            <div style="display:flex; justify-content:space-between; margin-top:120px;">
-                <div style="width:40%; text-align:center;">
-                    <div style="border-top:5pt solid black; margin-bottom:10px;"></div>
-                    <div style="font-size:20pt; font-weight:bold;">DISPATCH AUTHORIZATION</div>
-                </div>
-                <div style="width:40%; text-align:center;">
-                    <div style="border-top:5pt solid black; margin-bottom:10px;"></div>
-                    <div style="font-size:20pt; font-weight:bold;">RECEIVER SIGNATURE</div>
-                </div>
-            </div>
-            
-            <div style="margin-top: 60px; text-align: center; font-size: 20pt; border-top: 3pt dashed black; padding-top: 20px; font-weight: 900;">
-                OFFICIAL SECURE LOGISTICS RECORD
-            </div>
-        </div>`;
-        
-        reportContainer.classList.remove("hidden");
-    };
+        }
+    }, 1000);
 
 })();
 </script>
