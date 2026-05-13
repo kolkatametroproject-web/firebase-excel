@@ -10480,45 +10480,63 @@ window.captureSopPhoto = () => {
     const tag = inputEl ? inputEl.value.trim() : null;
     if (!tag) return;
 
-    // Check for duplicates in the current cart
+    // 1. CRITICAL: Check if Firebase Database is ready
+    if (!window.db) {
+        alert("Database connection not ready. Please refresh.");
+        return;
+    }
+
     if ((window.shipCart || []).some(i => i.barcode === tag)) {
-        showScanFeedback("DUPLICATE TAG", "#f59e0b", tag);
+        if (typeof showScanFeedback === 'function') showScanFeedback("DUPLICATE TAG", "#f59e0b", tag);
         inputEl.value = "";
         return;
     }
 
     try {
-        const { get, ref, query, orderByChild, equalTo } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        const q = query(ref(window.db, "inventory"), orderByChild("barcode"), equalTo(tag));
+        // 2. Destructure imports correctly from the ES module
+        const fbDB = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        const { get, ref, query, orderByChild, equalTo } = fbDB;
+
+        // 3. Ensure window.db is passed as the first argument
+        const dbRef = ref(window.db, "inventory"); 
+        const q = query(dbRef, orderByChild("barcode"), equalTo(tag));
+        
         const snap = await get(q);
 
         if (!snap.exists()) {
-            showScanFeedback("NOT FOUND", "#ef4444", tag);
+            if (typeof showScanFeedback === 'function') showScanFeedback("NOT FOUND", "#ef4444", tag);
             return;
         }
 
-        let item; snap.forEach(c => item = { key: c.key, ...c.val() });
+        let item; 
+        snap.forEach(c => { item = { key: c.key, ...c.val() }; });
 
-        // Add to global state
+        // Check if item is already dispatched
+        if (item.status === "In Transit" || item.status === "Sold Out") {
+            if (typeof showScanFeedback === 'function') showScanFeedback(`ALREADY ${item.status}`, "#ef4444", tag);
+            inputEl.value = "";
+            return;
+        }
+
         window.shipCart = window.shipCart || [];
         window.shipCart.push(item);
         
-        // Clear input for next scan
         inputEl.value = "";
         
-        // Refresh UI
         if (window.renderShipCart) window.renderShipCart();
         if (window.renderPackCart) window.renderPackCart();
 
-        // 🟢 Success Feedback
-        showScanFeedback(`ADDED: ${item.item}`, "#10b981", tag);
+        if (typeof showScanFeedback === 'function') {
+            showScanFeedback(`ADDED: ${item.item}`, "#10b981", tag);
+        }
 
     } catch (e) {
-        showScanFeedback("ERROR", "#ef4444");
-        console.error(e);
+        console.error("Firebase Error:", e);
+        if (typeof showScanFeedback === 'function') showScanFeedback("DB ERROR", "#ef4444");
     }
 };
 
+window.manualAddPackItem = window.addShipmentItem;
 // Map both names to the same function for compatibility
 window.manualAddPackItem = window.addShipmentItem;
   function showScanFeedback(message, color, tagId = "") {
