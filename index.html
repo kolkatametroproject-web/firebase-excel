@@ -10409,7 +10409,7 @@ window.captureSopPhoto = () => {
     }
 };
 // =========================================================
-// 🚚 ULTIMATE LOGISTICS ENGINE
+// 🚚 ULTIMATE LOGISTICS ENGINE (MULTI-ITEM SUPPORT)
 // Bulletproof against 'forEach' & 'toLowerCase' crashes
 // Features: 3-Button Transit, GPS on Delivery, Package Erase
 // =========================================================
@@ -10489,9 +10489,9 @@ window.captureSopPhoto = () => {
                 
                 <!-- NEW 3-BUTTON LAYOUT -->
                 <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; margin-bottom:15px;">
-                    <button onclick="updateTransitStatus('Shipped')" style="padding:15px; font-weight:900; background:#3b82f6; color:white; border-radius:6px; border:none;"><i class="fas fa-box"></i> SHIPPED</button>
-                    <button onclick="updateTransitStatus('Out for Delivery')" style="padding:15px; font-weight:900; background:#f59e0b; color:white; border-radius:6px; border:none;"><i class="fas fa-truck"></i> OUT FOR DELIVERY</button>
-                    <button onclick="updateTransitStatus('Delivered')" style="padding:15px; font-weight:900; background:#10b981; color:white; border-radius:6px; border:none;"><i class="fas fa-check-circle"></i> DELIVERED</button>
+                    <button onclick="updateTransitStatus('Shipped')" style="padding:15px; font-weight:900; background:#3b82f6; color:white; border-radius:6px; border:none; cursor:pointer;"><i class="fas fa-box"></i> SHIPPED</button>
+                    <button onclick="updateTransitStatus('Out for Delivery')" style="padding:15px; font-weight:900; background:#f59e0b; color:white; border-radius:6px; border:none; cursor:pointer;"><i class="fas fa-truck"></i> OUT FOR DELIVERY</button>
+                    <button onclick="updateTransitStatus('Delivered')" style="padding:15px; font-weight:900; background:#10b981; color:white; border-radius:6px; border:none; cursor:pointer;"><i class="fas fa-check-circle"></i> DELIVERED</button>
                 </div>
 
                 <button onclick="routeToWarrantyReturn()" class="danger" style="width:100%; padding:15px; font-weight:900; background:#be123c;">
@@ -10595,8 +10595,12 @@ window.captureSopPhoto = () => {
     window.currentUnboxPkg = null;
 
     window.toggleDelMode = (mode) => {
-        ['packing', 'transit', 'tracking', 'unboxing', 'erase'].forEach(m => document.getElementById(`del-${m}`).classList.add('hidden'));
-        document.getElementById(`del-${mode}`).classList.remove('hidden');
+        ['packing', 'transit', 'tracking', 'unboxing', 'erase'].forEach(m => {
+            const el = document.getElementById(`del-${m}`);
+            if (el) el.classList.add('hidden');
+        });
+        const activePanel = document.getElementById(`del-${mode}`);
+        if (activePanel) activePanel.classList.remove('hidden');
         
         if (mode === 'tracking') {
             document.getElementById('trackSearchInput').value = ""; 
@@ -10608,13 +10612,15 @@ window.captureSopPhoto = () => {
 
     function populateDelStations() {
         const packSel = document.getElementById("packTargetStation");
-        let opts = "<option value=''>-- Select Destination Station --</option>";
+        const eraseSel = document.getElementById("eraseStationSelect");
+        let opts = "<option value=''>-- Select Station --</option>";
         if (typeof METRO_STATIONS !== 'undefined') {
             for (const [line, stns] of Object.entries(METRO_STATIONS)) {
                 stns.forEach(stn => opts += `<option value="${stn} (${line})">${stn}</option>`);
             }
         }
         if(packSel) packSel.innerHTML = opts;
+        if(eraseSel) eraseSel.innerHTML = opts;
     }
 
     // --- PACKING LOGIC ---
@@ -10710,15 +10716,10 @@ window.captureSopPhoto = () => {
         } catch (e) { alert("DB Error: " + e.message); }
     };
 
-    // --- TRANSIT (WITH GPS ONLY ON DELIVERED) ---
+    // --- TRANSIT LOGIC (3 BUTTONS + GPS) ---
     window.updateTransitStatus = async (newStatus) => {
         const pkgId = document.getElementById("transitPkgInput").value.trim().toUpperCase();
         if (!pkgId) return alert("Scan Package AWB ID first.");
-
-        const btn = document.activeElement;
-        const origText = btn.innerText;
-        btn.innerText = "Processing...";
-        btn.disabled = true;
 
         const pushStatusUpdate = async (gpsLink) => {
             try {
@@ -10726,28 +10727,31 @@ window.captureSopPhoto = () => {
                 if (!snap.exists()) return alert("Package not found in delivery system.");
                 
                 const pkg = snap.val();
-                let hist = pkg.history || [];
-                hist.push({ status: newStatus, time: Date.now(), location: gpsLink, by: window.currentUser.name || "System" });
+                let hist = Array.isArray(pkg.history) ? pkg.history : [];
+                hist.push({ status: newStatus, time: Date.now(), location: gpsLink, by: window.currentUser?.name || "System" });
 
                 await update(ref(db, `packages/${pkgId}`), { status: newStatus, history: hist });
                 
                 if(newStatus === 'Delivered') {
                     const invUpdates = {};
-                    (pkg.items || []).forEach(it => {
+                    const items = Array.isArray(pkg.items) ? pkg.items : [];
+                    items.forEach(it => {
                         if(it.key) invUpdates[`inventory/${it.key}/status`] = "Delivered to Station";
                     });
-                    await update(ref(db), invUpdates);
+                    if (Object.keys(invUpdates).length > 0) {
+                        await update(ref(db), invUpdates);
+                    }
                 }
 
                 alert(`✅ Marked as: ${newStatus}`);
                 document.getElementById("transitPkgInput").value = "";
-            } catch (e) { alert("Error: " + e.message); }
-            finally { btn.innerText = origText; btn.disabled = false; }
+            } catch (e) { 
+                alert("Error: " + e.message); 
+            }
         };
 
         // ONLY attempt GPS capture if marked as "Delivered"
         if (newStatus === 'Delivered' && navigator.geolocation) {
-            btn.innerText = "Locating GPS...";
             navigator.geolocation.getCurrentPosition(
                 (pos) => pushStatusUpdate(`https://maps.google.com/?q=${pos.coords.latitude},${pos.coords.longitude}`), 
                 () => pushStatusUpdate("Location Disabled")
@@ -10787,12 +10791,12 @@ window.captureSopPhoto = () => {
             let html = "";
             pkgs.forEach(pkg => {
                 let histHtml = "";
-                const historyList = pkg.history || [];
+                const historyList = Array.isArray(pkg.history) ? pkg.history : [];
                 
                 // Bulletproof History Rendering
-                historyList.reverse().forEach(h => {
+                [...historyList].reverse().forEach(h => {
                     const dStr = h.time ? new Date(h.time).toLocaleString('en-IN', { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short' }) : "N/A";
-                    const safeLoc = h.location || "Unknown Location";
+                    const safeLoc = String(h.location || "Unknown Location");
                     const loc = safeLoc.startsWith('http') ? `<a href="${safeLoc}" target="_blank" style="color:#0ea5e9;">Map Location</a>` : safeLoc;
                     histHtml += `
                     <div style="font-size:11px; padding:6px 0; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between;">
@@ -10801,16 +10805,16 @@ window.captureSopPhoto = () => {
                     </div>`;
                 });
 
-                const currentStatus = pkg.status || "Unknown";
+                const currentStatus = String(pkg.status || "Unknown");
                 let statusColor = '#3b82f6'; // Default Blue
                 if(currentStatus === 'Out for Delivery') statusColor = '#f59e0b'; // Orange
                 if(currentStatus === 'Delivered' || currentStatus === 'Unboxed') statusColor = '#10b981'; // Green
                 if(currentStatus.includes('Rejected')) statusColor = '#e11d48'; // Red
 
-                // Safely handle missing items
-                const items = pkg.items || [];
+                // Safely handle missing items array
+                const items = Array.isArray(pkg.items) ? pkg.items : [];
                 const itemName = items.map(i => i.name).join(', ') || "Unknown Item";
-                const itemTag = items.map(i => i.tag).join(', ') || pkg.id;
+                const itemTag = items.map(i => i.tag).join(', ') || pkg.id || "Unknown ID";
                 
                 // Bulletproof toLowerCase search string
                 const searchString = `${String(pkg.id || '')} ${String(itemTag)} ${String(pkg.station || '')} ${String(itemName)}`.toLowerCase();
@@ -10821,7 +10825,7 @@ window.captureSopPhoto = () => {
                         <strong style="color:var(--metro-blue); font-size:16px; font-family:monospace;">📦 ${pkg.id || 'N/A'}</strong>
                         <span style="background:${statusColor}; color:white; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold;">${currentStatus.toUpperCase()}</span>
                     </div>
-                    <div style="font-weight:900; font-size:13px; margin-bottom:5px; color:#1e293b;">TARGET: ${(pkg.station || 'Unknown').toUpperCase()}</div>
+                    <div style="font-weight:900; font-size:13px; margin-bottom:5px; color:#1e293b;">TARGET: ${String(pkg.station || 'Unknown').toUpperCase()}</div>
                     <div style="font-size:12px; color:#475569; margin-bottom:15px;">Assets: ${itemName} <br><span style="font-family:monospace; color:var(--metro-blue);">${itemTag}</span></div>
                     
                     <div style="background:#f8fafc; padding:10px; border-radius:6px; max-height:150px; overflow-y:auto; border:1px solid #e2e8f0;">
@@ -10835,10 +10839,13 @@ window.captureSopPhoto = () => {
     };
 
     window.filterTrackingList = () => {
-        const query = document.getElementById("trackSearchInput").value.toLowerCase();
+        const searchInput = document.getElementById("trackSearchInput");
+        if (!searchInput) return;
+        const query = String(searchInput.value || '').toLowerCase();
+        
         const cards = document.querySelectorAll(".track-card");
         cards.forEach(card => {
-            const dataSearch = card.getAttribute("data-search") || "";
+            const dataSearch = String(card.getAttribute("data-search") || "");
             if (dataSearch.toLowerCase().includes(query)) {
                 card.style.display = "block";
             } else {
@@ -10858,13 +10865,15 @@ window.captureSopPhoto = () => {
             
             window.currentUnboxPkg = pkg;
             document.getElementById("unboxArea").classList.remove("hidden");
-            document.getElementById("unboxStationName").innerText = "Destination: " + (pkg.station || "Unknown");
+            document.getElementById("unboxStationName").innerText = "Destination: " + String(pkg.station || "Unknown");
             
             const list = document.getElementById("unboxItemsList");
             list.innerHTML = "";
-            const items = pkg.items || [];
+            const items = Array.isArray(pkg.items) ? pkg.items : [];
             
-            if(items.length === 0) list.innerHTML = "<p style='color:red;'>Package has no recorded items.</p>";
+            if(items.length === 0) {
+                list.innerHTML = "<p style='color:red;'>Package has no recorded items.</p>";
+            }
 
             items.forEach((it) => {
                 list.innerHTML += `
@@ -10889,13 +10898,13 @@ window.captureSopPhoto = () => {
         if(confirm("Confirm asset matches the ID and Tear Package Seal?")) {
             const pkgId = window.currentUnboxPkg.id;
             try {
-                let hist = window.currentUnboxPkg.history || [];
-                hist.push({ status: 'Seal Broken / Unboxed', time: Date.now(), location: 'On Site', by: window.currentUser.name || "System" });
+                let hist = Array.isArray(window.currentUnboxPkg.history) ? window.currentUnboxPkg.history : [];
+                hist.push({ status: 'Seal Broken / Unboxed', time: Date.now(), location: 'On Site', by: window.currentUser?.name || "System" });
                 
                 await update(ref(db, `packages/${pkgId}`), { status: 'Unboxed', history: hist });
 
                 const invUpdates = {};
-                const items = window.currentUnboxPkg.items || [];
+                const items = Array.isArray(window.currentUnboxPkg.items) ? window.currentUnboxPkg.items : [];
                 items.forEach(it => {
                     if(it.key) {
                         invUpdates[`inventory/${it.key}/status`] = "In Stock";
@@ -10946,12 +10955,14 @@ window.captureSopPhoto = () => {
         const reportContainer = document.getElementById("printableReportContainer");
         
         let rowsHtml = "";
-        (items || []).forEach((it, i) => {
+        const safeItems = Array.isArray(items) ? items : [];
+        
+        safeItems.forEach((it, i) => {
             rowsHtml += `
             <tr style="border-bottom: 2pt solid #ccc; font-size:30pt;">
                 <td style="padding:15px; text-align:center;">${i+1}</td>
-                <td style="font-weight:bold; text-align:left; padding:25px 15px;">${(it.item || '').toUpperCase()}</td>
-                <td style="font-family:monospace; font-weight:bold; text-align:right; padding:25px 15px;">${it.barcode || ''}</td>
+                <td style="font-weight:bold; text-align:left; padding:25px 15px;">${String(it.item || '').toUpperCase()}</td>
+                <td style="font-family:monospace; font-weight:bold; text-align:right; padding:25px 15px;">${String(it.barcode || '')}</td>
             </tr>`;
         });
 
@@ -10974,9 +10985,9 @@ window.captureSopPhoto = () => {
             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:40px;">
                 <div>
                     <div style="font-size: 35pt; font-weight:900; background:black; color:white; padding:10px 20px; display:inline-block;">PACKAGE MANIFEST</div>
-                    <div style="font-size: 25pt; margin-top:30px;"><b>TARGET STATION:</b><br>${station.toUpperCase()}</div>
+                    <div style="font-size: 25pt; margin-top:30px;"><b>TARGET STATION:</b><br>${String(station || '').toUpperCase()}</div>
                     <div style="font-size: 20pt; margin-top:15px;"><b>DATE:</b> ${new Date().toLocaleDateString('en-IN')}</div>
-                    <div style="font-size: 20pt; margin-top:10px;"><b>PACKED BY:</b> ${userName.toUpperCase()}</div>
+                    <div style="font-size: 20pt; margin-top:10px;"><b>PACKED BY:</b> ${String(userName || '').toUpperCase()}</div>
                 </div>
                 <div style="text-align:center; border: 6pt solid black; padding:20px;">
                     <img src="${qrUrl}" style="width:250px; height:250px;">
@@ -11011,6 +11022,10 @@ window.captureSopPhoto = () => {
                     <div style="border-top:5pt solid black; margin-bottom:10px;"></div>
                     <div style="font-size:20pt; font-weight:bold;">RECEIVER SIGNATURE</div>
                 </div>
+            </div>
+            
+            <div style="margin-top: 60px; text-align: center; font-size: 20pt; border-top: 3pt dashed black; padding-top: 20px; font-weight: 900;">
+                OFFICIAL SECURE LOGISTICS RECORD
             </div>
         </div>`;
         
