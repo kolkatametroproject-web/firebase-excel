@@ -10440,10 +10440,455 @@ window.captureSopPhoto = () => {
     }
 };
 // =========================================================
-// 🚚 ULTIMATE LOGISTICS ENGINE (MULTI-ITEM SUPPORT)
-// Bulletproof against 'forEach' & 'toLowerCase' crashes
-// Features: 3-Button Transit, GPS on Delivery, Package Erase
+// 📦 COMPLETE NATIVE LOGISTICS & FULFILLMENT ENGINE
+// Fixes "is not defined" errors and hooks up all buttons
 // =========================================================
+
+// 1. STATE VARIABLES
+window.shipCart = [];
+window.currentUnboxPkg = null;
+
+// 2. THE MISSING TOGGLE FUNCTION (Fixes your current error)
+window.toggleShipMode = (mode) => {
+    // Hide all possible panels
+    const allModes = ['packing', 'transit', 'tracking', 'returns', 'unboxing', 'erase'];
+    allModes.forEach(m => {
+        const el1 = document.getElementById(`ship-${m}`);
+        const el2 = document.getElementById(`del-${m}`);
+        if (el1) el1.classList.add('hidden');
+        if (el2) el2.classList.add('hidden');
+    });
+    
+    // Show the target panel
+    const target = document.getElementById(`ship-${mode}`) || document.getElementById(`del-${mode}`);
+    if (target) target.classList.remove('hidden');
+
+    // Auto-load data if entering specific tabs
+    if (mode === 'tracking' && typeof window.loadTrackingData === 'function') window.loadTrackingData();
+    if (mode === 'erase' && typeof window.loadErasePackages === 'function') window.loadErasePackages();
+};
+
+// 3. UNIVERSAL SCANNER ROUTING
+const baseOnScanSuccess = window.onScanSuccess;
+window.onScanSuccess = async function (decodedText) {
+    if (!decodedText) return;
+    const scanned = decodedText.trim();
+    
+    // Check if it's a Logistics Scan
+    const shipModes = ['SHIP_PACK', 'DEL_PACK_SCAN', 'SHIP_TRANSIT', 'DEL_TRANSIT_SCAN', 'SHIP_TRACK', 'DEL_TRACK_SCAN', 'SHIP_RETURN', 'DEL_UNBOX_SCAN'];
+    
+    if (shipModes.includes(scanMode)) {
+        closeBarcodeScanner();
+        
+        if (scanMode === 'SHIP_PACK' || scanMode === 'DEL_PACK_SCAN') {
+            const inp = document.getElementById('shipScanInput') || document.getElementById('packScanInput');
+            if(inp) inp.value = scanned;
+            window.addShipmentItem();
+        } 
+        else if (scanMode === 'SHIP_TRANSIT' || scanMode === 'DEL_TRANSIT_SCAN') {
+            const inp = document.getElementById('shipTransitInput') || document.getElementById('transitPkgInput');
+            if(inp) inp.value = scanned;
+        } 
+        else if (scanMode === 'SHIP_TRACK' || scanMode === 'DEL_TRACK_SCAN') {
+            const inp = document.getElementById('shipTrackInput') || document.getElementById('trackSearchInput');
+            if(inp) inp.value = scanned;
+            if(typeof window.trackShipment === 'function') window.trackShipment();
+            if(typeof window.filterTrackingList === 'function') window.filterTrackingList();
+        } 
+        else if (scanMode === 'SHIP_RETURN') {
+            const inp = document.getElementById('shipReturnInput');
+            if(inp) inp.value = scanned;
+        }
+        else if (scanMode === 'DEL_UNBOX_SCAN') {
+            const inp = document.getElementById('unboxPkgInput');
+            if(inp) inp.value = scanned;
+            if(typeof window.loadUnboxData === 'function') window.loadUnboxData(scanned);
+        }
+        return;
+    }
+    
+    // If not a logistics scan, pass to existing Inventory/Warranty system
+    if (typeof baseOnScanSuccess === "function") baseOnScanSuccess(decodedText);
+};
+
+// 4. PACKING LOGIC
+window.addShipmentItem = async () => {
+    const inputEl = document.getElementById('shipScanInput') || document.getElementById('packScanInput');
+    const tag = inputEl.value.trim();
+    if (!tag) return alert("Please enter an Asset Tag ID.");
+    if (window.shipCart.some(i => i.barcode === tag)) return alert("Asset already in shipment cart.");
+    
+    try {
+        const { get, ref, query, orderByChild, equalTo } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        const q = query(ref(window.db, "inventory"), orderByChild("barcode"), equalTo(tag));
+        const snap = await get(q);
+        
+        if (!snap.exists()) return alert("Asset Tag Not Found in Inventory.");
+        let item; snap.forEach(c => item = { key: c.key, ...c.val() });
+        
+        if (item.status === "Sold Out" || item.status === "Packed" || item.status === "In Transit") {
+            return alert(`Cannot add: Asset is currently ${item.status}.`);
+        }
+
+        window.shipCart.push(item);
+        inputEl.value = "";
+        window.renderShipCart();
+        
+        // Auto-Sync to Billing Cart
+        if (typeof window.billCart !== 'undefined') {
+            const isAlreadyInBill = window.billCart.some(i => i.tag === item.barcode);
+            if (!isAlreadyInBill) {
+                const sellRate = (parseFloat(item.purchasePrice) || 0) * 1.30; 
+                window.billCart.push({ name: item.item, tag: item.barcode, dbKey: item.key, qty: 1, rate: sellRate, net: sellRate });
+                if(typeof window.renderBillCartUI === 'function') window.renderBillCartUI();
+            }
+        }
+    } catch (e) { alert("Error: " + e.message); }
+};
+
+window.renderShipCart = () => {
+    const tbody = document.getElementById("shipCartBody") || document.getElementById("packCartBody");
+    if(!tbody) return;
+    tbody.innerHTML = "";
+    
+    if (window.shipCart.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:30px; color:#64748b;">Cart is empty. Scan items.</td></tr>';
+        return;
+    }
+    
+    window.shipCart.forEach((it, i) => {
+        tbody.innerHTML += `
+        <tr style="border-bottom:1px solid #e2e8f0;">
+            <td style="text-align:center; font-weight:bold;">${i+1}</td>
+            <td style="font-weight:bold;">${it.item}</td>
+            <td style="font-family:monospace; font-weight:bold; color:var(--metro-blue); text-align:right;">${it.barcode}</td>
+            <td style="text-align:center;"><button onclick="window.shipCart.splice(${i},1); window.renderShipCart();" class="danger">X</button></td>
+        </tr>`;
+    });
+};
+
+window.dispatchShipment = async () => {
+    if (window.shipCart.length === 0) return alert("Add items to shipment first.");
+    const stnInput = document.getElementById("shipTarget") || document.getElementById("packTargetStation");
+    const stn = stnInput.value;
+    if (!stn) return alert("Select Destination.");
+
+    const priorityInput = document.getElementById("shipPriority");
+    const priority = priorityInput ? priorityInput.value : "STANDARD";
+
+    const awb = "AWB" + Math.floor(1000000000 + Math.random() * 9000000000); 
+    const userStr = (window.currentUser && window.currentUser.name) ? window.currentUser.name : "System User";
+
+    const shipData = {
+        awb: awb,
+        id: awb, // dual support
+        destination: stn,
+        station: stn, // dual support
+        priority: priority,
+        status: 'Order Placed & Packed',
+        items: window.shipCart.map(i => ({ name: i.item, tag: i.barcode, key: i.key })),
+        dispatchedBy: userStr,
+        packedBy: userStr,
+        createdAt: Date.now(),
+        time: Date.now(),
+        history: [{ status: 'Order Placed & Packed', time: Date.now(), location: 'Fulfillment Center', by: userStr }]
+    };
+
+    const btn = document.activeElement;
+    const origText = btn.innerHTML;
+    btn.innerText = "Processing..."; btn.disabled = true;
+
+    try {
+        const { update, set, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        
+        // Save to DB (Support both paths based on which HTML you use)
+        await set(ref(window.db, `shipments/${awb}`), shipData);
+        await set(ref(window.db, `packages/${awb}`), shipData); 
+        
+        const updates = {};
+        window.shipCart.forEach(it => {
+            updates[`inventory/${it.key}/status`] = "In Transit"; // Marks as sold/in transit so warranty works
+            updates[`inventory/${it.key}/location`] = `Tracking: ${awb}`;
+            updates[`inventory/${it.key}/assignedStation`] = stn;
+            updates[`inventory/${it.key}/soldAt`] = Date.now();
+            updates[`inventory/${it.key}/invoiceNo`] = awb;
+        });
+        await update(ref(window.db), updates);
+
+        if(typeof window.generateShippingLabel === 'function') {
+            window.generateShippingLabel(awb, window.shipCart, stn, priority, userStr);
+        } else if (typeof window.generatePackageBillPrint === 'function') {
+            window.generatePackageBillPrint(awb, window.shipCart, stn, userStr);
+        }
+        
+        window.shipCart = [];
+        window.renderShipCart();
+        stnInput.value = "";
+    } catch (e) { alert("Error: " + e.message); }
+    finally { btn.innerHTML = origText; btn.disabled = false; }
+};
+
+// 5. TRANSIT LOGIC
+window.updateShipStatus = async (newStatus) => {
+    // Check both possible HTML input IDs
+    const inp = document.getElementById("shipTransitInput") || document.getElementById("transitPkgInput");
+    const awb = inp.value.trim().toUpperCase();
+    if (!awb) return alert("Scan Tracking ID first.");
+
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+            const gpsLink = `https://maps.google.com/?q=${pos.coords.latitude},${pos.coords.longitude}`;
+            try {
+                const { get, update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+                
+                // Check both database structures
+                let dbPath = `shipments/${awb}`;
+                let snap = await get(ref(window.db, dbPath));
+                if (!snap.exists()) {
+                    dbPath = `packages/${awb}`;
+                    snap = await get(ref(window.db, dbPath));
+                }
+                
+                if (!snap.exists()) return alert("AWB not found in system.");
+                
+                const ship = snap.val();
+                if(ship.status === 'Delivered' || ship.status === 'Cancelled / RTO') return alert("Shipment is closed.");
+
+                let hist = Array.isArray(ship.history) ? ship.history : [];
+                hist.push({ status: newStatus, time: Date.now(), location: gpsLink, by: window.currentUser?.name || "Agent" });
+
+                await update(ref(window.db, dbPath), { status: newStatus, history: hist });
+                
+                if(newStatus === 'Delivered') {
+                    const invUpdates = {};
+                    (ship.items || []).forEach(it => {
+                        if(it.key) {
+                            invUpdates[`inventory/${it.key}/status`] = "Sold Out";
+                            invUpdates[`inventory/${it.key}/location`] = "Delivered to Station";
+                        }
+                    });
+                    if (Object.keys(invUpdates).length > 0) await update(ref(window.db), invUpdates);
+                }
+
+                alert(`✅ AWB: ${awb}\nStatus Updated to: ${newStatus}`);
+                inp.value = "";
+            } catch (e) { alert("Error: " + e.message); }
+        }, () => alert("GPS Required for Logistics Tracking."), { enableHighAccuracy: true });
+    }
+};
+
+// 6. RETURNS LOGIC
+window.processReturn = async () => {
+    const inp = document.getElementById("shipReturnInput");
+    const awb = inp ? inp.value.trim().toUpperCase() : null;
+    if (!awb) return alert("Enter AWB ID to Cancel/Return.");
+
+    if(!confirm("Are you sure you want to CANCEL this shipment and Return to Origin (RTO)? Items will be restocked.")) return;
+
+    try {
+        const { get, update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        let dbPath = `shipments/${awb}`;
+        let snap = await get(ref(window.db, dbPath));
+        if (!snap.exists()) {
+            dbPath = `packages/${awb}`;
+            snap = await get(ref(window.db, dbPath));
+        }
+
+        if (!snap.exists()) return alert("AWB not found.");
+        
+        const ship = snap.val();
+        if(ship.status === 'Cancelled / RTO') return alert("Already cancelled.");
+
+        let hist = Array.isArray(ship.history) ? ship.history : [];
+        hist.push({ status: 'Cancelled / RTO', time: Date.now(), location: 'Fulfillment Return Hub', by: window.currentUser?.name || "System" });
+
+        await update(ref(window.db, dbPath), { status: 'Cancelled / RTO', history: hist });
+        
+        // Restock Items
+        const invUpdates = {};
+        (ship.items || []).forEach(it => {
+            if(it.key) {
+                invUpdates[`inventory/${it.key}/status`] = "In Stock";
+                invUpdates[`inventory/${it.key}/location`] = "RTO Hub / Main Lab";
+                invUpdates[`inventory/${it.key}/assignedStation`] = null;
+            }
+        });
+        if (Object.keys(invUpdates).length > 0) await update(ref(window.db), invUpdates);
+
+        alert(`✅ Shipment ${awb} Cancelled. All items restocked successfully.`);
+        if(inp) inp.value = "";
+    } catch (e) { alert("Error: " + e.message); }
+};
+
+// 7. TRACKING DATA
+window.trackShipment = async () => {
+    const awb = document.getElementById("shipTrackInput").value.trim().toUpperCase();
+    if (!awb) return alert("Enter AWB ID.");
+
+    try {
+        const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        let dbPath = `shipments/${awb}`;
+        let snap = await get(ref(window.db, dbPath));
+        if (!snap.exists()) {
+            dbPath = `packages/${awb}`;
+            snap = await get(ref(window.db, dbPath));
+        }
+        
+        if (!snap.exists()) return alert("AWB Tracking ID not found.");
+        
+        const ship = snap.val();
+        document.getElementById("trackResultArea").classList.remove("hidden");
+        document.getElementById("trackDisplayAwb").innerText = ship.awb || ship.id;
+        document.getElementById("trackDisplayDest").innerText = "Destination: " + (ship.destination || ship.station);
+        document.getElementById("trackDisplayDate").innerText = new Date(ship.createdAt || ship.time).toLocaleString('en-IN');
+        
+        const badge = document.getElementById("trackDisplayBadge");
+        badge.innerText = String(ship.status).toUpperCase();
+        if(ship.status === 'Delivered' || ship.status === 'Unboxed') badge.style.background = '#10b981';
+        else if(String(ship.status).includes('Cancelled') || String(ship.status).includes('Rejected')) badge.style.background = '#e11d48';
+        else badge.style.background = '#f59e0b';
+
+        // Items
+        const ul = document.getElementById("trackItemsList");
+        ul.innerHTML = "";
+        (ship.items || []).forEach(it => ul.innerHTML += `<li><b>${it.name}</b> (Tag: <span style="font-family:monospace;">${it.tag}</span>)</li>`);
+
+        // Timeline
+        const tl = document.getElementById("trackTimelineUI");
+        tl.innerHTML = "";
+        const historyList = Array.isArray(ship.history) ? ship.history : [];
+        [...historyList].reverse().forEach((h, i) => {
+            const dStr = new Date(h.time).toLocaleString('en-IN', { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short' });
+            const safeLoc = String(h.location || "Unknown Location");
+            const loc = safeLoc.startsWith('http') ? `<a href="${safeLoc}" target="_blank" style="color:#0ea5e9;">GPS Location</a>` : safeLoc;
+            
+            const dotColor = i === 0 ? "var(--metro-gold)" : "#cbd5e1";
+            const textColor = i === 0 ? "var(--metro-blue)" : "#64748b";
+            
+            tl.innerHTML += `
+            <div style="position:relative;">
+                <div style="position:absolute; left:-27px; top:3px; width:14px; height:14px; border-radius:50%; background:${dotColor}; border:2px solid white; box-shadow:0 0 0 1px ${dotColor};"></div>
+                <strong style="color:${textColor}; font-size:15px;">${h.status || 'Update'}</strong>
+                <div style="font-size:12px; color:#64748b; margin-top:2px;">${dStr} • ${loc}</div>
+                <div style="font-size:10px; color:#94a3b8;">Updated by: ${h.by || 'System'}</div>
+            </div>`;
+        });
+
+    } catch (e) { alert("Error: " + e.message); }
+};
+
+// 8. UNBOXING LOGIC
+window.loadUnboxData = async (pkgId) => {
+    try {
+        const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        let dbPath = `shipments/${pkgId}`;
+        let snap = await get(ref(window.db, dbPath));
+        if (!snap.exists()) {
+            dbPath = `packages/${pkgId}`;
+            snap = await get(ref(window.db, dbPath));
+        }
+
+        if (!snap.exists()) return alert("Invalid Package ID");
+        const pkg = snap.val();
+        
+        if(pkg.status === "Unboxed") return alert("This package has already been unboxed.");
+        
+        window.currentUnboxPkg = pkg;
+        window.currentUnboxDbPath = dbPath; // Save path to update later
+
+        document.getElementById("unboxArea").classList.remove("hidden");
+        document.getElementById("unboxStationName").innerText = "Destination: " + (pkg.station || pkg.destination || "Unknown");
+        
+        const list = document.getElementById("unboxItemsList");
+        list.innerHTML = "";
+        const items = Array.isArray(pkg.items) ? pkg.items : [];
+        
+        if(items.length === 0) list.innerHTML = "<p style='color:red;'>Package has no recorded items.</p>";
+
+        items.forEach((it) => {
+            list.innerHTML += `
+            <label style="display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #ccc; border-radius:4px; background:#fff; cursor:pointer;">
+                <input type="checkbox" class="unbox-chk" style="width:20px; height:20px;">
+                <div>
+                    <div style="font-weight:bold; font-size:14px;">${it.name || 'Unknown Item'}</div>
+                    <div style="font-family:monospace; color:#64748b; font-size:11px;">${it.tag || 'N/A'}</div>
+                </div>
+            </label>`;
+        });
+    } catch (e) { alert("Error: " + e.message); }
+};
+
+window.tearPackageSeal = async () => {
+    if(!window.currentUnboxPkg) return;
+    const checks = document.querySelectorAll('.unbox-chk');
+    const allChecked = Array.from(checks).every(c => c.checked);
+    
+    if(!allChecked && checks.length > 0) return alert("You must physically verify and check off EVERY item before breaking the seal.");
+    
+    if(confirm("Confirm asset matches the ID and Tear Package Seal?")) {
+        const dbPath = window.currentUnboxDbPath;
+        try {
+            const { update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+            let hist = Array.isArray(window.currentUnboxPkg.history) ? window.currentUnboxPkg.history : [];
+            hist.push({ status: 'Seal Broken / Unboxed', time: Date.now(), location: 'On Site', by: window.currentUser?.name || "System" });
+            
+            await update(ref(window.db, dbPath), { status: 'Unboxed', history: hist });
+
+            const invUpdates = {};
+            const items = Array.isArray(window.currentUnboxPkg.items) ? window.currentUnboxPkg.items : [];
+            items.forEach(it => {
+                if(it.key) {
+                    invUpdates[`inventory/${it.key}/status`] = "In Stock"; // Or keep as Sold Out based on preference
+                    invUpdates[`inventory/${it.key}/location`] = "Installed at " + (window.currentUnboxPkg.station || window.currentUnboxPkg.destination);
+                }
+            });
+            if(Object.keys(invUpdates).length > 0) await update(ref(window.db), invUpdates);
+
+            alert("✅ Package successfully unboxed and assets recorded to site.");
+            document.getElementById("unboxArea").classList.add("hidden");
+            const inp = document.getElementById("unboxPkgInput");
+            if(inp) inp.value = "";
+            window.currentUnboxPkg = null;
+        } catch(e) { alert("Error: " + e.message); }
+    }
+};
+
+// 9. ERASE LOGS
+window.loadErasePackages = async () => {
+    const sel = document.getElementById("erasePkgSelect") || document.getElementById("eraseStationSelect");
+    if(!sel) return;
+    sel.innerHTML = "<option value=''>Loading...</option>";
+    try {
+        const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        
+        let opts = "<option value=''>-- Select Package/AWB to Delete --</option>";
+        
+        // Check both collections
+        const snapPack = await get(ref(window.db, "packages"));
+        if (snapPack.exists()) snapPack.forEach(c => opts += `<option value="packages/${c.key}">${c.key} (${c.val().station || 'Unknown'})</option>`);
+        
+        const snapShip = await get(ref(window.db, "shipments"));
+        if (snapShip.exists()) snapShip.forEach(c => opts += `<option value="shipments/${c.key}">${c.key} (${c.val().destination || 'Unknown'})</option>`);
+
+        sel.innerHTML = opts;
+    } catch(e) { sel.innerHTML = "<option value=''>Error</option>"; }
+}
+
+window.eraseSpecificPackage = async () => {
+    const sel = document.getElementById("erasePkgSelect") || document.getElementById("eraseStationSelect");
+    const dbPath = sel.value;
+    if(!dbPath) return alert("Select a Package/AWB ID first.");
+    
+    const pkgId = dbPath.split("/")[1];
+    if(!confirm(`⚠️ PERMANENTLY DELETE PACKAGE ${pkgId}?\nThis will erase its tracking history.`)) return;
+
+    try {
+        const { remove, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        await remove(ref(window.db, dbPath));
+        alert(`✅ Package ${pkgId} has been completely erased from the database.`);
+        window.loadErasePackages(); // Refresh dropdown
+    } catch(e) { alert("Error: " + e.message); }
+}
 
 (function initAdvancedDeliverySystem() {
     // 1. INJECT FULL PAGE PRINT STYLES
