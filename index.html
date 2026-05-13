@@ -7158,29 +7158,210 @@ window.executeTagPrint = () => {
 const baseOnScanSuccess = window.onScanSuccess; 
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
-    const scanned = decodedText.trim();
+    
+    // Close the scanner modal immediately upon successful read
+    closeBarcodeScanner();
+    
+    const scannedInput = decodedText.trim();
 
-    if (scanMode === 'REGISTRATION_VERIFY') {
-        window.closeBarcodeScanner();
-        const barcodeInput = document.getElementById("invBarcode");
-        barcodeInput.value = scanned;
-
-        if (pendingTagData && scanned === pendingTagData.barcode) {
-            barcodeInput.style.borderColor = "green";
-            document.getElementById("btnFinalizeSave").classList.remove("hidden");
-            document.getElementById("registrationStatusMsg").innerText = "✅ VERIFIED! CLICK SAVE.";
-            document.getElementById("registrationStatusMsg").style.color = "green";
-            alert("✅ VERIFIED: Physical tag matches system ID.");
-        } else {
-            barcodeInput.style.borderColor = "red";
-            barcodeInput.value = "MISMATCH: " + scanned;
-            alert("❌ SECURITY ERROR: Scanned ID does not match generated ID.");
+    try {
+        // ==========================================
+        // 🆕 NEW: AMAZON-STYLE LOGISTICS MODES
+        // ==========================================
+        if (scanMode === 'SHIP_PACK') {
+            document.getElementById('shipScanInput').value = scannedInput;
+            window.addShipmentItem();
+            return;
+        } 
+        else if (scanMode === 'SHIP_TRANSIT') {
+            document.getElementById('shipTransitInput').value = scannedInput;
+            return;
+        } 
+        else if (scanMode === 'SHIP_TRACK') {
+            document.getElementById('shipTrackInput').value = scannedInput;
+            window.trackShipment();
+            return;
+        } 
+        else if (scanMode === 'SHIP_RETURN') {
+            document.getElementById('shipReturnInput').value = scannedInput;
+            return;
         }
-        return;
-    }
-    if (typeof baseOnScanSuccess === "function") baseOnScanSuccess(decodedText);
-};
 
+        // ==========================================
+        // 🏭 EXISTING: INVENTORY & SYSTEM MODES
+        // ==========================================
+        else if (scanMode === 'REGISTRATION_VERIFY') {
+            const barcodeInput = document.getElementById("invBarcode");
+            barcodeInput.value = scannedInput;
+
+            if (pendingTagData && scannedInput === pendingTagData.barcode) {
+                barcodeInput.style.borderColor = "var(--success-green)";
+                barcodeInput.style.color = "var(--success-green)";
+
+                try {
+                    const finalData = {...pendingTagData};
+                    const existingKey = finalData.dbKey;
+                    delete finalData.dbKey; 
+
+                    if(existingKey) {
+                        await update(ref(db, `inventory/${existingKey}`), finalData);
+                    } else {
+                        await push(ref(db, "inventory"), finalData);
+                    }
+
+                    alert("✅ VERIFICATION SUCCESSFUL\nAsset has been officially registered in the Master Database.");
+                    
+                    pendingTagData = null; 
+                    document.getElementById('tagPrintModal').classList.add('hidden');
+                    document.getElementById("btnVerifyScan").classList.add("hidden");
+                    document.getElementById("registrationStatusMsg").classList.add("hidden");
+                    
+                    const mainBtn = document.getElementById("btnAddStock");
+                    mainBtn.disabled = false;
+                    mainBtn.style.opacity = "1";
+                    mainBtn.innerText = "1. GENERATE PHYSICAL TAG";
+
+                    resetInvForm();
+                    toggleInvMode('list'); 
+                    
+                } catch(e) { 
+                    alert("❌ Database Save Error: " + e.message); 
+                }
+            } else {
+                barcodeInput.style.borderColor = "var(--metro-red)";
+                barcodeInput.style.color = "var(--metro-red)";
+                barcodeInput.value = "MISMATCH: " + scannedInput;
+                alert("❌ SECURITY ALERT: Scanned tag ID does not match the generated session. Please scan the correct printed tag.");
+                document.getElementById("registrationStatusMsg").innerText = "⚠️ MISMATCH DETECTED. Please re-scan the printed tag.";
+            }
+            return;
+        }
+
+        else if (scanMode === 'TECH_TICKET_SCAN') {
+            const cleanId = scannedInput.replace("#", "").toUpperCase();
+            const allClaims = await get(ref(db, "warranty_claims"));
+            let found = false;
+            
+            allClaims.forEach(c => {
+                const shortId = c.key.substring(1, 10).toUpperCase();
+                if (shortId === cleanId || c.key === scannedInput) {
+                    techVerifiedTicket = c.val();
+                    techVerifiedTicketKey = c.key;
+                    found = true;
+                }
+            });
+
+            if (found) {
+                document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
+                document.getElementById("btnScanProduct").disabled = false;
+                
+                const assetInput = document.getElementById("manualProductInp");
+                const assetBtn = document.getElementById("btnManualProduct");
+                
+                if(assetInput) {
+                    assetInput.disabled = false;
+                    assetInput.placeholder = "Enter Asset Tag ID...";
+                    assetInput.focus();
+                }
+                if(assetBtn) assetBtn.disabled = false;
+                
+                document.getElementById("techStepTitle").innerText = "STEP 2: ENTER OR SCAN PHYSICAL ASSET";
+            } else { 
+                alert("❌ Error: Ticket ID not recognized."); 
+            }
+        }
+
+        else if (scanMode === 'TECH_PRODUCT_VERIFY') {
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const snap = await get(q);
+            let itemData = null;
+            if (snap.exists()) snap.forEach(c => itemData = c.val());
+
+            if (itemData && itemData.item === techVerifiedTicket.item) {
+                document.getElementById("productVerifiedLabel").classList.remove("hidden");
+                renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
+            } else {
+                alert("⚠️ ASSET MISMATCH: The scanned tag does not match the reported item.");
+            }
+        }
+
+        else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
+            const isOut = (scanMode === 'CHECKOUT');
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const snap = await get(q);
+            
+            if (!snap.exists()) return alert("❌ Tag Not Registered in System");
+            
+            let itm; snap.forEach(c => itm = {key: c.key, ...c.val()});
+
+            if (isOut) {
+                if (itm.status === "Checked Out") return alert("⛔ Item already in the field.");
+                if (itm.status === "Sold Out") return alert("⛔ Item has been installed/sold.");
+                
+                document.getElementById("checkout_display").classList.remove("hidden");
+                document.getElementById("checkout_item_name").innerHTML = `✔ ${itm.item}`;
+                document.getElementById("checkout_item_code").innerText = itm.barcode;
+            } else {
+                if (itm.status === "In Stock") return alert("⚠️ Item is already In Stock.");
+                
+                document.getElementById("return_display").classList.remove("hidden");
+                document.getElementById("return_item_name").innerHTML = `✔ ${itm.item}`;
+                document.getElementById("return_item_code").innerText = itm.barcode;
+            }
+
+            pendingTransactionItem = itm;
+            currentTransactionType = scanMode; 
+        }
+
+        else if (scanMode === 'WARRANTY_CLAIM') {
+            const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const snap = await get(qWar);
+            if (!snap.exists()) return alert("❌ Tag Not Registered");
+            
+            let item; snap.forEach(c => item = c.val());
+            const war = calculateWarranty(item.soldAt, item.warrantyMonths, item.manualWarDate);
+            
+            document.getElementById("claimDisplay").classList.remove("hidden");
+            document.getElementById("claimItemName").innerText = item.item;
+            document.getElementById("claimInv").innerText = item.invoiceNo || "N/A";
+            document.getElementById("claimSite").innerText = item.assignedStation || "IN STORE";
+            
+            const statusBox = document.getElementById("claimStatusBox");
+            if (war && !war.expired) {
+                statusBox.innerHTML = `<div style="color:green; font-weight:900;">✅ WARRANTY ACTIVE: ${war.daysLeft} DAYS LEFT</div>`;
+                document.getElementById("btnFinalClaim").disabled = false;
+            } else {
+                statusBox.innerHTML = `<span style="color:red; font-weight:900;">🚫 WARRANTY EXPIRED / VOID</span>`;
+                document.getElementById("btnFinalClaim").disabled = true;
+            }
+        }
+
+        else if (scanMode === 'AUDIT_SEARCH') { 
+            document.getElementById("auditSearchInput").value = scannedInput; 
+            fetchAuditHistory(scannedInput); 
+        }
+        else if (scanMode === 'BILLING_SCAN') { 
+            document.getElementById("billBarcodeInp").value = scannedInput; 
+            addScannedItemToBill(); 
+        }
+        else if (scanMode === 'SEARCH_STOCK') { 
+            document.getElementById("mainStockSearch").value = scannedInput; 
+            filterStockTable(); 
+        }
+        else if (scanMode === 'ASSET_RECOVERY') {
+            window.addToRecoveryCart(scannedInput);
+            const statusDiv = document.getElementById("recoveryStatus");
+            if(statusDiv) {
+                statusDiv.innerText = "✅ Item Added: " + scannedInput;
+                statusDiv.style.color = "green";
+            }
+        }
+
+    } catch (err) { 
+        console.error("Scanner Error:", err); 
+        alert("Scan processing failed.");
+    }
+};
 // --- 5. DIRECT UPDATE (FOR EDITS) ---
 window.executeDirectUpdate = async () => {
     const key = document.getElementById("editItemKey").value;
