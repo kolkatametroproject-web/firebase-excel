@@ -10135,7 +10135,7 @@ window.captureSopPhoto = () => {
 };
 // =========================================================
 // 🚚 UNIFIED LOGISTICS ENGINE (1 ID = 1 PRODUCT)
-// Auto-Syncs with Billing Tab & Fixes Warranty Return Status
+// Fixed: Firebase db reference sync & print overrides
 // =========================================================
 
 (function initAdvancedDeliverySystem() {
@@ -10176,7 +10176,7 @@ window.captureSopPhoto = () => {
                 <button onclick="toggleDelMode('erase')" class="danger" style="background:#be123c;"><i class="fas fa-trash"></i> Erase Logs</button>
             </div>
 
-            <!-- PACKING TAB (Strictly 1 ID = 1 Product) -->
+            <!-- PACKING TAB -->
             <div id="del-packing" class="panel">
                 <h3><i class="fas fa-box"></i> Package Assembly (Auto-Syncs to Billing)</h3>
                 <div style="background:#f8fafc; padding:20px; border-radius:8px; border:2px dashed var(--metro-blue); margin-bottom:20px;">
@@ -10308,7 +10308,7 @@ window.captureSopPhoto = () => {
     window.toggleDelMode = (mode) => {
         ['packing', 'transit', 'tracking', 'unboxing', 'erase'].forEach(m => document.getElementById(`del-${m}`).classList.add('hidden'));
         document.getElementById(`del-${mode}`).classList.remove('hidden');
-        if (mode === 'tracking') window.loadTrackingData(); // Auto-load list when tab opens
+        if (mode === 'tracking') window.loadTrackingData(); 
     };
 
     function populateDelStations() {
@@ -10332,8 +10332,7 @@ window.captureSopPhoto = () => {
         if (!tag) return;
         
         try {
-            const { get, ref, query, orderByChild, equalTo } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            const q = query(ref(window.db, "inventory"), orderByChild("barcode"), equalTo(tag));
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
             const snap = await get(q);
             
             if (!snap.exists()) return alert("Asset Tag Not Found.");
@@ -10388,7 +10387,7 @@ window.captureSopPhoto = () => {
 
         const item = window.packCart[0];
         const pkgId = item.barcode; // 1:1 mapping
-        const currentUserStr = (window.currentUser && window.currentUser.name) ? window.currentUser.name : "System User";
+        const currentUserStr = (currentUser && currentUser.name) ? currentUser.name : "System User";
 
         const pkgData = {
             id: pkgId,
@@ -10401,13 +10400,10 @@ window.captureSopPhoto = () => {
         };
 
         try {
-            const { update, set, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+            await set(ref(db, `packages/${pkgId}`), pkgData);
             
-            // 1. Create Package
-            await set(ref(window.db, `packages/${pkgId}`), pkgData);
-            
-            // 2. FORCE "Sold Out" SO WARRANTY RETURNS ALWAYS WORK
-            await update(ref(window.db, `inventory/${item.key}`), {
+            // FORCE "Sold Out" SO WARRANTY RETURNS ALWAYS WORK
+            await update(ref(db, `inventory/${item.key}`), {
                 status: "Sold Out",
                 location: `Dispatched in ${pkgId}`,
                 assignedStation: stn,
@@ -10428,25 +10424,35 @@ window.captureSopPhoto = () => {
         const pkgId = document.getElementById("transitPkgInput").value.trim().toUpperCase();
         if (!pkgId) return alert("Scan tag ID first.");
 
+        const btn = document.activeElement;
+        const origText = btn.innerText;
+        btn.innerText = "Locating...";
+        btn.disabled = true;
+
         if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(async (pos) => {
                 const gpsLink = `https://maps.google.com/?q=${pos.coords.latitude},${pos.coords.longitude}`;
                 try {
-                    const { get, update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-                    const snap = await get(ref(window.db, `packages/${pkgId}`));
-                    if (!snap.exists()) return alert("Package not found in delivery system.");
+                    const snap = await get(ref(db, `packages/${pkgId}`));
+                    if (!snap.exists()) throw new Error("Package not found in delivery system.");
                     
                     const pkg = snap.val();
                     let hist = pkg.history || [];
-                    hist.push({ status: newStatus, time: Date.now(), location: gpsLink, by: window.currentUser.name });
+                    hist.push({ status: newStatus, time: Date.now(), location: gpsLink, by: currentUser.name || currentUser.email });
 
-                    // ONLY Update Package status. Leave inventory as "Sold Out".
-                    await update(ref(window.db, `packages/${pkgId}`), { status: newStatus, history: hist });
+                    await update(ref(db, `packages/${pkgId}`), { status: newStatus, history: hist });
                     
                     alert(`✅ Marked as: ${newStatus}`);
                     document.getElementById("transitPkgInput").value = "";
                 } catch (e) { alert(e.message); }
-            }, () => alert("GPS Error."), { enableHighAccuracy: true });
+                finally { btn.innerText = origText; btn.disabled = false; }
+            }, () => {
+                alert("GPS Error. Enable Location Services to track delivery.");
+                btn.innerText = origText; btn.disabled = false;
+            }, { enableHighAccuracy: true });
+        } else {
+            alert("Geolocation is not supported by this device.");
+            btn.innerText = origText; btn.disabled = false;
         }
     };
 
@@ -10459,9 +10465,7 @@ window.captureSopPhoto = () => {
         window.toggleWarMode('recovery');
         window.addToRecoveryCart(tag);
         
-        import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js").then(({ update, ref }) => {
-            update(ref(window.db, `packages/${tag}`), { status: 'Rejected / Returned' });
-        });
+        update(ref(db, `packages/${tag}`), { status: 'Rejected / Returned' });
         
         document.getElementById("transitPkgInput").value = "";
     };
@@ -10472,9 +10476,7 @@ window.captureSopPhoto = () => {
         tl.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading delivery grid...</p>";
         
         try {
-            const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            const snap = await get(ref(window.db, `packages`));
-            
+            const snap = await get(ref(db, `packages`));
             if (!snap.exists()) { tl.innerHTML = "<p style='text-align:center;'>No packages found.</p>"; return; }
             
             const pkgs = [];
@@ -10528,8 +10530,7 @@ window.captureSopPhoto = () => {
     // --- UNBOXING ---
     window.loadUnboxData = async (pkgId) => {
         try {
-            const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            const snap = await get(ref(window.db, `packages/${pkgId}`));
+            const snap = await get(ref(db, `packages/${pkgId}`));
             if (!snap.exists()) return alert("Invalid Package ID");
             const pkg = snap.val();
             
@@ -10564,18 +10565,16 @@ window.captureSopPhoto = () => {
         if(confirm("Confirm asset matches the ID and Tear Package Seal?")) {
             const pkgId = window.currentUnboxPkg.id;
             try {
-                const { update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
                 let hist = window.currentUnboxPkg.history || [];
-                hist.push({ status: 'Seal Broken / Unboxed', time: Date.now(), location: 'On Site', by: window.currentUser.name });
+                hist.push({ status: 'Seal Broken / Unboxed', time: Date.now(), location: 'On Site', by: currentUser.name });
                 
-                await update(ref(window.db, `packages/${pkgId}`), { status: 'Unboxed', history: hist });
+                await update(ref(db, `packages/${pkgId}`), { status: 'Unboxed', history: hist });
 
-                // Keep status as 'Sold Out', only update location
                 const invUpdates = {};
                 window.currentUnboxPkg.items.forEach(it => {
                     invUpdates[`inventory/${it.key}/location`] = "Installed at " + window.currentUnboxPkg.station;
                 });
-                await update(ref(window.db), invUpdates);
+                await update(ref(db), invUpdates);
 
                 alert("✅ Package successfully unboxed and assets recorded to site.");
                 document.getElementById("unboxArea").classList.add("hidden");
@@ -10592,13 +10591,12 @@ window.captureSopPhoto = () => {
         if(!confirm(`⚠️ WARNING: This will delete ALL delivery logs associated with ${stn}. Proceed?`)) return;
 
         try {
-            const { get, update, ref, query, orderByChild, equalTo } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            const snap = await get(query(ref(window.db, "packages"), orderByChild("station"), equalTo(stn)));
+            const snap = await get(query(ref(db, "packages"), orderByChild("station"), equalTo(stn)));
             if(!snap.exists()) return alert("No packages found for this station.");
             
             const updates = {};
             snap.forEach(c => updates[`packages/${c.key}`] = null);
-            await update(ref(window.db), updates);
+            await update(ref(db), updates);
             
             alert(`✅ All delivery data for ${stn} erased.`);
         } catch(e) { alert("Error: " + e.message); }
