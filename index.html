@@ -10446,68 +10446,70 @@ window.captureSopPhoto = () => {
     }
 };
 // =========================================================
-// 🚚 REFINED METRO LOGISTICS ENGINE
+// 🚀 CONSOLIDATED LOGISTICS & FEEDBACK ENGINE
+// Fixes: showScanFeedback ReferenceError & Printing Issues
 // =========================================================
 
 (function initMetroLogisticsSystem() {
-    window.shipCart = [];
+    // 1. GLOBAL STATE INITIALIZATION
+    window.shipCart = window.shipCart || [];
     window.currentUnboxPkg = null;
 
-    // --- 1. THE UNIFIED NAVIGATION ENGINE ---
-    window.toggleDelMode = (mode) => {
-        const prefixes = ['del-', 'ship-'];
-        const sections = ['packing', 'transit', 'tracking', 'returns', 'unboxing', 'erase'];
-        
-        sections.forEach(s => {
-            prefixes.forEach(p => {
-                const el = document.getElementById(p + s);
-                if (el) el.classList.add('hidden');
-            });
-        });
+    // 2. VISUAL FEEDBACK SYSTEM (Fixed ReferenceError)
+    window.showScanFeedback = function(message, color, tagId = "") {
+        let overlay = document.getElementById('scan-feedback-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'scan-feedback-overlay';
+            overlay.style = "position:fixed; top:0; left:0; width:100vw; height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:100000; color:white; font-family:sans-serif; transition:opacity 0.2s ease; pointer-events:none; opacity:0;";
+            document.body.appendChild(overlay);
+        }
 
-        const target = document.getElementById(`del-${mode}`) || document.getElementById(`ship-${mode}`);
-        if (target) target.classList.remove('hidden');
+        overlay.style.backgroundColor = color;
+        overlay.innerHTML = `
+            <div style="font-size:45px; font-weight:900; text-align:center; text-transform:uppercase; text-shadow: 2px 2px 10px rgba(0,0,0,0.3);">${message}</div>
+            ${tagId ? `<div style="font-size:20px; margin-top:15px; padding:8px 20px; background:rgba(0,0,0,0.3); border-radius:50px;">${tagId}</div>` : ''}
+        `;
 
-        if (mode === 'tracking') window.trackShipment();
+        overlay.style.opacity = "0.95";
+        setTimeout(() => { overlay.style.opacity = "0"; }, 1200);
     };
 
-    // --- 2. THE MASTER SCANNER ROUTER (BATCH SCAN SUPPORT) ---
+    // 3. MASTER SCANNER ROUTER
     const originalOnScan = window.onScanSuccess;
-    window.onScanSuccess = async function(text) {
-        if (!text) return;
-        const decoded = text.trim();
+    window.onScanSuccess = async function(decodedText) {
+        if (!decodedText) return;
+        const scanned = decodedText.trim();
         const mode = typeof scanMode !== 'undefined' ? scanMode : "";
 
         if (mode.startsWith('DEL_') || mode.startsWith('SHIP_')) {
-            // Batch scanning: Don't close camera for Packing
-            if (mode !== 'DEL_PACK_SCAN' && mode !== 'SHIP_PACK') closeBarcodeScanner();
+            // Batch Scan: Don't close scanner for Packing
+            if (!mode.includes('PACK')) {
+                if (typeof closeBarcodeScanner === 'function') closeBarcodeScanner();
+            }
 
-            if (mode === 'DEL_PACK_SCAN' || mode === 'SHIP_PACK') {
+            if (mode.includes('PACK')) {
                 const inp = document.getElementById('packScanInput') || document.getElementById('shipScanInput');
-                if (inp) { inp.value = decoded; window.addShipmentItem(); }
+                if (inp) { inp.value = scanned; window.addShipmentItem(); }
             } else if (mode.includes('TRANSIT')) {
                 const inp = document.getElementById('transitPkgInput') || document.getElementById('shipTransitInput');
-                if (inp) inp.value = decoded;
+                if (inp) inp.value = scanned;
             } else if (mode.includes('UNBOX')) {
-                const inp = document.getElementById('unboxPkgInput');
-                if (inp) { inp.value = decoded; window.loadUnboxData(decoded); }
-            } else if (mode.includes('TRACK')) {
-                const inp = document.getElementById('shipTrackInput');
-                if (inp) { inp.value = decoded; window.trackShipment(); }
+                if (window.loadUnboxData) window.loadUnboxData(scanned);
             }
             return;
         }
-        if (originalOnScan) originalOnScan(text);
+        if (originalOnScan) originalOnScan(decodedText);
     };
 
-    // --- 3. ASSEMBLY & DISPATCH (WITH INVENTORY SYNC) ---
+    // 4. ITEM REGISTRATION
     window.addShipmentItem = async () => {
         const inp = document.getElementById('packScanInput') || document.getElementById('shipScanInput');
-        const tag = inp.value.trim().toUpperCase();
+        const tag = inp ? inp.value.trim().toUpperCase() : null;
         if (!tag) return;
 
         if (window.shipCart.some(i => i.barcode === tag)) {
-            showScanFeedback("ALREADY IN CART", "#f59e0b", tag);
+            window.showScanFeedback("ALREADY IN CART", "#f59e0b", tag);
             inp.value = ""; return;
         }
 
@@ -10516,126 +10518,99 @@ window.captureSopPhoto = () => {
             const q = query(ref(window.db, "inventory"), orderByChild("barcode"), equalTo(tag));
             const snap = await get(q);
 
-            if (!snap.exists()) return showScanFeedback("NOT FOUND", "#ef4444", tag);
+            if (!snap.exists()) {
+                window.showScanFeedback("NOT FOUND", "#ef4444", tag);
+                return;
+            }
 
             let item; snap.forEach(c => item = { key: c.key, ...c.val() });
-            
-            if (item.status === "Sold Out") return showScanFeedback("ALREADY SOLD", "#ef4444", tag);
-
             window.shipCart.push(item);
             inp.value = "";
             window.renderShipCart();
-            showScanFeedback(`ADDED: ${item.item}`, "#10b981", tag);
+            window.showScanFeedback(`ADDED: ${item.item}`, "#10b981", tag);
         } catch (e) { console.error(e); }
     };
 
+    // 5. DISPATCH & MANIFEST PRINTING (Fixed Print Logic)
     window.dispatchShipment = async () => {
         if (window.shipCart.length === 0) return alert("Cart is empty.");
-        const stn = document.getElementById("packTargetStation").value || document.getElementById("shipTarget").value;
+        const stn = document.getElementById("packTargetStation")?.value || document.getElementById("shipTarget")?.value;
         if (!stn) return alert("Select Destination.");
 
         const awb = "PKG-" + Date.now().toString().slice(-8);
-        const agent = window.currentUser?.name || "System";
+        const agent = window.currentUser?.name || "System Agent";
 
         const pkgData = {
-            id: awb, awb: awb, station: stn, destination: stn, status: 'Packed',
+            id: awb, awb: awb, station: stn, status: 'Packed',
             items: window.shipCart.map(i => ({ name: i.item, tag: i.barcode, key: i.key })),
-            history: [{ status: 'Packed & Sealed', time: Date.now(), by: agent, location: 'HQ' }]
+            time: Date.now(),
+            history: [{ status: 'Packed & Sealed', time: Date.now(), by: agent }]
         };
 
         try {
             const { update, set, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
             await set(ref(window.db, `packages/${awb}`), pkgData);
-            await set(ref(window.db, `shipments/${awb}`), pkgData);
-
+            
             const updates = {};
             window.shipCart.forEach(it => {
                 updates[`inventory/${it.key}/status`] = "In Transit";
-                updates[`inventory/${it.key}/location`] = `In Transit [${awb}]`;
-                updates[`inventory/${it.key}/assignedStation`] = stn;
+                updates[`inventory/${it.key}/location`] = `In ${awb}`;
             });
             await update(ref(window.db), updates);
 
-            alert(`🚀 DISPATCHED: ${awb}`);
-            window.shipCart = []; window.renderShipCart();
+            // Trigger Printout
+            window.generatePackageBillPrint(awb, window.shipCart, stn, agent);
+            
+            window.shipCart = []; 
+            window.renderShipCart();
         } catch (e) { alert(e.message); }
     };
 
-    // --- 4. TRANSIT & DELIVERY (SYMBOLS SYNC TO SOLD OUT) ---
-    window.updateShipStatus = async (newStatus) => {
-        const id = (document.getElementById("transitPkgInput") || document.getElementById("shipTransitInput")).value.trim().toUpperCase();
-        if (!id) return alert("Scan AWB ID.");
-
-        try {
-            const { get, update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-            let path = `packages/${id}`;
-            let snap = await get(ref(window.db, path));
-            if (!snap.exists()) { path = `shipments/${id}`; snap = await get(ref(window.db, path)); }
-            if (!snap.exists()) return alert("AWB not found.");
-
-            const pkg = snap.val();
-            let hist = pkg.history || [];
-            hist.push({ status: newStatus, time: Date.now(), by: window.currentUser?.name || "Agent" });
-
-            const batch = { [`${path}/status`]: newStatus, [`${path}/history`]: hist };
-
-            // 🟢 CRITICAL: IF DELIVERED, SYNC INVENTORY TO "SOLD OUT"
-            if (newStatus === 'Delivered') {
-                (pkg.items || []).forEach(it => {
-                    if (it.key) {
-                        batch[`inventory/${it.key}/status`] = "Sold Out";
-                        batch[`inventory/${it.key}/soldAt`] = Date.now();
-                        batch[`inventory/${it.key}/location`] = `Installed at ${pkg.station || pkg.destination}`;
-                    }
-                });
-            }
-
-            await update(ref(window.db), batch);
-            showScanFeedback(newStatus.toUpperCase(), "#10b981", id);
-            (document.getElementById("transitPkgInput") || document.getElementById("shipTransitInput")).value = "";
-        } catch (e) { alert(e.message); }
-    };
-
-    // --- 5. UNBOXING LOGIC ---
-    window.loadUnboxData = async (id) => {
-        const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        const snap = await get(ref(window.db, `packages/${id}`));
-        if (!snap.exists()) return alert("Invalid Package ID");
-        const pkg = snap.val();
-        if (pkg.status === 'Unboxed') return alert("Already unboxed.");
-
-        window.currentUnboxPkg = pkg;
-        document.getElementById("unboxArea").classList.remove("hidden");
-        document.getElementById("unboxStationName").innerText = pkg.station;
-        document.getElementById("unboxItemsList").innerHTML = (pkg.items || []).map(it => `
-            <label style="display:flex; gap:10px; background:#f1f5f9; padding:12px; border-radius:8px;">
-                <input type="checkbox" class="unbox-chk" style="width:20px; height:20px;">
-                <div><b>${it.name}</b><br><small>${it.tag}</small></div>
-            </label>
-        `).join('');
-    };
-
-    window.tearPackageSeal = async () => {
-        const checks = document.querySelectorAll('.unbox-chk');
-        if (!Array.from(checks).every(c => c.checked)) return alert("⚠️ Please verify all physical items first.");
+    // 6. OFFICIAL PRINT TEMPLATE (A4 High-Res)
+    window.generatePackageBillPrint = (pkgId, items, station, userName) => {
+        const reportContainer = document.getElementById("printableReportContainer");
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${pkgId}`;
         
-        const { update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        await update(ref(window.db, `packages/${window.currentUnboxPkg.id}`), { status: 'Unboxed' });
-        alert("✅ SEAL BROKEN: Content Verified.");
-        document.getElementById("unboxArea").classList.add("hidden");
+        let rows = items.map((it, i) => `
+            <tr style="border-bottom: 2pt solid #000; font-size:24pt;">
+                <td style="padding:15px; text-align:center;">${i+1}</td>
+                <td style="font-weight:bold; padding:15px;">${it.item.toUpperCase()}</td>
+                <td style="font-family:monospace; font-weight:bold; text-align:right; padding:15px;">${it.barcode}</td>
+            </tr>`).join('');
+
+        reportContainer.innerHTML = `
+            <div class="no-print" style="text-align:center; padding:20px; background:#fff; border-bottom:2px solid #ccc;">
+                <button onclick="window.print()" style="padding:15px 40px; font-size:18px; font-weight:900; background:#15803d; color:white; border-radius:8px;">🖨️ PRINT MANIFEST</button>
+                <button onclick="window.closeReportPreview()" style="padding:15px 40px; font-size:18px; margin-left:10px;">CLOSE</button>
+            </div>
+            <div style="background:white; color:black; padding:20mm; font-family:sans-serif;">
+                <h1 style="font-size:40pt; text-align:center; margin:0;">METRO RAILWAY</h1>
+                <h2 style="font-size:20pt; text-align:center; margin:0; border-bottom:5pt solid #000; padding-bottom:10px;">PLATFORM SAFETY PROJECT</h2>
+                <div style="display:flex; justify-content:space-between; margin-top:30px;">
+                    <div style="font-size:18pt; font-weight:bold;">
+                        DESTINATION: ${station.toUpperCase()}<br>
+                        DATE: ${new Date().toLocaleDateString('en-IN')}<br>
+                        AGENT: ${userName.toUpperCase()}
+                    </div>
+                    <img src="${qrUrl}" style="width:150px; border:2px solid #000;">
+                </div>
+                <h3 style="background:#000; color:white; padding:10px; text-align:center; margin-top:30px;">PACKAGE MANIFEST: ${pkgId}</h3>
+                <table style="width:100%; border-collapse:collapse; margin-top:10px;">
+                    <thead><tr style="border-bottom:4pt solid #000; font-size:18pt;"><th>#</th><th style="text-align:left;">DESCRIPTION</th><th style="text-align:right;">ASSET TAG</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+                <div style="margin-top:50px; border:4pt solid #b91c1c; padding:20px; text-align:center; font-size:20pt; font-weight:bold; color:#b91c1c;">
+                    DO NOT ACCEPT IF SEAL IS BROKEN
+                </div>
+            </div>`;
+        reportContainer.classList.remove("hidden");
     };
 
-    // Helper: Build station list
-    window.populateShipStations = () => {
-        const sel = document.getElementById("packTargetStation");
-        if (sel && typeof METRO_STATIONS !== 'undefined') {
-            let opts = "<option value=''>-- Select Destination --</option>";
-            Object.entries(METRO_STATIONS).forEach(([line, stns]) => {
-                stns.forEach(s => opts += `<option value="${s} (${line})">${s}</option>`);
-            });
-            sel.innerHTML = opts;
-        }
+    window.closeReportPreview = () => {
+        document.getElementById("printableReportContainer").classList.add("hidden");
     };
+
+    console.log("✅ Logistics Engine (Fixed) initialized.");
 })();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
