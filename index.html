@@ -10475,55 +10475,124 @@ window.captureSopPhoto = () => {
     
     window.toggleShipMode = syncNav;
     window.toggleDelMode = syncNav;
+  window.addShipmentItem = async () => {
+    const inputEl = document.getElementById('packScanInput') || document.getElementById('shipScanInput');
+    const tag = inputEl ? inputEl.value.trim() : null;
+    if (!tag) return;
+
+    // Check for duplicates in the current cart
+    if ((window.shipCart || []).some(i => i.barcode === tag)) {
+        showScanFeedback("DUPLICATE TAG", "#f59e0b", tag);
+        inputEl.value = "";
+        return;
+    }
+
+    try {
+        const { get, ref, query, orderByChild, equalTo } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        const q = query(ref(window.db, "inventory"), orderByChild("barcode"), equalTo(tag));
+        const snap = await get(q);
+
+        if (!snap.exists()) {
+            showScanFeedback("NOT FOUND", "#ef4444", tag);
+            return;
+        }
+
+        let item; snap.forEach(c => item = { key: c.key, ...c.val() });
+
+        // Add to global state
+        window.shipCart = window.shipCart || [];
+        window.shipCart.push(item);
+        
+        // Clear input for next scan
+        inputEl.value = "";
+        
+        // Refresh UI
+        if (window.renderShipCart) window.renderShipCart();
+        if (window.renderPackCart) window.renderPackCart();
+
+        // 🟢 Success Feedback
+        showScanFeedback(`ADDED: ${item.item}`, "#10b981", tag);
+
+    } catch (e) {
+        showScanFeedback("ERROR", "#ef4444");
+        console.error(e);
+    }
+};
+
+// Map both names to the same function for compatibility
+window.manualAddPackItem = window.addShipmentItem;
+  function showScanFeedback(message, color, tagId = "") {
+    let overlay = document.getElementById('scan-feedback-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'scan-feedback-overlay';
+        overlay.style = "position:fixed; top:0; left:0; width:100vw; height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:100000; color:white; font-family:sans-serif; transition:opacity 0.2s ease; pointer-events:none; opacity:0;";
+        document.body.appendChild(overlay);
+    }
+
+    overlay.style.backgroundColor = color;
+    overlay.innerHTML = `
+        <div style="font-size:45px; font-weight:900; text-align:center; text-transform:uppercase;">${message}</div>
+        ${tagId ? `<div style="font-size:20px; margin-top:15px; padding:8px 20px; background:rgba(0,0,0,0.3); border-radius:50px;">${tagId}</div>` : ''}
+    `;
+
+    overlay.style.opacity = "0.95";
+    setTimeout(() => { overlay.style.opacity = "0"; }, 1000);
+}
 
     // 4. THE MASTER SCANNER ROUTER
     window.onScanSuccess = async function (decodedText) {
-        if (!decodedText) return;
-        const scanned = decodedText.trim();
-        const mode = typeof scanMode !== 'undefined' ? scanMode : "";
+    if (!decodedText) return;
+    const scanned = decodedText.trim();
+    const mode = typeof scanMode !== 'undefined' ? scanMode : "";
 
-        // Detect if the current mode belongs to Logistics
-        if (mode.startsWith('SHIP_') || mode.startsWith('DEL_')) {
+    // 1. Check if the current mode belongs to Logistics
+    if (mode.startsWith('SHIP_') || mode.startsWith('DEL_')) {
+        
+        // --- BATCH SCAN LOGIC ---
+        // Only close the scanner automatically if NOT in a Packing mode.
+        // This allows you to scan multiple assets rapidly.
+        if (!mode.includes('PACK')) {
             if (typeof closeBarcodeScanner === 'function') closeBarcodeScanner();
+        }
 
-            // Routing Logic
-            if (mode.includes('PACK')) {
-                const inp = document.getElementById('packScanInput') || document.getElementById('shipScanInput');
-                if (inp) { 
-                    inp.value = scanned; 
-                    // Support both function names used in your different versions
-                    if (window.manualAddPackItem) window.manualAddPackItem();
-                    else if (window.addShipmentItem) window.addShipmentItem();
-                }
-            } 
-            else if (mode.includes('TRANSIT')) {
-                const inp = document.getElementById('transitPkgInput') || document.getElementById('shipTransitInput');
-                if (inp) inp.value = scanned;
-            } 
-            else if (mode.includes('TRACK')) {
-                const inp = document.getElementById('trackSearchInput') || document.getElementById('shipTrackInput');
-                if (inp) {
-                    inp.value = scanned;
-                    if (window.filterTrackingList) window.filterTrackingList();
-                    if (window.trackShipment) window.trackShipment();
-                }
-            } 
-            else if (mode.includes('UNBOX')) {
-                const inp = document.getElementById('unboxPkgInput');
-                if (inp) {
-                    inp.value = scanned;
-                    if (window.loadUnboxData) window.loadUnboxData(scanned);
-                }
+        // 2. Routing Logic
+        if (mode.includes('PACK')) {
+            const inp = document.getElementById('packScanInput') || document.getElementById('shipScanInput');
+            if (inp) { 
+                inp.value = scanned; 
+                // Prioritize addShipmentItem, fallback to manualAddPackItem
+                if (window.addShipmentItem) window.addShipmentItem();
+                else if (window.manualAddPackItem) window.manualAddPackItem();
             }
-            return; // Exit: Do not pass to inventory
+        } 
+        else if (mode.includes('TRANSIT')) {
+            const inp = document.getElementById('transitPkgInput') || document.getElementById('shipTransitInput');
+            if (inp) inp.value = scanned;
+        } 
+        else if (mode.includes('TRACK')) {
+            const inp = document.getElementById('trackSearchInput') || document.getElementById('shipTrackInput');
+            if (inp) {
+                inp.value = scanned;
+                if (window.filterTrackingList) window.filterTrackingList();
+                if (window.trackShipment) window.trackShipment();
+            }
+        } 
+        else if (mode.includes('UNBOX')) {
+            const inp = document.getElementById('unboxPkgInput');
+            if (inp) {
+                inp.value = scanned;
+                if (window.loadUnboxData) window.loadUnboxData(scanned);
+            }
         }
+        return; // Exit: Do not pass to inventory
+    }
 
-        // Pass to original Inventory/Warranty system if not a logistics scan
-        if (typeof window.originalOnScanSuccess === "function") {
-            window.originalOnScanSuccess(decodedText);
-        }
-    };
-
+    // 3. Fallback to original Inventory/Warranty system
+    if (typeof window.originalOnScanSuccess === "function") {
+        window.originalOnScanSuccess(decodedText);
+    }
+};
     // 5. HELPER: RE-INITIALIZE BUTTONS
     const navBar = document.querySelector('.nav-bar');
     const logisticsBtn = document.getElementById('btnDelivery');
