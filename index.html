@@ -10363,11 +10363,46 @@ window.captureSopPhoto = () => {
 
     // 1. Navigation Router
     window.logRouter = (mode) => {
-        ['pack', 'unbox', 'manage'].forEach(m => document.getElementById(`log-${m}`).classList.add('hidden'));
-        document.getElementById(`log-${mode}`).classList.remove('hidden');
-        if(mode === 'manage') window.refreshManualRegistry();
-    };
+    ['pack', 'transit', 'unbox', 'manage'].forEach(m => {
+        const el = document.getElementById(`log-${m}`);
+        if(el) el.classList.add('hidden');
+    });
+    document.getElementById(`log-${mode}`).classList.remove('hidden');
+    if(mode === 'manage') window.refreshManualRegistry();
+};
+window.updateManualStatus = async (status) => {
+    const id = document.getElementById("transitAwbInp").value.trim().toUpperCase();
+    const loc = document.getElementById("transitLoc").value.trim() || "Main Hub";
+    
+    if(!id) return alert("Please scan a Track ID first.");
 
+    try {
+        const { get, update, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+        const snap = await get(ref(window.db, `manual_shipments/${id}`));
+        
+        if(!snap.exists()) return alert("Error: ID not found in Registry.");
+
+        const d = snap.val();
+        let history = d.history || [];
+        history.push({
+            status: status.toUpperCase(),
+            location: loc,
+            time: Date.now(),
+            agent: currentUser.name || "System"
+        });
+
+        await update(ref(window.db, `manual_shipments/${id}`), {
+            status: status.toUpperCase(),
+            currentLoc: loc,
+            history: history
+        });
+
+        window.showScanFeedback(status.toUpperCase(), "#10b981", id);
+        document.getElementById("transitAwbInp").value = "";
+        document.getElementById("transitLoc").value = "";
+        alert(`✅ ${id} updated to ${status} at ${loc}`);
+    } catch(e) { alert(e.message); }
+};
     // 2. Scanner Router (No Auto-Close for Packing)
     const baseOnScan = window.onScanSuccess;
     window.onScanSuccess = async (text) => {
@@ -10536,20 +10571,70 @@ window.captureSopPhoto = () => {
     };
 
     window.refreshManualRegistry = async () => {
-        const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
-        const snap = await get(ref(window.db, "manual_shipments"));
-        const list = document.getElementById("manualRegistryList");
-        list.innerHTML = "";
-        if(snap.exists()){
-            snap.forEach(c => {
-                const d = c.val();
-                list.innerHTML += `<div class="panel" style="display:flex; justify-content:space-between; background:white; align-items:center;">
-                    <div><b>${d.id}</b><br><small>${d.dest}</small></div>
-                    <button class="info" onclick='window.printA4Manifest(${JSON.stringify(d)})'>RE-PRINT</button>
-                </div>`;
-            });
-        }
-    };
+    const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+    const snap = await get(ref(window.db, "manual_shipments"));
+    const tbody = document.getElementById("manualRegistryBody");
+    tbody.innerHTML = "";
+
+    if(snap.exists()){
+        snap.forEach(c => {
+            const d = c.val();
+            const statusColor = d.status === 'DELIVERED' ? '#10b981' : (d.status === 'RETURNED' ? '#be123c' : '#3b82f6');
+            
+            tbody.innerHTML += `
+                <tr style="border-bottom:1px solid #eee;">
+                    <td>
+                        <a href="javascript:void(0)" onclick='window.viewIndividualTrack("${d.id}")' 
+                           style="color:#0284c7; font-weight:bold; font-family:monospace; font-size:15px; text-decoration:underline;">
+                           ${d.id}
+                        </a>
+                    </td>
+                    <td style="font-weight:bold;">${d.dest.toUpperCase()}</td>
+                    <td><span style="background:${statusColor}; color:white; padding:3px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${d.status || 'PACKED'}</span></td>
+                    <td style="font-size:12px; color:#64748b;">${d.currentLoc || 'Origin Hub'}</td>
+                </tr>`;
+        });
+    }
+};
+    window.viewIndividualTrack = async (id) => {
+    const { get, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+    const snap = await get(ref(window.db, `manual_shipments/${id}`));
+    if(!snap.exists()) return;
+    
+    const d = snap.val();
+    const container = document.getElementById("printableReportContainer");
+    
+    let historyHtml = (d.history || []).reverse().map(h => `
+        <div style="border-left: 3pt solid #0f172a; padding-left: 20px; position:relative; margin-bottom:20px;">
+            <div style="position:absolute; left:-11px; top:0; width:18px; height:18px; background:#0f172a; border-radius:50%;"></div>
+            <div style="font-size:35pt; font-weight:900;">${h.status}</div>
+            <div style="font-size:25pt; color:#444;">${h.location.toUpperCase()}</div>
+            <div style="font-size:20pt; color:#888;">${new Date(h.time).toLocaleString('en-IN')}</div>
+        </div>
+    `).join('');
+
+    container.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:20px; background:#eee; position:sticky; top:0; z-index:999;">
+            <button onclick="window.print()" class="info">PRINT LOG</button>
+            <button onclick="closeReportPreview()" class="danger" style="margin-left:10px;">CLOSE</button>
+        </div>
+        <div class="a4-max-wrapper" style="background:white; color:black; padding:20mm; font-family:'Arial Black', sans-serif;">
+            <div style="text-align:center; border-bottom:10pt solid #000; padding-bottom:20px;">
+                <h1 style="font-size:70pt; margin:0;">TRACKING DETIALS</h1>
+                <h2 style="font-size:40pt; margin:0; color:#444;">ID: ${d.id}</h2>
+            </div>
+            <div style="margin:40px 0; font-size:35pt;">
+                <b>DESTINATION:</b> ${d.dest.toUpperCase()}<br>
+                <b>TOTAL ITEMS:</b> ${d.items.length}
+            </div>
+            <div style="margin-top:50px;">
+                <h3 style="background:#000; color:#fff; padding:10px; font-size:30pt; text-align:center;">MOVEMENT HISTORY</h3>
+                <div style="margin-top:30px; padding-left:20px;">${historyHtml || '<p style="font-size:25pt;">Order Packed & Sealed at HQ</p>'}</div>
+            </div>
+        </div>`;
+    
+    container.classList.remove("hidden");
+};
 })();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
