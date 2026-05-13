@@ -10629,7 +10629,108 @@ window.manualAddPackItem = window.addShipmentItem;
     overlay.style.opacity = "0.95";
     setTimeout(() => { overlay.style.opacity = "0"; }, 1000);
 }
+/**
+ * 📦 DISPATCH SHIPMENT ENGINE
+ * Handles Finalization, Inventory Updates, and Manifest Generation.
+ * Fixes: "ReferenceError: dispatchShipment is not defined"
+ */
 
+window.dispatchShipment = async () => {
+    // 1. Validation Checks
+    if (!window.shipCart || window.shipCart.length === 0) {
+        return alert("Empty Cart: Please scan assets before dispatching.");
+    }
+
+    const stnInput = document.getElementById("shipTarget") || document.getElementById("packTargetStation");
+    const destination = stnInput ? stnInput.value : "";
+    
+    if (!destination) {
+        return alert("Destination Missing: Please select a Target Station.");
+    }
+
+    if (!window.db) {
+        return alert("Database Error: Connection not ready.");
+    }
+
+    // 2. Prepare Metadata
+    // Support for both AWB (Railway style) and PKG (standard) IDs
+    const awb = "PKG-" + Date.now().toString().slice(-8); 
+    const agent = window.currentUser?.name || "Field Agent";
+    
+    const btn = document.activeElement;
+    const originalText = btn.innerHTML;
+    
+    try {
+        // Disable UI during processing
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> DISPATCHING...';
+        btn.disabled = true;
+
+        const { update, set, ref } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js");
+
+        // 3. Create Package Record
+        const packageData = {
+            id: awb,
+            awb: awb,
+            station: destination,
+            destination: destination,
+            status: 'Packed',
+            items: window.shipCart.map(i => ({ name: i.item, tag: i.barcode, key: i.key })),
+            packedBy: agent,
+            time: Date.now(),
+            history: [{ 
+                status: 'Packed & Sealed', 
+                time: Date.now(), 
+                location: 'Fulfillment HQ', 
+                by: agent 
+            }]
+        };
+
+        // Write to dual paths for cross-system compatibility
+        await set(ref(window.db, `packages/${awb}`), packageData);
+        await set(ref(window.db, `shipments/${awb}`), packageData);
+
+        // 4. Batch Update Inventory Status
+        const updates = {};
+        window.shipCart.forEach(item => {
+            if (item.key) {
+                updates[`inventory/${item.key}/status`] = "In Transit";
+                updates[`inventory/${item.key}/location`] = `In Transit [${awb}]`;
+                updates[`inventory/${item.key}/assignedStation`] = destination;
+                updates[`inventory/${item.key}/lastUpdated`] = Date.now();
+                updates[`inventory/${item.key}/invoiceNo`] = awb;
+            }
+        });
+
+        await update(ref(window.db), updates);
+
+        // 5. Success Feedback & Cleanup
+        if (typeof window.showScanFeedback === 'function') {
+            window.showScanFeedback("DISPATCH SUCCESS", "#10b981", awb);
+        }
+
+        // Trigger Manifest Printing
+        if (typeof window.generatePackageBillPrint === 'function') {
+            window.generatePackageBillPrint(awb, window.shipCart, destination, agent);
+        } else {
+            alert(`Dispatch Successful! ID: ${awb}`);
+        }
+
+        // Reset Cart and UI
+        window.shipCart = [];
+        if (window.renderShipCart) window.renderShipCart();
+        if (stnInput) stnInput.value = "";
+
+    } catch (error) {
+        console.error("Dispatch Failed:", error);
+        alert("Critical Error during Dispatch: " + error.message);
+    } finally {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+    }
+};
+
+// Aliasing for different HTML button versions
+window.finalizePackage = window.dispatchShipment;
     // 4. THE MASTER SCANNER ROUTER
     window.onScanSuccess = async function (decodedText) {
     if (!decodedText) return;
