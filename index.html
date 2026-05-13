@@ -10134,6 +10134,506 @@ window.captureSopPhoto = () => {
         }
     }
 };
+  // =========================================================
+// 🚚 MODULE: LOGISTICS, DELIVERY & PACKAGING ENGINE
+// dynamically injected to bypass HTML restrictions.
+// =========================================================
+
+(function initDeliverySystem() {
+    // 1. INJECT THE NAVIGATION BUTTON
+    const navBar = document.querySelector('.nav-bar');
+    if (navBar && !document.getElementById('btnDelivery')) {
+        const delBtn = document.createElement('button');
+        delBtn.className = 'nav-btn';
+        delBtn.id = 'btnDelivery';
+        delBtn.onclick = () => switchTab('delivery');
+        delBtn.innerHTML = '<i class="fas fa-truck"></i> Logistics';
+        navBar.appendChild(delBtn);
+    }
+
+    // 2. INJECT THE DELIVERY TAB HTML INTO APP SCREEN
+    const appScreen = document.getElementById('appScreen');
+    if (appScreen && !document.getElementById('tab-delivery')) {
+        const deliveryHTML = `
+        <div id="tab-delivery" class="hidden">
+            <div style="margin-bottom:20px; display:flex; gap:10px; flex-wrap:wrap; padding: 10px; background: #e2e8f0; border-radius: 6px;">
+                <button onclick="toggleDelMode('packing')" class="info"><i class="fas fa-box"></i> Packing & Bill</button>
+                <button onclick="toggleDelMode('transit')" class="warning"><i class="fas fa-motorcycle"></i> Pickup/Delivery</button>
+                <button onclick="toggleDelMode('tracking')" class="secondary"><i class="fas fa-map-marker-alt"></i> Live Tracking</button>
+                <button onclick="toggleDelMode('unboxing')" class="success"><i class="fas fa-box-open"></i> Unboxing</button>
+                <button onclick="toggleDelMode('erase')" class="danger" style="background:#be123c;"><i class="fas fa-trash"></i> Erase Logs</button>
+            </div>
+
+            <!-- PACKING & BILLING -->
+            <div id="del-packing" class="panel">
+                <h3><i class="fas fa-box"></i> Package Assembly & Billing</h3>
+                <div style="background:#f8fafc; padding:20px; border-radius:8px; border:2px dashed var(--metro-blue); margin-bottom:20px;">
+                    <label style="font-weight:bold; font-size:11px;">1. SELECT DESTINATION STATION</label>
+                    <select id="packTargetStation" style="margin-bottom:15px; border: 2px solid var(--metro-blue);"></select>
+                    
+                    <label style="font-weight:bold; font-size:11px;">2. SCAN ASSETS INTO PACKAGE</label>
+                    <div style="display:flex; gap:10px;">
+                        <input id="packScanInput" placeholder="Scan or Enter Asset ID..." style="margin:0; height:45px;">
+                        <button onclick="openBarcodeScanner('DEL_PACK_SCAN')" class="warning" style="height:45px; padding:0 20px;"><i class="fas fa-qrcode"></i> SCAN</button>
+                        <button onclick="manualAddPackItem()" class="info" style="height:45px;"><i class="fas fa-plus"></i> ADD</button>
+                    </div>
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead style="background:var(--metro-blue); color:white;">
+                            <tr><th>Sl.</th><th>Product Details</th><th>Asset ID (Tag)</th><th>Action</th></tr>
+                        </thead>
+                        <tbody id="packCartBody"><tr><td colspan="4" style="text-align:center;">Cart is empty. Scan items.</td></tr></tbody>
+                    </table>
+                </div>
+                <button onclick="finalizePackage()" class="success" style="width:100%; margin-top:20px; padding:15px; font-weight:900; font-size:16px;">
+                    <i class="fas fa-print"></i> SEAL PACKAGE & PRINT BILL
+                </button>
+            </div>
+
+            <!-- TRANSIT & PICKUP -->
+            <div id="del-transit" class="panel hidden" style="border-top: 5px solid #f59e0b;">
+                <h3 style="color:#d97706;"><i class="fas fa-motorcycle"></i> Field Transit Agent</h3>
+                <p style="font-size:12px; color:#64748b; margin-bottom:15px;">Scan the Package QR. Your GPS location and time will be logged automatically.</p>
+                <div style="display:flex; gap:10px; margin-bottom:20px;">
+                    <input id="transitPkgInput" placeholder="Package ID (PKG-...)" style="margin:0; height:50px;">
+                    <button onclick="openBarcodeScanner('DEL_TRANSIT_SCAN')" class="danger" style="height:50px; padding:0 25px;"><i class="fas fa-qrcode"></i> SCAN PKG</button>
+                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
+                    <button onclick="updateTransitStatus('In Transit')" class="warning" style="padding:20px; font-size:14px; font-weight:900;">📍 MARK PICKUP / TRANSIT</button>
+                    <button onclick="updateTransitStatus('Delivered')" class="success" style="padding:20px; font-size:14px; font-weight:900;">✅ MARK DELIVERED</button>
+                </div>
+            </div>
+
+            <!-- TRACKING -->
+            <div id="del-tracking" class="panel hidden">
+                <h3><i class="fas fa-search-location"></i> Package Tracking</h3>
+                <div style="display:flex; gap:10px; margin-bottom:20px;">
+                    <input id="trackPkgInput" placeholder="Enter Package ID..." style="margin:0;">
+                    <button onclick="openBarcodeScanner('DEL_TRACK_SCAN')" class="secondary"><i class="fas fa-qrcode"></i></button>
+                    <button onclick="loadTrackingData()" class="info">TRACK</button>
+                </div>
+                <div id="trackingTimeline" style="background:#f1f5f9; padding:20px; border-radius:8px; border:1px solid #cbd5e1; min-height:100px;">
+                    <p style="text-align:center; color:#64748b;">Enter ID to view timeline</p>
+                </div>
+            </div>
+
+            <!-- UNBOXING -->
+            <div id="del-unboxing" class="panel hidden" style="border-top: 5px solid var(--success-green);">
+                <h3 style="color:var(--success-green);"><i class="fas fa-box-open"></i> Safe Unboxing Verification</h3>
+                <div style="display:flex; gap:10px; margin-bottom:20px;">
+                    <input id="unboxPkgInput" placeholder="Scan Package to Unbox..." style="margin:0;">
+                    <button onclick="openBarcodeScanner('DEL_UNBOX_SCAN')" class="warning"><i class="fas fa-qrcode"></i> SCAN</button>
+                </div>
+                <div id="unboxArea" class="hidden">
+                    <div style="background:#fffbeb; padding:15px; border-left:4px solid #f59e0b; margin-bottom:20px;">
+                        <h4 id="unboxStationName" style="margin:0 0 5px 0; color:#b45309;">Station</h4>
+                        <small>Verify every item below physically before breaking the package seal entirely.</small>
+                    </div>
+                    <div id="unboxItemsList" class="checkbox-list" style="max-height:300px; display:flex; flex-direction:column; gap:8px;"></div>
+                    <button onclick="tearPackageSeal()" class="danger" style="width:100%; padding:15px; font-size:16px; margin-top:20px; font-weight:900;">
+                        <i class="fas fa-cut"></i> CONFIRM CONTENTS & TEAR SEAL
+                    </button>
+                </div>
+            </div>
+
+            <!-- ERASE LOGS -->
+            <div id="del-erase" class="panel hidden" style="border-top: 5px solid #be123c;">
+                <h3 style="color:#be123c;"><i class="fas fa-trash"></i> Clear Station Deployment Logs</h3>
+                <label style="font-weight:bold; font-size:12px;">Select Station to wipe closed packages:</label>
+                <select id="eraseStationSelect" style="border:2px solid #be123c; margin-top:5px; margin-bottom:20px;"></select>
+                <button onclick="eraseStationPackages()" class="danger" style="width:100%; padding:15px; background:#be123c; font-weight:900;">
+                    ERASE ALL DELIVERED LOGS
+                </button>
+            </div>
+        </div>`;
+        appScreen.insertAdjacentHTML('beforeend', deliveryHTML);
+        populateDelStations();
+    }
+
+    // 3. OVERRIDE `switchTab` SAFELY TO INCLUDE DELIVERY
+    const baseSwitchTab = window.switchTab;
+    window.switchTab = (t) => {
+        baseSwitchTab(t);
+        const delTab = document.getElementById('tab-delivery');
+        const delBtn = document.getElementById('btnDelivery');
+        if (delTab && delBtn) {
+            if (t === 'delivery') {
+                delTab.classList.remove('hidden');
+                delBtn.classList.add('active');
+            } else {
+                delTab.classList.add('hidden');
+                delBtn.classList.remove('active');
+            }
+        }
+    };
+
+    // 4. OVERRIDE `onScanSuccess` TO ROUTE DELIVERY SCANS
+    const baseOnScanSuccess = window.onScanSuccess;
+    window.onScanSuccess = async function (decodedText) {
+        if (!decodedText) return;
+        const scanned = decodedText.trim();
+        
+        if (['DEL_PACK_SCAN', 'DEL_TRACK_SCAN', 'DEL_TRANSIT_SCAN', 'DEL_UNBOX_SCAN'].includes(scanMode)) {
+            closeBarcodeScanner();
+            if (scanMode === 'DEL_PACK_SCAN') {
+                document.getElementById('packScanInput').value = scanned;
+                window.manualAddPackItem();
+            } else if (scanMode === 'DEL_TRACK_SCAN') {
+                document.getElementById('trackPkgInput').value = scanned;
+                window.loadTrackingData();
+            } else if (scanMode === 'DEL_TRANSIT_SCAN') {
+                document.getElementById('transitPkgInput').value = scanned;
+            } else if (scanMode === 'DEL_UNBOX_SCAN') {
+                document.getElementById('unboxPkgInput').value = scanned;
+                window.loadUnboxData(scanned);
+            }
+            return;
+        }
+        
+        // Pass back to original logic if it's not a delivery scan
+        if (typeof baseOnScanSuccess === "function") baseOnScanSuccess(decodedText);
+    };
+
+    // ==========================================
+    // CORE DELIVERY FUNCTIONS
+    // ==========================================
+    window.packCart = [];
+    window.currentUnboxPkg = null;
+
+    window.toggleDelMode = (mode) => {
+        ['packing', 'transit', 'tracking', 'unboxing', 'erase'].forEach(m => {
+            document.getElementById(`del-${m}`).classList.add('hidden');
+        });
+        document.getElementById(`del-${mode}`).classList.remove('hidden');
+    };
+
+    function populateDelStations() {
+        const packSel = document.getElementById("packTargetStation");
+        const eraseSel = document.getElementById("eraseStationSelect");
+        let opts = "<option value=''>-- Select Station --</option>";
+        if (typeof METRO_STATIONS !== 'undefined') {
+            for (const [line, stns] of Object.entries(METRO_STATIONS)) {
+                stns.forEach(stn => opts += `<option value="${stn} (${line})">${stn}</option>`);
+            }
+        }
+        if(packSel) packSel.innerHTML = opts;
+        if(eraseSel) eraseSel.innerHTML = opts;
+    }
+
+    // --- PACKING ---
+    window.manualAddPackItem = async () => {
+        const tag = document.getElementById('packScanInput').value.trim();
+        if (!tag) return;
+        if (window.packCart.some(i => i.barcode === tag)) return alert("Asset already in box.");
+        
+        try {
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
+            const snap = await get(q);
+            if (!snap.exists()) return alert("Asset Tag Not Found.");
+            
+            let item; snap.forEach(c => item = { key: c.key, ...c.val() });
+            
+            window.packCart.push(item);
+            document.getElementById('packScanInput').value = "";
+            renderPackCart();
+        } catch (e) { alert("Error: " + e.message); }
+    };
+
+    function renderPackCart() {
+        const tbody = document.getElementById("packCartBody");
+        tbody.innerHTML = "";
+        if (window.packCart.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">Cart is empty.</td></tr>';
+            return;
+        }
+        window.packCart.forEach((it, i) => {
+            tbody.innerHTML += `
+            <tr>
+                <td>${i+1}</td>
+                <td style="font-weight:bold;">${it.item}</td>
+                <td style="font-family:monospace;">${it.barcode}</td>
+                <td><button onclick="window.packCart.splice(${i},1); renderPackCart();" class="danger" style="padding:2px 6px;">X</button></td>
+            </tr>`;
+        });
+    }
+
+    window.finalizePackage = async () => {
+        if (window.packCart.length === 0) return alert("Add items to package first.");
+        const stn = document.getElementById("packTargetStation").value;
+        if (!stn) return alert("Select Destination Station.");
+
+        const pkgId = "PKG-" + Date.now().toString().slice(-6);
+        const pkgData = {
+            id: pkgId,
+            station: stn,
+            status: 'Packed',
+            items: window.packCart.map(i => ({ name: i.item, tag: i.barcode, key: i.key })),
+            packedBy: currentUser.name || currentUser.email,
+            time: serverTimestamp(),
+            history: [{ status: 'Packed & Sealed', time: Date.now(), location: 'Dispatch HQ', by: currentUser.name || currentUser.email }]
+        };
+
+        try {
+            // Update Package Node
+            await set(ref(db, `packages/${pkgId}`), pkgData);
+            
+            // Mark items in inventory as Packed
+            const updates = {};
+            window.packCart.forEach(it => {
+                updates[`inventory/${it.key}/status`] = "Packed";
+                updates[`inventory/${it.key}/location`] = `In Package: ${pkgId}`;
+                updates[`inventory/${it.key}/assignedStation`] = stn;
+            });
+            await update(ref(db), updates);
+
+            generatePackageBillPrint(pkgId, window.packCart, stn);
+            window.packCart = [];
+            renderPackCart();
+            document.getElementById("packTargetStation").value = "";
+            alert("Package sealed successfully!");
+        } catch (e) { alert("DB Error: " + e.message); }
+    };
+
+    // --- TRANSIT (LOCATION & TIME) ---
+    window.updateTransitStatus = async (newStatus) => {
+        const pkgId = document.getElementById("transitPkgInput").value.trim().toUpperCase();
+        if (!pkgId) return alert("Scan package ID first.");
+
+        const btn = document.activeElement;
+        const origText = btn.innerText;
+        btn.innerText = "Locating...";
+        btn.disabled = true;
+
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(async (pos) => {
+                const lat = pos.coords.latitude;
+                const lon = pos.coords.longitude;
+                const gpsLink = `https://maps.google.com/?q=${lat},${lon}`;
+                
+                try {
+                    const snap = await get(ref(db, `packages/${pkgId}`));
+                    if (!snap.exists()) throw new Error("Package not found.");
+                    
+                    const pkg = snap.val();
+                    let hist = pkg.history || [];
+                    hist.push({
+                        status: newStatus,
+                        time: Date.now(),
+                        location: gpsLink,
+                        by: currentUser.name || currentUser.email
+                    });
+
+                    await update(ref(db, `packages/${pkgId}`), { status: newStatus, history: hist });
+                    
+                    // If Delivered, update inventory status
+                    if(newStatus === 'Delivered') {
+                        const invUpdates = {};
+                        pkg.items.forEach(it => invUpdates[`inventory/${it.key}/status`] = "Delivered to Station");
+                        await update(ref(db), invUpdates);
+                    }
+
+                    alert(`✅ Package Marked as: ${newStatus}\nLocation Captured.`);
+                    document.getElementById("transitPkgInput").value = "";
+                } catch (e) { alert(e.message); }
+                finally { btn.innerText = origText; btn.disabled = false; }
+            }, (err) => {
+                alert("GPS Error. Enable Location Services to track delivery.");
+                btn.innerText = origText; btn.disabled = false;
+            }, { enableHighAccuracy: true });
+        } else {
+            alert("Geolocation is not supported by this device.");
+            btn.innerText = origText; btn.disabled = false;
+        }
+    };
+
+    // --- TRACKING ---
+    window.loadTrackingData = async () => {
+        const pkgId = document.getElementById("trackPkgInput").value.trim().toUpperCase();
+        const tl = document.getElementById("trackingTimeline");
+        if (!pkgId) return;
+
+        tl.innerHTML = "Fetching GPS logs...";
+        try {
+            const snap = await get(ref(db, `packages/${pkgId}`));
+            if (!snap.exists()) { tl.innerHTML = "<p style='color:red;'>Package Not Found.</p>"; return; }
+            const pkg = snap.val();
+
+            let html = `<h4 style="margin:0 0 15px 0; color:var(--metro-blue); border-bottom:1px solid #ccc; padding-bottom:5px;">ID: ${pkg.id} <br><small>Target: ${pkg.station}</small></h4>`;
+            html += `<div style="border-left: 3px solid var(--metro-gold); padding-left: 15px; margin-left:10px;">`;
+            
+            pkg.history.forEach(h => {
+                const dateStr = new Date(h.time).toLocaleString('en-IN');
+                const locLink = h.location.startsWith('http') ? `<a href="${h.location}" target="_blank" style="color:#0284c7; text-decoration:underline;">View on Map</a>` : h.location;
+                html += `
+                <div style="position:relative; margin-bottom:20px;">
+                    <div style="position:absolute; left:-23px; top:0; width:12px; height:12px; border-radius:50%; background:var(--metro-blue);"></div>
+                    <strong style="color:var(--metro-blue); font-size:14px;">${h.status}</strong>
+                    <div style="font-size:11px; color:#64748b;">${dateStr} | By: ${h.by}</div>
+                    <div style="font-size:12px; margin-top:4px; font-weight:bold;">📍 ${locLink}</div>
+                </div>`;
+            });
+            html += `</div>`;
+            
+            // Show Items Preview
+            html += `<h5 style="margin-top:20px;">Contents:</h5><ul style="font-size:11px; color:#333;">`;
+            pkg.items.forEach(it => html += `<li>${it.name} (${it.tag})</li>`);
+            html += `</ul>`;
+
+            tl.innerHTML = html;
+        } catch (e) { tl.innerHTML = "Error loading data."; }
+    };
+
+    // --- UNBOXING ---
+    window.loadUnboxData = async (pkgId) => {
+        try {
+            const snap = await get(ref(db, `packages/${pkgId}`));
+            if (!snap.exists()) return alert("Invalid Package ID");
+            const pkg = snap.val();
+            
+            if(pkg.status === "Unboxed") return alert("This package has already been unboxed.");
+            
+            window.currentUnboxPkg = pkg;
+            document.getElementById("unboxArea").classList.remove("hidden");
+            document.getElementById("unboxStationName").innerText = "Destination: " + pkg.station;
+            
+            const list = document.getElementById("unboxItemsList");
+            list.innerHTML = "";
+            pkg.items.forEach((it, i) => {
+                list.innerHTML += `
+                <label style="display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #ccc; border-radius:4px; background:#fff; cursor:pointer;">
+                    <input type="checkbox" class="unbox-chk" style="width:20px; height:20px;">
+                    <div>
+                        <div style="font-weight:bold; font-size:14px;">${it.name}</div>
+                        <div style="font-family:monospace; color:#64748b; font-size:11px;">${it.tag}</div>
+                    </div>
+                </label>`;
+            });
+        } catch (e) { alert("Error: " + e.message); }
+    };
+
+    window.tearPackageSeal = async () => {
+        if(!window.currentUnboxPkg) return;
+        const checks = document.querySelectorAll('.unbox-chk');
+        const allChecked = Array.from(checks).every(c => c.checked);
+        
+        if(!allChecked) return alert("You must physically verify and check off EVERY item before breaking the seal.");
+        
+        if(confirm("Confirm all items match the ID list and Tear Package Seal?")) {
+            const pkgId = window.currentUnboxPkg.id;
+            try {
+                // Update Package
+                let hist = window.currentUnboxPkg.history || [];
+                hist.push({ status: 'Seal Broken / Unboxed', time: Date.now(), location: 'On Site', by: currentUser.name });
+                await update(ref(db, `packages/${pkgId}`), { status: 'Unboxed', history: hist });
+
+                // Update Items to "In Stock" at Station
+                const invUpdates = {};
+                window.currentUnboxPkg.items.forEach(it => {
+                    invUpdates[`inventory/${it.key}/status`] = "In Stock";
+                });
+                await update(ref(db), invUpdates);
+
+                alert("✅ Package successfully unboxed and assets recorded to site.");
+                document.getElementById("unboxArea").classList.add("hidden");
+                document.getElementById("unboxPkgInput").value = "";
+                window.currentUnboxPkg = null;
+            } catch(e) { alert(e.message); }
+        }
+    };
+
+    // --- ERASE STATION DATA ---
+    window.eraseStationPackages = async () => {
+        const stn = document.getElementById("eraseStationSelect").value;
+        if(!stn) return alert("Select Station to Erase");
+        if(!confirm(`⚠️ WARNING: This will delete ALL delivery logs associated with ${stn}. Proceed?`)) return;
+
+        try {
+            const snap = await get(query(ref(db, "packages"), orderByChild("station"), equalTo(stn)));
+            if(!snap.exists()) return alert("No packages found for this station.");
+            
+            const updates = {};
+            snap.forEach(c => updates[`packages/${c.key}`] = null);
+            await update(ref(db), updates);
+            
+            alert(`✅ All delivery data for ${stn} erased.`);
+        } catch(e) { alert("Error: " + e.message); }
+    };
+
+    // --- PRINT BILL GENERATOR ---
+    window.generatePackageBillPrint = (pkgId, items, station) => {
+        let rows = "";
+        items.forEach((it, i) => {
+            rows += `
+            <tr style="border-bottom: 2px solid #ccc; font-size:24pt;">
+                <td style="padding:15px; text-align:center;">${i+1}</td>
+                <td style="font-weight:bold;">${it.item.toUpperCase()}</td>
+                <td style="font-family:monospace; text-align:right;">${it.tag}</td>
+            </tr>`;
+        });
+
+        const qrUrl = \`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=\${pkgId}\`;
+
+        const reportContainer = document.getElementById("printableReportContainer");
+        reportContainer.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:20px; background:#fff; position:sticky; top:0;">
+            <button onclick="window.print()" style="padding:20px 40px; font-size:20pt; font-weight:900; background:green; color:white; border-radius:10px; cursor:pointer;">🖨️ PRINT PACKAGE BILL</button>
+            <button class="danger" onclick="closeReportPreview()" style="padding:20px 40px; font-size:20pt; font-weight:900; margin-left:15px; cursor:pointer;">CLOSE</button>
+        </div>
+        <div style="width:210mm; min-height:297mm; background:white; color:black; margin:0 auto; padding:20mm; box-sizing:border-box; font-family:'Arial Black', sans-serif;">
+            <style>@media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } }</style>
+            
+            <div style="text-align:center; border-bottom: 8pt solid black; padding-bottom:20px; margin-bottom:30px;">
+                <div style="font-size: 45pt; font-weight: 900; line-height: 1;">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+                <div style="font-size: 25pt; margin-top:10px;">IEM - UEM GROUP</div>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:40px;">
+                <div>
+                    <div style="font-size: 35pt; font-weight:900; background:black; color:white; padding:10px 20px; display:inline-block;">DELIVERY INVOICE</div>
+                    <div style="font-size: 25pt; margin-top:20px;"><b>TARGET STATION:</b><br>${station.toUpperCase()}</div>
+                    <div style="font-size: 20pt; margin-top:10px;"><b>DATE:</b> ${new Date().toLocaleDateString('en-IN')}</div>
+                    <div style="font-size: 20pt; margin-top:10px;"><b>PACKED BY:</b> ${(currentUser.name || "System").toUpperCase()}</div>
+                </div>
+                <div style="text-align:center; border: 4pt solid black; padding:15px;">
+                    <img src="${qrUrl}" style="width:200px; height:200px;">
+                    <div style="font-family:monospace; font-size:18pt; font-weight:bold; margin-top:10px;">${pkgId}</div>
+                </div>
+            </div>
+
+            <table style="width:100%; border-collapse:collapse; margin-bottom:50px;">
+                <thead style="background:black; color:white;">
+                    <tr>
+                        <th style="padding:15px; font-size:24pt; width:10%;">#</th>
+                        <th style="padding:15px; font-size:24pt; text-align:left;">PRODUCT DESCRIPTION</th>
+                        <th style="padding:15px; font-size:24pt; text-align:right;">ASSET ID (TAG)</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+
+            <div style="border: 8pt solid #b91c1c; padding:30px; text-align:center; margin-top:auto;">
+                <div style="color:#b91c1c; font-size:40pt; font-weight:900; text-transform:uppercase;">⚠️ CRITICAL WARNING</div>
+                <div style="font-size:26pt; font-weight:bold; margin-top:15px; line-height:1.3;">
+                    IF THE PACKAGE SEAL IS PREVIOUSLY BROKEN WITHOUT PROPER AUTHORIZED JUSTIFICATION, <span style="text-decoration:underline;">DO NOT ACCEPT THIS DELIVERY</span>.
+                </div>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; margin-top:80px;">
+                <div style="width:40%; text-align:center;">
+                    <div style="border-top:5pt solid black; margin-bottom:10px;"></div>
+                    <div style="font-size:20pt; font-weight:bold;">DISPATCH AUTHORIZATION</div>
+                </div>
+                <div style="width:40%; text-align:center;">
+                    <div style="border-top:5pt solid black; margin-bottom:10px;"></div>
+                    <div style="font-size:20pt; font-weight:bold;">RECEIVER SIGNATURE</div>
+                </div>
+            </div>
+        </div>`;
+        reportContainer.classList.remove("hidden");
+    };
+
+})();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
