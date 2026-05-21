@@ -10098,42 +10098,46 @@ window.captureSopPhoto = () => {
     }
 };
 window.submitSopTaskReview = async () => {
-    // 1. Capture the globally stored key
     const taskKey = window.activeSopExecuteKey;
-    const remarks = document.getElementById("execTaskRemarks").value.trim();
     const btn = document.getElementById("btnUploadSopProof");
+    const remarks = document.getElementById("execTaskRemarks").value.trim();
 
-    // 2. Validation
-    if (!taskKey) {
-        return alert("⚠️ ERROR: No Active Task found. Please open the task again.");
-    }
-    if (!window.sopCapturedBlob) {
-        return alert("⚠️ No photo captured! Please take a picture first.");
-    }
-    if (!remarks) {
-        return alert("Please enter Field Remarks.");
-    }
+    if (!taskKey) return alert("⚠️ Error: No task key. Please restart the task.");
+    if (!window.sopCapturedBlob) return alert("⚠️ Please capture an image first.");
+    if (!remarks) return alert("⚠️ Please add Field Remarks.");
 
     btn.innerText = "⏳ UPLOADING...";
     btn.disabled = true;
 
     try {
-        // 3. Update the specific task node
-        await update(ref(db, `sop_tasks/${taskKey}`), {
+        // 1. Log the size to ensure it's not too big for Firebase
+        console.log("Image size (chars):", window.sopCapturedBlob.length);
+        if (window.sopCapturedBlob.length > 1000000) { // Approx 1MB check
+            console.warn("Image is quite large. This may cause a delay.");
+        }
+
+        // 2. Perform the update with a 15-second "fail-safe" timer
+        const uploadTask = update(ref(db, `sop_tasks/${taskKey}`), {
             status: "REVIEW",
             imgProof: window.sopCapturedBlob,
             studentRemarks: remarks,
             submittedAt: serverTimestamp()
         });
-        
-        console.log("Task submitted successfully.");
+
+        // This ensures the code doesn't hang forever if the network drops
+        await Promise.race([
+            uploadTask,
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Upload timed out (Connection too slow)")), 15000))
+        ]);
+
         alert("✅ Task Submitted for Admin Audit.");
-        
-        // 4. Reset Modal
         window.closeSopExecuteModal();
+
     } catch (e) {
-        console.error("Upload Error:", e);
-        alert("❌ Upload Failed: " + e.message);
+        console.error("Critical Upload Error:", e);
+        alert("❌ Failed: " + e.message + "\n\nTry taking a lower-resolution photo.");
+    } finally {
+        // 3. THIS IS THE FIX: The button resets even if it fails
         btn.innerText = "SUBMIT FOR REVIEW";
         btn.disabled = false;
     }
