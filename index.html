@@ -10121,55 +10121,99 @@ window.initAdminVerify = (taskKey, targetBarcode) => {
 // A. When Task Starts
 window.openSopExecution = (taskKey, title, station) => {
     window.activeSopExecuteKey = taskKey;
-    document.getElementById("execTaskTitle").innerText = title;
-    document.getElementById("execTaskStation").innerText = "📍 " + station;
     
-    // Reset Modal
-    document.getElementById("sopTaskExecuteModal").classList.remove("hidden");
-    document.getElementById("step2-scanner").classList.add("hidden");
-    document.getElementById("step3-submit").classList.add("hidden");
-    document.getElementById("sopEvidencePreview").style.display = "none";
+    // 1. Get elements safely
+    const modal = document.getElementById("sopTaskExecuteModal");
+    const titleEl = document.getElementById("execTaskTitle");
+    const stnEl = document.getElementById("execTaskStation");
     
-    // Auto-start camera
+    // 2. Guard against missing elements
+    if (!modal) {
+        console.error("Critical: Modal not found.");
+        return alert("Error: UI element not found. Please refresh.");
+    }
+    
+    if(titleEl) titleEl.innerText = title;
+    if(stnEl) stnEl.innerText = "📍 " + station;
+    
+    // 3. Reset UI for fresh input
+    window.sopCapturedBlob = null; 
+    const preview = document.getElementById("sopEvidencePreview");
+    if(preview) { preview.src = ""; preview.style.display = "none"; }
+    
+    const videoWrapper = document.getElementById("sopVideoWrapper");
+    if(videoWrapper) videoWrapper.style.display = "block";
+
+    // 4. Show modal
+    modal.classList.remove("hidden");
+    
+    // 5. Start camera after a small delay to ensure modal is rendered
     setTimeout(window.openSopCamera, 500);
 };
-
 // B. After Photo Captured
 window.captureSopPhoto = () => {
     const video = document.getElementById("sopEvidenceVideo");
+    const preview = document.getElementById("sopEvidencePreview");
+    const videoWrapper = document.getElementById("sopVideoWrapper");
+    const scanArea = document.getElementById("sopScanArea");
+    const uploadBtn = document.getElementById("btnUploadSopProof");
+
+    // Guard Clause: Only run if elements exist
+    if(!video || !preview || !videoWrapper || !scanArea || !uploadBtn) {
+        return alert("UI Error: Camera elements missing.");
+    }
+
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    canvas.width = video.videoWidth; 
+    canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
     
+    // Compress quality to 0.3 to prevent database hanging
     window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.3);
     
-    document.getElementById("sopEvidencePreview").src = window.sopCapturedBlob;
-    document.getElementById("sopEvidencePreview").style.display = "block";
-    document.getElementById("sopVideoWrapper").style.display = "none";
+    preview.src = window.sopCapturedBlob;
+    preview.style.display = "block";
+    videoWrapper.style.display = "none";
     
-    // Reveal Scanner
-    document.getElementById("step2-scanner").classList.remove("hidden");
-    
+    // Reveal Scanner and Submit button
+    scanArea.classList.remove("hidden");
+    uploadBtn.classList.remove("hidden");
+
+    // Release camera
     if(window.sopLocalStream) window.sopLocalStream.getTracks().forEach(t => t.stop());
 };
 
 // D. Final Submit
 window.submitSopTaskReview = async () => {
+    const taskKey = window.activeSopExecuteKey;
+    const remarks = document.getElementById("execTaskRemarks")?.value.trim();
+    const barcode = document.getElementById("sopScanInput")?.value.trim();
     const btn = document.getElementById("btnUploadSopProof");
-    btn.disabled = true;
+
+    if (!window.sopCapturedBlob) return alert("⚠️ Please capture a photo first.");
+    if (!barcode) return alert("⚠️ Please scan the product barcode first.");
+    if (!remarks) return alert("⚠️ Please enter Field Remarks.");
+
     btn.innerText = "⏳ UPLOADING...";
+    btn.disabled = true;
 
     try {
-        await update(ref(db, `sop_tasks/${window.activeSopExecuteKey}`), {
+        await update(ref(db, `sop_tasks/${taskKey}`), {
             status: "REVIEW",
             imgProof: window.sopCapturedBlob,
-            barcode: window.currentStudentBarcode,
-            studentRemarks: document.getElementById("execTaskRemarks").value,
+            barcode: barcode,
+            studentRemarks: remarks,
             submittedAt: serverTimestamp()
         });
-        alert("✅ Task Submitted!");
+        
+        alert("✅ Task Submitted for Admin Audit.");
         window.closeSopExecuteModal();
-    } catch(e) { alert(e.message); btn.disabled = false; btn.innerText = "SUBMIT TASK"; }
+    } catch (e) {
+        console.error("Upload Error:", e);
+        alert("Upload Failed: " + e.message);
+        btn.innerText = "SUBMIT FOR REVIEW";
+        btn.disabled = false;
+    }
 };
 window.auditSopTask = async (taskKey, decision) => {
     try {
