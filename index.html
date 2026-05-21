@@ -2308,7 +2308,23 @@ window.toggleFundMode = () => {
         inp.value = ""; 
     }
 };
+// The Universal Firebase Listener Wrapper
+window.safeOnValue = (refPath, callback) => {
+    onValue(refPath, (snap) => {
+        // LAYER 1: Stop if database node doesn't exist
+        if (!snap.exists()) {
+            console.warn("Syncing database: node empty...");
+            return;
+        }
 
+        // LAYER 2: Stop if the data itself is null
+        const data = snap.val();
+        if (data === null || data === undefined) return;
+
+        // LAYER 3: Trigger your custom logic
+        callback(data, snap.key);
+    });
+};
 window.submitFund = async () => {
     if(!isAdmin) return alert("Admin Only");
     
@@ -3666,35 +3682,17 @@ onAuthStateChanged(auth, (user) => {
     currentUser = user;
     startPresenceSystem(user);
 
-    const userRef = ref(db, `users/${user.uid}`);
-
-    onValue(userRef, (snap) => {
-        const u = snap.val();
-
-        // 1. Bulletproof check for existence
-        if (!u) {
-            console.warn("Database sync in progress, skipping UI update...");
-            return;
-        }
-
-        // 2. Safe Parsing: Force to string and handle nulls inside the replace logic
-        let safeName = "Unknown";
-        try {
-            const rawValue = u.name || u.email || "Unknown";
-            safeName = String(rawValue).replace(/[.#$\[\]]/g, "").trim();
-        } catch (e) {
-            console.error("Name parsing error:", e);
-        }
+    // Using the Safe Wrapper here
+    window.safeOnValue(ref(db, `users/${user.uid}`), (u) => {
+        // Now 'u' is guaranteed to exist here. No more "undefined" errors.
+        
+        const rawName = u.name || u.email || "Unknown";
+        const safeName = String(rawName).replace(/[.#$\[\]]/g, "").trim();
 
         const userInfoDisplay = document.getElementById("userInfo");
         if (userInfoDisplay) userInfoDisplay.innerText = safeName;
 
-        if (u.terminated) {
-            alert("ACCOUNT TERMINATED.");
-            signOut(auth);
-            return;
-        }
-        
+        if (u.terminated) { signOut(auth); return; }
         if (u.banned) {
             document.querySelector("header").style.display = "none";
             document.getElementById("bannedScreen")?.classList.remove("hidden");
@@ -3706,8 +3704,6 @@ onAuthStateChanged(auth, (user) => {
             document.getElementById("adminBadge")?.classList.remove("hidden");
             document.getElementById("btnAdmin")?.classList.remove("hidden");
         }
-    }, (error) => {
-        console.error("Database sync failed:", error);
     });
 });
    // ==========================================
@@ -3909,37 +3905,21 @@ function startPresenceSystem(user) {
     const userStatusRef = ref(db, `status/${user.uid}`);
     const connectedRef = ref(db, ".info/connected");
 
-    onValue(connectedRef, (snap) => {
-        if (snap.val() === true) {
-            // SAFE ACCESS: Explicitly force string and sanitize
-            const rawVal = user.displayName || user.email || "Unknown User";
-            const safeName = String(rawVal).replace(/[.#$\[\]]/g, "").trim();
+    // Use safe wrapper for connection status
+    window.safeOnValue(connectedRef, (isConnected) => {
+        if (isConnected === true) {
+            const rawName = user.displayName || user.email || "Unknown User";
+            const safeName = String(rawName).replace(/[.#$\[\]]/g, "").trim();
 
             onDisconnect(userStatusRef).set({
-                state: 'offline',
-                last_seen: serverTimestamp(),
-                email: user.email,
-                name: safeName
+                state: 'offline', last_seen: serverTimestamp(), name: safeName
             });
 
             update(userStatusRef, {
-                state: 'online',
-                last_seen: serverTimestamp(),
-                email: user.email,
-                name: safeName
+                state: 'online', last_seen: serverTimestamp(), name: safeName
             });
         }
     });
-
-    if (presenceInterval) clearInterval(presenceInterval);
-    presenceInterval = setInterval(() => {
-        if (auth.currentUser) {
-            update(userStatusRef, {
-                last_seen: serverTimestamp(),
-                state: 'online'
-            }).catch(() => {});
-        }
-    }, 5000);
 }
 function updateRegDots(count) {
     document.getElementById("dot1").className = count >= 1 ? "dot active" : "dot";
