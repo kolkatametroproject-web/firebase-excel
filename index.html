@@ -2143,7 +2143,7 @@ tr:hover { background: #fcfcfd; }
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <div>
                 <small style="color:var(--metro-gold); font-weight:800; letter-spacing:2px; text-transform:uppercase;">Deployment Command</small>
-                <h2 style="margin:5px 0; font-size:24px;">MRPSP SOP ENGINE V2</h2>
+                <h2 style="margin:5px 0; font-size:24px;">MRPSP SOP ENGINE V3</h2>
             </div>
             <!-- SUB-NAVIGATION BAR -->
             <div style="display:flex; gap:10px; background: rgba(0,0,0,0.3); padding: 5px; border-radius: 8px;">
@@ -2160,7 +2160,7 @@ tr:hover { background: #fcfcfd; }
         <div class="panel" style="border-top: 4px solid var(--metro-blue);">
             <h3 style="margin-bottom:20px;"><i class="fas fa-sitemap"></i> Assign Deployment Tasks</h3>
             
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; margin-bottom:25px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0;">
+            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:15px; margin-bottom:25px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0;">
                 <div>
                     <label style="font-weight:bold; font-size:11px; color:#64748b;">TARGET CORRIDOR</label>
                     <select id="sopLineSelect" onchange="handleSopLineChange()" style="border:2px solid var(--metro-blue);"></select>
@@ -2169,10 +2169,20 @@ tr:hover { background: #fcfcfd; }
                     <label style="font-weight:bold; font-size:11px; color:#64748b;">TARGET STATION</label>
                     <select id="sopStationSelect" disabled onchange="window.loadSopTaskGrid()"></select>
                 </div>
+                <div>
+                    <label style="font-weight:bold; font-size:11px; color:#64748b;">PLATFORM / AREA</label>
+                    <select id="sopPlatformSelect" onchange="window.loadSopTaskGrid()" style="border:2px solid var(--metro-blue);">
+                        <option value="Platform 1">Platform 1 (UP)</option>
+                        <option value="Platform 2">Platform 2 (DN)</option>
+                        <option value="Platform 3">Platform 3</option>
+                        <option value="Concourse">Concourse</option>
+                        <option value="Control Room">Control Room</option>
+                    </select>
+                </div>
             </div>
 
             <div id="sopTaskAssignmentGrid" style="display:grid; grid-template-columns: 1fr; gap:10px;">
-                <p style="text-align:center; color:#94a3b8; font-style:italic;">Select a station to view the 16-step deployment checklist.</p>
+                <p style="text-align:center; color:#94a3b8; font-style:italic;">Select a Corridor, Station, and Platform to view the checklist.</p>
             </div>
         </div>
     </div>
@@ -2234,12 +2244,10 @@ tr:hover { background: #fcfcfd; }
                 <span style="color:#10b981;"><i class="fas fa-square"></i> Passed</span>
                 <span style="color:#e11d48;"><i class="fas fa-square"></i> Failed</span>
             </div>
-            <!-- The Innovative Grid -->
             <div id="sopLiveGridContainer" style="overflow-x:auto;"></div>
         </div>
     </div>
 </div>
-
 <div id="scanSuccessOverlay" class="hidden" style="position:fixed; inset:0; background:rgba(16, 185, 129, 0.95); z-index:10000; display:flex; flex-direction:column; align-items:center; justify-content:center; color:white;">
     <i class="fas fa-check-circle" style="font-size:120px; margin-bottom:20px;"></i>
     <h1 style="font-size:40px; margin:0;">VERIFIED</h1>
@@ -9847,43 +9855,56 @@ window.generateDirectivePrint = async function() {
     reportContainer.classList.remove("hidden");
 };
 // =========================================================
-// 🚀 MRPSP SOP ENGINE V2: TASK-LEVEL ASSIGNMENT & GRID
+// 🚀 MRPSP SOP ENGINE V3: FIXES, DELETE, 14-STEPS & WIPING
 // =========================================================
 
-// --- 1. NEW 16-STEP MASTER LIBRARY ---
+// --- GLOBAL VARIABLES (FIXES REFERENCE ERROR) ---
+window.sopLocalStream = null;
+window.sopCapturedBlob = null;
+window.activeSopExecuteKey = null;
+
+// --- 1. NEW 14-STEP MASTER LIBRARY ---
 const SOP_GUIDE_BOOK = {
     "TASK_01": { title: "1. IR Sensor TX", instr: "Transmitter - Power supply, clamping." },
     "TASK_02": { title: "2. IR Sensor RX", instr: "Receiver - Power supply, clamping, code wire fixing." },
-    "TASK_03": { title: "3. 230V Connection", instr: "Main AC input wiring from source to MCB." },
-    "TASK_04": { title: "4. SMPS Connection", instr: "Power supply unit integration and output tuning." },
-    "TASK_05": { title: "5. DC Distribution", instr: "Route DC power to all low-voltage components." },
-    "TASK_06": { title: "6. Bed Pi Coding", instr: "Flash, install libraries, and configure Bed Pi." },
-    "TASK_07": { title: "7. Master Pi Coding", instr: "Flash, configure IPs, and setup Master Pi." },
-    "TASK_08": { title: "8. System Housing", instr: "Mount all components securely in IP65 enclosure." },
-    "TASK_09": { title: "9. Cooling (Bed Pi)", instr: "Install heatsink and active cooling fan for Bed Pi." },
-    "TASK_10": { title: "10. Cooling (Master Pi)", instr: "Install heatsink and active cooling fan for Master Pi." },
-    "TASK_11": { title: "11. Cooling (System)", instr: "Main enclosure ventilation and exhaust setup." },
-    "TASK_12": { title: "12. Sound Calibration", instr: "Calibrate system audio outputs for platform norms." },
-    "TASK_13": { title: "13. Ultrasonic Fixing", instr: "Physical mounting of ultrasonic sensors." },
-    "TASK_14": { title: "14. Ultrasonic Wiring", instr: "Signal and power wiring for ultrasonic array." },
-    "TASK_15": { title: "15. Sound System", instr: "Final speaker and siren physical installation." },
-    "TASK_16": { title: "16. Final Checking", instr: "Overall system stress test and verification." }
+    "TASK_03": { title: "3. 230V Connection", instr: "Main AC input wiring." },
+    "TASK_04": { title: "4. SMPS Connection", instr: "Power supply unit integration." },
+    "TASK_05": { title: "5. DC Distribution", instr: "Route DC power to low-voltage components." },
+    "TASK_06": { title: "6. Bed Pi Coding", instr: "Flash and configure Bed Pi." },
+    "TASK_07": { title: "7. Master Pi Coding", instr: "Flash and configure Master Pi." },
+    "TASK_08": { title: "8. System Housing", instr: "Mount components securely." },
+    "TASK_09": { title: "9. Cooling (Bed Pi)", instr: "Install heatsink and cooling fan for Bed Pi." },
+    "TASK_10": { title: "10. Cooling (Master Pi)", instr: "Install heatsink and cooling fan for Master Pi." },
+    "TASK_11": { title: "11. Cooling (System)", instr: "Main enclosure ventilation." },
+    "TASK_12": { title: "12. Ultrasonic Fixing", instr: "Physical mounting of ultrasonic sensors." },
+    "TASK_13": { title: "13. Ultrasonic Wiring", instr: "Signal and power wiring for ultrasonic array." },
+    "TASK_14": { title: "14. Final Checking", instr: "Siren calibration, system stress test, and verification." }
 };
 
-let activeSopExecuteKey = null; // Tracks which task a student is currently uploading
+// --- GLOBAL TASK DELETION FUNCTION ---
+window.deleteSopTask = async (taskKey) => {
+    if(!confirm("⚠️ PERMANENTLY DELETE this task assignment? It will be removed from the database and the student's terminal.")) return;
+    try {
+        await remove(ref(db, `sop_tasks/${taskKey}`));
+        alert("✅ Task Deleted.");
+        // Auto-refresh the currently open view
+        if(!document.getElementById("sop-sub-dispatch").classList.contains("hidden")) window.loadSopTaskGrid();
+        if(!document.getElementById("sop-sub-audit").classList.contains("hidden")) window.loadSopAuditTasks();
+        if(!document.getElementById("sop-sub-status").classList.contains("hidden")) window.loadSopLiveGrid();
+    } catch(e) {
+        alert("Error deleting task: " + e.message);
+    }
+};
 
 // --- 2. INITIALIZE & TAB ROUTING ---
 window.initSopModule = async () => {
-    // Reveal Admin Buttons if authorized
     if (isAdmin) {
         document.getElementById("btnSopSubDispatch").style.display = "block";
         document.getElementById("btnSopSubAudit").style.display = "block";
     }
 
-    // Default Tab
     switchSopSubTab(isAdmin ? 'status' : 'mywork');
 
-    // Populate Corridor Dropdown
     const lineSel = document.getElementById("sopLineSelect");
     if (lineSel && lineSel.options.length <= 1) {
         if (typeof METRO_STATIONS !== 'undefined') {
@@ -9895,20 +9916,16 @@ window.initSopModule = async () => {
 };
 
 window.switchSopSubTab = (tab) => {
-    // Hide all
     document.querySelectorAll('.sop-sub-panel').forEach(p => p.classList.add('hidden'));
     document.querySelectorAll('#tab-fieldSOP .nav-btn').forEach(b => b.classList.remove('active'));
     
-    // Show active
     document.getElementById(`sop-sub-${tab}`).classList.remove('hidden');
     
-    // Find the button (easiest way by partial ID match)
     const btns = document.querySelectorAll('#tab-fieldSOP .nav-btn');
     btns.forEach(b => {
         if(b.id.toLowerCase().includes(tab)) b.classList.add('active');
     });
 
-    // Fire specific loaders
     if(tab === 'dispatch') window.loadSopTaskGrid();
     if(tab === 'mywork') window.loadMySopTasks();
     if(tab === 'audit') window.loadSopAuditTasks();
@@ -9931,27 +9948,26 @@ window.loadSopTaskGrid = async () => {
     const container = document.getElementById("sopTaskAssignmentGrid");
     const line = document.getElementById("sopLineSelect").value;
     const stn = document.getElementById("sopStationSelect").value;
+    const plat = document.getElementById("sopPlatformSelect").value;
     
-    if (!stn || !line) {
-        container.innerHTML = "<p style='text-align:center; color:#94a3b8;'>Select a station above to assign work.</p>";
+    if (!stn || !line || !plat) {
+        container.innerHTML = "<p style='text-align:center; color:#94a3b8;'>Select Corridor, Station, and Platform.</p>";
         return;
     }
 
-    const stationFullName = `${stn} (${line})`;
-    container.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading User Database...</p>";
+    const locationFullName = `${stn} (${line}) - ${plat}`;
+    container.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Database...</p>";
 
     try {
-        // Fetch all users to build dropdown
         const userSnap = await get(ref(db, "users"));
-        let userOptions = `<option value="">-- Assign To --</option>`;
+        let userOptions = `<option value="">-- Incharge Name --</option>`;
         userSnap.forEach(u => {
             if(!u.val().banned) {
                 userOptions += `<option value="${u.key}">${(u.val().name || u.val().email).toUpperCase()}</option>`;
             }
         });
 
-        // Fetch existing task assignments for this station
-        const q = query(ref(db, "sop_tasks"), orderByChild("station"), equalTo(stationFullName));
+        const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
         const existingSnap = await get(q);
         const existingTasks = {};
         if(existingSnap.exists()) {
@@ -9960,38 +9976,41 @@ window.loadSopTaskGrid = async () => {
 
         container.innerHTML = "";
         
-        // Render 16 Steps
         Object.keys(SOP_GUIDE_BOOK).forEach(code => {
             const taskDef = SOP_GUIDE_BOOK[code];
             const existing = existingTasks[code];
             
             let statusBadge = `<span style="background:#e2e8f0; color:#64748b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">UNASSIGNED</span>`;
+            let deleteBtnHtml = ``;
+
             if(existing) {
                 if(existing.status === 'WORKING') statusBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">WORKING</span>`;
                 if(existing.status === 'REVIEW') statusBadge = `<span style="background:#e0f2fe; color:#0284c7; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">IN REVIEW</span>`;
                 if(existing.status === 'PASSED') statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">PASSED</span>`;
                 if(existing.status === 'FAILED') statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">FAILED</span>`;
+                
+                deleteBtnHtml = `<button onclick="window.deleteSopTask('${existing.key}')" class="danger" style="height:35px; width:35px; border-radius:4px; border:none; cursor:pointer;" title="Delete Assignment"><i class="fas fa-trash"></i></button>`;
             }
 
             container.innerHTML += `
                 <div style="background:white; border:1px solid #cbd5e1; border-left:5px solid var(--metro-blue); padding:15px; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
-                    <div style="width: 50%;">
+                    <div style="width: 45%;">
                         <div style="font-weight:900; font-size:13px;">${taskDef.title}</div>
                         <div style="font-size:11px; color:#64748b; margin-top:3px;">${taskDef.instr}</div>
                         <div style="margin-top:5px;">${statusBadge}</div>
                     </div>
-                    <div style="display:flex; gap:10px; align-items:center;">
-                        <select id="assign_user_${code}" style="width: 180px; font-size:11px; font-weight:bold; height:35px; margin:0;">
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select id="assign_user_${code}" style="width: 160px; font-size:11px; font-weight:bold; height:35px; margin:0;">
                             ${userOptions}
                         </select>
-                        <button onclick="window.assignSingleSopTask('${stationFullName}', '${code}')" class="info" style="height:35px; font-size:10px; background:var(--metro-blue); color:white; border:none; border-radius:4px; cursor:pointer;">
+                        <button onclick="window.assignSingleSopTask('${locationFullName}', '${code}')" class="info" style="height:35px; font-size:10px; background:var(--metro-blue); color:white; border:none; border-radius:4px; cursor:pointer;">
                             <i class="fas fa-paper-plane"></i> ASSIGN
                         </button>
+                        ${deleteBtnHtml}
                     </div>
                 </div>
             `;
             
-            // Pre-select if existing
             if(existing && existing.assignedToUid) {
                 setTimeout(() => {
                     const sel = document.getElementById(`assign_user_${code}`);
@@ -9999,23 +10018,20 @@ window.loadSopTaskGrid = async () => {
                 }, 50);
             }
         });
-
     } catch (e) {
         container.innerHTML = `<p style="color:red;">Error loading tools: ${e.message}</p>`;
     }
 };
 
-window.assignSingleSopTask = async (stationFullName, workCode) => {
+window.assignSingleSopTask = async (locationFullName, workCode) => {
     const sel = document.getElementById(`assign_user_${workCode}`);
     const uid = sel.value;
     const uName = sel.options[sel.selectedIndex].text;
 
-    if(!uid) return alert("Please select a student to assign.");
+    if(!uid) return alert("Please select an Incharge Name (Student) to assign.");
 
     const taskDef = SOP_GUIDE_BOOK[workCode];
-    
-    // We check if it exists
-    const q = query(ref(db, "sop_tasks"), orderByChild("station"), equalTo(stationFullName));
+    const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
     const snap = await get(q);
     
     let existingKey = null;
@@ -10026,7 +10042,7 @@ window.assignSingleSopTask = async (stationFullName, workCode) => {
     }
 
     const payload = {
-        station: stationFullName,
+        location: locationFullName,
         workCode: workCode,
         workTitle: taskDef.title,
         assignedToUid: uid,
@@ -10042,8 +10058,8 @@ window.assignSingleSopTask = async (stationFullName, workCode) => {
         } else {
             await push(ref(db, "sop_tasks"), payload);
         }
-        alert(`✅ Task Assigned to ${uName}`);
-        window.loadSopTaskGrid(); // Refresh line
+        alert(`✅ Task Assigned to ${uName} for ${locationFullName}`);
+        window.loadSopTaskGrid();
     } catch(e) { alert("Error: " + e.message); }
 };
 
@@ -10051,85 +10067,107 @@ window.assignSingleSopTask = async (stationFullName, workCode) => {
 window.loadMySopTasks = () => {
     const container = document.getElementById("mySopTasksContainer");
     if(!container) return;
-    container.innerHTML = "<p style='text-align:center;'>Loading your tasks...</p>";
 
-    // Real-time listener for tasks assigned to current user
     const q = query(ref(db, "sop_tasks"), orderByChild("assignedToUid"), equalTo(currentUser.uid));
     
     onValue(q, (snap) => {
         container.innerHTML = "";
         if(!snap.exists()) {
-            container.innerHTML = `<div style="text-align:center; padding:30px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px;">
-                <i class="fas fa-coffee" style="font-size:40px; color:#cbd5e1; margin-bottom:15px;"></i>
-                <h4 style="color:#64748b; margin:0;">No Active Tasks</h4>
-                <p style="font-size:12px; color:#94a3b8;">You have not been assigned any field tasks yet.</p>
-            </div>`;
+            container.innerHTML = `<div style="text-align:center; padding:30px;"><h4 style="color:#64748b;">No Active Tasks</h4></div>`;
             return;
         }
 
-        let tasksFound = false;
-
         snap.forEach(c => {
             const t = {key: c.key, ...c.val()};
-            
-            // Only show Working or Failed tasks to the student to execute
             if (t.status === 'WORKING' || t.status === 'FAILED') {
-                tasksFound = true;
                 const isFail = t.status === 'FAILED';
-                
                 container.innerHTML += `
-                    <div style="background:white; border:1px solid ${isFail ? '#fecaca' : '#cbd5e1'}; border-left:6px solid ${isFail ? '#e11d48' : '#f59e0b'}; padding:20px; border-radius:8px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);">
-                        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                    <div style="background:white; border:1px solid #cbd5e1; border-left:6px solid ${isFail ? '#e11d48' : '#f59e0b'}; padding:20px; border-radius:8px;">
+                        <div style="display:flex; justify-content:space-between;">
                             <div>
-                                <div style="font-size:10px; font-weight:bold; color:#64748b; margin-bottom:5px; text-transform:uppercase;"><i class="fas fa-map-marker-alt"></i> ${t.station}</div>
-                                <h3 style="margin:0 0 5px 0; color:var(--metro-blue);">${t.workTitle}</h3>
-                                <p style="font-size:12px; color:#475569; margin:0 0 10px 0;">${SOP_GUIDE_BOOK[t.workCode].instr}</p>
+                                <div style="font-size:11px; font-weight:900; color:var(--metro-red);"><i class="fas fa-map-marker-alt"></i> ${t.location}</div>
+                                <h3 style="margin:5px 0; color:var(--metro-blue);">${t.workTitle}</h3>
                             </div>
-                            ${isFail ? `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">REDO REQUIRED</span>` : ''}
+                            ${isFail ? `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; font-size:10px; font-weight:bold;">REDO</span>` : ''}
                         </div>
-                        
-                        ${isFail && t.adminRemarks ? `<div style="background:#fff1f2; color:#be123c; padding:10px; font-size:11px; border-radius:4px; margin-bottom:15px;"><b>Admin Feedback:</b> ${t.adminRemarks}</div>` : ''}
-                        
-                        <button onclick="window.openSopExecution('${t.key}', '${t.workTitle.replace(/'/g,"\\'")}', '${t.station.replace(/'/g,"\\'")}')" style="width:100%; padding:12px; background:var(--metro-blue); color:white; font-weight:900; border:none; border-radius:6px; cursor:pointer;">
-                            <i class="fas fa-camera"></i> EXECUTE & UPLOAD PROOF
+                        <button onclick="window.openSopExecution('${t.key}', '${t.workTitle.replace(/'/g,"\\'")}', '${t.location.replace(/'/g,"\\'")}')" style="width:100%; margin-top:10px; padding:12px; background:var(--metro-blue); color:white; font-weight:900; border-radius:6px; cursor:pointer;">
+                            <i class="fas fa-camera"></i> EXECUTE & UPLOAD PICTURE
                         </button>
                     </div>
                 `;
             }
         });
-
-        if(!tasksFound) {
-            container.innerHTML = `<p style='text-align:center; color:#10b981; font-weight:bold;'><i class='fas fa-check-circle'></i> All your assigned tasks are completed or in review!</p>`;
-        }
     });
 };
 
+// --- 5. CAMERA EXECUTION ---
 window.openSopExecution = (taskKey, title, station) => {
-    activeSopExecuteKey = taskKey;
+    window.activeSopExecuteKey = taskKey;
     document.getElementById("execTaskTitle").innerText = title;
     document.getElementById("execTaskStation").innerText = "📍 " + station;
     document.getElementById("execTaskRemarks").value = "";
     
-    // Reset Camera UI
     const preview = document.getElementById("sopEvidencePreview");
     if(preview) { preview.src = ""; preview.style.display = "none"; }
+    
     document.getElementById("sopVideoWrapper").style.display = "block";
     document.getElementById("btnStartSopCam").classList.remove("hidden");
     document.getElementById("btnUploadSopProof").classList.add("hidden");
     document.getElementById("btnRetrySopProof").classList.add("hidden");
-    sopCapturedBlob = null;
+    window.sopCapturedBlob = null; // Explicitly set to null
 
     document.getElementById("sopTaskExecuteModal").classList.remove("hidden");
 };
 
 window.closeSopExecuteModal = () => {
     document.getElementById("sopTaskExecuteModal").classList.add("hidden");
-    activeSopExecuteKey = null;
-    if(sopLocalStream) sopLocalStream.getTracks().forEach(t => t.stop());
+    window.activeSopExecuteKey = null;
+    if(window.sopLocalStream) window.sopLocalStream.getTracks().forEach(t => t.stop());
+};
+
+window.openSopCamera = async () => {
+    const video = document.getElementById("sopEvidenceVideo");
+    document.getElementById("sopVideoWrapper").style.display = "block";
+    document.getElementById("sopEvidencePreview").style.display = "none";
+    document.getElementById("btnStartSopCam").classList.add("hidden");
+
+    try {
+        window.sopLocalStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        if(video) video.srcObject = window.sopLocalStream;
+    } catch(err) { 
+        alert("Camera Error: " + err.message); 
+        document.getElementById("btnStartSopCam").classList.remove("hidden");
+    }
+};
+
+window.captureSopPhoto = () => {
+    const video = document.getElementById("sopEvidenceVideo");
+    const canvas = document.createElement("canvas");
+    if(!video) return;
+
+    canvas.width = video.videoWidth; 
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    
+    window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.8);
+    
+    const preview = document.getElementById("sopEvidencePreview");
+    if(preview) { 
+        preview.src = window.sopCapturedBlob; 
+        preview.style.display = "block"; 
+    }
+    
+    document.getElementById("sopVideoWrapper").style.display = "none";
+    document.getElementById("btnUploadSopProof").classList.remove("hidden");
+    document.getElementById("btnRetrySopProof").classList.remove("hidden");
+
+    if(window.sopLocalStream) {
+        window.sopLocalStream.getTracks().forEach(track => track.stop());
+    }
 };
 
 window.submitSopTaskReview = async () => {
-    if(!activeSopExecuteKey || !sopCapturedBlob) return alert("Please capture photo proof.");
+    if(!window.activeSopExecuteKey || !window.sopCapturedBlob) return alert("Please capture photo proof.");
     
     const remarks = document.getElementById("execTaskRemarks").value.trim();
     if(!remarks) return alert("Please provide field remarks.");
@@ -10139,15 +10177,15 @@ window.submitSopTaskReview = async () => {
     btn.disabled = true;
 
     try {
-        await update(ref(db, `sop_tasks/${activeSopExecuteKey}`), {
+        await update(ref(db, `sop_tasks/${window.activeSopExecuteKey}`), {
             status: "REVIEW",
-            imgProof: sopCapturedBlob,
+            imgProof: window.sopCapturedBlob,
             studentRemarks: remarks,
             submittedAt: serverTimestamp()
         });
         
         alert("✅ Task Submitted for Admin Audit.");
-        closeSopExecuteModal();
+        window.closeSopExecuteModal();
     } catch(e) {
         alert("Upload Error: " + e.message);
         btn.innerText = "SUBMIT FOR REVIEW";
@@ -10155,18 +10193,17 @@ window.submitSopTaskReview = async () => {
     }
 };
 
-// --- 5. AUDIT TAB (ADMIN) ---
+// --- 6. AUDIT TAB (ADMIN) ---
 window.loadSopAuditTasks = () => {
     const container = document.getElementById("sopAuditContainer");
     if(!container) return;
-    container.innerHTML = "<p style='grid-column: 1 / -1; text-align:center;'>Scanning for tasks in review...</p>";
 
     const q = query(ref(db, "sop_tasks"), orderByChild("status"), equalTo("REVIEW"));
     
     onValue(q, (snap) => {
         container.innerHTML = "";
         if(!snap.exists()) {
-            container.innerHTML = `<p style="grid-column: 1 / -1; text-align:center; color:#10b981; font-weight:bold;">All clear! No tasks pending review.</p>`;
+            container.innerHTML = `<p style="grid-column: 1 / -1; text-align:center; color:#10b981; font-weight:bold;">No tasks pending review.</p>`;
             return;
         }
 
@@ -10174,9 +10211,9 @@ window.loadSopAuditTasks = () => {
             const t = {key: c.key, ...c.val()};
             
             container.innerHTML += `
-                <div style="background:white; border:1px solid #0284c7; padding:15px; border-radius:8px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);">
+                <div style="background:white; border:1px solid #0284c7; padding:15px; border-radius:8px;">
                     <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
-                        <span style="font-size:10px; font-weight:bold; color:#0284c7; text-transform:uppercase;">${t.station}</span>
+                        <span style="font-size:10px; font-weight:bold; color:var(--metro-red);">${t.location}</span>
                         <span style="font-size:10px; background:#0f172a; color:white; padding:2px 6px; border-radius:4px;">${t.assignedToName}</span>
                     </div>
                     <h3 style="margin:0 0 10px 0; font-size:15px;">${t.workTitle}</h3>
@@ -10184,13 +10221,14 @@ window.loadSopAuditTasks = () => {
                     <img src="${t.imgProof}" style="width:100%; height:200px; object-fit:cover; border-radius:6px; border:2px solid #e2e8f0; cursor:pointer; margin-bottom:10px;" onclick="window.openBigPhoto(this.src)">
                     
                     <div style="background:#f1f5f9; padding:10px; border-radius:4px; font-size:11px; margin-bottom:15px;">
-                        <b>Student Notes:</b> "${t.studentRemarks}"
+                        <b>Incharge Notes:</b> "${t.studentRemarks}"
                     </div>
 
-                    <div style="display:flex; gap:10px;">
+                    <div style="display:flex; gap:5px; margin-bottom: 5px;">
                         <button onclick="window.auditSopTask('${t.key}', 'PASSED')" style="flex:1; background:#15803d; color:white; border:none; padding:10px; border-radius:4px; font-weight:bold; cursor:pointer;">✅ PASS</button>
                         <button onclick="window.auditSopTask('${t.key}', 'FAILED')" style="flex:1; background:#be123c; color:white; border:none; padding:10px; border-radius:4px; font-weight:bold; cursor:pointer;">🚫 FAIL</button>
                     </div>
+                    <button onclick="window.deleteSopTask('${t.key}')" class="secondary" style="width:100%; padding:8px; font-size:10px; font-weight:bold;"><i class="fas fa-trash"></i> DELETE TASK COMPLETELY</button>
                 </div>
             `;
         });
@@ -10199,7 +10237,6 @@ window.loadSopAuditTasks = () => {
 
 window.auditSopTask = async (taskKey, decision) => {
     let adminNotes = "Task Approved. Good job.";
-    
     if (decision === 'FAILED') {
         adminNotes = prompt("Enter Rejection Reason (Required):");
         if (!adminNotes) return;
@@ -10209,7 +10246,6 @@ window.auditSopTask = async (taskKey, decision) => {
     }
 
     try {
-        // Prepare the database update payload
         const updatePayload = {
             status: decision,
             adminRemarks: adminNotes,
@@ -10217,73 +10253,58 @@ window.auditSopTask = async (taskKey, decision) => {
             auditedBy: currentUser.name || currentUser.email
         };
 
-        // 🚀 THE NEW LOGIC: IF APPROVED, DELETE THE IMAGE TO SAVE DB SPACE
+        // 🚀 CRITICAL NEW FEATURE: WIPES IMAGE ON APPROVAL
         if (decision === 'PASSED') {
-            updatePayload.imgProof = null; // Setting to null in Firebase deletes the field entirely
+            updatePayload.imgProof = null; // Removing image saves MBs of DB space immediately
         }
 
-        // Execute the update
         await update(ref(db, `sop_tasks/${taskKey}`), updatePayload);
         
-        // Show confirmation to Admin
         if (decision === 'PASSED') {
-            alert("✅ Task Approved! The image proof has been securely deleted from the database to save storage space.");
+            alert("✅ Task Approved! The image proof has been permanently deleted from the database to conserve memory.");
         } else {
-            alert("❌ Task Rejected. The student has been notified to redo the work.");
+            alert("❌ Task Rejected. Assigned student has been notified.");
         }
-        
-    } catch(e) { 
-        alert("Audit Error: " + e.message); 
-    }
+    } catch(e) { alert("Audit Error: " + e.message); }
 };
 
-// --- 6. LIVE STATUS GRID (INNOVATIVE BOARD) ---
+// --- 7. LIVE STATUS GRID ---
 window.loadSopLiveGrid = () => {
     const container = document.getElementById("sopLiveGridContainer");
     if(!container) return;
 
     onValue(ref(db, "sop_tasks"), (snap) => {
         container.innerHTML = "";
-        if(!snap.exists()) {
-            container.innerHTML = "<p style='text-align:center; padding:20px; color:#64748b;'>No deployments initiated yet.</p>";
-            return;
-        }
+        if(!snap.exists()) return;
 
-        // Group by Station
-        const stations = {};
+        const locations = {};
         snap.forEach(c => {
             const t = c.val();
-            if(!stations[t.station]) stations[t.station] = {};
-            stations[t.station][t.workCode] = t;
+            if(!locations[t.location]) locations[t.location] = {};
+            locations[t.location][t.workCode] = t;
         });
 
         const taskKeys = Object.keys(SOP_GUIDE_BOOK);
 
-        // Render Table
-        let tableHTML = `<table style="width:100%; border-collapse: separate; border-spacing: 0 10px;">
-            <tbody>`;
+        let tableHTML = `<table style="width:100%; border-collapse: separate; border-spacing: 0 10px;"><tbody>`;
 
-        Object.keys(stations).sort().forEach(stnName => {
-            const stnTasks = stations[stnName];
+        Object.keys(locations).sort().forEach(locName => {
+            const locTasks = locations[locName];
             
             let blocksHTML = "";
             taskKeys.forEach((key, index) => {
-                const t = stnTasks[key];
-                
-                // Color Logic
-                let bgColor = "#e2e8f0"; // Grey (Unassigned)
-                let tooltip = `Step ${index+1}: ${SOP_GUIDE_BOOK[key].title} (Not Assigned)`;
+                const t = locTasks[key];
+                let bgColor = "#e2e8f0"; 
+                let tooltip = `${index+1}: Unassigned`;
 
                 if(t) {
-                    if(t.status === 'WORKING') bgColor = "#f59e0b"; // Yellow
-                    else if(t.status === 'REVIEW') bgColor = "#3b82f6"; // Blue
-                    else if(t.status === 'PASSED') bgColor = "#10b981"; // Green
-                    else if(t.status === 'FAILED') bgColor = "#e11d48"; // Red
-
-                    tooltip = `Step ${index+1}: ${t.workTitle}&#10;Assigned: ${t.assignedToName}&#10;Status: ${t.status}`;
+                    if(t.status === 'WORKING') bgColor = "#f59e0b";
+                    else if(t.status === 'REVIEW') bgColor = "#3b82f6";
+                    else if(t.status === 'PASSED') bgColor = "#10b981";
+                    else if(t.status === 'FAILED') bgColor = "#e11d48";
+                    tooltip = `${index+1}: ${t.workTitle}\nIncharge: ${t.assignedToName}\nStatus: ${t.status}`;
                 }
 
-                // Render tiny square block
                 blocksHTML += `
                     <div title="${tooltip}" style="width:25px; height:25px; background:${bgColor}; border-radius:4px; border:1px solid rgba(0,0,0,0.1); cursor:help; display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(255,255,255,0.8); font-weight:bold;">
                         ${index+1}
@@ -10293,8 +10314,8 @@ window.loadSopLiveGrid = () => {
 
             tableHTML += `
                 <tr style="background:white; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                    <td style="padding:15px; border-radius:8px 0 0 8px; border:1px solid #e2e8f0; border-right:none; font-weight:900; color:var(--metro-blue); width:200px;">
-                        ${stnName}
+                    <td style="padding:15px; border-radius:8px 0 0 8px; border:1px solid #e2e8f0; border-right:none; font-weight:900; color:var(--metro-blue); width:250px;">
+                        ${locName}
                     </td>
                     <td style="padding:15px; border-radius:0 8px 8px 0; border:1px solid #e2e8f0; border-left:none;">
                         <div style="display:flex; gap:6px; flex-wrap:wrap;">
