@@ -2200,14 +2200,14 @@ tr:hover { background: #fcfcfd; }
         <h3 id="execTaskTitle">TASK</h3>
         <p id="execTaskStation" style="font-weight:bold; color:var(--metro-red);"></p>
 
-        <div id="sopVideoWrapper" style="background:black; width:100%; height:200px; border-radius:8px; overflow:hidden; position:relative;">
+        <div id="sopVideoWrapper" style="display:block; background:black; width:100%; height:200px; border-radius:8px; overflow:hidden; position:relative;">
             <video id="sopEvidenceVideo" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
-            <button onclick="captureSopPhoto()" class="warning" style="position:absolute; bottom:10px; left:50%; transform:translateX(-50%);">📸 CAPTURE</button>
+            <button onclick="captureSopPhoto()" class="warning" style="position:absolute; bottom:10px; left:50%; transform:translateX(-50%);">📸 CAPTURE PHOTO</button>
         </div>
         <img id="sopEvidencePreview" style="display:none; width:100%; height:200px; object-fit:cover; border-radius:8px; border:4px solid #10b981;">
 
         <div id="step2-submit" class="hidden" style="margin-top:20px;">
-            <input id="execTaskRemarks" placeholder="Field Remarks (Required)..." style="margin-bottom:15px;">
+            <input id="execTaskRemarks" placeholder="Field Remarks..." style="margin-bottom:15px;">
             <button id="btnUploadSopProof" onclick="submitSopTaskReview()" class="success" style="width:100%;">SUBMIT FOR REVIEW</button>
         </div>
     </div>
@@ -9991,74 +9991,55 @@ window.closeSopExecuteModal = () => {
 };
 window.openSopCamera = async () => {
     const video = document.getElementById("sopEvidenceVideo");
-    const videoWrapper = document.getElementById("sopVideoWrapper");
-    const btnStart = document.getElementById("btnStartSopCam"); // Ensure this matches HTML ID
-
-    // This check now prevents the crash
-    if (!btnStart) {
-        console.error("Critical Error: The button with ID 'btnStartSopCam' was not found in your HTML.");
-        alert("Configuration Error: The 'Open Camera' button is missing from the page.");
-        return;
-    }
-
-    if (videoWrapper) videoWrapper.style.display = "block";
-    btnStart.classList.add("hidden"); // This is now safe to run
-
     try {
-        window.sopLocalStream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: "environment" } 
-        });
-        if (video) video.srcObject = window.sopLocalStream;
-    } catch(err) { 
-        console.error("Camera Access Denied:", err);
-        alert("Camera Error: " + err.message); 
-        btnStart.classList.remove("hidden");
-    }
+        window.sopLocalStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.srcObject = window.sopLocalStream;
+        video.play();
+    } catch(err) { alert("Camera Error: " + err.message); }
 };
 // REPLACE your current captureSopPhoto
 window.captureSopPhoto = () => {
     const video = document.getElementById("sopEvidenceVideo");
+    const preview = document.getElementById("sopEvidencePreview");
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth; 
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
     
-    // REDUCED QUALITY FIX: 0.2 is tiny enough for the DB to handle
+    // Quality 0.2 prevents database from crashing
     window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.2);
     
-    document.getElementById("sopEvidencePreview").src = window.sopCapturedBlob;
-    document.getElementById("sopEvidencePreview").style.display = "block";
+    preview.src = window.sopCapturedBlob;
+    preview.style.display = "block";
     document.getElementById("sopVideoWrapper").style.display = "none";
-    
-    // Unlock scanner area
-    document.getElementById("step2-scanner").classList.remove("hidden");
+    document.getElementById("step2-submit").classList.remove("hidden");
+
     if(window.sopLocalStream) window.sopLocalStream.getTracks().forEach(t => t.stop());
 };
 window.submitSopTaskReview = async () => {
     const taskKey = window.activeSopExecuteKey;
-    const barcode = document.getElementById("sopScanInput").value.trim();
-    const remarks = document.getElementById("execTaskRemarks").value;
+    const remarks = document.getElementById("execTaskRemarks").value.trim();
     const btn = document.getElementById("btnUploadSopProof");
 
-    if (!barcode) return alert("⚠️ Please scan the product barcode.");
-
-    btn.innerText = "⏳ UPLOADING...";
+    if (!window.sopCapturedBlob) return alert("⚠️ Please capture photo.");
+    
     btn.disabled = true;
+    btn.innerText = "⏳ UPLOADING...";
 
     try {
         await update(ref(db, `sop_tasks/${taskKey}`), {
             status: "REVIEW",
-            imgProof: window.sopCapturedBlob, // Compressed image
-            barcode: barcode,                // Saved for Admin to scan
+            imgProof: window.sopCapturedBlob,
             studentRemarks: remarks,
             submittedAt: serverTimestamp()
         });
-        alert("✅ Task Submitted!");
-        window.closeSopExecuteModal();
+        alert("✅ Task Submitted for Admin Audit.");
+        document.getElementById("sopTaskExecuteModal").classList.add("hidden");
     } catch (e) {
         alert("Upload Error: " + e.message);
-        btn.innerText = "SUBMIT TASK";
+    } finally {
         btn.disabled = false;
+        btn.innerText = "SUBMIT FOR REVIEW";
     }
 };
 // --- 6. AUDIT TAB (ADMIN) ---
@@ -10101,18 +10082,19 @@ window.initAdminVerify = (taskKey, savedBarcode) => {
 window.openSopExecution = (taskKey, title, station) => {
     window.activeSopExecuteKey = taskKey;
     const modal = document.getElementById("sopTaskExecuteModal");
-    if (!modal) return alert("System Error: Modal not found.");
+    if (!modal) return alert("System Error: Modal UI is missing.");
     
     document.getElementById("execTaskTitle").innerText = title;
     document.getElementById("execTaskStation").innerText = "📍 " + station;
     
-    // UI Reset
+    // Reset UI
     document.getElementById("step2-submit").classList.add("hidden");
     document.getElementById("sopEvidencePreview").style.display = "none";
     document.getElementById("sopVideoWrapper").style.display = "block";
-    modal.classList.remove("hidden");
+    document.getElementById("execTaskRemarks").value = "";
     
-    setTimeout(window.openSopCamera, 500);
+    modal.classList.remove("hidden");
+    setTimeout(window.openSopCamera, 500); // Start camera automatically
 };
 // B. After Photo Captured
 window.captureSopPhoto = () => {
@@ -10164,23 +10146,23 @@ window.submitSopTaskReview = async () => {
 window.auditSopTask = async (taskKey, decision) => {
     try {
         if (decision === 'PASSED') {
-            // SETTING imgProof to NULL deletes the image data from Firebase
+            // SETTING imgProof to NULL DELETES the image from Firebase
             await update(ref(db, `sop_tasks/${taskKey}`), {
                 status: 'PASSED',
                 imgProof: null, 
-                auditedAt: serverTimestamp()
+                auditedAt: serverTimestamp(),
+                auditedBy: currentUser.name || "Admin"
             });
-            alert("✅ Approved. Photo proof deleted from Database.");
+            alert("✅ Approved. Photo proof purged to save memory.");
         } else {
             await update(ref(db, `sop_tasks/${taskKey}`), {
                 status: 'FAILED',
                 adminRemarks: prompt("Rejection Reason:")
             });
+            alert("❌ Task Rejected.");
         }
         window.loadSopAuditTasks();
-    } catch (e) {
-        alert("Error: " + e.message);
-    }
+    } catch (e) { alert("Audit Error: " + e.message); }
 };
 // --- 7. LIVE STATUS GRID ---
 window.loadSopLiveGrid = () => {
