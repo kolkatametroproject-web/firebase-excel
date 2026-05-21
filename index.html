@@ -3669,16 +3669,18 @@ onAuthStateChanged(auth, (user) => {
     const userRef = ref(db, `users/${user.uid}`);
 
     onValue(userRef, (snap) => {
-        const u = snap.val();
-
-        // THE FIX: If data is null (syncing), exit immediately.
-        if (!u) {
-            console.warn("Waiting for user profile data...");
+        // --- THE CRITICAL FIX ---
+        // If data is null or undefined (happens during sync), exit immediately.
+        if (!snap.exists()) {
+            console.warn("User data syncing...");
             return;
         }
 
-        // Safe replacement logic: convert to string first, then replace.
-        const safeName = (u.name || u.email || "Unknown").toString().replace(/[.#$\[\]]/g, "").trim();
+        const u = snap.val();
+
+        // Ensure we are working with a string, preventing .replace() from crashing
+        const rawName = u.name || u.email || "Unknown";
+        const safeName = String(rawName).replace(/[.#$\[\]]/g, "").trim();
 
         const userInfoDisplay = document.getElementById("userInfo");
         if (userInfoDisplay) userInfoDisplay.innerText = safeName;
@@ -3900,9 +3902,9 @@ let presenceInterval = null;
 function startPresenceSystem(user) {
     if (!user || !user.uid) return;
 
-    // Sanity Check: Ensure UID is safe for Firebase paths
+    // Sanity Check: Ensure UID is safe
     if (user.uid.includes(".") || user.uid.includes("#") || user.uid.includes("$")) {
-        console.error("CRITICAL: Invalid UID detected. Presence system aborted.");
+        console.error("CRITICAL: Invalid UID detected.");
         return;
     }
 
@@ -3911,11 +3913,10 @@ function startPresenceSystem(user) {
 
     onValue(connectedRef, (snap) => {
         if (snap.val() === true) {
-            // THE FIX: Use the 'user' object passed in, and ensure it's a string before .replace()
+            // SAFE ACCESS: Use the passed 'user' object and stringify safely
             const rawName = user.displayName || user.email || "Unknown User";
-            const safeName = rawName.toString().replace(/[.#$\[\]]/g, "").trim();
+            const safeName = String(rawName).replace(/[.#$\[\]]/g, "").trim();
 
-            // 1. Set Disconnect Hook
             onDisconnect(userStatusRef).set({
                 state: 'offline',
                 last_seen: serverTimestamp(),
@@ -3923,7 +3924,6 @@ function startPresenceSystem(user) {
                 name: safeName
             });
 
-            // 2. Mark as Online
             update(userStatusRef, {
                 state: 'online',
                 last_seen: serverTimestamp(),
@@ -3933,7 +3933,6 @@ function startPresenceSystem(user) {
         }
     });
 
-    // Heartbeat Pulse
     if (presenceInterval) clearInterval(presenceInterval);
     presenceInterval = setInterval(() => {
         if (auth.currentUser) {
