@@ -9995,25 +9995,54 @@ window.loadSopTaskGrid = async () => {
     }
 };
 
-window.assignSingleSopTask = async (stn, line, workCode) => {
-    const plat = document.getElementById("sopPlatformSelect").value;
-    const locationFullName = `${stn} (${line}) - ${plat}`; // Combined Station/Platform
+ window.assignSingleSopTask = async (locationFullName, workCode) => {
+    // 1. Get the element safely
     const sel = document.getElementById(`assign_user_${workCode}`);
+    
+    // 2. Check if element exists
+    if (!sel) {
+        console.error("Critical Error: Dropdown not found for code:", workCode);
+        return alert("Error: Assignment dropdown not found. Please refresh the page.");
+    }
+
     const uid = sel.value;
-    if(!uid) return alert("Select Incharge!");
+    const uName = sel.options[sel.selectedIndex]?.text || "Unknown";
+
+    if(!uid) return alert("Please select an Incharge Name (Student) to assign.");
+
+    const taskDef = SOP_GUIDE_BOOK[workCode];
+    
+    // Query existing task by location AND workCode to ensure precise mapping
+    const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
+    const snap = await get(q);
+    
+    let existingKey = null;
+    if(snap.exists()) {
+        snap.forEach(c => {
+            if(c.val().workCode === workCode) existingKey = c.key;
+        });
+    }
 
     const payload = {
-        station: `${stn} (${line})`,
         location: locationFullName,
         workCode: workCode,
-        workTitle: SOP_GUIDE_BOOK[workCode].title,
+        workTitle: taskDef.title,
         assignedToUid: uid,
-        assignedToName: sel.options[sel.selectedIndex].text,
-        status: "WORKING"
+        assignedToName: uName,
+        assignedBy: currentUser.name || currentUser.email,
+        status: "WORKING",
+        timestamp: serverTimestamp()
     };
 
-    await push(ref(db, "sop_tasks"), payload);
-    alert("✅ Task Assigned to " + locationFullName);
+    try {
+        if(existingKey) {
+            await update(ref(db, `sop_tasks/${existingKey}`), payload);
+        } else {
+            await push(ref(db, "sop_tasks"), payload);
+        }
+        alert(`✅ Task Assigned to ${uName}`);
+        window.loadSopTaskGrid();
+    } catch(e) { alert("Error: " + e.message); }
 };
 // --- 4. MY WORK TAB (STUDENT) ---
 window.loadMySopTasks = () => {
