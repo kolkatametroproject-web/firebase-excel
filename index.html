@@ -9773,16 +9773,40 @@ window.handleSopLineChange = () => {
         stnSel.onchange = window.loadSopTaskGrid;
     }
 };
+// Run this immediately after login success or when the SOP tab is initialized
+window.initSopVisibility = () => {
+    const btnDispatch = document.getElementById("btnSopSubDispatch");
+    const btnAudit = document.getElementById("btnSopSubAudit");
 
-// --- 3. DISPATCH TAB (ADMIN) ---
+    if (isAdmin) {
+        // Show Admin Tabs
+        if(btnDispatch) btnDispatch.style.display = "block";
+        if(btnAudit) btnAudit.style.display = "block";
+    } else {
+        // Force hide Admin Tabs
+        if(btnDispatch) btnDispatch.style.display = "none";
+        if(btnAudit) btnAudit.style.display = "none";
+    }
+};
 window.loadSopTaskGrid = async () => {
+    // 1. SAFETY: Get all elements safely
+    const lineEl = document.getElementById("sopLineSelect");
+    const stnEl = document.getElementById("sopStationSelect");
+    const platEl = document.getElementById("sopPlatformSelect");
     const container = document.getElementById("sopTaskAssignmentGrid");
-    const line = document.getElementById("sopLineSelect").value;
-    const stn = document.getElementById("sopStationSelect").value;
-    const plat = document.getElementById("sopPlatformSelect").value;
+
+    // 2. GUARD CLAUSE: If any element is missing, exit quietly
+    if (!lineEl || !stnEl || !platEl || !container) {
+        console.warn("SOP UI elements not fully loaded, skipping grid load.");
+        return; 
+    }
+
+    const line = lineEl.value;
+    const stn = stnEl.value;
+    const plat = platEl.value;
     
     if (!stn || !line || !plat) {
-        container.innerHTML = "<p style='text-align:center; color:#94a3b8;'>Select Corridor, Station, and Platform.</p>";
+        container.innerHTML = "<p style='text-align:center; color:#94a3b8; font-style:italic;'>Select Corridor, Station, and Platform.</p>";
         return;
     }
 
@@ -9791,7 +9815,7 @@ window.loadSopTaskGrid = async () => {
 
     try {
         const userSnap = await get(ref(db, "users"));
-        let userOptions = `<option value="">-- Incharge Name --</option>`;
+        let userOptions = `<option value="">-- Select Personnel --</option>`;
         userSnap.forEach(u => {
             if(!u.val().banned) {
                 userOptions += `<option value="${u.key}">${(u.val().name || u.val().email).toUpperCase()}</option>`;
@@ -9811,8 +9835,9 @@ window.loadSopTaskGrid = async () => {
             const taskDef = SOP_GUIDE_BOOK[code];
             const existing = existingTasks[code];
             
+            // Logic for visual status
             let statusBadge = `<span style="background:#e2e8f0; color:#64748b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">UNASSIGNED</span>`;
-            let deleteBtnHtml = ``;
+            let deleteBtnHtml = "";
 
             if(existing) {
                 if(existing.status === 'WORKING') statusBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">WORKING</span>`;
@@ -9834,7 +9859,7 @@ window.loadSopTaskGrid = async () => {
                         <select id="assign_user_${code}" style="width: 160px; font-size:11px; font-weight:bold; height:35px; margin:0;">
                             ${userOptions}
                         </select>
-                        <button onclick="window.assignSingleSopTask('${locationFullName}', '${code}')" class="info" style="height:35px; font-size:10px; background:var(--metro-blue); color:white; border:none; border-radius:4px; cursor:pointer;">
+                        <button onclick="window.assignSingleSopTask('${locationFullName}', '${code}')" class="info" style="height:35px; font-size:10px; border:none; border-radius:4px; cursor:pointer;">
                             <i class="fas fa-paper-plane"></i> ASSIGN
                         </button>
                         ${deleteBtnHtml}
@@ -9843,17 +9868,15 @@ window.loadSopTaskGrid = async () => {
             `;
             
             if(existing && existing.assignedToUid) {
-                setTimeout(() => {
-                    const sel = document.getElementById(`assign_user_${code}`);
-                    if(sel) sel.value = existing.assignedToUid;
-                }, 50);
+                const sel = document.getElementById(`assign_user_${code}`);
+                if(sel) sel.value = existing.assignedToUid;
             }
         });
     } catch (e) {
         container.innerHTML = `<p style="color:red;">Error loading tools: ${e.message}</p>`;
     }
 };
-
+  
  window.assignSingleSopTask = async (locationFullName, workCode) => {
     // 1. Get the element safely
     const sel = document.getElementById(`assign_user_${workCode}`);
