@@ -3663,29 +3663,40 @@ async function processUpload(dataBase64, fileType, fileName) {
     await push(ref(db, "history"), uploadData);
 }
 onAuthStateChanged(auth, (user) => {
-    if (!user) {
-        showLoginScreen();
-        return;
+    if (!user) { 
+        showLoginScreen(); 
+        return; 
     }
-
+    
     currentUser = user;
-    startPresenceSystem(user);
+    startPresenceSystem(user);  
 
-    // Using the Safe Wrapper here
-    window.safeOnValue(ref(db, `users/${user.uid}`), (u) => {
-        // Now 'u' is guaranteed to exist here. No more "undefined" errors.
+    const userRef = ref(db, `users/${user.uid}`);
+    
+    // Use 'get' for a single reliable read, or keep onValue if you need live updates
+    get(userRef).then((snap) => {
+        const u = snap.val(); // 'u' is now correctly scoped here
         
-        const rawName = u.name || u.email || "Unknown";
-        const safeName = String(rawName).replace(/[.#$\[\]]/g, "").trim();
+        // 1. SAFE CHECK: If user record is missing, redirect to profile setup
+        if (!u || !u.name) {
+            document.getElementById("loginSection")?.classList.add("hidden");
+            document.getElementById("appScreen")?.classList.add("hidden");
+            document.getElementById("nameModal")?.classList.remove("hidden");
+            return; 
+        }
 
+        // 2. SAFE NAME PARSING
+        const safeName = (u?.name || "Unknown").toString().replace(/[.#$\[\]]/g, "").trim();
+        
         const userInfoDisplay = document.getElementById("userInfo");
         if (userInfoDisplay) userInfoDisplay.innerText = safeName;
 
         if (u.terminated) { signOut(auth); return; }
+        
         if (u.banned) {
             document.querySelector("header").style.display = "none";
             document.getElementById("bannedScreen")?.classList.remove("hidden");
-            return;
+            return; 
         }
 
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
@@ -3693,6 +3704,8 @@ onAuthStateChanged(auth, (user) => {
             document.getElementById("adminBadge")?.classList.remove("hidden");
             document.getElementById("btnAdmin")?.classList.remove("hidden");
         }
+    }).catch((error) => {
+        console.error("Database sync failed:", error);
     });
 });
    // ==========================================
