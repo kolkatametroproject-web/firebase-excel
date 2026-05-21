@@ -10045,25 +10045,40 @@ window.submitSopTaskReview = async () => {
 // --- 6. AUDIT TAB (ADMIN) ---
 window.loadSopAuditTasks = () => {
     const container = document.getElementById("sopAuditContainer");
+    if (!container) return;
+
+    console.log("🔍 Loading Audit Tasks...");
     const q = query(ref(db, "sop_tasks"), orderByChild("status"), equalTo("REVIEW"));
 
     onValue(q, (snap) => {
-        container.innerHTML = "";
+        container.innerHTML = ""; // Clear old UI
+
+        if (!snap.exists()) {
+            console.warn("⚠️ No tasks found with status 'REVIEW'. Check your database.");
+            container.innerHTML = `
+                <div style="text-align:center; padding:40px; border:2px dashed #ccc;">
+                    <h3 style="color:#666;">No tasks currently in REVIEW status.</h3>
+                    <p>Make sure student tasks are submitted with status "REVIEW".</p>
+                </div>`;
+            return;
+        }
+
         snap.forEach(c => {
             const t = { key: c.key, ...c.val() };
+            console.log("✅ Rendering task:", t.workTitle);
+            
             container.innerHTML += `
             <div style="background:white; border:1px solid #ddd; padding:20px; border-radius:8px; margin-bottom:20px;">
-                <h3>${t.workTitle}</h3>
-                <div id="status_${t.key}" style="color:red; font-weight:bold;">Status: Pending Admin Verification</div>
+                <h3>${t.workTitle || "Untitled"}</h3>
+                <p><b>Station:</b> ${t.location || "N/A"}</p>
+                <p><b>Remarks:</b> ${t.studentRemarks || "None"}</p>
                 
-                <div id="proof_area_${t.key}" class="hidden">
-                    <img src="${t.imgProof}" style="width:100%; border:4px solid green;">
-                    <button onclick="window.auditSopTask('${t.key}', 'PASSED')" class="success">APPROVE & PURGE IMAGE</button>
+                <img src="${t.imgProof}" style="width:100%; border:4px solid #10b981; border-radius:8px;">
+                
+                <div style="margin-top:15px; display:flex; gap:10px;">
+                    <button onclick="window.auditSopTask('${t.key}', 'PASSED')" class="success" style="flex:1;">APPROVE</button>
+                    <button onclick="window.auditSopTask('${t.key}', 'FAILED')" class="danger" style="flex:1;">REJECT</button>
                 </div>
-
-                <button onclick="window.initAdminVerify('${t.key}', '${t.barcode}')" class="info" style="margin-top:10px;">
-                    <i class="fas fa-qrcode"></i> SCAN PRODUCT TO UNLOCK PHOTO
-                </button>
             </div>`;
         });
     });
@@ -10171,55 +10186,43 @@ window.loadSopLiveGrid = () => {
 
     onValue(ref(db, "sop_tasks"), (snap) => {
         container.innerHTML = "";
-        if(!snap.exists()) return;
+        if(!snap.exists()) {
+            container.innerHTML = "<p style='text-align:center;'>No live deployment data.</p>";
+            return;
+        }
 
         const locations = {};
         snap.forEach(c => {
             const t = c.val();
+            if(!t.location) return; // Skip if location is missing
             if(!locations[t.location]) locations[t.location] = {};
             locations[t.location][t.workCode] = t;
         });
 
         const taskKeys = Object.keys(SOP_GUIDE_BOOK);
-
         let tableHTML = `<table style="width:100%; border-collapse: separate; border-spacing: 0 10px;"><tbody>`;
 
-        Object.keys(locations).sort().forEach(locName => {
+        Object.keys(locations).forEach(locName => {
             const locTasks = locations[locName];
-            
             let blocksHTML = "";
+            
             taskKeys.forEach((key, index) => {
                 const t = locTasks[key];
                 let bgColor = "#e2e8f0"; 
-                let tooltip = `${index+1}: Unassigned`;
-
                 if(t) {
                     if(t.status === 'WORKING') bgColor = "#f59e0b";
                     else if(t.status === 'REVIEW') bgColor = "#3b82f6";
                     else if(t.status === 'PASSED') bgColor = "#10b981";
                     else if(t.status === 'FAILED') bgColor = "#e11d48";
-                    tooltip = `${index+1}: ${t.workTitle}\nIncharge: ${t.assignedToName}\nStatus: ${t.status}`;
                 }
 
-                blocksHTML += `
-                    <div title="${tooltip}" style="width:25px; height:25px; background:${bgColor}; border-radius:4px; border:1px solid rgba(0,0,0,0.1); cursor:help; display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(255,255,255,0.8); font-weight:bold;">
-                        ${index+1}
-                    </div>
-                `;
+                blocksHTML += `<div style="width:25px; height:25px; background:${bgColor}; border-radius:4px; margin:2px;"></div>`;
             });
 
-            tableHTML += `
-                <tr style="background:white; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                    <td style="padding:15px; border-radius:8px 0 0 8px; border:1px solid #e2e8f0; border-right:none; font-weight:900; color:var(--metro-blue); width:250px;">
-                        ${locName}
-                    </td>
-                    <td style="padding:15px; border-radius:0 8px 8px 0; border:1px solid #e2e8f0; border-left:none;">
-                        <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                            ${blocksHTML}
-                        </div>
-                    </td>
-                </tr>
-            `;
+            tableHTML += `<tr>
+                <td style="padding:10px; font-weight:bold;">${locName}</td>
+                <td><div style="display:flex;">${blocksHTML}</div></td>
+            </tr>`;
         });
 
         tableHTML += `</tbody></table>`;
