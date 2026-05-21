@@ -10030,6 +10030,7 @@ window.openSopCamera = async () => {
         btnStart.classList.remove("hidden");
     }
 };
+// REPLACE your current captureSopPhoto
 window.captureSopPhoto = () => {
     const video = document.getElementById("sopEvidenceVideo");
     const canvas = document.createElement("canvas");
@@ -10037,43 +10038,41 @@ window.captureSopPhoto = () => {
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
     
-    // Quality 0.3 to prevent database hang
-    window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.3);
+    // REDUCED QUALITY FIX: 0.2 is tiny enough for the DB to handle
+    window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.2);
     
     document.getElementById("sopEvidencePreview").src = window.sopCapturedBlob;
     document.getElementById("sopEvidencePreview").style.display = "block";
     document.getElementById("sopVideoWrapper").style.display = "none";
     
-    // Reveal Scanner Step
+    // Unlock scanner area
     document.getElementById("step2-scanner").classList.remove("hidden");
     if(window.sopLocalStream) window.sopLocalStream.getTracks().forEach(t => t.stop());
 };
 window.submitSopTaskReview = async () => {
     const taskKey = window.activeSopExecuteKey;
-    const remarks = document.getElementById("execTaskRemarks").value.trim();
     const barcode = document.getElementById("sopScanInput").value.trim();
-
-    if (!window.sopCapturedBlob) return alert("⚠️ No photo.");
-    if (!barcode) return alert("⚠️ Please scan the barcode first.");
-
+    const remarks = document.getElementById("execTaskRemarks").value;
     const btn = document.getElementById("btnUploadSopProof");
+
+    if (!barcode) return alert("⚠️ Please scan the product barcode.");
+
     btn.innerText = "⏳ UPLOADING...";
     btn.disabled = true;
 
     try {
         await update(ref(db, `sop_tasks/${taskKey}`), {
             status: "REVIEW",
-            imgProof: window.sopCapturedBlob,
-            barcode: barcode, // <--- SAVED TO DATABASE
+            imgProof: window.sopCapturedBlob, // Compressed image
+            barcode: barcode,                // Saved for Admin to scan
             studentRemarks: remarks,
             submittedAt: serverTimestamp()
         });
-        
         alert("✅ Task Submitted!");
         window.closeSopExecuteModal();
     } catch (e) {
         alert("Upload Error: " + e.message);
-        btn.innerText = "SUBMIT FOR REVIEW";
+        btn.innerText = "SUBMIT TASK";
         btn.disabled = false;
     }
 };
@@ -10105,9 +10104,9 @@ window.loadSopAuditTasks = () => {
 };
 
 // Start the scanner mode for the admin
-window.initAdminVerify = (taskKey, targetBarcode) => {
+window.initAdminVerify = (taskKey, savedBarcode) => {
     window.activeAuditKey = taskKey;
-    window.activeAuditTargetBarcode = targetBarcode;
+    window.activeAuditTargetBarcode = savedBarcode;
     window.scanMode = 'ADMIN_VERIFY';
     window.openBarcodeScanner('ADMIN_VERIFY');
 };
@@ -10199,13 +10198,13 @@ window.submitSopTaskReview = async () => {
 window.auditSopTask = async (taskKey, decision) => {
     try {
         if (decision === 'PASSED') {
-            // SETTING imgProof TO NULL DELETES IT FROM FIREBASE
+            // SETTING imgProof to NULL deletes the image data from Firebase
             await update(ref(db, `sop_tasks/${taskKey}`), {
                 status: 'PASSED',
                 imgProof: null, 
                 auditedAt: serverTimestamp()
             });
-            alert("✅ Approved. Photo purged from database.");
+            alert("✅ Approved. Photo proof deleted from Database.");
         } else {
             await update(ref(db, `sop_tasks/${taskKey}`), {
                 status: 'FAILED',
