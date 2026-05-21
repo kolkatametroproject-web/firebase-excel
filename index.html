@@ -5907,7 +5907,6 @@ window.deleteUserTask = (uid, taskKey) => {
 // 2. CRASH-PROOF AUTH LISTENER (GENERIC ONBOARDING)
 // ==========================================
 onAuthStateChanged(auth, (user) => {
-    // A. NOT LOGGED IN
     if (!user) { 
         showLoginScreen(); 
         return; 
@@ -5916,21 +5915,29 @@ onAuthStateChanged(auth, (user) => {
     currentUser = user;
     startPresenceSystem(user);  
 
-    // B. LOGGED IN - DATA SYNC ONLY
     const userRef = ref(db, `users/${user.uid}`);
     
+    // Use 'onValue' safely
     onValue(userRef, (snap) => {
         const u = snap.val();
 
-        // 1. New User Detection (Still needed for first-time setup)
-        if (!u || !u.name) {
+        // 1. SAFE DATA CHECK: If u is null, we can't do anything
+        if (!u) {
+            // If there's no data, treat as a first-time user and show Name Modal
             document.getElementById("loginSection").classList.add("hidden");
             document.getElementById("appScreen").classList.add("hidden");
             document.getElementById("nameModal").classList.remove("hidden");
             return; 
         }
 
-        // 2. Account Status Checks (Security)
+        // 2. SAFE NAME PARSING: Use a fallback if u.name is undefined
+        const safeName = (u.name) ? u.name.replace(/[.#$\[\]]/g, "").trim() : "Unknown User";
+        
+        // 3. Update the UI only if elements exist
+        const userInfoDisplay = document.getElementById("userInfo");
+        if (userInfoDisplay) userInfoDisplay.innerText = safeName;
+
+        // 4. Handle Account Status safely
         if (u.terminated) { 
             alert("ACCOUNT TERMINATED."); 
             signOut(auth); 
@@ -5941,34 +5948,19 @@ onAuthStateChanged(auth, (user) => {
             // Handle Ban Screen UI
             document.querySelector("header").style.display = "none";
             document.getElementById("appScreen").classList.add("hidden");
-            document.getElementById("faceModal").classList.add("hidden");
             document.getElementById("bannedScreen").classList.remove("hidden");
-            
-            document.getElementById("displayBanReason").innerText = u.banReason || "Violation";
-            // ... rest of your existing ban display logic ...
             return; 
         }
 
-        // 3. Sync User Data (Silent Sync)
-        currentUser.name = u.name;
+        // 5. Admin Rights Check
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
-        document.getElementById("userInfo").innerText = `${u.name}`;
-
-        // Load Admin Tools Badge
         if (isAdmin) {
-            const badge = document.getElementById("adminBadge");
-            const btn = document.getElementById("btnAdmin");
-            if(badge) badge.classList.remove("hidden");
-            if(btn) btn.classList.remove("hidden");
+            document.getElementById("adminBadge")?.classList.remove("hidden");
+            document.getElementById("btnAdmin")?.classList.remove("hidden");
         }
 
-        // --- THE FIX: REMOVED FACE MODAL POPUP FROM HERE ---
-        // This function should now only watch for background data changes
-        // without interrupting the user's screen.
-        
     }, (error) => {
-        console.error(error);
-        signOut(auth);
+        console.error("Database sync failed:", error);
     });
 });
 window.removeFile = async (key) => {
