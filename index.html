@@ -10071,7 +10071,6 @@ window.openSopCamera = async () => {
         document.getElementById("btnStartSopCam").classList.remove("hidden");
     }
 };
-
 window.captureSopPhoto = () => {
     const video = document.getElementById("sopEvidenceVideo");
     const canvas = document.createElement("canvas");
@@ -10081,7 +10080,8 @@ window.captureSopPhoto = () => {
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
     
-    window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.8);
+    // REDUCED QUALITY FIX: 0.3 is optimal for DB storage
+    window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.3);
     
     const preview = document.getElementById("sopEvidencePreview");
     if(preview) { 
@@ -10093,6 +10093,7 @@ window.captureSopPhoto = () => {
     document.getElementById("btnUploadSopProof").classList.remove("hidden");
     document.getElementById("btnRetrySopProof").classList.remove("hidden");
 
+    // Close the camera stream immediately
     if(window.sopLocalStream) {
         window.sopLocalStream.getTracks().forEach(track => track.stop());
     }
@@ -10102,47 +10103,30 @@ window.submitSopTaskReview = async () => {
     const btn = document.getElementById("btnUploadSopProof");
     const remarks = document.getElementById("execTaskRemarks").value.trim();
 
-    if (!taskKey) return alert("⚠️ Error: No task key. Please restart the task.");
-    if (!window.sopCapturedBlob) return alert("⚠️ Please capture an image first.");
-    if (!remarks) return alert("⚠️ Please add Field Remarks.");
-
+    if (!window.sopCapturedBlob) return alert("⚠️ No photo captured.");
+    
     btn.innerText = "⏳ UPLOADING...";
     btn.disabled = true;
 
     try {
-        // 1. Log the size to ensure it's not too big for Firebase
-        console.log("Image size (chars):", window.sopCapturedBlob.length);
-        if (window.sopCapturedBlob.length > 1000000) { // Approx 1MB check
-            console.warn("Image is quite large. This may cause a delay.");
-        }
-
-        // 2. Perform the update with a 15-second "fail-safe" timer
-        const uploadTask = update(ref(db, `sop_tasks/${taskKey}`), {
+        await update(ref(db, `sop_tasks/${taskKey}`), {
             status: "REVIEW",
-            imgProof: window.sopCapturedBlob,
+            imgProof: window.sopCapturedBlob, // Now compressed
             studentRemarks: remarks,
             submittedAt: serverTimestamp()
         });
-
-        // This ensures the code doesn't hang forever if the network drops
-        await Promise.race([
-            uploadTask,
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Upload timed out (Connection too slow)")), 15000))
-        ]);
-
+        
         alert("✅ Task Submitted for Admin Audit.");
         window.closeSopExecuteModal();
-
     } catch (e) {
-        console.error("Critical Upload Error:", e);
-        alert("❌ Failed: " + e.message + "\n\nTry taking a lower-resolution photo.");
+        console.error(e);
+        alert("❌ Failed: " + e.message);
     } finally {
-        // 3. THIS IS THE FIX: The button resets even if it fails
+        // ALWAYS resets the button so you can try again
         btn.innerText = "SUBMIT FOR REVIEW";
         btn.disabled = false;
     }
 };
-
 // --- 6. AUDIT TAB (ADMIN) ---
 window.loadSopAuditTasks = () => {
     const container = document.getElementById("sopAuditContainer");
@@ -10217,12 +10201,14 @@ window.openSopExecution = (taskKey, title, station) => {
     const preview = document.getElementById("sopEvidencePreview");
     if(preview) { preview.src = ""; preview.style.display = "none"; }
     
-    document.getElementById("sopVideoWrapper").style.display = "block";
-    document.getElementById("btnStartSopCam").classList.remove("hidden");
-    document.getElementById("btnUploadSopProof").classList.add("hidden");
-    document.getElementById("btnRetrySopProof").classList.add("hidden");
-
+    // Show Modal
     document.getElementById("sopTaskExecuteModal").classList.remove("hidden");
+    
+    // AUTO-START CAMERA
+    // We add a tiny delay to ensure the modal is fully visible before initializing
+    setTimeout(() => {
+        window.openSopCamera();
+    }, 500);
 };
 window.auditSopTask = async (taskKey, decision) => {
     // decision will be 'PASSED' or 'FAILED'
