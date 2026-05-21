@@ -7100,6 +7100,19 @@ window.onScanSuccess = async function(decodedText) {
     closeBarcodeScanner();
     
     const scannedInput = decodedText.trim();
+  if (window.scanMode === 'ADMIN_VERIFY') {
+        // Compare current scan against the barcode stored in the specific task
+        if (scannedInput === window.activeAuditTargetBarcode) {
+            alert("✅ ASSET MATCH CONFIRMED!");
+            
+            // Reveal the photo proof
+            document.getElementById(`proof_area_${window.activeAuditKey}`).classList.remove("hidden");
+            document.getElementById(`status_${window.activeAuditKey}`).innerText = "✅ VERIFIED";
+        } else {
+            alert("❌ MISMATCH: This asset does not match the record.");
+        }
+        return;
+    }
 
     try {
         // ==========================================
@@ -10101,71 +10114,69 @@ window.captureSopPhoto = () => {
 window.submitSopTaskReview = async () => {
     const taskKey = window.activeSopExecuteKey;
     const remarks = document.getElementById("execTaskRemarks").value.trim();
+    // Assuming you captured the student's scan in a variable 'window.currentStudentBarcode'
+    const studentBarcode = window.currentStudentBarcode; 
+
+    if (!window.sopCapturedBlob) return alert("⚠️ Please capture a photo first.");
+    if (!studentBarcode) return alert("⚠️ Please scan the product barcode first.");
+
+    const btn = document.getElementById("btnUploadSopProof");
+    btn.innerText = "⏳ UPLOADING...";
+    btn.disabled = true;
 
     try {
-        // Ensure this string is exactly "REVIEW"
         await update(ref(db, `sop_tasks/${taskKey}`), {
-            status: "REVIEW", 
+            status: "REVIEW",
             imgProof: window.sopCapturedBlob,
             studentRemarks: remarks,
+            barcode: studentBarcode, // <--- SAVE THE BARCODE HERE
             submittedAt: serverTimestamp()
         });
         
-        alert("✅ Task Submitted!");
+        alert("✅ Task Submitted for Admin Audit.");
         window.closeSopExecuteModal();
     } catch (e) {
         alert("❌ Error: " + e.message);
+    } finally {
+        btn.innerText = "SUBMIT FOR REVIEW";
+        btn.disabled = false;
     }
 };
 // --- 6. AUDIT TAB (ADMIN) ---
-window.loadSopAuditTasks = async () => {
+window.loadSopAuditTasks = () => {
     const container = document.getElementById("sopAuditContainer");
-    if (!container) return;
-
-    // We look for tasks that have been uploaded by students ('REVIEW')
     const q = query(ref(db, "sop_tasks"), orderByChild("status"), equalTo("REVIEW"));
 
     onValue(q, (snap) => {
         container.innerHTML = "";
-        if (!snap.exists()) {
-            container.innerHTML = `<p style="text-align:center; padding:20px; color:#666;">No tasks currently pending review.</p>`;
-            return;
-        }
-
         snap.forEach(c => {
             const t = { key: c.key, ...c.val() };
-
             container.innerHTML += `
-            <div id="task_card_${t.key}" style="background:white; border:1px solid #ddd; padding:20px; border-radius:8px; margin-bottom:20px;">
-                <h3 style="margin-top:0;">${t.workTitle}</h3>
-                <p><b>Location:</b> ${t.location}</p>
-                <p><b>Student Notes:</b> ${t.studentRemarks}</p>
+            <div style="background:white; border:1px solid #ddd; padding:20px; border-radius:8px; margin-bottom:20px;">
+                <h3>${t.workTitle}</h3>
+                <div id="status_${t.key}" style="color:red; font-weight:bold;">Status: Pending Admin Verification</div>
                 
                 <div id="proof_area_${t.key}" class="hidden">
-                    <img src="${t.imgProof}" style="width:100%; border:4px solid #10b981; border-radius:8px;">
-                    <div style="margin-top:15px; display:flex; gap:10px;">
-                        <button onclick="window.auditSopTask('${t.key}', 'PASSED')" class="success" style="flex:1;">✅ APPROVE & PURGE IMAGE</button>
-                        <button onclick="window.auditSopTask('${t.key}', 'FAILED')" class="danger" style="flex:1;">❌ REJECT & REDO</button>
-                    </div>
+                    <img src="${t.imgProof}" style="width:100%; border:4px solid green;">
+                    <button onclick="window.auditSopTask('${t.key}', 'PASSED')" class="success">APPROVE & PURGE IMAGE</button>
                 </div>
 
-                <button id="verify_btn_${t.key}" onclick="window.verifyAuditStep('${t.key}')" class="info" style="width:100%; margin-top:10px;">
-                    <i class="fas fa-fingerprint"></i> VERIFY ASSET & MATCH ID
+                <button onclick="window.initAdminVerify('${t.key}', '${t.barcode}')" class="info" style="margin-top:10px;">
+                    <i class="fas fa-qrcode"></i> SCAN PRODUCT TO UNLOCK PHOTO
                 </button>
             </div>`;
         });
     });
 };
-  window.verifyAuditStep = (key) => {
-    // In a real scenario, you could add barcode scanner logic here.
-    // For now, this acts as the "Manual Override/Verify" gate.
-    const isVerified = confirm("Confirm: Asset scanned and matches the database ID?");
-    
-    if (isVerified) {
-        document.getElementById(`proof_area_${key}`).classList.remove("hidden");
-        document.getElementById(`verify_btn_${key}`).classList.add("hidden");
-    }
+
+// Start the scanner mode for the admin
+window.initAdminVerify = (taskKey, targetBarcode) => {
+    window.activeAuditKey = taskKey;
+    window.activeAuditTargetBarcode = targetBarcode;
+    window.scanMode = 'ADMIN_VERIFY';
+    window.openBarcodeScanner('ADMIN_VERIFY');
 };
+  
   // --- 5. CAMERA EXECUTION ---
 window.openSopExecution = (taskKey, title, station) => {
     window.activeSopExecuteKey = taskKey;
@@ -10190,36 +10201,24 @@ window.openSopExecution = (taskKey, title, station) => {
 window.auditSopTask = async (taskKey, decision) => {
     try {
         if (decision === 'PASSED') {
-            // Update status and wipe image proof to null (deletes it from DB)
+            // SETTING imgProof TO NULL DELETES IT FROM FIREBASE
             await update(ref(db, `sop_tasks/${taskKey}`), {
                 status: 'PASSED',
                 imgProof: null, 
-                auditedAt: serverTimestamp(),
-                auditedBy: currentUser.name || "Admin"
+                auditedAt: serverTimestamp()
             });
-            alert("✅ Task Approved. Photo proof purged to save memory.");
-            
-            // Optional: Move to a "History" node or delete the task entirely
-            // await remove(ref(db, `sop_tasks/${taskKey}`)); 
-            
+            alert("✅ Approved. Photo purged from database.");
         } else {
-            // If rejected, keep the image (so student can see it) but change status
             await update(ref(db, `sop_tasks/${taskKey}`), {
                 status: 'FAILED',
-                adminRemarks: prompt("Enter rejection reason:") || "Rejected"
+                adminRemarks: prompt("Rejection Reason:")
             });
-            alert("❌ Task Rejected. Student notified.");
         }
-        
-        // Refresh the audit list
         window.loadSopAuditTasks();
-
     } catch (e) {
-        console.error(e);
-        alert("System Error: " + e.message);
+        alert("Error: " + e.message);
     }
 };
-
 // --- 7. LIVE STATUS GRID ---
 window.loadSopLiveGrid = () => {
     const container = document.getElementById("sopLiveGridContainer");
