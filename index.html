@@ -10097,31 +10097,43 @@ window.captureSopPhoto = () => {
         window.sopLocalStream.getTracks().forEach(track => track.stop());
     }
 };
-
 window.submitSopTaskReview = async () => {
-    if(!window.activeSopExecuteKey || !window.sopCapturedBlob) {
-        return alert("Please capture photo proof first.");
-    }
-    
+    // 1. Capture the globally stored key
+    const taskKey = window.activeSopExecuteKey;
     const remarks = document.getElementById("execTaskRemarks").value.trim();
-    if(!remarks) return alert("Please provide field remarks.");
-
     const btn = document.getElementById("btnUploadSopProof");
+
+    // 2. Validation
+    if (!taskKey) {
+        return alert("⚠️ ERROR: No Active Task found. Please open the task again.");
+    }
+    if (!window.sopCapturedBlob) {
+        return alert("⚠️ No photo captured! Please take a picture first.");
+    }
+    if (!remarks) {
+        return alert("Please enter Field Remarks.");
+    }
+
     btn.innerText = "⏳ UPLOADING...";
     btn.disabled = true;
 
     try {
-        await update(ref(db, `sop_tasks/${window.activeSopExecuteKey}`), {
+        // 3. Update the specific task node
+        await update(ref(db, `sop_tasks/${taskKey}`), {
             status: "REVIEW",
-            imgProof: window.sopCapturedBlob, // This is now safely defined
+            imgProof: window.sopCapturedBlob,
             studentRemarks: remarks,
             submittedAt: serverTimestamp()
         });
         
+        console.log("Task submitted successfully.");
         alert("✅ Task Submitted for Admin Audit.");
+        
+        // 4. Reset Modal
         window.closeSopExecuteModal();
-    } catch(e) {
-        alert("Upload Error: " + e.message);
+    } catch (e) {
+        console.error("Upload Error:", e);
+        alert("❌ Upload Failed: " + e.message);
         btn.innerText = "SUBMIT FOR REVIEW";
         btn.disabled = false;
     }
@@ -10189,38 +10201,56 @@ snap.forEach(c => {
 });
     });
 };
+  // --- 5. CAMERA EXECUTION ---
+window.openSopExecution = (taskKey, title, station) => {
+    window.activeSopExecuteKey = taskKey;
+    document.getElementById("execTaskTitle").innerText = title;
+    document.getElementById("execTaskStation").innerText = "📍 " + station;
+    document.getElementById("execTaskRemarks").value = "";
+    
+    // Reset Image Proof
+    window.sopCapturedBlob = null; 
+    const preview = document.getElementById("sopEvidencePreview");
+    if(preview) { preview.src = ""; preview.style.display = "none"; }
+    
+    document.getElementById("sopVideoWrapper").style.display = "block";
+    document.getElementById("btnStartSopCam").classList.remove("hidden");
+    document.getElementById("btnUploadSopProof").classList.add("hidden");
+    document.getElementById("btnRetrySopProof").classList.add("hidden");
 
+    document.getElementById("sopTaskExecuteModal").classList.remove("hidden");
+};
 window.auditSopTask = async (taskKey, decision) => {
-    let adminNotes = "Task Approved. Good job.";
+    // decision will be 'PASSED' or 'FAILED'
+    let adminNotes = decision === 'PASSED' ? "Task Approved." : "";
+
     if (decision === 'FAILED') {
         adminNotes = prompt("Enter Rejection Reason (Required):");
         if (!adminNotes) return;
-    } else {
-        const optNote = prompt("Optional Remarks (Leave blank for default):");
-        if(optNote) adminNotes = optNote;
     }
 
     try {
-        const updatePayload = {
-            status: decision,
-            adminRemarks: adminNotes,
-            auditedAt: serverTimestamp(),
-            auditedBy: currentUser.name || currentUser.email
-        };
-
-        // 🚀 CRITICAL NEW FEATURE: WIPES IMAGE ON APPROVAL
         if (decision === 'PASSED') {
-            updatePayload.imgProof = null; // Removing image saves MBs of DB space immediately
-        }
-
-        await update(ref(db, `sop_tasks/${taskKey}`), updatePayload);
-        
-        if (decision === 'PASSED') {
-            alert("✅ Task Approved! The image proof has been permanently deleted from the database to conserve memory.");
+            // 🚀 CRITICAL: This removes the task from the database entirely
+            await remove(ref(db, `sop_tasks/${taskKey}`));
+            alert("✅ Task Approved & Removed from Database.");
         } else {
+            // If failed, just update status so the student can see the feedback
+            await update(ref(db, `sop_tasks/${taskKey}`), {
+                status: 'FAILED',
+                adminRemarks: adminNotes,
+                auditedAt: serverTimestamp()
+            });
             alert("❌ Task Rejected. Assigned student has been notified.");
         }
-    } catch(e) { alert("Audit Error: " + e.message); }
+        
+        // Refresh the Audit Grid
+        window.loadSopAuditTasks();
+        
+    } catch(e) {
+        console.error("Audit Error:", e);
+        alert("Audit Error: " + e.message);
+    }
 };
 
 // --- 7. LIVE STATUS GRID ---
@@ -10506,24 +10536,6 @@ window.loadSopLiveGrid = () => {
         <div id="triAngleProofContainer"></div>
     </div>
 </div>
-  // --- 5. CAMERA EXECUTION ---
-window.openSopExecution = (taskKey, title, station) => {
-    window.activeSopExecuteKey = taskKey;
-    document.getElementById("execTaskTitle").innerText = title;
-    document.getElementById("execTaskStation").innerText = "📍 " + station;
-    document.getElementById("execTaskRemarks").value = "";
-    
-    // Reset Image Proof
-    window.sopCapturedBlob = null; 
-    const preview = document.getElementById("sopEvidencePreview");
-    if(preview) { preview.src = ""; preview.style.display = "none"; }
-    
-    document.getElementById("sopVideoWrapper").style.display = "block";
-    document.getElementById("btnStartSopCam").classList.remove("hidden");
-    document.getElementById("btnUploadSopProof").classList.add("hidden");
-    document.getElementById("btnRetrySopProof").classList.add("hidden");
 
-    document.getElementById("sopTaskExecuteModal").classList.remove("hidden");
-};
 </body>
 </html>
