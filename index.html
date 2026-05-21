@@ -3658,75 +3658,50 @@ async function processUpload(dataBase64, fileType, fileName) {
     await push(ref(db, "history"), uploadData);
 }
 onAuthStateChanged(auth, (user) => {
-    if (!user) { 
-        // Use a safe check here too
-        const loginSec = document.getElementById("loginSection");
-        if (loginSec) loginSec.classList.remove("hidden");
-        return; 
+    if (!user) {
+        showLoginScreen();
+        return;
     }
 
     currentUser = user;
-    startPresenceSystem(user);  
+    startPresenceSystem(user);
 
     const userRef = ref(db, `users/${user.uid}`);
-    
+
     onValue(userRef, (snap) => {
         const u = snap.val();
 
-        // --- THE FIX: Create a helper to prevent "null" crashes ---
-        const updateClass = (id, action, className) => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.classList[action](className);
-            } else {
-                console.warn(`SafeUI: Element #${id} not found. Skipping.`);
-            }
-        };
-
-        // 1. New User Detection
-        if (!u || !u.name) {
-            updateClass("loginSection", "add", "hidden");
-            updateClass("appScreen", "add", "hidden");
-            updateClass("nameModal", "remove", "hidden");
-            return; 
+        // THE FIX: If data is null (syncing), exit immediately.
+        if (!u) {
+            console.warn("Waiting for user profile data...");
+            return;
         }
 
-        // 2. Security Checks
-        if (u.terminated) { 
-            alert("ACCOUNT TERMINATED."); 
-            signOut(auth); 
-            return; 
-        }
+        // Safe replacement logic: convert to string first, then replace.
+        const safeName = (u.name || u.email || "Unknown").toString().replace(/[.#$\[\]]/g, "").trim();
 
-        if (u.banned) {
-            updateClass("header", "add", "hidden");
-            updateClass("appScreen", "add", "hidden");
-            updateClass("faceModal", "add", "hidden");
-            updateClass("bannedScreen", "remove", "hidden");
-            
-            const reasonDisplay = document.getElementById("displayBanReason");
-            if (reasonDisplay) reasonDisplay.innerText = u.banReason || "Security Protocol Violation";
-            return; 
-        }
-
-        // 3. Silent Data Sync
-        currentUser.name = u.name;
-        isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
-        
         const userInfoDisplay = document.getElementById("userInfo");
-        if (userInfoDisplay) userInfoDisplay.innerText = `${u.name}`;
+        if (userInfoDisplay) userInfoDisplay.innerText = safeName;
 
-        if (isAdmin) {
-            updateClass("adminBadge", "remove", "hidden");
-            updateClass("btnAdmin", "remove", "hidden");
+        if (u.terminated) {
+            alert("ACCOUNT TERMINATED.");
+            signOut(auth);
+            return;
+        }
+        
+        if (u.banned) {
+            document.querySelector("header").style.display = "none";
+            document.getElementById("bannedScreen")?.classList.remove("hidden");
+            return;
         }
 
-        // CRITICAL: No Face Modal logic here. 
-        // It must only be triggered by the login() button success.
-        
+        isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
+        if (isAdmin) {
+            document.getElementById("adminBadge")?.classList.remove("hidden");
+            document.getElementById("btnAdmin")?.classList.remove("hidden");
+        }
     }, (error) => {
         console.error("Database sync failed:", error);
-        signOut(auth);
     });
 });
    // ==========================================
@@ -3925,7 +3900,7 @@ let presenceInterval = null;
 function startPresenceSystem(user) {
     if (!user || !user.uid) return;
 
-    // Sanity Check: Ensure UID is safe
+    // Sanity Check: Ensure UID is safe for Firebase paths
     if (user.uid.includes(".") || user.uid.includes("#") || user.uid.includes("$")) {
         console.error("CRITICAL: Invalid UID detected. Presence system aborted.");
         return;
@@ -3936,7 +3911,7 @@ function startPresenceSystem(user) {
 
     onValue(connectedRef, (snap) => {
         if (snap.val() === true) {
-            // SAFE ACCESS: Use the passed 'user' object and safely stringify
+            // THE FIX: Use the 'user' object passed in, and ensure it's a string before .replace()
             const rawName = user.displayName || user.email || "Unknown User";
             const safeName = rawName.toString().replace(/[.#$\[\]]/g, "").trim();
 
