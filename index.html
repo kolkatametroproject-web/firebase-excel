@@ -3922,12 +3922,10 @@ window.selectBanDuration = (days, btn) => {
 // 4. ROBUST PRESENCE SYSTEM (Fixed)
 // ==========================================
 let presenceInterval = null; 
-
-// Replace your existing startPresenceSystem function with this:
 function startPresenceSystem(user) {
     if (!user || !user.uid) return;
 
-    // Sanity Check: Ensure UID is safe for Firebase keys
+    // Sanity Check: Ensure UID is safe
     if (user.uid.includes(".") || user.uid.includes("#") || user.uid.includes("$")) {
         console.error("CRITICAL: Invalid UID detected. Presence system aborted.");
         return;
@@ -3938,9 +3936,7 @@ function startPresenceSystem(user) {
 
     onValue(connectedRef, (snap) => {
         if (snap.val() === true) {
-            
-            // FIX: Use the 'user' object directly (which is passed into this function)
-            // Fallback to email if display name isn't set, ensuring it's always a valid string
+            // SAFE ACCESS: Use the passed 'user' object and safely stringify
             const rawName = user.displayName || user.email || "Unknown User";
             const safeName = rawName.toString().replace(/[.#$\[\]]/g, "").trim();
 
@@ -5911,35 +5907,43 @@ window.deleteUserTask = (uid, taskKey) => {
 // 2. CRASH-PROOF AUTH LISTENER (GENERIC ONBOARDING)
 // ==========================================
 onAuthStateChanged(auth, (user) => {
-    if (!user) { 
-        showLoginScreen(); 
-        return; 
+    if (!user) {
+        showLoginScreen();
+        return;
     }
+
     currentUser = user;
-    startPresenceSystem(user);  
+    startPresenceSystem(user);
 
     const userRef = ref(db, `users/${user.uid}`);
-    
+
     onValue(userRef, (snap) => {
         const u = snap.val();
-        
-        // 1. SAFE CHECK: Stop if user data is missing
+
+        // --- THE CRITICAL FIX ---
+        // If data is null/undefined, stop immediately and return.
         if (!u) {
             console.warn("User data not loaded yet.");
-            return; 
+            return;
         }
 
-        // 2. SAFE NAME PARSING:
-        const safeName = (u && u.name) ? u.name.toString().replace(/[.#$\[\]]/g, "").trim() : "Unknown";
-        
+        // Now that we confirmed 'u' exists, we can safely work with it.
+        // Convert to string first to prevent .replace() errors.
+        const safeName = (u.name || u.email || "Unknown").toString().replace(/[.#$\[\]]/g, "").trim();
+
         const userInfoDisplay = document.getElementById("userInfo");
         if (userInfoDisplay) userInfoDisplay.innerText = safeName;
 
-        if (u.terminated) { signOut(auth); return; }
+        if (u.terminated) {
+            alert("ACCOUNT TERMINATED.");
+            signOut(auth);
+            return;
+        }
+        
         if (u.banned) {
             document.querySelector("header").style.display = "none";
             document.getElementById("bannedScreen")?.classList.remove("hidden");
-            return; 
+            return;
         }
 
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
