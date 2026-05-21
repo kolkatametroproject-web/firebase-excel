@@ -2195,37 +2195,33 @@ tr:hover { background: #fcfcfd; }
         </div>
 
         <!-- CAMERA/UPLOAD MODAL FOR EXECUTING TASK -->
-        <div id="sopTaskExecuteModal" class="modal-overlay hidden" style="z-index: 3000;">
-          <div class="panel" style="width: 500px; max-width: 95%; background: white;">
-    <h3 id="execTaskTitle">TASK</h3>
-    <p id="execTaskStation" style="font-weight:bold; color:var(--metro-red);"></p>
+        <div id="sopTaskExecuteModal" class="modal-overlay hidden">
+    <div class="panel" style="width: 500px; max-width: 95%; background: white; padding: 20px;">
+        <h3 id="execTaskTitle">TASK</h3>
+        <p id="execTaskStation" style="font-weight:bold; color:var(--metro-red);"></p>
 
-    <div id="sopVideoWrapper" style="background:black; width:100%; height:200px; border-radius:8px; overflow:hidden; position:relative; display:none;">
-        <video id="sopEvidenceVideo" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
-    </div>
-    
-    <img id="sopEvidencePreview" style="display:none; width:100%; height:200px; object-fit:cover; border-radius:8px; border:4px solid #10b981;">
+        <div id="step1-camera">
+            <div id="sopVideoWrapper" style="background:black; width:100%; height:200px; border-radius:8px; overflow:hidden; position:relative;">
+                <video id="sopEvidenceVideo" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+                <button onclick="captureSopPhoto()" class="warning" style="position:absolute; bottom:10px; left:50%; transform:translateX(-50%);">📸 CAPTURE</button>
+            </div>
+            <img id="sopEvidencePreview" style="display:none; width:100%; height:200px; object-fit:cover; border-radius:8px; border:4px solid #10b981;">
+        </div>
 
-    <div id="sopProofControls" style="margin-top:15px; text-align:center;">
-        <button id="btnStartSopCam" onclick="openSopCamera()" class="info" style="width:100%;">
-            <i class="fas fa-video"></i> OPEN CAMERA
-        </button>
-        <button onclick="captureSopPhoto()" id="btnCaptureSop" class="warning hidden" style="width:100%; margin-top:10px;">
-            <i class="fas fa-camera"></i> CAPTURE PHOTO
-        </button>
-    </div>
-    <div id="sopScanArea" class="hidden" style="background:#f1f5f9; padding:15px; border-radius:8px; margin-top:15px;">
-        <label style="font-weight:bold; font-size:12px;">ASSET BARCODE:</label>
-        <div style="display:flex; gap:10px;">
-            <input id="sopScanInput" placeholder="Scan Barcode..." readonly style="flex:1; border:2px solid #ccc;">
-            <button onclick="openBarcodeScanner('SOP_EXECUTION')" class="info"><i class="fas fa-qrcode"></i></button>
+        <div id="step2-scanner" class="hidden" style="margin-top:20px;">
+            <label style="font-weight:bold; font-size:12px;">STEP 2: SCAN BARCODE</label>
+            <div style="display:flex; gap:10px; margin-bottom:15px;">
+                <input id="sopScanInput" placeholder="Scan Barcode..." readonly style="flex:1; border:2px solid #ccc;">
+                <button onclick="openBarcodeScanner('SOP_EXECUTION')" class="info"><i class="fas fa-qrcode"></i></button>
+            </div>
+        </div>
+
+        <div id="step3-submit" class="hidden">
+            <input id="execTaskRemarks" placeholder="Field Remarks..." style="margin-bottom:15px;">
+            <button onclick="submitSopTaskReview()" class="success" style="width:100%;">SUBMIT TASK</button>
         </div>
     </div>
-
-    <input id="execTaskRemarks" placeholder="Field Remarks..." style="margin:15px 0;">
-    <button id="btnUploadSopProof" onclick="submitSopTaskReview()" class="success hidden" style="width:100%;">SUBMIT FOR REVIEW</button>
 </div>
-    </div>
 
     <!-- 3. REVIEW & AUDIT TAB (ADMIN ONLY) -->
     <div id="sop-sub-audit" class="sop-sub-panel hidden">
@@ -10040,17 +10036,15 @@ window.captureSopPhoto = () => {
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
     
-    // Quality 0.3 is critical to prevent the "Uploading..." hang
+    // Quality 0.3 to prevent database hang
     window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.3);
     
     document.getElementById("sopEvidencePreview").src = window.sopCapturedBlob;
     document.getElementById("sopEvidencePreview").style.display = "block";
     document.getElementById("sopVideoWrapper").style.display = "none";
     
-    // Unlock the scanner and submit button
-    document.getElementById("sopScanArea").classList.remove("hidden");
-    document.getElementById("btnUploadSopProof").classList.remove("hidden");
-
+    // Reveal Scanner Step
+    document.getElementById("step2-scanner").classList.remove("hidden");
     if(window.sopLocalStream) window.sopLocalStream.getTracks().forEach(t => t.stop());
 };
 window.submitSopTaskReview = async () => {
@@ -10186,16 +10180,8 @@ window.captureSopPhoto = () => {
 // D. Final Submit
 window.submitSopTaskReview = async () => {
     const taskKey = window.activeSopExecuteKey;
-    const remarks = document.getElementById("execTaskRemarks")?.value.trim();
-    const barcode = document.getElementById("sopScanInput")?.value.trim();
-    const btn = document.getElementById("btnUploadSopProof");
-
-    if (!window.sopCapturedBlob) return alert("⚠️ Please capture a photo first.");
-    if (!barcode) return alert("⚠️ Please scan the product barcode first.");
-    if (!remarks) return alert("⚠️ Please enter Field Remarks.");
-
-    btn.innerText = "⏳ UPLOADING...";
-    btn.disabled = true;
+    const barcode = window.currentStudentBarcode;
+    const remarks = document.getElementById("execTaskRemarks").value;
 
     try {
         await update(ref(db, `sop_tasks/${taskKey}`), {
@@ -10205,15 +10191,9 @@ window.submitSopTaskReview = async () => {
             studentRemarks: remarks,
             submittedAt: serverTimestamp()
         });
-        
-        alert("✅ Task Submitted for Admin Audit.");
+        alert("✅ Task Submitted!");
         window.closeSopExecuteModal();
-    } catch (e) {
-        console.error("Upload Error:", e);
-        alert("Upload Failed: " + e.message);
-        btn.innerText = "SUBMIT FOR REVIEW";
-        btn.disabled = false;
-    }
+    } catch(e) { alert("Error: " + e.message); }
 };
 window.auditSopTask = async (taskKey, decision) => {
     try {
