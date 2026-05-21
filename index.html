@@ -5911,56 +5911,39 @@ onAuthStateChanged(auth, (user) => {
         showLoginScreen(); 
         return; 
     }
-
     currentUser = user;
     startPresenceSystem(user);  
 
     const userRef = ref(db, `users/${user.uid}`);
-    
-    // Use 'onValue' safely
     onValue(userRef, (snap) => {
         const u = snap.val();
-
-        // 1. SAFE DATA CHECK: If u is null, we can't do anything
-        if (!u) {
-            // If there's no data, treat as a first-time user and show Name Modal
-            document.getElementById("loginSection").classList.add("hidden");
-            document.getElementById("appScreen").classList.add("hidden");
-            document.getElementById("nameModal").classList.remove("hidden");
+        
+        // SAFE CHECK: If user record is missing, go to profile setup
+        if (!u || !u.name) {
+            document.getElementById("loginSection")?.classList.add("hidden");
+            document.getElementById("appScreen")?.classList.add("hidden");
+            document.getElementById("nameModal")?.classList.remove("hidden");
             return; 
         }
 
-        // 2. SAFE NAME PARSING: Use a fallback if u.name is undefined
-        const safeName = (u.name) ? u.name.replace(/[.#$\[\]]/g, "").trim() : "Unknown User";
+        // SAFE NAME PARSING: Check existence before replace
+        const safeName = (u && u.name) ? u.name.replace(/[.#$\[\]]/g, "").trim() : "Unknown";
         
-        // 3. Update the UI only if elements exist
         const userInfoDisplay = document.getElementById("userInfo");
         if (userInfoDisplay) userInfoDisplay.innerText = safeName;
 
-        // 4. Handle Account Status safely
-        if (u.terminated) { 
-            alert("ACCOUNT TERMINATED."); 
-            signOut(auth); 
-            return; 
-        }
-
+        if (u.terminated) { signOut(auth); return; }
         if (u.banned) {
-            // Handle Ban Screen UI
             document.querySelector("header").style.display = "none";
-            document.getElementById("appScreen").classList.add("hidden");
-            document.getElementById("bannedScreen").classList.remove("hidden");
+            document.getElementById("bannedScreen")?.classList.remove("hidden");
             return; 
         }
 
-        // 5. Admin Rights Check
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
         if (isAdmin) {
             document.getElementById("adminBadge")?.classList.remove("hidden");
             document.getElementById("btnAdmin")?.classList.remove("hidden");
         }
-
-    }, (error) => {
-        console.error("Database sync failed:", error);
     });
 });
 window.removeFile = async (key) => {
@@ -9877,17 +9860,12 @@ const SOP_GUIDE_BOOK = {
 
 // --- GLOBAL TASK DELETION FUNCTION ---
 window.deleteSopTask = async (taskKey) => {
-    if(!confirm("⚠️ PERMANENTLY DELETE this task assignment? It will be removed from the database and the student's terminal.")) return;
-    try {
-        await remove(ref(db, `sop_tasks/${taskKey}`));
-        alert("✅ Task Deleted.");
-        // Auto-refresh the currently open view
-        if(!document.getElementById("sop-sub-dispatch").classList.contains("hidden")) window.loadSopTaskGrid();
-        if(!document.getElementById("sop-sub-audit").classList.contains("hidden")) window.loadSopAuditTasks();
-        if(!document.getElementById("sop-sub-status").classList.contains("hidden")) window.loadSopLiveGrid();
-    } catch(e) {
-        alert("Error deleting task: " + e.message);
-    }
+    if(!confirm("⚠️ PERMANENTLY DELETE this task assignment?")) return;
+    await remove(ref(db, `sop_tasks/${taskKey}`));
+    alert("✅ Task Deleted.");
+    window.loadSopTaskGrid();
+    window.loadSopAuditTasks();
+    window.loadSopLiveGrid();
 };
 
 // --- 2. INITIALIZE & TAB ROUTING ---
@@ -10017,46 +9995,26 @@ window.loadSopTaskGrid = async () => {
     }
 };
 
-window.assignSingleSopTask = async (locationFullName, workCode) => {
+window.assignSingleSopTask = async (stn, line, workCode) => {
+    const plat = document.getElementById("sopPlatformSelect").value;
+    const locationFullName = `${stn} (${line}) - ${plat}`; // Combined Station/Platform
     const sel = document.getElementById(`assign_user_${workCode}`);
     const uid = sel.value;
-    const uName = sel.options[sel.selectedIndex].text;
-
-    if(!uid) return alert("Please select an Incharge Name (Student) to assign.");
-
-    const taskDef = SOP_GUIDE_BOOK[workCode];
-    const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
-    const snap = await get(q);
-    
-    let existingKey = null;
-    if(snap.exists()) {
-        snap.forEach(c => {
-            if(c.val().workCode === workCode) existingKey = c.key;
-        });
-    }
+    if(!uid) return alert("Select Incharge!");
 
     const payload = {
+        station: `${stn} (${line})`,
         location: locationFullName,
         workCode: workCode,
-        workTitle: taskDef.title,
+        workTitle: SOP_GUIDE_BOOK[workCode].title,
         assignedToUid: uid,
-        assignedToName: uName,
-        assignedBy: currentUser.name || currentUser.email,
-        status: "WORKING",
-        timestamp: serverTimestamp()
+        assignedToName: sel.options[sel.selectedIndex].text,
+        status: "WORKING"
     };
 
-    try {
-        if(existingKey) {
-            await update(ref(db, `sop_tasks/${existingKey}`), payload);
-        } else {
-            await push(ref(db, "sop_tasks"), payload);
-        }
-        alert(`✅ Task Assigned to ${uName} for ${locationFullName}`);
-        window.loadSopTaskGrid();
-    } catch(e) { alert("Error: " + e.message); }
+    await push(ref(db, "sop_tasks"), payload);
+    alert("✅ Task Assigned to " + locationFullName);
 };
-
 // --- 4. MY WORK TAB (STUDENT) ---
 window.loadMySopTasks = () => {
     const container = document.getElementById("mySopTasksContainer");
