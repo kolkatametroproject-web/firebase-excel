@@ -3669,18 +3669,22 @@ onAuthStateChanged(auth, (user) => {
     const userRef = ref(db, `users/${user.uid}`);
 
     onValue(userRef, (snap) => {
-        // --- THE CRITICAL FIX ---
-        // If data is null or undefined (happens during sync), exit immediately.
-        if (!snap.exists()) {
-            console.warn("User data syncing...");
+        const u = snap.val();
+
+        // 1. Bulletproof check for existence
+        if (!u) {
+            console.warn("Database sync in progress, skipping UI update...");
             return;
         }
 
-        const u = snap.val();
-
-        // Ensure we are working with a string, preventing .replace() from crashing
-        const rawName = u.name || u.email || "Unknown";
-        const safeName = String(rawName).replace(/[.#$\[\]]/g, "").trim();
+        // 2. Safe Parsing: Force to string and handle nulls inside the replace logic
+        let safeName = "Unknown";
+        try {
+            const rawValue = u.name || u.email || "Unknown";
+            safeName = String(rawValue).replace(/[.#$\[\]]/g, "").trim();
+        } catch (e) {
+            console.error("Name parsing error:", e);
+        }
 
         const userInfoDisplay = document.getElementById("userInfo");
         if (userInfoDisplay) userInfoDisplay.innerText = safeName;
@@ -3902,20 +3906,14 @@ let presenceInterval = null;
 function startPresenceSystem(user) {
     if (!user || !user.uid) return;
 
-    // Sanity Check: Ensure UID is safe
-    if (user.uid.includes(".") || user.uid.includes("#") || user.uid.includes("$")) {
-        console.error("CRITICAL: Invalid UID detected.");
-        return;
-    }
-
     const userStatusRef = ref(db, `status/${user.uid}`);
     const connectedRef = ref(db, ".info/connected");
 
     onValue(connectedRef, (snap) => {
         if (snap.val() === true) {
-            // SAFE ACCESS: Use the passed 'user' object and stringify safely
-            const rawName = user.displayName || user.email || "Unknown User";
-            const safeName = String(rawName).replace(/[.#$\[\]]/g, "").trim();
+            // SAFE ACCESS: Explicitly force string and sanitize
+            const rawVal = user.displayName || user.email || "Unknown User";
+            const safeName = String(rawVal).replace(/[.#$\[\]]/g, "").trim();
 
             onDisconnect(userStatusRef).set({
                 state: 'offline',
