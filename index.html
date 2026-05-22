@@ -9724,6 +9724,57 @@ window.dispatchSCADACommand = () => {
         document.getElementById("commandTerminal").value = "";
     }
 };
+  // Assign a specific task to a specific user
+window.assignSingleSopTask = async (location, code) => {
+    const sel = document.getElementById(`user_${code}`);
+    if (!sel || !sel.value) return alert("Select Personnel first.");
+
+    try {
+        const payload = {
+            location: location,
+            workCode: code,
+            workTitle: SOP_GUIDE_BOOK[code].title,
+            assignedToUid: sel.value,
+            assignedToName: sel.options[sel.selectedIndex].text,
+            assignedBy: currentUser.email,
+            status: "WORKING", // Initial state
+            timestamp: serverTimestamp()
+        };
+        
+        await push(ref(db, "sop_tasks"), payload);
+        alert(`✅ Task '${SOP_GUIDE_BOOK[code].title}' assigned to ${sel.options[sel.selectedIndex].text}`);
+        window.loadSopTaskGrid();
+    } catch(e) { 
+        alert("Assignment Error: " + e.message); 
+    }
+};
+  window.loadSopAuditTasks = async () => {
+    const container = document.getElementById("sopAuditContainer");
+    if (!container) return;
+
+    onValue(ref(db, "sop_tasks"), (snap) => {
+        container.innerHTML = "";
+        snap.forEach(c => {
+            const t = {key: c.key, ...c.val()};
+            // Only show tasks that are ready for Audit/Verification
+            if (t.status === 'REVIEW') {
+                container.innerHTML += `
+                    <div class="panel" style="border:1px solid #10b981;">
+                        <h5>${t.workTitle}</h5>
+                        <p><small>Assigned to: ${t.assignedToName}</small></p>
+                        <button onclick="window.verifyTask('${t.key}', 'PASSED')" class="success">APPROVE</button>
+                        <button onclick="window.verifyTask('${t.key}', 'FAILED')" class="danger">REJECT</button>
+                    </div>`;
+            }
+        });
+    });
+};
+
+window.verifyTask = async (key, decision) => {
+    await update(ref(db, `sop_tasks/${key}`), { status: decision });
+    alert(`Task status updated to: ${decision}`);
+    window.loadSopAuditTasks();
+};
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
