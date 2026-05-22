@@ -9716,18 +9716,10 @@ window.generateDirectivePrint = async function() {
     reportContainer.classList.remove("hidden");
 };
 // =========================================================
-// 🚀 MRPSP SOP ENGINE V3: FIXES, DELETE, 14-STEPS & WIPING
+// 🚀 MRPSP SOP ENGINE V3: CONSOLIDATED & STABLE
 // =========================================================
-window.safeReplace = (input) => {
-    if (input === null || input === undefined) return "";
-    return String(input).replace(/[.#$\[\]]/g, "").trim();
-};
-// --- GLOBAL VARIABLES (FIXES REFERENCE ERROR) ---
-window.sopLocalStream = null;
-window.sopCapturedBlob = null;
-window.activeSopExecuteKey = null;
 
-// --- 1. NEW 14-STEP MASTER LIBRARY ---
+// --- 1. CONFIG & MASTER LIBRARY ---
 const SOP_GUIDE_BOOK = {
     "TASK_01": { title: "1. IR Sensor TX", instr: "Transmitter - Power supply, clamping." },
     "TASK_02": { title: "2. IR Sensor RX", instr: "Receiver - Power supply, clamping, code wire fixing." },
@@ -9745,24 +9737,10 @@ const SOP_GUIDE_BOOK = {
     "TASK_14": { title: "14. Final Checking", instr: "Siren calibration, system stress test, and verification." }
 };
 
-// --- GLOBAL TASK DELETION FUNCTION ---
-window.deleteSopTask = async (taskKey) => {
-    if(!confirm("⚠️ PERMANENTLY DELETE this task assignment?")) return;
-    await remove(ref(db, `sop_tasks/${taskKey}`));
-    alert("✅ Task Deleted.");
-    window.loadSopTaskGrid();
-    window.loadSopAuditTasks();
-    window.loadSopLiveGrid();
-};
-
-// --- 2. INITIALIZE & TAB ROUTING ---
+// --- 2. INITIALIZATION & UI CONTROL ---
 window.initSopModule = async () => {
-    if (isAdmin) {
-        document.getElementById("btnSopSubDispatch").style.display = "block";
-        document.getElementById("btnSopSubAudit").style.display = "block";
-    }
-
-    switchSopSubTab(isAdmin ? 'status' : 'mywork');
+    window.initSopVisibility();
+    window.switchSopSubTab(isAdmin ? 'status' : 'mywork');
 
     const lineSel = document.getElementById("sopLineSelect");
     if (lineSel && lineSel.options.length <= 1) {
@@ -9775,68 +9753,44 @@ window.initSopModule = async () => {
 };
 
 window.switchSopSubTab = (tab) => {
-    // 1. Hide all panels
     document.querySelectorAll('.sop-sub-panel').forEach(p => p.classList.add('hidden'));
-    
-    // 2. Show the target panel
     const target = document.getElementById(`sop-sub-${tab}`);
     if (target) {
         target.classList.remove('hidden');
-        // 3. Delay triggers to ensure DOM elements exist before reading values
+        // Use a timeout to ensure elements are rendered before running loaders
         setTimeout(() => {
             if (tab === 'audit') window.loadSopAuditTasks();
             else if (tab === 'dispatch') window.loadSopTaskGrid();
             else if (tab === 'mywork') window.loadMySopTasks();
             else if (tab === 'status') window.loadSopLiveGrid();
-        }, 150);
+        }, 100);
     }
 };
 
-window.handleSopLineChange = () => {
-    const line = document.getElementById("sopLineSelect").value;
-    const stnSel = document.getElementById("sopStationSelect");
-    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
-    if (line && METRO_STATIONS[line]) {
-        METRO_STATIONS[line].forEach(stn => stnSel.innerHTML += `<option value="${stn}">${stn}</option>`);
-        stnSel.disabled = false;
-        stnSel.onchange = window.loadSopTaskGrid;
-    }
-};
-// Run this immediately after login success or when the SOP tab is initialized
 window.initSopVisibility = () => {
     const btnDispatch = document.getElementById("btnSopSubDispatch");
     const btnAudit = document.getElementById("btnSopSubAudit");
-
-    if (isAdmin) {
-        // Show Admin Tabs
-        if(btnDispatch) btnDispatch.style.display = "block";
-        if(btnAudit) btnAudit.style.display = "block";
-    } else {
-        // Force hide Admin Tabs
-        if(btnDispatch) btnDispatch.style.display = "none";
-        if(btnAudit) btnAudit.style.display = "none";
-    }
+    if (btnDispatch) btnDispatch.style.display = (isAdmin) ? "block" : "none";
+    if (btnAudit) btnAudit.style.display = (isAdmin) ? "block" : "none";
 };
+
+// --- 3. THE FIXED GRID LOADER (RETRY LOGIC) ---
 window.loadSopTaskGrid = async (retries = 10) => {
-    // 1. Attempt to find elements
     const lineEl = document.getElementById("sopLineSelect");
     const stnEl = document.getElementById("sopStationSelect");
     const platEl = document.getElementById("sopPlatformSelect");
     const container = document.getElementById("sopTaskAssignmentGrid");
 
-    // 2. SAFETY CHECK: If elements don't exist yet, wait 200ms and try again
-    // This solves the 'null' error caused by the browser rendering too slowly
     if (!lineEl || !stnEl || !platEl || !container) {
         if (retries > 0) {
             setTimeout(() => window.loadSopTaskGrid(retries - 1), 200);
             return;
         } else {
-            console.error("Critical Failure: SOP UI elements missing after retries.");
+            console.error("Critical Failure: SOP UI elements missing.");
             return;
         }
     }
 
-    // 3. Elements exist, proceed with logic
     const line = lineEl.value;
     const stn = stnEl.value;
     const plat = platEl.value;
@@ -9847,15 +9801,13 @@ window.loadSopTaskGrid = async (retries = 10) => {
     }
 
     const locationFullName = `${stn} (${line}) - ${plat}`;
-    container.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Database...</p>";
+    container.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading...</p>";
 
     try {
         const userSnap = await get(ref(db, "users"));
         let userOptions = `<option value="">-- Select Personnel --</option>`;
         userSnap.forEach(u => {
-            if(!u.val().banned) {
-                userOptions += `<option value="${u.key}">${(u.val().name || u.val().email).toUpperCase()}</option>`;
-            }
+            if(!u.val().banned) userOptions += `<option value="${u.key}">${(u.val().name || u.val().email).toUpperCase()}</option>`;
         });
 
         const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
@@ -9866,421 +9818,58 @@ window.loadSopTaskGrid = async (retries = 10) => {
         }
 
         container.innerHTML = "";
-        
         Object.keys(SOP_GUIDE_BOOK).forEach(code => {
             const taskDef = SOP_GUIDE_BOOK[code];
             const existing = existingTasks[code];
-            
             let statusBadge = `<span style="background:#e2e8f0; color:#64748b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">UNASSIGNED</span>`;
             let deleteBtnHtml = "";
 
             if(existing) {
                 if(existing.status === 'WORKING') statusBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">WORKING</span>`;
-                if(existing.status === 'REVIEW') statusBadge = `<span style="background:#e0f2fe; color:#0284c7; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">IN REVIEW</span>`;
-                if(existing.status === 'PASSED') statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">PASSED</span>`;
-                if(existing.status === 'FAILED') statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">FAILED</span>`;
-                
-                deleteBtnHtml = `<button onclick="window.deleteSopTask('${existing.key}')" class="danger" style="height:35px; width:35px; border-radius:4px; border:none; cursor:pointer;" title="Delete Assignment"><i class="fas fa-trash"></i></button>`;
+                else if(existing.status === 'REVIEW') statusBadge = `<span style="background:#e0f2fe; color:#0284c7; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">IN REVIEW</span>`;
+                else if(existing.status === 'PASSED') statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">PASSED</span>`;
+                else if(existing.status === 'FAILED') statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">FAILED</span>`;
+                deleteBtnHtml = `<button onclick="window.deleteSopTask('${existing.key}')" class="danger" style="height:35px; width:35px; border-radius:4px; border:none; cursor:pointer;"><i class="fas fa-trash"></i></button>`;
             }
 
             container.innerHTML += `
                 <div style="background:white; border:1px solid #cbd5e1; border-left:5px solid var(--metro-blue); padding:15px; border-radius:6px; display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <div style="width: 45%;">
+                    <div>
                         <div style="font-weight:900; font-size:13px;">${taskDef.title}</div>
                         <div style="font-size:11px; color:#64748b; margin-top:3px;">${taskDef.instr}</div>
                         <div style="margin-top:5px;">${statusBadge}</div>
                     </div>
                     <div style="display:flex; gap:8px; align-items:center;">
-                        <select id="assign_user_${code}" style="width: 160px; font-size:11px; font-weight:bold; height:35px; margin:0;">
-                            ${userOptions}
-                        </select>
-                        <button onclick="window.assignSingleSopTask('${locationFullName}', '${code}')" class="info" style="height:35px; font-size:10px; border:none; border-radius:4px; cursor:pointer;">
-                            <i class="fas fa-paper-plane"></i> ASSIGN
-                        </button>
+                        <select id="assign_user_${code}" style="width: 160px; font-size:11px; font-weight:bold; height:35px;"><option value="">-- Select Personnel --</option>${userOptions}</select>
+                        <button onclick="window.assignSingleSopTask('${locationFullName}', '${code}')" class="info" style="height:35px; font-size:10px; border:none; border-radius:4px; cursor:pointer;">ASSIGN</button>
                         ${deleteBtnHtml}
                     </div>
-                </div>
-            `;
-            
+                </div>`;
             if(existing && existing.assignedToUid) {
                 const sel = document.getElementById(`assign_user_${code}`);
                 if(sel) sel.value = existing.assignedToUid;
             }
         });
-    } catch (e) {
-        container.innerHTML = `<p style="color:red;">Error loading tools: ${e.message}</p>`;
-    }
+    } catch (e) { container.innerHTML = `<p style="color:red;">Error: ${e.message}</p>`; }
 };
-  window.assignSingleSopTask = async (locationFullName, workCode) => {
-    const sel = document.getElementById(`assign_user_${workCode}`);
-    
-    // Safety Guard to prevent TypeError
-    if (!sel) {
-        console.warn("Dropdown not found, ignoring assignment.");
-        return;
-    }
 
-    const uid = sel.value;
-    const uName = sel.options[sel.selectedIndex]?.text || "Unknown";
-
-    if(!uid) return alert("Please select a personnel.");
-
-    const taskDef = SOP_GUIDE_BOOK[workCode];
-    
+// --- 4. DATA OPS ---
+window.assignSingleSopTask = async (location, code) => {
+    const sel = document.getElementById(`assign_user_${code}`);
+    if (!sel || !sel.value) return alert("Select Personnel.");
     try {
-        const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
-        const snap = await get(q);
-        
-        let existingKey = null;
-        snap.forEach(c => { if(c.val().workCode === workCode) existingKey = c.key; });
-
-        const payload = {
-            location: locationFullName,
-            workCode: workCode,
-            workTitle: taskDef.title,
-            assignedToUid: uid,
-            assignedToName: uName,
-            assignedBy: window.currentUser.email,
-            status: "WORKING",
-            timestamp: serverTimestamp()
-        };
-
-        if(existingKey) {
-            await update(ref(db, `sop_tasks/${existingKey}`), payload);
-        } else {
-            await push(ref(db, "sop_tasks"), payload);
-        }
-        alert(`✅ Task Assigned to ${uName}`);
+        const payload = { location, workCode: code, workTitle: SOP_GUIDE_BOOK[code].title, assignedToUid: sel.value, assignedToName: sel.options[sel.selectedIndex].text, assignedBy: currentUser.email, status: "WORKING", timestamp: serverTimestamp() };
+        await push(ref(db, "sop_tasks"), payload);
+        alert("✅ Task Assigned.");
         window.loadSopTaskGrid();
-    } catch(e) { 
-        alert("Assignment Error: " + e.message); 
+    } catch(e) { alert("Assignment Error: " + e.message); }
+};
+
+window.deleteSopTask = async (key) => {
+    if(confirm("Confirm deletion?")) {
+        await remove(ref(db, `sop_tasks/${key}`));
+        window.loadSopTaskGrid();
     }
-};
-// --- 4. MY WORK TAB (STUDENT) ---
-window.loadMySopTasks = () => {
-    const container = document.getElementById("mySopTasksContainer");
-    if(!container) return;
-
-    const q = query(ref(db, "sop_tasks"), orderByChild("assignedToUid"), equalTo(currentUser.uid));
-    
-    onValue(q, (snap) => {
-        container.innerHTML = "";
-        if(!snap.exists()) {
-            container.innerHTML = `<div style="text-align:center; padding:30px;"><h4 style="color:#64748b;">No Active Tasks</h4></div>`;
-            return;
-        }
-
-        snap.forEach(c => {
-            const t = {key: c.key, ...c.val()};
-            if (t.status === 'WORKING' || t.status === 'FAILED') {
-                const isFail = t.status === 'FAILED';
-                container.innerHTML += `
-                    <div style="background:white; border:1px solid #cbd5e1; border-left:6px solid ${isFail ? '#e11d48' : '#f59e0b'}; padding:20px; border-radius:8px;">
-                        <div style="display:flex; justify-content:space-between;">
-                            <div>
-                                <div style="font-size:11px; font-weight:900; color:var(--metro-red);"><i class="fas fa-map-marker-alt"></i> ${t.location}</div>
-                                <h3 style="margin:5px 0; color:var(--metro-blue);">${t.workTitle}</h3>
-                            </div>
-                            ${isFail ? `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; font-size:10px; font-weight:bold;">REDO</span>` : ''}
-                        </div>
-                        <button
-    onclick="openSopExecution('${t.key}','${encodeURIComponent(t.workTitle || "")}','${encodeURIComponent(t.location || "")}')"
-    style="width:100%; margin-top:10px; padding:12px; background:var(--metro-blue); color:white; font-weight:900; border-radius:6px; cursor:pointer;"
->
-    <i class="fas fa-camera"></i>
-    EXECUTE & UPLOAD PICTURE
-</button>
-                    </div>
-                `;
-            }
-        });
-    });
-};
-
-
-
-window.closeSopExecuteModal = () => {
-    document.getElementById("sopTaskExecuteModal").classList.add("hidden");
-    window.activeSopExecuteKey = null;
-    if(window.sopLocalStream) window.sopLocalStream.getTracks().forEach(t => t.stop());
-};
-window.openSopCamera = async () => {
-    const video = document.getElementById("sopEvidenceVideo");
-    try {
-        window.sopLocalStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        video.srcObject = window.sopLocalStream;
-        video.play();
-    } catch(err) { alert("Camera Error: " + err.message); }
-};
-// REPLACE your current captureSopPhoto
-window.captureSopPhoto = () => {
-    const video = document.getElementById("sopEvidenceVideo");
-    const preview = document.getElementById("sopEvidencePreview");
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth; 
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    
-    // Quality 0.2 prevents database from crashing
-    window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.2);
-    
-    preview.src = window.sopCapturedBlob;
-    preview.style.display = "block";
-    document.getElementById("sopVideoWrapper").style.display = "none";
-    document.getElementById("step2-submit").classList.remove("hidden");
-
-    if(window.sopLocalStream) window.sopLocalStream.getTracks().forEach(t => t.stop());
-};
-window.submitSopTaskReview = async () => {
-    const taskKey = window.activeSopExecuteKey;
-    const remarks = document.getElementById("execTaskRemarks").value.trim();
-    const btn = document.getElementById("btnUploadSopProof");
-
-    if (!window.sopCapturedBlob) return alert("⚠️ Please capture photo.");
-    
-    btn.disabled = true;
-    btn.innerText = "⏳ UPLOADING...";
-
-    try {
-        await update(ref(db, `sop_tasks/${taskKey}`), {
-            status: "REVIEW",
-            imgProof: window.sopCapturedBlob,
-            studentRemarks: remarks,
-            submittedAt: serverTimestamp()
-        });
-        alert("✅ Task Submitted for Admin Audit.");
-        document.getElementById("sopTaskExecuteModal").classList.add("hidden");
-    } catch (e) {
-        alert("Upload Error: " + e.message);
-    } finally {
-        btn.disabled = false;
-        btn.innerText = "SUBMIT FOR REVIEW";
-    }
-};
-// --- 6. AUDIT TAB (ADMIN) ---
-window.loadSopAuditTasks = () => {
-    const container = document.getElementById("sopAuditContainer");
-    if (!container) return;
-
-    container.innerHTML = "<p style='text-align:center; padding:20px;'><i class='fas fa-sync fa-spin'></i> Loading Queue...</p>";
-
-    const q = query(ref(db, "sop_tasks"), orderByChild("status"), equalTo("REVIEW"));
-
-    onValue(q, (snap) => {
-        container.innerHTML = "";
-
-        if (!snap.exists()) {
-            container.innerHTML = `
-                <div style="text-align:center; padding:40px; border:2px dashed #cbd5e1; border-radius:8px;">
-                    <h3>All clear!</h3>
-                    <p>No tasks currently awaiting audit.</p>
-                </div>`;
-            return;
-        }
-
-        snap.forEach(c => {
-            const t = { key: c.key, ...c.val() };
-            
-            container.innerHTML += `
-            <div style="background:white; border:1px solid #e2e8f0; padding:20px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                <div style="display:flex; justify-content:space-between;">
-                    <h4 style="margin-top:0; color:var(--metro-blue);">${t.workTitle || "Untitled Task"}</h4>
-                    <small style="color:#64748b;">${new Date(t.submittedAt).toLocaleDateString()}</small>
-                </div>
-                <div style="font-size:12px; margin-bottom:10px;">
-                    <b>Location:</b> ${t.location || "N/A"}<br>
-                    <b>Assigned To:</b> ${t.assignedToName || "Unknown"}
-                </div>
-                <div style="background:#f8fafc; padding:10px; border-radius:4px; margin-bottom:15px; font-size:13px; border-left:3px solid #64748b;">
-                    <b>Student Remarks:</b> ${t.studentRemarks || "No remarks provided."}
-                </div>
-                
-                ${t.imgProof ? 
-                    `<img src="${t.imgProof}" style="width:100%; border:4px solid #10b981; border-radius:8px; margin-bottom:15px; cursor:pointer;" onclick="window.open('${t.imgProof}')">` 
-                    : `<div style="padding:20px; background:#fee2e2; color:#991b1b; text-align:center; margin-bottom:15px;">⚠️ NO IMAGE UPLOADED</div>`
-                }
-                
-                <div style="display:flex; gap:10px;">
-                    <button onclick="window.auditSopTask('${t.key}', 'PASSED')" class="success" style="flex:1; padding:10px; cursor:pointer;">APPROVE</button>
-                    <button onclick="window.auditSopTask('${t.key}', 'FAILED')" class="danger" style="flex:1; padding:10px; cursor:pointer;">REJECT</button>
-                </div>
-            </div>`;
-        });
-    });
-};
-// Start the scanner mode for the admin
-window.initAdminVerify = (taskKey, savedBarcode) => {
-    window.activeAuditKey = taskKey;
-    window.activeAuditTargetBarcode = savedBarcode;
-    window.scanMode = 'ADMIN_VERIFY';
-    window.openBarcodeScanner('ADMIN_VERIFY');
-};
-  
-  // --- 5. CAMERA EXECUTION ---
-// A. When Task Starts
-window.openSopExecution = (taskKey, title, station) => {
-    window.activeSopExecuteKey = taskKey;
-    const modal = document.getElementById("sopTaskExecuteModal");
-    if (!modal) return alert("System Error: Modal UI is missing.");
-    
-    document.getElementById("execTaskTitle").innerText = title;
-    document.getElementById("execTaskStation").innerText = "📍 " + station;
-    
-    // Reset UI
-    document.getElementById("step2-submit").classList.add("hidden");
-    document.getElementById("sopEvidencePreview").style.display = "none";
-    document.getElementById("sopVideoWrapper").style.display = "block";
-    document.getElementById("execTaskRemarks").value = "";
-    
-    modal.classList.remove("hidden");
-    setTimeout(window.openSopCamera, 500); // Start camera automatically
-};
-// B. After Photo Captured
-window.captureSopPhoto = () => {
-    const video = document.getElementById("sopEvidenceVideo");
-    const preview = document.getElementById("sopEvidencePreview");
-    
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth; 
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    
-    // Quality 0.3 prevents database "hanging"
-    window.sopCapturedBlob = canvas.toDataURL('image/jpeg', 0.3);
-    
-    preview.src = window.sopCapturedBlob;
-    preview.style.display = "block";
-    document.getElementById("sopVideoWrapper").style.display = "none";
-    document.getElementById("step2-submit").classList.remove("hidden");
-
-    if(window.sopLocalStream) window.sopLocalStream.getTracks().forEach(t => t.stop());
-};
-window.submitSopTaskReview = async () => {
-    const taskKey = window.activeSopExecuteKey;
-    const remarks = document.getElementById("execTaskRemarks").value.trim();
-    const btn = document.getElementById("btnUploadSopProof");
-
-    if (!window.sopCapturedBlob) return alert("⚠️ Please capture a photo first.");
-    if (!remarks) return alert("⚠️ Please enter Field Remarks.");
-
-    btn.innerText = "⏳ UPLOADING...";
-    btn.disabled = true;
-
-    try {
-        await update(ref(db, `sop_tasks/${taskKey}`), {
-            status: "REVIEW",
-            imgProof: window.sopCapturedBlob,
-            studentRemarks: remarks,
-            submittedAt: serverTimestamp()
-        });
-        alert("✅ Task Submitted for Admin Audit.");
-        window.closeSopExecuteModal();
-    } catch (e) {
-        alert("Upload Error: " + e.message);
-    } finally {
-        btn.innerText = "SUBMIT FOR REVIEW";
-        btn.disabled = false;
-    }
-};
-window.auditSopTask = async (taskKey, decision) => {
-    // SECURITY GUARD: Stop non-admins immediately
-    if (!isAdmin) {
-        alert("⛔ ACCESS DENIED: Audit privileges reserved for System Administrators.");
-        return;
-    }
-
-    try {
-        if (decision === 'PASSED') {
-            await update(ref(db, `sop_tasks/${taskKey}`), {
-                status: 'PASSED',
-                imgProof: null, // Wipe memory
-                auditedAt: serverTimestamp(),
-                auditedBy: currentUser.name || "Admin"
-            });
-            alert("✅ Approved.");
-        } else {
-            const reason = prompt("Enter Rejection Reason:");
-            if (!reason) return;
-            await update(ref(db, `sop_tasks/${taskKey}`), {
-                status: 'FAILED',
-                adminRemarks: reason
-            });
-            alert("❌ Task Rejected.");
-        }
-        window.loadSopAuditTasks();
-    } catch (e) { alert("Audit Error: " + e.message); }
-};
-// --- 7. LIVE STATUS GRID ---
-window.loadSopLiveGrid = () => {
-    const container = document.getElementById("sopLiveGridContainer");
-    if(!container) return;
-
-    onValue(ref(db, "sop_tasks"), (snap) => {
-        container.innerHTML = "";
-        if(!snap.exists()) {
-            container.innerHTML = "<p style='text-align:center;'>No live deployment data.</p>";
-            return;
-        }
-
-        const locations = {};
-        snap.forEach(c => {
-            const t = c.val();
-            if(!t.location) return; // Skip if location is missing
-            if(!locations[t.location]) locations[t.location] = {};
-            locations[t.location][t.workCode] = t;
-        });
-
-        const taskKeys = Object.keys(SOP_GUIDE_BOOK);
-        let tableHTML = `<table style="width:100%; border-collapse: separate; border-spacing: 0 10px;"><tbody>`;
-
-        Object.keys(locations).forEach(locName => {
-            const locTasks = locations[locName];
-            let blocksHTML = "";
-            
-            taskKeys.forEach((key, index) => {
-                const t = locTasks[key];
-                let bgColor = "#e2e8f0"; 
-                if(t) {
-                    if(t.status === 'WORKING') bgColor = "#f59e0b";
-                    else if(t.status === 'REVIEW') bgColor = "#3b82f6";
-                    else if(t.status === 'PASSED') bgColor = "#10b981";
-                    else if(t.status === 'FAILED') bgColor = "#e11d48";
-                }
-
-                blocksHTML += `<div style="width:25px; height:25px; background:${bgColor}; border-radius:4px; margin:2px;"></div>`;
-            });
-
-            tableHTML += `<tr>
-                <td style="padding:10px; font-weight:bold;">${locName}</td>
-                <td><div style="display:flex;">${blocksHTML}</div></td>
-            </tr>`;
-        });
-
-        tableHTML += `</tbody></table>`;
-        container.innerHTML = tableHTML;
-    });
-};
- // Add this to your script
-window.updateSopVisibility = (userEmail) => {
-    const btnDispatch = document.getElementById("btnSopSubDispatch");
-    const btnAudit = document.getElementById("btnSopSubAudit");
-
-    if (!btnDispatch || !btnAudit) return;
-
-    // Use global variable window.isAdmin
-    const email = userEmail ? userEmail.toLowerCase().trim() : "";
-    const isPriti = (email === "priti@metro.project");
-    
-    // Logic: Priti or Admin can assign
-    btnDispatch.style.display = (window.isAdmin || isPriti) ? "block" : "none";
-
-    // Logic: Admin ONLY for Audit
-    btnAudit.style.display = window.isAdmin ? "block" : "none";
-};
-  // Expose these to the window object so you can debug them in the console
-window.debugUser = () => {
-    console.log("Current User Email:", currentUser ? currentUser.email : "Not logged in");
-    console.log("Is Admin:", isAdmin);
 };
   // =========================================================
 // 📦 UNIVERSAL MANUAL LOGISTICS (ZERO-DATABASE ERRORS)
