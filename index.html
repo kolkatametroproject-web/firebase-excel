@@ -2204,7 +2204,44 @@ tr:hover { background: #fcfcfd; }
         </div>
     </div>
 </div>
+<div id="tab-fieldSOP" class="panel">
+    <!-- Tab Navigation -->
+    <div style="display:flex; gap:10px; margin-bottom:20px; border-bottom:2px solid #e2e8f0; padding-bottom:10px;">
+        <button class="nav-btn active" onclick="switchSopSubTab('dispatch')">🛠️ Dispatch</button>
+        <button class="nav-btn" onclick="switchSopSubTab('myWork')">📋 My Work</button>
+        <button class="nav-btn" onclick="switchSopSubTab('audit')">🛡️ Admin Audit</button>
+        <button class="nav-btn" onclick="switchSopSubTab('scada')">📡 SCADA Live</button>
+    </div>
 
+    <!-- 1. Dispatch Panel (Admin Assign) -->
+    <div id="sop-sub-dispatch" class="sop-sub-panel">
+        <h4>Assign 16-Point SOP Tasks</h4>
+        <div id="scadaTaskMatrix" class="table-wrapper">
+            <table style="width:100%;">
+                <thead><tr><th>Task</th><th>Status</th><th>Assign To</th></tr></thead>
+                <tbody id="scadaBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 2. My Work Panel (User View) -->
+    <div id="sop-sub-myWork" class="sop-sub-panel hidden">
+        <h4>My Assigned Tasks</h4>
+        <div id="mySopTasksContainer"></div>
+    </div>
+
+    <!-- 3. Audit Panel (Admin Verify) -->
+    <div id="sop-sub-audit" class="sop-sub-panel hidden">
+        <h4>Review & Audit Queue</h4>
+        <div id="sopAuditContainer"></div>
+    </div>
+
+    <!-- 4. Live Status Panel -->
+    <div id="sop-sub-scada" class="sop-sub-panel hidden">
+        <h4>Live Operation Matrix</h4>
+        <div id="sopLiveGridContainer"></div>
+    </div>
+</div>
 <div id="log-manage" class="panel hidden">
     <h3><i class="fas fa-history"></i> Logistics Master Registry</h3>
     <p style="font-size:11px; color:#64748b; margin-bottom:15px;">Click on any <b>Track ID</b> to view full movement history and items.</p>
@@ -9669,99 +9706,47 @@ window.generateDirectivePrint = async function() {
 
     reportContainer.classList.remove("hidden");
 };
-  // 1. Updated 16-Point SOP Book
-const SOP_GUIDE_BOOK = {
-    "TASK_01": { title: "1. IR Sensor TX", instr: "Transmit unit power and alignment." },
-    "TASK_02": { title: "2. IR Sensor RX", instr: "Receiver code and wire fix." },
-    "TASK_03": { title: "3. 230V Connection", instr: "AC supply integration." },
-    "TASK_04": { title: "4. SMPS Connection", instr: "Power supply unit." },
-    "TASK_05": { title: "5. DC Distribution", instr: "Low-voltage route." },
-    "TASK_06": { title: "6. Bed Pi Coding", instr: "Flash Bed Pi logic." },
-    "TASK_07": { title: "7. Master Pi Coding", instr: "Flash Master Pi logic." },
-    "TASK_08": { title: "8. System Housing", instr: "Secure mounting." },
-    "TASK_09": { title: "9. Cooling (Bed Pi)", instr: "Install Bed Pi heatsink." },
-    "TASK_10": { title: "10. Cooling (Master Pi)", instr: "Install Master Pi heatsink." },
-    "TASK_11": { title: "11. Cooling (System)", instr: "Main enclosure vent." },
-    "TASK_12": { title: "12. Ultrasonic Fixing", instr: "Mount sensors." },
-    "TASK_13": { title: "13. Ultrasonic Wiring", instr: "Sensor signal cabling." },
-    "TASK_14": { title: "14. Siren Calibration", instr: "Decibel thresholding." },
-    "TASK_15": { title: "15. Network Handshake", instr: "Node communication." },
-    "TASK_16": { title: "16. Final Stress Test", instr: "Full authority verify." }
+// A. Unified Tab Switcher for SOP Sub-Tabs
+window.switchSopSubTab = (tab) => {
+    document.querySelectorAll('.sop-sub-panel').forEach(p => p.classList.add('hidden'));
+    document.getElementById(`sop-sub-${tab}`).classList.remove('hidden');
+    
+    // Auto-load correct data
+    if(tab === 'dispatch') window.loadScadaMatrix();
+    if(tab === 'myWork') window.loadMySopTasks();
+    if(tab === 'audit') window.loadSopAuditTasks();
+    if(tab === 'scada') window.loadSopLiveGrid();
 };
 
-// 2. SCADA Task Dispatcher
-window.loadScadaMatrix = async () => {
-    const tbody = document.getElementById("scadaBody");
-    if(!tbody) return;
-
-    // Fetch users for dropdowns
-    const userSnap = await get(ref(db, "users"));
-    let userOptions = `<option value="">-- Assign Personnel --</option>`;
-    userSnap.forEach(u => {
-        if(!u.val().banned) {
-            userOptions += `<option value="${u.key}">${(u.val().name || u.val().email).toUpperCase()}</option>`;
-        }
-    });
-
-    tbody.innerHTML = "";
-    Object.keys(SOP_GUIDE_BOOK).forEach(code => {
-        const task = SOP_GUIDE_BOOK[code];
-        tbody.innerHTML += `
-            <tr style="border-bottom:1px solid #e2e8f0;">
-                <td style="padding:15px;"><b>${task.title}</b><br><small style="color:#64748b;">${task.instr}</small></td>
-                <td style="text-align:center;"><span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">STANDBY</span></td>
-                <td><select style="width:100%; padding:8px;" onchange="window.assignScadaTask('${code}', this.value)">${userOptions}</select></td>
-            </tr>`;
-    });
-};
-
-window.dispatchSCADACommand = () => {
-    const command = document.getElementById("commandTerminal").value;
-    if(!command) return alert("Terminal Empty.");
-    if(confirm(`EXECUTE SYSTEM COMMAND:\n"${command}"`)) {
-        push(ref(db, "logs"), { type: "SCADA_COMMAND", details: command, time: serverTimestamp() });
-        alert("✅ Broadcast Sent.");
-        document.getElementById("commandTerminal").value = "";
-    }
-};
-  // Assign a specific task to a specific user
-window.assignSingleSopTask = async (location, code) => {
-    const sel = document.getElementById(`user_${code}`);
-    if (!sel || !sel.value) return alert("Select Personnel first.");
-
+// B. Enhanced Dispatcher (Assigns specific tasks)
+window.assignScadaTask = async (code, uid) => {
+    if (!uid) return;
+    
+    const task = SOP_GUIDE_BOOK[code];
     try {
-        const payload = {
-            location: location,
+        await push(ref(db, "sop_tasks"), {
             workCode: code,
-            workTitle: SOP_GUIDE_BOOK[code].title,
-            assignedToUid: sel.value,
-            assignedToName: sel.options[sel.selectedIndex].text,
-            assignedBy: currentUser.email,
-            status: "WORKING", // Initial state
+            workTitle: task.title,
+            assignedToUid: uid,
+            status: "WORKING",
             timestamp: serverTimestamp()
-        };
-        
-        await push(ref(db, "sop_tasks"), payload);
-        alert(`✅ Task '${SOP_GUIDE_BOOK[code].title}' assigned to ${sel.options[sel.selectedIndex].text}`);
-        window.loadSopTaskGrid();
-    } catch(e) { 
-        alert("Assignment Error: " + e.message); 
-    }
+        });
+        alert(`✅ Assigned: ${task.title}`);
+    } catch(e) { alert("Assignment Failed: " + e.message); }
 };
-  window.loadSopAuditTasks = async () => {
-    const container = document.getElementById("sopAuditContainer");
-    if (!container) return;
 
+// C. Verification Audit (The Final Gatekeeper)
+window.loadSopAuditTasks = async () => {
+    const container = document.getElementById("sopAuditContainer");
     onValue(ref(db, "sop_tasks"), (snap) => {
         container.innerHTML = "";
         snap.forEach(c => {
             const t = {key: c.key, ...c.val()};
-            // Only show tasks that are ready for Audit/Verification
             if (t.status === 'REVIEW') {
                 container.innerHTML += `
-                    <div class="panel" style="border:1px solid #10b981;">
-                        <h5>${t.workTitle}</h5>
-                        <p><small>Assigned to: ${t.assignedToName}</small></p>
+                    <div style="border:1px solid #10b981; padding:15px; border-radius:8px; margin-bottom:10px;">
+                        <strong>${t.workTitle}</strong><br>
+                        <small>Status: Awaiting Verification</small><br>
                         <button onclick="window.verifyTask('${t.key}', 'PASSED')" class="success">APPROVE</button>
                         <button onclick="window.verifyTask('${t.key}', 'FAILED')" class="danger">REJECT</button>
                     </div>`;
@@ -9770,10 +9755,21 @@ window.assignSingleSopTask = async (location, code) => {
     });
 };
 
-window.verifyTask = async (key, decision) => {
-    await update(ref(db, `sop_tasks/${key}`), { status: decision });
-    alert(`Task status updated to: ${decision}`);
-    window.loadSopAuditTasks();
+// D. Live Grid: At a Glance (Showing progress for all 16 tasks)
+window.loadSopLiveGrid = () => {
+    const container = document.getElementById("sopLiveGridContainer");
+    onValue(ref(db, "sop_tasks"), (snap) => {
+        container.innerHTML = "<h4>Live Status Matrix</h4>";
+        const grid = document.createElement("div");
+        grid.style.display = "grid";
+        grid.style.gridTemplateColumns = "repeat(4, 1fr)";
+        grid.style.gap = "10px";
+        
+        Object.keys(SOP_GUIDE_BOOK).forEach(code => {
+            grid.innerHTML += `<div style="padding:10px; background:#e2e8f0; text-align:center; border-radius:4px;">${SOP_GUIDE_BOOK[code].title}</div>`;
+        });
+        container.appendChild(grid);
+    });
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
