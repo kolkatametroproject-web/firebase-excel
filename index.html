@@ -9757,23 +9757,25 @@ window.initSopModule = async () => {
 };
 
 window.switchSopSubTab = (tab) => {
-    // Hide all
+    // 1. Hide all panels
     document.querySelectorAll('.sop-sub-panel').forEach(p => p.classList.add('hidden'));
     
-    // Show target
+    // 2. Show the target panel
     const target = document.getElementById(`sop-sub-${tab}`);
     if (target) target.classList.remove('hidden');
 
-    // Trigger Loaders
-    if (tab === 'audit') {
-        window.loadSopAuditTasks();
-    } else if (tab === 'dispatch') {
-        window.loadSopTaskGrid();
-    } else if (tab === 'mywork') {
-        window.loadMySopTasks();
-    } else if (tab === 'status') {
-        window.loadSopLiveGrid();
-    }
+    // 3. Trigger Loaders with a tiny delay to allow DOM to render
+    setTimeout(() => {
+        if (tab === 'audit') {
+            window.loadSopAuditTasks();
+        } else if (tab === 'dispatch') {
+            window.loadSopTaskGrid();
+        } else if (tab === 'mywork') {
+            window.loadMySopTasks();
+        } else if (tab === 'status') {
+            window.loadSopLiveGrid();
+        }
+    }, 100);
 };
 
 window.handleSopLineChange = () => {
@@ -9802,24 +9804,90 @@ window.initSopVisibility = () => {
     }
 };
 window.loadSopTaskGrid = async () => {
-    // 1. Get elements with explicit debug checks
     const lineEl = document.getElementById("sopLineSelect");
     const stnEl = document.getElementById("sopStationSelect");
     const platEl = document.getElementById("sopPlatformSelect");
     const container = document.getElementById("sopTaskAssignmentGrid");
 
-    // 2. Debugging: If something is missing, tell us exactly what
-    if (!lineEl) console.error("DEBUG: Missing sopLineSelect");
-    if (!stnEl) console.error("DEBUG: Missing sopStationSelect");
-    if (!platEl) console.error("DEBUG: Missing sopPlatformSelect");
-    if (!container) console.error("DEBUG: Missing sopTaskAssignmentGrid");
-
+    // Guard clauses: If any element is missing, exit safely
     if (!lineEl || !stnEl || !platEl || !container) {
-        console.warn("SOP UI elements not fully loaded, skipping grid load.");
+        console.warn("SOP UI elements not found. Tab likely not active.");
         return; 
     }
 
-    // ... rest of your existing function code ...
+    const line = lineEl.value;
+    const stn = stnEl.value;
+    const plat = platEl.value;
+    
+    if (!stn || !line || !plat) {
+        container.innerHTML = "<p style='text-align:center; color:#94a3b8; font-style:italic;'>Select Corridor, Station, and Platform.</p>";
+        return;
+    }
+
+    const locationFullName = `${stn} (${line}) - ${plat}`;
+    container.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Database...</p>";
+
+    try {
+        const userSnap = await get(ref(db, "users"));
+        let userOptions = `<option value="">-- Select Personnel --</option>`;
+        userSnap.forEach(u => {
+            if(!u.val().banned) {
+                userOptions += `<option value="${u.key}">${(u.val().name || u.val().email).toUpperCase()}</option>`;
+            }
+        });
+
+        const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
+        const existingSnap = await get(q);
+        const existingTasks = {};
+        if(existingSnap.exists()) {
+            existingSnap.forEach(c => { existingTasks[c.val().workCode] = { key: c.key, ...c.val() }; });
+        }
+
+        container.innerHTML = "";
+        
+        Object.keys(SOP_GUIDE_BOOK).forEach(code => {
+            const taskDef = SOP_GUIDE_BOOK[code];
+            const existing = existingTasks[code];
+            
+            let statusBadge = `<span style="background:#e2e8f0; color:#64748b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">UNASSIGNED</span>`;
+            let deleteBtnHtml = "";
+
+            if(existing) {
+                if(existing.status === 'WORKING') statusBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">WORKING</span>`;
+                if(existing.status === 'REVIEW') statusBadge = `<span style="background:#e0f2fe; color:#0284c7; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">IN REVIEW</span>`;
+                if(existing.status === 'PASSED') statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">PASSED</span>`;
+                if(existing.status === 'FAILED') statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">FAILED</span>`;
+                
+                deleteBtnHtml = `<button onclick="window.deleteSopTask('${existing.key}')" class="danger" style="height:35px; width:35px; border-radius:4px; border:none; cursor:pointer;" title="Delete Assignment"><i class="fas fa-trash"></i></button>`;
+            }
+
+            container.innerHTML += `
+                <div style="background:white; border:1px solid #cbd5e1; border-left:5px solid var(--metro-blue); padding:15px; border-radius:6px; display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <div style="width: 45%;">
+                        <div style="font-weight:900; font-size:13px;">${taskDef.title}</div>
+                        <div style="font-size:11px; color:#64748b; margin-top:3px;">${taskDef.instr}</div>
+                        <div style="margin-top:5px;">${statusBadge}</div>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select id="assign_user_${code}" style="width: 160px; font-size:11px; font-weight:bold; height:35px; margin:0;">
+                            ${userOptions}
+                        </select>
+                        <button onclick="window.assignSingleSopTask('${locationFullName}', '${code}')" class="info" style="height:35px; font-size:10px; border:none; border-radius:4px; cursor:pointer;">
+                            <i class="fas fa-paper-plane"></i> ASSIGN
+                        </button>
+                        ${deleteBtnHtml}
+                    </div>
+                </div>
+            `;
+            
+            if(existing && existing.assignedToUid) {
+                const sel = document.getElementById(`assign_user_${code}`);
+                if(sel) sel.value = existing.assignedToUid;
+            }
+        });
+    } catch (e) {
+        container.innerHTML = `<p style="color:red;">Error loading tools: ${e.message}</p>`;
+    }
 };
   window.assignSingleSopTask = async (locationFullName, workCode) => {
     const sel = document.getElementById(`assign_user_${workCode}`);
