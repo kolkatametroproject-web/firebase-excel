@@ -2162,41 +2162,42 @@ tr:hover { background: #fcfcfd; }
     </div>
 </div>
 <div id="tab-fieldSOP" class="panel">
-    <!-- Tab Navigation -->
-    <div style="display:flex; gap:10px; margin-bottom:20px; border-bottom:2px solid #e2e8f0; padding-bottom:10px;">
+    <div class="nav-bar">
         <button class="nav-btn active" onclick="switchSopSubTab('dispatch')">🛠️ Dispatch</button>
         <button class="nav-btn" onclick="switchSopSubTab('myWork')">📋 My Work</button>
-        <button class="nav-btn" onclick="switchSopSubTab('audit')">🛡️ Admin Audit</button>
+        <button class="nav-btn" onclick="switchSopSubTab('audit')">🛡️ Audit</button>
         <button class="nav-btn" onclick="switchSopSubTab('scada')">📡 SCADA Live</button>
+        <button class="nav-btn" onclick="switchSopSubTab('purge')" style="color:red;">⚠️ Purge</button>
     </div>
 
-    <!-- 1. Dispatch Panel (Admin Assign) -->
     <div id="sop-sub-dispatch" class="sop-sub-panel">
-        <h4>Assign 16-Point SOP Tasks</h4>
-        <div id="scadaTaskMatrix" class="table-wrapper">
-            <table style="width:100%;">
-                <thead><tr><th>Task</th><th>Status</th><th>Assign To</th></tr></thead>
-                <tbody id="scadaBody"></tbody>
-            </table>
-        </div>
+        <h4>16-Point SOP Task Matrix</h4>
+        <table style="width:100%; border-collapse:collapse;">
+            <thead><tr style="background:#0f172a; color:white;"><th style="padding:10px;">TASK</th><th>STATUS</th><th>ASSIGN TO</th></tr></thead>
+            <tbody id="scadaBody"></tbody>
+        </table>
     </div>
 
-    <!-- 2. My Work Panel (User View) -->
     <div id="sop-sub-myWork" class="sop-sub-panel hidden">
-        <h4>My Assigned Tasks</h4>
+        <h4>Tasks Assigned to You</h4>
         <div id="mySopTasksContainer"></div>
     </div>
 
-    <!-- 3. Audit Panel (Admin Verify) -->
     <div id="sop-sub-audit" class="sop-sub-panel hidden">
-        <h4>Review & Audit Queue</h4>
+        <h4>Review Evidence</h4>
         <div id="sopAuditContainer"></div>
     </div>
 
-    <!-- 4. Live Status Panel -->
     <div id="sop-sub-scada" class="sop-sub-panel hidden">
-        <h4>Live Operation Matrix</h4>
-        <div id="sopLiveGridContainer"></div>
+        <h4>System Live Matrix (16 Point Status)</h4>
+        <div id="sopLiveGridContainer" style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px;"></div>
+    </div>
+
+    <div id="sop-sub-purge" class="sop-sub-panel hidden">
+        <h4>⚠️ Danger Zone: Station Purge</h4>
+        <select id="purgeStationSelect">
+            </select>
+        <button class="danger" onclick="window.performStationPurge()">WIPE ALL STATION DATA</button>
     </div>
 </div>
 <div id="log-manage" class="panel hidden">
@@ -9663,70 +9664,64 @@ window.generateDirectivePrint = async function() {
 
     reportContainer.classList.remove("hidden");
 };
-// A. Unified Tab Switcher for SOP Sub-Tabs
+  const SOP_GUIDE_BOOK = {
+    "TASK_01": "IR Sensor TX", "TASK_02": "IR Sensor RX", "TASK_03": "230V Connection",
+    "TASK_04": "SMPS Connection", "TASK_05": "DC Distribution", "TASK_06": "Bed Pi Coding",
+    "TASK_07": "Master Pi Coding", "TASK_08": "System Housing", "TASK_09": "Cooling (Bed Pi)",
+    "TASK_10": "Cooling (Master Pi)", "TASK_11": "Cooling (System)", "TASK_12": "Ultrasonic Fixing",
+    "TASK_13": "Ultrasonic Wiring", "TASK_14": "Siren Calibration", "TASK_15": "Network Handshake",
+    "TASK_16": "Final Stress Test"
+};
+
+// 1. Dispatch Logic
+window.loadScadaMatrix = async () => {
+    const tbody = document.getElementById("scadaBody");
+    const userSnap = await get(ref(db, "users"));
+    let userOptions = `<option value="">-- Assign --</option>`;
+    userSnap.forEach(u => userOptions += `<option value="${u.key}">${u.val().name}</option>`);
+    
+    tbody.innerHTML = "";
+    Object.entries(SOP_GUIDE_BOOK).forEach(([code, title]) => {
+        tbody.innerHTML += `<tr>
+            <td style="padding:15px;">${title}</td>
+            <td><span style="background:#eee; padding:2px 8px; border-radius:10px;">STANDBY</span></td>
+            <td><select onchange="window.assignScadaTask('${code}', this.value)">${userOptions}</select></td>
+        </tr>`;
+    });
+};
+
+window.assignScadaTask = async (code, uid) => {
+    await push(ref(db, "sop_tasks"), {
+        code, title: SOP_GUIDE_BOOK[code], assignedToUid: uid, status: "WORKING", time: serverTimestamp()
+    });
+    alert("Task Assigned.");
+};
+
+// 2. Audit/Verify Logic
+window.verifyTask = async (key, decision) => {
+    await update(ref(db, `sop_tasks/${key}`), { status: decision });
+    window.loadSopAuditTasks();
+};
+
+// 3. Purge Logic
+window.performStationPurge = async () => {
+    const station = document.getElementById("purgeStationSelect").value;
+    if(!confirm("Are you sure? This deletes station records.")) return;
+    
+    const snap = await get(query(ref(db, "station_logs"), orderByChild("name"), equalTo(station)));
+    const updates = {};
+    snap.forEach(c => updates[`station_logs/${c.key}`] = null);
+    await update(ref(db), updates);
+    alert("Station Data Wiped.");
+};
+
+// 4. Tab Switcher
 window.switchSopSubTab = (tab) => {
     document.querySelectorAll('.sop-sub-panel').forEach(p => p.classList.add('hidden'));
     document.getElementById(`sop-sub-${tab}`).classList.remove('hidden');
-    
-    // Auto-load correct data
+    // Call loader based on tab
     if(tab === 'dispatch') window.loadScadaMatrix();
-    if(tab === 'myWork') window.loadMySopTasks();
     if(tab === 'audit') window.loadSopAuditTasks();
-    if(tab === 'scada') window.loadSopLiveGrid();
-};
-
-// B. Enhanced Dispatcher (Assigns specific tasks)
-window.assignScadaTask = async (code, uid) => {
-    if (!uid) return;
-    
-    const task = SOP_GUIDE_BOOK[code];
-    try {
-        await push(ref(db, "sop_tasks"), {
-            workCode: code,
-            workTitle: task.title,
-            assignedToUid: uid,
-            status: "WORKING",
-            timestamp: serverTimestamp()
-        });
-        alert(`✅ Assigned: ${task.title}`);
-    } catch(e) { alert("Assignment Failed: " + e.message); }
-};
-
-// C. Verification Audit (The Final Gatekeeper)
-window.loadSopAuditTasks = async () => {
-    const container = document.getElementById("sopAuditContainer");
-    onValue(ref(db, "sop_tasks"), (snap) => {
-        container.innerHTML = "";
-        snap.forEach(c => {
-            const t = {key: c.key, ...c.val()};
-            if (t.status === 'REVIEW') {
-                container.innerHTML += `
-                    <div style="border:1px solid #10b981; padding:15px; border-radius:8px; margin-bottom:10px;">
-                        <strong>${t.workTitle}</strong><br>
-                        <small>Status: Awaiting Verification</small><br>
-                        <button onclick="window.verifyTask('${t.key}', 'PASSED')" class="success">APPROVE</button>
-                        <button onclick="window.verifyTask('${t.key}', 'FAILED')" class="danger">REJECT</button>
-                    </div>`;
-            }
-        });
-    });
-};
-
-// D. Live Grid: At a Glance (Showing progress for all 16 tasks)
-window.loadSopLiveGrid = () => {
-    const container = document.getElementById("sopLiveGridContainer");
-    onValue(ref(db, "sop_tasks"), (snap) => {
-        container.innerHTML = "<h4>Live Status Matrix</h4>";
-        const grid = document.createElement("div");
-        grid.style.display = "grid";
-        grid.style.gridTemplateColumns = "repeat(4, 1fr)";
-        grid.style.gap = "10px";
-        
-        Object.keys(SOP_GUIDE_BOOK).forEach(code => {
-            grid.innerHTML += `<div style="padding:10px; background:#e2e8f0; text-align:center; border-radius:4px;">${SOP_GUIDE_BOOK[code].title}</div>`;
-        });
-        container.appendChild(grid);
-    });
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
