@@ -9785,27 +9785,96 @@ window.loadSopTaskGrid = async (retries = 10) => {
         if (retries > 0) {
             setTimeout(() => window.loadSopTaskGrid(retries - 1), 200);
             return;
+        } else {
+            console.error("Critical Failure: SOP UI elements missing.");
+            return;
         }
+    }
+
+    const line = lineEl.value;
+    const stn = stnEl.value;
+    const plat = platEl.value;
+    
+    if (!stn || !line || !plat) {
+        container.innerHTML = "<p style='text-align:center;'>Select Corridor, Station, and Platform.</p>";
         return;
     }
 
-    const locationFullName = `${stnEl.value} (${lineEl.value}) - ${platEl.value}`;
-    container.innerHTML = "<p style='text-align:center;'>Loading...</p>";
+    const locationFullName = `${stn} (${line}) - ${plat}`;
+    container.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Fetching tasks...</p>";
 
     try {
-        // --- ADDED AUTH CHECK ---
-        if (!currentUser) {
-            throw new Error("You are not logged in. Please refresh.");
-        }
+        // 1. Fetch Users
+        const userSnap = await get(ref(db, "users"));
+        let userOptions = `<option value="">-- Select Personnel --</option>`;
+        userSnap.forEach(u => {
+            if(!u.val().banned) {
+                userOptions += `<option value="${u.key}">${(u.val().name || u.val().email).toUpperCase()}</option>`;
+            }
+        });
 
+        // 2. Fetch Existing Assignments for this specific platform
         const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
         const existingSnap = await get(q);
-        // ... (rest of your logic) ...
+        const existingTasks = {};
+        if(existingSnap.exists()) {
+            existingSnap.forEach(c => { existingTasks[c.val().workCode] = { key: c.key, ...c.val() }; });
+        }
 
+        // 3. Render Table
+        container.innerHTML = `<table style="width:100%; border-collapse:collapse;">
+            <thead>
+                <tr style="background:#0f172a; color:white; font-size:11px;">
+                    <th style="padding:10px; text-align:left;">TASK DESCRIPTION</th>
+                    <th style="padding:10px; width:120px;">STATUS</th>
+                    <th style="padding:10px; width:300px;">ASSIGN TO</th>
+                </tr>
+            </thead>
+            <tbody id="sopBody"></tbody>
+        </table>`;
+        
+        const tbody = document.getElementById("sopBody");
+
+        Object.keys(SOP_GUIDE_BOOK).forEach(code => {
+            const taskDef = SOP_GUIDE_BOOK[code];
+            const existing = existingTasks[code];
+            
+            // Status Logic
+            let statusBadge = `<span style="background:#e2e8f0; color:#64748b; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">UNASSIGNED</span>`;
+            if(existing) {
+                if(existing.status === 'WORKING') statusBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">WORKING</span>`;
+                else if(existing.status === 'REVIEW') statusBadge = `<span style="background:#dbeafe; color:#2563eb; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">IN REVIEW</span>`;
+                else if(existing.status === 'PASSED') statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">PASSED</span>`;
+            }
+
+            const row = document.createElement("tr");
+            row.style.borderBottom = "1px solid #e2e8f0";
+            row.innerHTML = `
+                <td style="padding:12px;">
+                    <div style="font-weight:900; font-size:13px;">${taskDef.title}</div>
+                    <div style="font-size:10px; color:#64748b;">${taskDef.instr}</div>
+                </td>
+                <td style="padding:12px; text-align:center;">${statusBadge}</td>
+                <td style="padding:12px;">
+                    <div style="display:flex; gap:5px;">
+                        <select id="user_${code}" style="flex:1; height:35px; border:1px solid #cbd5e1; border-radius:4px;">${userOptions}</select>
+                        <button onclick="window.assignSingleSopTask('${locationFullName}', '${code}')" class="info" style="border:none; padding:0 10px; border-radius:4px;">
+                            <i class="fas fa-check"></i>
+                        </button>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(row);
+
+            // Set dropdown if already assigned
+            if(existing && existing.assignedToUid) {
+                const sel = document.getElementById(`user_${code}`);
+                if(sel) sel.value = existing.assignedToUid;
+            }
+        });
     } catch (e) {
-        // --- THIS WILL SHOW THE ACTUAL ERROR IN CONSOLE ---
-        console.error("Firebase Error Detail:", e);
-        container.innerHTML = `<p style="color:red; text-align:center;">Error: Permission denied. Code: ${e.code || 'N/A'}</p>`;
+        console.error("Firebase Error:", e);
+        container.innerHTML = `<p style="color:red; text-align:center;">Permission Denied or Data Error. Check DB Rules.</p>`;
     }
 };
 
