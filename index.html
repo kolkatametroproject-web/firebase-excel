@@ -6191,7 +6191,12 @@ window.switchTab = (t) => {
     else if (t === 'purchase') loadPurchaseData();
     else if (t === 'directives') window.populateDirectiveUsers();
     else if (t === 'comments') window.populateCommentUsers();
-    else if (t === 'fieldSOP') window.initSopModule();
+    else if (t === 'fieldSOP') {
+        window.initSopModule(); 
+        if (currentUser) {
+            window.updateSopVisibility(currentUser.email);
+        }
+    }
     else if (t === 'delivery') window.populateShipStations(); // Trigger Station Load
 
     window.scrollTo(0, 0);
@@ -9884,55 +9889,54 @@ window.loadSopTaskGrid = async () => {
         container.innerHTML = `<p style="color:red;">Error loading tools: ${e.message}</p>`;
     }
 };
-  
- window.assignSingleSopTask = async (locationFullName, workCode) => {
-    // 1. Get the element safely
-    const sel = document.getElementById(`assign_user_${workCode}`);
+  window.assignSingleSopTask = async (locationFullName, workCode) => {
+    const selId = `assign_user_${workCode}`;
+    const sel = document.getElementById(selId);
     
-    // 2. Check if element exists
+    // Safety Guard
     if (!sel) {
-        console.error("Critical Error: Dropdown not found for code:", workCode);
-        return alert("Error: Assignment dropdown not found. Please refresh the page.");
+        console.error("DEBUG: Could not find dropdown with ID:", selId);
+        return alert("Error: Assignment controls not loaded. Please refresh the page.");
     }
 
     const uid = sel.value;
     const uName = sel.options[sel.selectedIndex]?.text || "Unknown";
 
-    if(!uid) return alert("Please select an Incharge Name (Student) to assign.");
+    if(!uid) return alert("Please select a personnel from the dropdown.");
 
     const taskDef = SOP_GUIDE_BOOK[workCode];
     
-    // Query existing task by location AND workCode to ensure precise mapping
-    const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
-    const snap = await get(q);
-    
-    let existingKey = null;
-    if(snap.exists()) {
-        snap.forEach(c => {
-            if(c.val().workCode === workCode) existingKey = c.key;
-        });
-    }
-
-    const payload = {
-        location: locationFullName,
-        workCode: workCode,
-        workTitle: taskDef.title,
-        assignedToUid: uid,
-        assignedToName: uName,
-        assignedBy: currentUser.name || currentUser.email,
-        status: "WORKING",
-        timestamp: serverTimestamp()
-    };
-
     try {
+        // Query existing task
+        const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
+        const snap = await get(q);
+        
+        let existingKey = null;
+        snap.forEach(c => { if(c.val().workCode === workCode) existingKey = c.key; });
+
+        const payload = {
+            location: locationFullName,
+            workCode: workCode,
+            workTitle: taskDef.title,
+            assignedToUid: uid,
+            assignedToName: uName,
+            assignedBy: currentUser.email,
+            status: "WORKING",
+            timestamp: serverTimestamp()
+        };
+
         if(existingKey) {
             await update(ref(db, `sop_tasks/${existingKey}`), payload);
         } else {
             await push(ref(db, "sop_tasks"), payload);
         }
+        
         alert(`✅ Task Assigned to ${uName}`);
         window.loadSopTaskGrid();
-    } catch(e) { alert("Error: " + e.message); }
+    } catch(e) { 
+        alert("Assignment Error: " + e.message); 
+        console.error(e);
+    }
 };
 // --- 4. MY WORK TAB (STUDENT) ---
 window.loadMySopTasks = () => {
@@ -10233,32 +10237,24 @@ window.loadSopLiveGrid = () => {
         container.innerHTML = tableHTML;
     });
 };
-  window.updateSopVisibility = (userEmail) => {
+ // Add this to your script
+window.updateSopVisibility = (userEmail) => {
     const btnDispatch = document.getElementById("btnSopSubDispatch");
     const btnAudit = document.getElementById("btnSopSubAudit");
 
+    // Exit if buttons aren't in the DOM yet
     if (!btnDispatch || !btnAudit) return;
 
-    // Use the actual email confirmed from your console
-    const pritiEmail = "priti@metro.project"; 
-    const normalizedEmail = userEmail ? userEmail.toLowerCase() : "";
-    const isPriti = (normalizedEmail === pritiEmail);
+    // Use the confirmed email from your console: priti@metro.project
+    const isPriti = (userEmail && userEmail.toLowerCase() === "priti@metro.project");
     
     // 1. Dispatch Logic: Visible to Admin OR Priti
-    if (isAdmin || isPriti) {
-        btnDispatch.style.display = "block";
-    } else {
-        btnDispatch.style.display = "none";
-    }
+    btnDispatch.style.display = (isAdmin || isPriti) ? "block" : "none";
 
     // 2. Audit Logic: Visible to Admin ONLY
-    if (isAdmin) {
-        btnAudit.style.display = "block";
-    } else {
-        btnAudit.style.display = "none";
-    }
+    btnAudit.style.display = isAdmin ? "block" : "none";
     
-    console.log("SOP Permissions Updated for:", normalizedEmail);
+    console.log("SOP Permissions Applied for:", userEmail, "| isAdmin:", isAdmin, "| isPriti:", isPriti);
 };
   // =========================================================
 // 📦 UNIVERSAL MANUAL LOGISTICS (ZERO-DATABASE ERRORS)
