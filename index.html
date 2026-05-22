@@ -9802,112 +9802,42 @@ window.initSopVisibility = () => {
     }
 };
 window.loadSopTaskGrid = async () => {
-    // 1. SAFETY: Get all elements safely
+    // 1. Get elements with explicit debug checks
     const lineEl = document.getElementById("sopLineSelect");
     const stnEl = document.getElementById("sopStationSelect");
     const platEl = document.getElementById("sopPlatformSelect");
     const container = document.getElementById("sopTaskAssignmentGrid");
 
-    // 2. GUARD CLAUSE: If any element is missing, exit quietly
+    // 2. Debugging: If something is missing, tell us exactly what
+    if (!lineEl) console.error("DEBUG: Missing sopLineSelect");
+    if (!stnEl) console.error("DEBUG: Missing sopStationSelect");
+    if (!platEl) console.error("DEBUG: Missing sopPlatformSelect");
+    if (!container) console.error("DEBUG: Missing sopTaskAssignmentGrid");
+
     if (!lineEl || !stnEl || !platEl || !container) {
         console.warn("SOP UI elements not fully loaded, skipping grid load.");
         return; 
     }
 
-    const line = lineEl.value;
-    const stn = stnEl.value;
-    const plat = platEl.value;
-    
-    if (!stn || !line || !plat) {
-        container.innerHTML = "<p style='text-align:center; color:#94a3b8; font-style:italic;'>Select Corridor, Station, and Platform.</p>";
-        return;
-    }
-
-    const locationFullName = `${stn} (${line}) - ${plat}`;
-    container.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Database...</p>";
-
-    try {
-        const userSnap = await get(ref(db, "users"));
-        let userOptions = `<option value="">-- Select Personnel --</option>`;
-        userSnap.forEach(u => {
-            if(!u.val().banned) {
-                userOptions += `<option value="${u.key}">${(u.val().name || u.val().email).toUpperCase()}</option>`;
-            }
-        });
-
-        const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
-        const existingSnap = await get(q);
-        const existingTasks = {};
-        if(existingSnap.exists()) {
-            existingSnap.forEach(c => { existingTasks[c.val().workCode] = { key: c.key, ...c.val() }; });
-        }
-
-        container.innerHTML = "";
-        
-        Object.keys(SOP_GUIDE_BOOK).forEach(code => {
-            const taskDef = SOP_GUIDE_BOOK[code];
-            const existing = existingTasks[code];
-            
-            // Logic for visual status
-            let statusBadge = `<span style="background:#e2e8f0; color:#64748b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">UNASSIGNED</span>`;
-            let deleteBtnHtml = "";
-
-            if(existing) {
-                if(existing.status === 'WORKING') statusBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">WORKING</span>`;
-                if(existing.status === 'REVIEW') statusBadge = `<span style="background:#e0f2fe; color:#0284c7; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">IN REVIEW</span>`;
-                if(existing.status === 'PASSED') statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">PASSED</span>`;
-                if(existing.status === 'FAILED') statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">FAILED</span>`;
-                
-                deleteBtnHtml = `<button onclick="window.deleteSopTask('${existing.key}')" class="danger" style="height:35px; width:35px; border-radius:4px; border:none; cursor:pointer;" title="Delete Assignment"><i class="fas fa-trash"></i></button>`;
-            }
-
-            container.innerHTML += `
-                <div style="background:white; border:1px solid #cbd5e1; border-left:5px solid var(--metro-blue); padding:15px; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
-                    <div style="width: 45%;">
-                        <div style="font-weight:900; font-size:13px;">${taskDef.title}</div>
-                        <div style="font-size:11px; color:#64748b; margin-top:3px;">${taskDef.instr}</div>
-                        <div style="margin-top:5px;">${statusBadge}</div>
-                    </div>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <select id="assign_user_${code}" style="width: 160px; font-size:11px; font-weight:bold; height:35px; margin:0;">
-                            ${userOptions}
-                        </select>
-                        <button onclick="window.assignSingleSopTask('${locationFullName}', '${code}')" class="info" style="height:35px; font-size:10px; border:none; border-radius:4px; cursor:pointer;">
-                            <i class="fas fa-paper-plane"></i> ASSIGN
-                        </button>
-                        ${deleteBtnHtml}
-                    </div>
-                </div>
-            `;
-            
-            if(existing && existing.assignedToUid) {
-                const sel = document.getElementById(`assign_user_${code}`);
-                if(sel) sel.value = existing.assignedToUid;
-            }
-        });
-    } catch (e) {
-        container.innerHTML = `<p style="color:red;">Error loading tools: ${e.message}</p>`;
-    }
+    // ... rest of your existing function code ...
 };
   window.assignSingleSopTask = async (locationFullName, workCode) => {
-    const selId = `assign_user_${workCode}`;
-    const sel = document.getElementById(selId);
+    const sel = document.getElementById(`assign_user_${workCode}`);
     
-    // Safety Guard
+    // Safety Guard to prevent TypeError
     if (!sel) {
-        console.error("DEBUG: Could not find dropdown with ID:", selId);
-        return alert("Error: Assignment controls not loaded. Please refresh the page.");
+        console.warn("Dropdown not found, ignoring assignment.");
+        return;
     }
 
     const uid = sel.value;
     const uName = sel.options[sel.selectedIndex]?.text || "Unknown";
 
-    if(!uid) return alert("Please select a personnel from the dropdown.");
+    if(!uid) return alert("Please select a personnel.");
 
     const taskDef = SOP_GUIDE_BOOK[workCode];
     
     try {
-        // Query existing task
         const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
         const snap = await get(q);
         
@@ -9920,7 +9850,7 @@ window.loadSopTaskGrid = async () => {
             workTitle: taskDef.title,
             assignedToUid: uid,
             assignedToName: uName,
-            assignedBy: currentUser.email,
+            assignedBy: window.currentUser.email,
             status: "WORKING",
             timestamp: serverTimestamp()
         };
@@ -9930,12 +9860,10 @@ window.loadSopTaskGrid = async () => {
         } else {
             await push(ref(db, "sop_tasks"), payload);
         }
-        
         alert(`✅ Task Assigned to ${uName}`);
         window.loadSopTaskGrid();
     } catch(e) { 
         alert("Assignment Error: " + e.message); 
-        console.error(e);
     }
 };
 // --- 4. MY WORK TAB (STUDENT) ---
@@ -10044,37 +9972,42 @@ window.loadSopAuditTasks = () => {
     const container = document.getElementById("sopAuditContainer");
     if (!container) return;
 
-    container.innerHTML = "<p style='text-align:center; padding:20px;'>Syncing Review Queue...</p>";
+    container.innerHTML = "<p style='text-align:center; padding:20px;'><i class='fas fa-sync fa-spin'></i> Loading Queue...</p>";
 
-    // Use Firebase query to get ONLY tasks where status is "REVIEW"
     const q = query(ref(db, "sop_tasks"), orderByChild("status"), equalTo("REVIEW"));
 
     onValue(q, (snap) => {
-        container.innerHTML = ""; // Clear loader
+        container.innerHTML = "";
 
         if (!snap.exists()) {
-            container.innerHTML = "<div style='text-align:center; padding:20px; color:#64748b;'><h3>All clear!</h3><p>No tasks are currently awaiting audit.</p></div>";
+            container.innerHTML = `
+                <div style="text-align:center; padding:40px; border:2px dashed #cbd5e1; border-radius:8px;">
+                    <h3>All clear!</h3>
+                    <p>No tasks currently awaiting audit.</p>
+                </div>`;
             return;
         }
 
         snap.forEach(c => {
             const t = { key: c.key, ...c.val() };
             
-            // Build the audit card dynamically
             container.innerHTML += `
             <div style="background:white; border:1px solid #e2e8f0; padding:20px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                <h4 style="margin-top:0; color:var(--metro-blue);">${t.workTitle || "Untitled Task"}</h4>
+                <div style="display:flex; justify-content:space-between;">
+                    <h4 style="margin-top:0; color:var(--metro-blue);">${t.workTitle || "Untitled Task"}</h4>
+                    <small style="color:#64748b;">${new Date(t.submittedAt).toLocaleDateString()}</small>
+                </div>
                 <div style="font-size:12px; margin-bottom:10px;">
                     <b>Location:</b> ${t.location || "N/A"}<br>
                     <b>Assigned To:</b> ${t.assignedToName || "Unknown"}
                 </div>
                 <div style="background:#f8fafc; padding:10px; border-radius:4px; margin-bottom:15px; font-size:13px; border-left:3px solid #64748b;">
-                    <b>Student Remarks:</b> ${t.studentRemarks || "No remarks."}
+                    <b>Student Remarks:</b> ${t.studentRemarks || "No remarks provided."}
                 </div>
                 
                 ${t.imgProof ? 
                     `<img src="${t.imgProof}" style="width:100%; border:4px solid #10b981; border-radius:8px; margin-bottom:15px; cursor:pointer;" onclick="window.open('${t.imgProof}')">` 
-                    : `<div style="padding:20px; background:#fca5a5; text-align:center; margin-bottom:15px;">⚠️ NO IMAGE UPLOADED</div>`
+                    : `<div style="padding:20px; background:#fee2e2; color:#991b1b; text-align:center; margin-bottom:15px;">⚠️ NO IMAGE UPLOADED</div>`
                 }
                 
                 <div style="display:flex; gap:10px;">
@@ -10242,19 +10175,34 @@ window.updateSopVisibility = (userEmail) => {
     const btnDispatch = document.getElementById("btnSopSubDispatch");
     const btnAudit = document.getElementById("btnSopSubAudit");
 
-    // Exit if buttons aren't in the DOM yet
     if (!btnDispatch || !btnAudit) return;
 
-    // Use the confirmed email from your console: priti@metro.project
-    const isPriti = (userEmail && userEmail.toLowerCase() === "priti@metro.project");
+    const email = userEmail ? userEmail.toLowerCase().trim() : "";
+    const isPriti = (email === "priti@metro.project");
     
     // 1. Dispatch Logic: Visible to Admin OR Priti
-    btnDispatch.style.display = (isAdmin || isPriti) ? "block" : "none";
+    if (window.isAdmin || isPriti) {
+        btnDispatch.style.display = "block";
+    } else {
+        btnDispatch.style.display = "none";
+    }
 
     // 2. Audit Logic: Visible to Admin ONLY
-    btnAudit.style.display = isAdmin ? "block" : "none";
-    
-    console.log("SOP Permissions Applied for:", userEmail, "| isAdmin:", isAdmin, "| isPriti:", isPriti);
+    if (window.isAdmin) {
+        btnAudit.style.display = "block";
+    } else {
+        btnAudit.style.display = "none";
+        // Force navigate away if non-admin is viewing the audit tab
+        const auditTab = document.getElementById("sop-sub-audit");
+        if (auditTab && !auditTab.classList.contains("hidden")) {
+            window.switchSopSubTab('mywork');
+        }
+    }
+};
+  // Expose these to the window object so you can debug them in the console
+window.debugUser = () => {
+    console.log("Current User Email:", currentUser ? currentUser.email : "Not logged in");
+    console.log("Is Admin:", isAdmin);
 };
   // =========================================================
 // 📦 UNIVERSAL MANUAL LOGISTICS (ZERO-DATABASE ERRORS)
