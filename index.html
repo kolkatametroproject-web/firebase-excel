@@ -9799,18 +9799,18 @@ window.initSopVisibility = () => {
         if(btnAudit) btnAudit.style.display = "none";
     }
 };
-window.loadSopTaskGrid = async (retries = 3) => {
-    // 1. Attempt to find all required elements
+window.loadSopTaskGrid = async (retries = 10) => {
+    // 1. Attempt to find elements
     const lineEl = document.getElementById("sopLineSelect");
     const stnEl = document.getElementById("sopStationSelect");
     const platEl = document.getElementById("sopPlatformSelect");
     const container = document.getElementById("sopTaskAssignmentGrid");
 
-    // 2. RETRY LOGIC: If elements don't exist yet, wait 500ms and try again
+    // 2. SAFETY CHECK: If elements don't exist yet, wait 200ms and try again
+    // This solves the 'null' error caused by the browser rendering too slowly
     if (!lineEl || !stnEl || !platEl || !container) {
         if (retries > 0) {
-            console.log(`SOP UI not ready, retrying in 500ms... (${retries} attempts left)`);
-            setTimeout(() => window.loadSopTaskGrid(retries - 1), 500);
+            setTimeout(() => window.loadSopTaskGrid(retries - 1), 200);
             return;
         } else {
             console.error("Critical Failure: SOP UI elements missing after retries.");
@@ -9818,14 +9818,13 @@ window.loadSopTaskGrid = async (retries = 3) => {
         }
     }
 
-    // 3. Extract values now that we know elements exist
+    // 3. Elements exist, proceed with logic
     const line = lineEl.value;
     const stn = stnEl.value;
     const plat = platEl.value;
     
-    // 4. Validate selection
     if (!stn || !line || !plat) {
-        container.innerHTML = "<p style='text-align:center; color:#94a3b8; font-style:italic;'>Select Corridor, Station, and Platform to load tasks.</p>";
+        container.innerHTML = "<p style='text-align:center; color:#94a3b8; font-style:italic;'>Select Corridor, Station, and Platform.</p>";
         return;
     }
 
@@ -9833,7 +9832,6 @@ window.loadSopTaskGrid = async (retries = 3) => {
     container.innerHTML = "<p style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Database...</p>";
 
     try {
-        // 5. Fetch User list
         const userSnap = await get(ref(db, "users"));
         let userOptions = `<option value="">-- Select Personnel --</option>`;
         userSnap.forEach(u => {
@@ -9842,7 +9840,6 @@ window.loadSopTaskGrid = async (retries = 3) => {
             }
         });
 
-        // 6. Fetch Existing Tasks
         const q = query(ref(db, "sop_tasks"), orderByChild("location"), equalTo(locationFullName));
         const existingSnap = await get(q);
         const existingTasks = {};
@@ -9850,7 +9847,6 @@ window.loadSopTaskGrid = async (retries = 3) => {
             existingSnap.forEach(c => { existingTasks[c.val().workCode] = { key: c.key, ...c.val() }; });
         }
 
-        // 7. Render Task Cards
         container.innerHTML = "";
         
         Object.keys(SOP_GUIDE_BOOK).forEach(code => {
@@ -9862,9 +9858,9 @@ window.loadSopTaskGrid = async (retries = 3) => {
 
             if(existing) {
                 if(existing.status === 'WORKING') statusBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">WORKING</span>`;
-                else if(existing.status === 'REVIEW') statusBadge = `<span style="background:#e0f2fe; color:#0284c7; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">IN REVIEW</span>`;
-                else if(existing.status === 'PASSED') statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">PASSED</span>`;
-                else if(existing.status === 'FAILED') statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">FAILED</span>`;
+                if(existing.status === 'REVIEW') statusBadge = `<span style="background:#e0f2fe; color:#0284c7; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">IN REVIEW</span>`;
+                if(existing.status === 'PASSED') statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">PASSED</span>`;
+                if(existing.status === 'FAILED') statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">FAILED</span>`;
                 
                 deleteBtnHtml = `<button onclick="window.deleteSopTask('${existing.key}')" class="danger" style="height:35px; width:35px; border-radius:4px; border:none; cursor:pointer;" title="Delete Assignment"><i class="fas fa-trash"></i></button>`;
             }
@@ -9888,7 +9884,6 @@ window.loadSopTaskGrid = async (retries = 3) => {
                 </div>
             `;
             
-            // Set existing select value
             if(existing && existing.assignedToUid) {
                 const sel = document.getElementById(`assign_user_${code}`);
                 if(sel) sel.value = existing.assignedToUid;
@@ -9896,7 +9891,6 @@ window.loadSopTaskGrid = async (retries = 3) => {
         });
     } catch (e) {
         container.innerHTML = `<p style="color:red;">Error loading tools: ${e.message}</p>`;
-        console.error("Assignment Loader Error:", e);
     }
 };
   window.assignSingleSopTask = async (locationFullName, workCode) => {
