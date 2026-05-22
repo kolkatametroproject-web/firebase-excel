@@ -9871,6 +9871,105 @@ window.deleteSopTask = async (key) => {
         window.loadSopTaskGrid();
     }
 };
+  // --- SOP MODULE EXPOSURE (Place this in your <script type="module">) ---
+
+// 1. Explicitly attach functions to window to fix the TypeError
+window.updateSopVisibility = (userEmail) => {
+    const btnDispatch = document.getElementById("btnSopSubDispatch");
+    const btnAudit = document.getElementById("btnSopSubAudit");
+
+    if (!btnDispatch || !btnAudit) return;
+
+    const email = userEmail ? userEmail.toLowerCase().trim() : "";
+    const isPriti = (email === "priti@metro.project");
+    
+    // Logic: Priti or Admin can assign
+    btnDispatch.style.display = (window.isAdmin || isPriti) ? "block" : "none";
+    // Logic: Admin ONLY for Audit
+    btnAudit.style.display = window.isAdmin ? "block" : "none";
+};
+
+window.loadMySopTasks = () => {
+    const container = document.getElementById("mySopTasksContainer");
+    if(!container) return;
+
+    const q = query(ref(db, "sop_tasks"), orderByChild("assignedToUid"), equalTo(currentUser.uid));
+    
+    onValue(q, (snap) => {
+        container.innerHTML = "";
+        if(!snap.exists()) {
+            container.innerHTML = `<div style="text-align:center; padding:30px;"><h4 style="color:#64748b;">No Active Tasks</h4></div>`;
+            return;
+        }
+
+        snap.forEach(c => {
+            const t = {key: c.key, ...c.val()};
+            if (t.status === 'WORKING' || t.status === 'FAILED') {
+                const isFail = t.status === 'FAILED';
+                container.innerHTML += `
+                    <div style="background:white; border:1px solid #cbd5e1; border-left:6px solid ${isFail ? '#e11d48' : '#f59e0b'}; padding:20px; border-radius:8px;">
+                        <div style="display:flex; justify-content:space-between;">
+                            <div>
+                                <div style="font-size:11px; font-weight:900; color:var(--metro-red);"><i class="fas fa-map-marker-alt"></i> ${t.location}</div>
+                                <h3 style="margin:5px 0; color:var(--metro-blue);">${t.workTitle}</h3>
+                            </div>
+                            ${isFail ? `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; font-size:10px; font-weight:bold;">REDO</span>` : ''}
+                        </div>
+                        <button onclick="openSopExecution('${t.key}','${encodeURIComponent(t.workTitle || "")}','${encodeURIComponent(t.location || "")}')" 
+                                style="width:100%; margin-top:10px; padding:12px; background:var(--metro-blue); color:white; font-weight:900; border-radius:6px; cursor:pointer;">
+                            <i class="fas fa-camera"></i> EXECUTE & UPLOAD PICTURE
+                        </button>
+                    </div>`;
+            }
+        });
+    });
+};
+
+window.loadSopLiveGrid = () => {
+    const container = document.getElementById("sopLiveGridContainer");
+    if(!container) return;
+
+    onValue(ref(db, "sop_tasks"), (snap) => {
+        container.innerHTML = "";
+        if(!snap.exists()) {
+            container.innerHTML = "<p style='text-align:center;'>No live deployment data.</p>";
+            return;
+        }
+
+        const locations = {};
+        snap.forEach(c => {
+            const t = c.val();
+            if(!t.location) return; 
+            if(!locations[t.location]) locations[t.location] = {};
+            locations[t.location][t.workCode] = t;
+        });
+
+        const taskKeys = Object.keys(SOP_GUIDE_BOOK);
+        let tableHTML = `<table style="width:100%; border-collapse: separate; border-spacing: 0 10px;"><tbody>`;
+
+        Object.keys(locations).forEach(locName => {
+            const locTasks = locations[locName];
+            let blocksHTML = "";
+            
+            taskKeys.forEach((key) => {
+                const t = locTasks[key];
+                let bgColor = "#e2e8f0"; 
+                if(t) {
+                    if(t.status === 'WORKING') bgColor = "#f59e0b";
+                    else if(t.status === 'REVIEW') bgColor = "#3b82f6";
+                    else if(t.status === 'PASSED') bgColor = "#10b981";
+                    else if(t.status === 'FAILED') bgColor = "#e11d48";
+                }
+                blocksHTML += `<div style="width:25px; height:25px; background:${bgColor}; border-radius:4px; margin:2px;"></div>`;
+            });
+
+            tableHTML += `<tr><td style="padding:10px; font-weight:bold;">${locName}</td><td><div style="display:flex;">${blocksHTML}</div></td></tr>`;
+        });
+
+        tableHTML += `</tbody></table>`;
+        container.innerHTML = tableHTML;
+    });
+};
   // =========================================================
 // 📦 UNIVERSAL MANUAL LOGISTICS (ZERO-DATABASE ERRORS)
 // =========================================================
