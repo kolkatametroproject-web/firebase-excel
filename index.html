@@ -552,6 +552,9 @@ tr:hover { background: #fcfcfd; }
     <button class="nav-btn" onclick="switchTab('attendance')" id="btnAttendance">
     <i class="fas fa-calendar-check"></i> Payroll & Attendance
     </button>
+    <button class="nav-btn" onclick="switchTab('scadaControl')" id="btnScada">
+    <i class="fas fa-network-wired"></i> SCADA Control
+</button>
     <button class="nav-btn" onclick="switchTab('delivery')" id="btnDelivery">
         <i class="fas fa-shipping-fast"></i> Fulfillment & Logistics
     </button>
@@ -2133,6 +2136,49 @@ tr:hover { background: #fcfcfd; }
     </div>
     <div id="techPurchasePrice" class="hidden"></div>
 </div>
+</div>
+  <div id="tab-scadaControl" class="hidden">
+    <!-- Header: Industrial Command Center -->
+    <div class="panel" style="background: #0f172a; color: white; border-bottom: 4px solid var(--metro-gold); padding: 20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <h2 style="margin:0; letter-spacing:2px; font-weight:900;">SCADA OPERATION MATRIX</h2>
+                <small style="color:var(--metro-slate);">SYSTEM LOGIC | SIGNALING | HARDWARE DISPATCH</small>
+            </div>
+            <div id="statusIndicator" style="background:#065f46; padding:8px 16px; border-radius:20px; font-weight:bold; font-size:12px; border:1px solid #10b981;">
+                ● SYSTEM LIVE
+            </div>
+        </div>
+    </div>
+
+    <!-- The 16-Point Task Dispatcher -->
+    <div class="panel">
+        <div style="display:grid; grid-template-columns: 2fr 1fr; gap:20px;">
+            <div>
+                <h4><i class="fas fa-microchip"></i> Hardware Logic Dispatcher (16 Tasks)</h4>
+                <div class="table-wrapper" style="margin-top:15px;">
+                    <table style="width:100%; border-collapse:collapse;">
+                        <thead style="background:#f1f5f9;">
+                            <tr>
+                                <th style="padding:10px; text-align:left;">TASK DESCRIPTION</th>
+                                <th style="padding:10px; width:120px;">STATUS</th>
+                                <th style="padding:10px; width:250px;">ASSIGNED OFFICER</th>
+                            </tr>
+                        </thead>
+                        <tbody id="scadaBody">
+                            <!-- Tasks will be injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <!-- Command Override Terminal -->
+            <div style="background:#f8fafc; padding:20px; border-radius:12px; border:1px solid #e2e8f0;">
+                <h4><i class="fas fa-terminal"></i> Command Terminal</h4>
+                <textarea id="commandTerminal" rows="12" placeholder="System override or log instructions..." style="width:100%; font-family:monospace; font-size:12px; padding:10px;"></textarea>
+                <button onclick="window.dispatchSCADACommand()" class="info" style="width:100%; margin-top:10px; font-weight:bold;">EXECUTE COMMAND</button>
+            </div>
+        </div>
+    </div>
 </div>
 <div id="scanSuccessOverlay" class="hidden" style="position:fixed; inset:0; background:rgba(16, 185, 129, 0.95); z-index:10000; display:flex; flex-direction:column; align-items:center; justify-content:center; color:white;">
     <i class="fas fa-check-circle" style="font-size:120px; margin-bottom:20px;"></i>
@@ -9622,6 +9668,61 @@ window.generateDirectivePrint = async function() {
     </div>`;
 
     reportContainer.classList.remove("hidden");
+};
+  // 1. Updated 16-Point SOP Book
+const SOP_GUIDE_BOOK = {
+    "TASK_01": { title: "1. IR Sensor TX", instr: "Transmit unit power and alignment." },
+    "TASK_02": { title: "2. IR Sensor RX", instr: "Receiver code and wire fix." },
+    "TASK_03": { title: "3. 230V Connection", instr: "AC supply integration." },
+    "TASK_04": { title: "4. SMPS Connection", instr: "Power supply unit." },
+    "TASK_05": { title: "5. DC Distribution", instr: "Low-voltage route." },
+    "TASK_06": { title: "6. Bed Pi Coding", instr: "Flash Bed Pi logic." },
+    "TASK_07": { title: "7. Master Pi Coding", instr: "Flash Master Pi logic." },
+    "TASK_08": { title: "8. System Housing", instr: "Secure mounting." },
+    "TASK_09": { title: "9. Cooling (Bed Pi)", instr: "Install Bed Pi heatsink." },
+    "TASK_10": { title: "10. Cooling (Master Pi)", instr: "Install Master Pi heatsink." },
+    "TASK_11": { title: "11. Cooling (System)", instr: "Main enclosure vent." },
+    "TASK_12": { title: "12. Ultrasonic Fixing", instr: "Mount sensors." },
+    "TASK_13": { title: "13. Ultrasonic Wiring", instr: "Sensor signal cabling." },
+    "TASK_14": { title: "14. Siren Calibration", instr: "Decibel thresholding." },
+    "TASK_15": { title: "15. Network Handshake", instr: "Node communication." },
+    "TASK_16": { title: "16. Final Stress Test", instr: "Full authority verify." }
+};
+
+// 2. SCADA Task Dispatcher
+window.loadScadaMatrix = async () => {
+    const tbody = document.getElementById("scadaBody");
+    if(!tbody) return;
+
+    // Fetch users for dropdowns
+    const userSnap = await get(ref(db, "users"));
+    let userOptions = `<option value="">-- Assign Personnel --</option>`;
+    userSnap.forEach(u => {
+        if(!u.val().banned) {
+            userOptions += `<option value="${u.key}">${(u.val().name || u.val().email).toUpperCase()}</option>`;
+        }
+    });
+
+    tbody.innerHTML = "";
+    Object.keys(SOP_GUIDE_BOOK).forEach(code => {
+        const task = SOP_GUIDE_BOOK[code];
+        tbody.innerHTML += `
+            <tr style="border-bottom:1px solid #e2e8f0;">
+                <td style="padding:15px;"><b>${task.title}</b><br><small style="color:#64748b;">${task.instr}</small></td>
+                <td style="text-align:center;"><span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">STANDBY</span></td>
+                <td><select style="width:100%; padding:8px;" onchange="window.assignScadaTask('${code}', this.value)">${userOptions}</select></td>
+            </tr>`;
+    });
+};
+
+window.dispatchSCADACommand = () => {
+    const command = document.getElementById("commandTerminal").value;
+    if(!command) return alert("Terminal Empty.");
+    if(confirm(`EXECUTE SYSTEM COMMAND:\n"${command}"`)) {
+        push(ref(db, "logs"), { type: "SCADA_COMMAND", details: command, time: serverTimestamp() });
+        alert("✅ Broadcast Sent.");
+        document.getElementById("commandTerminal").value = "";
+    }
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
