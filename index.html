@@ -2320,19 +2320,40 @@ tr:hover { background: #fcfcfd; }
 
 <!-- --- SCADA LOCAL SHIFT REPORT COPY GENERATOR MODAL --- -->
 <div id="scadaPrintModal" class="modal-overlay hidden">
-    <div class="panel" style="width:360px; border-top: 6px solid #0284c7;">
+    <div class="panel" style="width:400px; border-top: 6px solid #0284c7;">
         <h3><i class="fas fa-print"></i> Shift Report Configuration</h3>
-        <p style="color:#64748b; font-size:12px; margin-bottom:15px;">Specify transient structural variables below. Data is utilized locally for layout rendering and will not be pushed to the database.</p>
+        <p style="color:#64748b; font-size:12px; margin-bottom:15px;">Select target operational infrastructure mapping parameters below. This data is utilized locally for layout rendering and will not be pushed to the database.</p>
         
-        <label style="font-weight:bold; font-size:11px;">TARGET PLATFORM NUMBER</label>
-        <input type="text" id="printPlatformNo" placeholder="e.g. Platform 1A, Platform 2" style="border: 2px solid #cbd5e1;">
-        
-        <label style="font-weight:bold; font-size:11px; margin-top:10px; display:block;">CORRIDOR DIRECTION SIDE</label>
-        <select id="printPlatformSide" style="border: 2px solid #cbd5e1; height:45px;">
-            <option value="UP LINE (NORTHBOUND / EASTBOUND)">UP LINE (North/East Bound)</option>
-            <option value="DOWN LINE (SOUTHBOUND / WESTBOUND)">DOWN LINE (South/West Bound)</option>
-            <option value="CROSS-TRACK RUNTIME">CROSS-TRACK REVERSAL</option>
+        <label style="font-weight:700; color:var(--metro-blue); font-size: 11px; text-transform: uppercase;">Step 1: Select Corridor</label>
+        <select id="scadaPrintLineSelect" onchange="handleScadaPrintLineChange()" style="border:2px solid var(--metro-blue); font-weight:600; margin-bottom: 12px;">
+            <option value="">-- Select Line Corridor --</option>
+            <option value="Blue Line">Blue Line (North-South)</option>
+            <option value="Green Line">Green Line (East-West)</option>
+            <option value="Purple Line">Purple Line (Joka ↔ Majerhat)</option>
+            <option value="Yellow Line">Yellow Line (Noapara ↔ Airport)</option>
+            <option value="Orange Line">Orange Line (New Garia ↔ Airport)</option>
+            <option value="Pink Line">Pink Line (Baranagar ↔ Barrackpore)</option>
         </select>
+
+        <label style="font-weight:700; color:var(--metro-blue); font-size: 11px; text-transform: uppercase;">Step 2: Select Station</label>
+        <select id="scadaPrintStationSelect" disabled style="background:#f1f5f9; margin-bottom: 12px;">
+            <option value="">-- First Select a Corridor --</option>
+        </select>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div>
+                <label style="font-weight:bold; font-size:11px;">PLATFORM NO</label>
+                <input type="text" id="printPlatformNo" placeholder="e.g. PF-1, PF-2" style="border: 2px solid #cbd5e1;">
+            </div>
+            <div>
+                <label style="font-weight:bold; font-size:11px;">LINE DIRECTION</label>
+                <select id="printPlatformSide" style="border: 2px solid #cbd5e1; height:45px;">
+                    <option value="UP LINE">UP LINE</option>
+                    <option value="DOWN LINE">DOWN LINE</option>
+                    <option value="REVERSAL LOOP">REVERSAL LOOP</option>
+                </select>
+            </div>
+        </div>
         
         <div style="display:flex; gap:10px; margin-top:20px;">
             <button class="secondary" style="flex:1;" onclick="document.getElementById('scadaPrintModal').classList.add('hidden')">CANCEL</button>
@@ -9789,17 +9810,61 @@ window.generateDirectivePrint = async function() {
 
     reportContainer.classList.remove("hidden");
 };
- // --- CENTRAL GLOBAL SCADA ENGINE MODULE ---
+// =========================================================
+// 🌐 GLOBAL SCADA INITIALIZATION & DROPDOWN ARBITRATION
+// =========================================================
+
+// Bind explicitly to window container namespace to eliminate ReferenceErrors
+window.SCADA_PROTOCOLS = {
+    "TASK_01": { title: "IR Sensor TX Installation", icon: "fa-broadcast-tower", caution: "⚠️ PRECISE ALIGNMENT REQUIRED. Avoid direct laser eye exposure." },
+    "TASK_02": { title: "IR Sensor RX Installation", icon: "fa-satellite-dish", caution: "⚠️ SHIELD REQUIRED. Prevent ambient sunlight from triggering false positives." },
+    "TASK_03": { title: "230V AC Power Connection", icon: "fa-bolt", caution: "⚡ FATAL SHOCK HAZARD. Isolate mains. Wear Class-0 dielectric gloves." },
+    "TASK_04": { title: "SMPS Power Supply Connection", icon: "fa-plug", caution: "⚠️ VERIFY POLARITY. Incorrect wiring will fry the logic boards." },
+    "TASK_05": { title: "DC Power Distribution Setup", icon: "fa-network-wired", caution: "⚠️ MEASURE DROP. Ensure 5.1V reaches the end of the line under load." },
+    "TASK_06": { title: "Bed Pi Programming & Coding", icon: "fa-microchip", caution: "⚠️ STATIC SENSITIVE. Ground yourself before touching GPIO pins." },
+    "TASK_07": { title: "Master Pi Programming & Coding", icon: "fa-server", caution: "⚠️ CRITICAL NODE. Double-check local IP bindings before flashing." },
+    "TASK_08": { title: "System Housing Assembly", icon: "fa-box", caution: "⚠️ IP65 RATING. Ensure all rubber gaskets are sealed tightly against dust." },
+    "TASK_09": { title: "Cooling System Setup for Bed Pi", icon: "fa-fan", caution: "⚠️ THERMAL PASTE. Apply uniformly to prevent thermal throttling." },
+    "TASK_10": { title: "Cooling System Setup for Master Pi", icon: "fa-fan", caution: "⚠️ ACTIVE EXHAUST. Ensure fan blows OUTWARD from the housing." },
+    "TASK_11": { title: "Main System Cooling Arrangement", icon: "fa-wind", caution: "⚠️ CLEARANCE. Maintain 50mm distance from tunnel walls for airflow." },
+    "TASK_12": { title: "Ultrasonic Sensor Mounting", icon: "fa-wave-square", caution: "⚠️ ACOUSTIC ECHO. Do not mount flush against metallic vibrating panels." },
+    "TASK_13": { title: "Ultrasonic Sensor Wiring", icon: "fa-project-diagram", caution: "⚠️ SIGNAL NOISE. Keep data lines separate from AC power lines." },
+    "TASK_14": { title: "Siren Calibration & Testing", icon: "fa-bullhorn", caution: "⚠️ HIGH DECIBEL. Wear ear protection during alarm sequence testing." },
+    "TASK_15": { title: "Network Handshake Configuration", icon: "fa-wifi", caution: "⚠️ PACKET LOSS. Ensure UDP broadcast reaches all subnets." },
+    "TASK_16": { title: "Final System Stress Testing", icon: "fa-vial", caution: "⚠️ SYSTEM LOCKDOWN. Warn station master before triggering simulated breaches." }
+};
+
 let scadaStream = null;
 let scadaProofBase64 = null;
-let scadaLocalCache = {}; // Ephemeral state object for real-time local print execution
+let scadaLocalCache = {}; 
+
+// Dynamic Line Change Dropdown inside Print Config Modal
+window.handleScadaPrintLineChange = () => {
+    const lineSel = document.getElementById("scadaPrintLineSelect");
+    const stnSel = document.getElementById("scadaPrintStationSelect");
+    
+    stnSel.innerHTML = "<option value=''>-- Select Station --</option>";
+    stnSel.disabled = true;
+    stnSel.style.background = "#f1f5f9";
+
+    const selectedLine = lineSel.value;
+    if (selectedLine && METRO_STATIONS[selectedLine]) {
+        METRO_STATIONS[selectedLine].forEach(stn => {
+            const opt = document.createElement("option");
+            opt.value = stn;
+            opt.innerText = stn;
+            stnSel.appendChild(opt);
+        });
+        stnSel.disabled = false;
+        stnSel.style.background = "#fff";
+    }
+};
 
 // Hook visibility parameters during switchTab commands
 const baseSwitchTab = window.switchTab;
 window.switchTab = (t) => {
     baseSwitchTab(t);
     if(t === 'scadaControl') {
-        // Toggle administrative view nodes based on account context
         document.getElementById("btnScadaAudit").style.display = isAdmin ? "inline-flex" : "none";
         document.getElementById("btnScadaDispatch").style.display = isAdmin ? "inline-flex" : "none";
         if(document.getElementById("btnGlobalScadaReset")) {
@@ -9821,7 +9886,7 @@ window.switchScadaMode = (mode) => {
     if (mode === 'dispatch') renderScadaDispatch();
 };
 
-// --- ADMIN DISPATCH MAPPING WITH AUTOMATIC RE-ASSIGN BLOCKERS ---
+// --- TASK DISPATCH MATRIX (WITH PERSISTENT RE-ASSIGN DISABLE LOCKS) ---
 async function renderScadaDispatch() {
     if (!isAdmin) return;
     const tbody = document.getElementById("scadaDispatchBody");
@@ -9834,12 +9899,11 @@ async function renderScadaDispatch() {
         }
     });
 
-    // Execute absolute read for locking states
     const networkSnap = await get(ref(db, "scada_network"));
     const activeAssignments = networkSnap.exists() ? networkSnap.val() : {};
 
     tbody.innerHTML = "";
-    Object.entries(SCADA_PROTOCOLS).forEach(([code, data]) => {
+    Object.entries(window.SCADA_PROTOCOLS).forEach(([code, data]) => {
         const assignedData = activeAssignments[code];
         const isLocked = assignedData && assignedData.status !== "STANDBY";
         
@@ -9873,7 +9937,7 @@ window.dispatchScadaTask = async (code) => {
     const [uid, name] = sel.split('|');
 
     await update(ref(db, `scada_network/${code}`), {
-        title: SCADA_PROTOCOLS[code].title,
+        title: window.SCADA_PROTOCOLS[code].title,
         assignedUid: uid,
         assignedName: name,
         status: "WORKING",
@@ -9883,10 +9947,10 @@ window.dispatchScadaTask = async (code) => {
     renderScadaDispatch();
 };
 
-// --- FIELD TECHNICIAN WORKBENCH MANAGEMENT ---
+// --- FIELD WORKBENCH RENDERING CONTROLLER ---
 function renderScadaWorkbench() {
     const container = document.getElementById("scadaMyTasks");
-    container.innerHTML = `<div style="text-align:center; padding:20px;"><i class="fas fa-sync fa-spin"></i> Polling telemetry for targeted task loads...</div>`;
+    container.innerHTML = `<div style="text-align:center; padding:20px;"><i class="fas fa-sync fa-spin"></i> Polling workstation task registers...</div>`;
 
     onValue(ref(db, "scada_network"), snap => {
         container.innerHTML = "";
@@ -9897,9 +9961,9 @@ function renderScadaWorkbench() {
                 const v = c.val();
                 if (v.assignedUid === currentUser.uid && v.status === "WORKING") {
                     hasTasks = true;
-                    const proto = SCADA_PROTOCOLS[c.key];
+                    const proto = window.SCADA_PROTOCOLS[c.key];
                     container.innerHTML += `
-                    <div style="background:white; border:1px solid #e2e8f0; border-left:6px solid #3b82f6; padding:18px; border-radius:12px; box-shadow:var(--card-shadow);">
+                    <div style="background:white; border:1px solid #e2e8f0; border-left:6px solid #3b82f6; padding:18px; border-radius:12px;">
                         <h4 style="margin:0 0 5px 0; color:var(--metro-blue); font-size:15px; font-weight:900;">${v.title}</h4>
                         <div class="scada-caution">${proto.caution}</div>
                         <div style="margin-top:15px; display:flex; justify-content:space-between; align-items:center; border-top:1px solid #f1f5f9; padding-top:10px;">
@@ -9912,11 +9976,11 @@ function renderScadaWorkbench() {
                 }
             });
         }
-        if (!hasTasks) container.innerHTML = `<div style="text-align:center; padding:30px; color:#64748b; font-weight:600; background:white; border-radius:12px; border:1px solid #e2e8f0;">No active engineering workflows are targeted to your workspace profile.</div>`;
+        if (!hasTasks) container.innerHTML = `<div style="text-align:center; padding:30px; color:#64748b; font-weight:600; background:white; border-radius:12px;">No active engineering workflows are targeted to your workspace profile.</div>`;
     });
 }
 
-// --- STREAM ARBITRATION AND PHOTO FRAME CAPTURES ---
+// --- OPTIMIZED LIVE HARDWARE CAMERA STREAMING ---
 window.openScadaCamera = async (taskCode) => {
     document.getElementById("scadaActiveTaskCode").value = taskCode;
     document.getElementById("scadaProofModal").classList.remove("hidden");
@@ -10013,7 +10077,7 @@ function renderScadaAudit() {
                 if (v.status === "REVIEW") {
                     hasReviews = true;
                     container.innerHTML += `
-                    <div style="background:white; border:1px solid #cbd5e1; border-left:6px solid #f59e0b; padding:15px; border-radius:12px; display:flex; gap:20px; box-shadow:var(--card-shadow);">
+                    <div style="background:white; border:1px solid #cbd5e1; border-left:6px solid #f59e0b; padding:15px; border-radius:12px; display:flex; gap:20px;">
                         <img src="${v.proofImage}" onclick="openBigPhoto('${v.proofImage}')" style="width:140px; height:105px; object-fit:cover; border-radius:6px; cursor:zoom-in; border:2px solid var(--metro-blue);">
                         <div style="flex:1;">
                             <h4 style="margin:0 0 5px 0; color:var(--metro-blue); font-size:14px; font-weight:900;">${v.title}</h4>
@@ -10033,21 +10097,21 @@ function renderScadaAudit() {
 
 window.auditScadaTask = async (code, decision) => {
     const payload = { status: decision, auditedBy: currentUser.name, auditedAt: serverTimestamp() };
-    if (decision === 'VERIFIED') payload.proofImage = null; // Purge base64 payload to optimize RTDB database space allocation
+    if (decision === 'VERIFIED') payload.proofImage = null; 
     await update(ref(db, `scada_network/${code}`), payload);
     renderScadaAudit();
 };
 
-// --- REAL-TIME LIVE 4X4 COMMAND STATUS MATRIX VIEW ---
+// --- REAL-TIME LIVE SCADA MONITORING GRID VIEW ---
 function renderScadaMatrix() {
     const grid = document.getElementById("scadaMatrixGrid");
     
     onValue(ref(db, "scada_network"), snap => {
         grid.innerHTML = "";
         const dbData = snap.exists() ? snap.val() : {};
-        scadaLocalCache = dbData; // Cache deep snapshot values for transient print pipeline routing
+        scadaLocalCache = dbData; 
 
-        Object.entries(SCADA_PROTOCOLS).forEach(([code, proto]) => {
+        Object.entries(window.SCADA_PROTOCOLS).forEach(([code, proto]) => {
             const nodeData = dbData[code] || {};
             const status = nodeData.status || "STANDBY";
             
@@ -10091,21 +10155,30 @@ function renderScadaMatrix() {
     });
 }
 
-// --- VOLATILE TEMPORARY PRINT MANAGEMENT FRAMEWORK (ZERO DB INJECTION) ---
+// --- EPHEMERAL SHIFT COLD COPY PRINT LOGIC ---
 window.openScadaPrintDialog = () => {
+    document.getElementById("scadaPrintLineSelect").value = "";
+    document.getElementById("scadaPrintStationSelect").innerHTML = "<option value=''>-- Select Corridor First --</option>";
+    document.getElementById("scadaPrintStationSelect").disabled = true;
     document.getElementById("printPlatformNo").value = "";
     document.getElementById("scadaPrintModal").classList.remove("hidden");
 };
 
 window.executeScadaLocalPrint = () => {
+    const corridor = document.getElementById("scadaPrintLineSelect").value;
+    const station = document.getElementById("scadaPrintStationSelect").value;
     const platNo = document.getElementById("printPlatformNo").value.trim() || "NOT SPECIFIED";
     const sideName = document.getElementById("printPlatformSide").value;
-    document.getElementById("scadaPrintModal").classList.add("hidden");
 
+    if (!corridor || !station) {
+        return alert("⚠️ Configuration Incomplete: Select both Corridor and Target Station.");
+    }
+
+    document.getElementById("scadaPrintModal").classList.add("hidden");
     const printWin = window.open('', '_blank', 'width=1000,height=800');
     
     let tableRowsMarkup = "";
-    Object.entries(SCADA_PROTOCOLS).forEach(([code, proto]) => {
+    Object.entries(window.SCADA_PROTOCOLS).forEach(([code, proto]) => {
         const dbRecord = scadaLocalCache[code] || {};
         const status = dbRecord.status || "STANDBY";
         
@@ -10146,7 +10219,8 @@ window.executeScadaLocalPrint = () => {
             
             <div style="border: 8pt solid black; padding: 20px; margin-bottom: 30px;">
                 <span class="meta-row" style="font-size:32pt; display:block; border-bottom:3pt solid black; padding-bottom:5px; margin-bottom:15px;">SCADA MONITORING MATRIX SUMMARY</span>
-                <span class="meta-row"><b>TARGET STATION DESIG:</b> ${(document.getElementById("stationSelect")?.value || "INTERNAL BENCH").toUpperCase()}</span>
+                <span class="meta-row"><b>TARGET ROUTING CORRIDOR:</b> ${corridor.toUpperCase()}</span>
+                <span class="meta-row"><b>TARGET STATION DESIG:</b> ${station.toUpperCase()}</span>
                 <span class="meta-row"><b>PLATFORM RUNWAY NO:</b> ${platNo.toUpperCase()}</span>
                 <span class="meta-row"><b>CORRIDOR LINE TRACK:</b> ${sideName}</span>
                 <span class="meta-row"><b>TIMESTAMP OF RUN:</b> ${new Date().toLocaleString('en-IN')}</span>
@@ -10161,16 +10235,13 @@ window.executeScadaLocalPrint = () => {
                         <th style="width:20%; text-align:right; padding-right:10px;">STATUS</th>
                     </tr>
                 </thead>
-                <tbody>
-                    ${tableRowsMarkup}
-                </tbody>
+                <tbody>${tableRowsMarkup}</tbody>
             </table>
 
             <div style="margin-top: 100px; border-top: 6pt solid black; width: 50%; text-align: left; padding-top: 10px;">
                 <div style="font-size: 28pt; font-weight: 900;">${(currentUser.name || 'SYSTEM ADMIN').toUpperCase()}</div>
                 <div style="font-size: 18pt; font-weight: 900; opacity:0.8;">SUPERVISING INSPECTION OFFICER</div>
             </div>
-            <div style="margin-top: 50px; text-align: center; font-size: 14pt; border-top: 3pt dashed black; padding-top: 15px; font-weight: bold;">[TRANSIENT EPHEMERAL MATRIX RECORD • COLD COPY]</div>
             <script>
                 window.onload = function() {
                     setTimeout(function() { window.print(); window.close(); }, 800);
@@ -10183,18 +10254,16 @@ window.executeScadaLocalPrint = () => {
     printWin.document.close();
 };
 
-// --- SYSTEM ARCHITECTURE DEPLOYMENT CLEARANCE PURGE (RESET) ---
+// --- RESTORE NETWORK & RESET OPERATION WORKFLOWS ---
 window.resetScadaNetwork = async () => {
     if (!isAdmin) return alert("Security Breach: Operational reset parameters are restricted to System Oversight Console profile.");
     if (!confirm("⚠️ CRITICAL OVERRIDE: Clear ALL fleet assignments and wipe matrix logs?\n\nThis will unlock all operational steps and return nodes to open STANDBY status.")) return;
 
     try {
-        const networkRef = ref(db, "scada_network");
         const updates = {};
-        
-        Object.keys(SCADA_PROTOCOLS).forEach(code => {
+        Object.keys(window.SCADA_PROTOCOLS).forEach(code => {
             updates[`scada_network/${code}`] = {
-                title: SCADA_PROTOCOLS[code].title,
+                title: window.SCADA_PROTOCOLS[code].title,
                 status: "STANDBY",
                 assignedUid: null,
                 assignedName: null
@@ -10203,7 +10272,10 @@ window.resetScadaNetwork = async () => {
 
         await update(ref(db), updates);
         alert("✅ SCADA Matrix purged. All operations restored to open configurations.");
-        switchScadaMode('matrix');
+        if(document.getElementById("tab-scadaControl").classList.contains("hidden") === false) {
+            renderScadaDispatch();
+            renderScadaMatrix();
+        }
     } catch(e) {
         alert("Wipe Failed: " + e.message);
     }
