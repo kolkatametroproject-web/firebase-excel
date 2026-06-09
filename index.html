@@ -9951,15 +9951,27 @@ window.switchTab = (t) => {
 };
 
 window.switchScadaMode = (mode) => {
-    ['matrix', 'workbench', 'audit', 'dispatch'].forEach(m => {
-        document.getElementById(`tab-scadaControl`).querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
-        document.getElementById(`tab-scadaControl`).querySelector(`#scada-${m}-view`).classList.add('hidden');
+    // Gracefully cycle active button state within the local panel context
+    const scadaTabContainer = document.getElementById('tab-scadaControl');
+    if (!scadaTabContainer) return;
+
+    scadaTabContainer.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+    
+    // Hard close view layers to enforce complete structural data isolation
+    const subViews = ['matrix', 'workbench', 'audit', 'dispatch'];
+    subViews.forEach(m => {
+        const viewEl = document.getElementById(`scada-${m}-view`);
+        if (viewEl) viewEl.classList.add('hidden');
     });
     
-    document.getElementById(`scada-${mode}-view`).classList.remove('hidden');
-    const subTabBtn = document.getElementById(`btnScadaSub` + mode.charAt(0).toUpperCase() + mode.slice(1));
-    if(subTabBtn) subTabBtn.classList.add('active');
+    // Display targeted node canvas layer
+    const targetView = document.getElementById(`scada-${mode}-view`);
+    if (targetView) targetView.classList.remove('hidden');
 
+    const activeBtn = document.getElementById(`btnScadaSub${mode.charAt(0).toUpperCase() + mode.slice(1)}`);
+    if (activeBtn) activeBtn.classList.add('active');
+
+    // Trigger local memory block arrays without leaking into adjacent tabs
     if (mode === 'matrix') renderScadaMatrix();
     if (mode === 'workbench') renderScadaWorkbench();
     if (mode === 'audit') renderScadaAudit();
@@ -10206,15 +10218,21 @@ window.auditScadaTask = async (code, decision) => {
         renderScadaAudit();
     } catch(e) { console.error(e); }
 };
-
 function renderScadaMatrix() {
     const grid = document.getElementById("scadaMatrixGrid");
     if (!grid) return;
     
+    // Wrap entire grid structural block to isolate the dark dashboard frame cleanly
+    const parentPanel = grid.closest('.panel');
+    if (parentPanel) {
+        parentPanel.className = "panel scada-container-box";
+    }
+    
+    // Secure real-time downstream data sync loop pipeline
     onValue(ref(db, "scada_network"), snap => {
         grid.innerHTML = "";
         const dbData = snap.exists() ? snap.val() : {};
-        scadaLocalCache = dbData; 
+        window.scadaLocalCache = dbData; 
 
         Object.entries(window.SCADA_PROTOCOLS).forEach(([code, proto]) => {
             const nodeData = dbData[code] || {};
@@ -10227,16 +10245,17 @@ function renderScadaMatrix() {
             } else if (status === "WORKING") {
                 statusClass = "working";
                 statusText = "OPERATIONAL LINE ACTIVE";
-                metaText = `ENG: ${nodeData.assignedName}`;
+                metaText = `ENG: ${nodeData.assignedName || 'Omitted'}`;
             } else if (status === "REVIEW") {
                 statusClass = "review";
                 statusText = "STAGE AUDIT LOCKOUT";
-                metaText = `ENG: ${nodeData.assignedName}`;
+                metaText = `ENG: ${nodeData.assignedName || 'Omitted'}`;
             } else if (status === "VERIFIED") {
                 statusClass = "verified";
                 statusText = "SECURED / VERIFIED";
                 metaText = `QA: ${nodeData.auditedBy || 'Soham Pal'}`;
-                // Matches the visual layout in your snapshot perfectly
+                
+                // Formatted verified layer mapping directly to terminal UI standards
                 tickOverlay = `
                 <div class="big-green-tick-overlay">
                     <i class="fas fa-check-circle" style="font-size:45px; color:white; margin-bottom:10px;"></i>
@@ -10246,9 +10265,8 @@ function renderScadaMatrix() {
                 </div>`;
             }
 
-            // Stays inside standard theme syntax unless verified turns it into a high-visibility block
             const labelColorStyle = (status === "VERIFIED") ? "color:rgba(255,255,255,0.7);" : "color:var(--metro-slate);";
-            const titleColorStyle = (status === "VERIFIED") ? "color:#ffffff;" : "color:var(--metro-blue);";
+            const titleColorStyle = (status === "VERIFIED") ? "color:#ffffff;" : "color:#f8fafc;";
 
             grid.innerHTML += `
             <div class="scada-node ${statusClass}">
@@ -10258,15 +10276,14 @@ function renderScadaMatrix() {
                     <div style="font-size:9px; font-weight:bold; letter-spacing:0.5px; ${labelColorStyle}">SYSTEM ADDR: ${code.toUpperCase()}</div>
                     <div style="font-size:13px; font-weight:800; line-height:1.2; margin:4px 0; ${titleColorStyle}">${proto.title}</div>
                 </div>
-                <div style="z-index:2; position:relative; margin-top:10px; border-top:1px solid var(--border-color); padding-top:8px;">
+                <div style="z-index:2; position:relative; margin-top:10px; border-top:1px solid #1e293b; padding-top:8px;">
                     <div style="font-size:11px; font-weight:800; display:flex; align-items:center; gap:5px;"><i class="fas fa-link" style="font-size:10px;"></i> ${statusText}</div>
-                    <div style="font-size:10px; color:var(--metro-slate); margin-top:2px; font-weight:600;">${metaText}</div>
+                    <div style="font-size:10px; color:#94a3b8; margin-top:2px; font-weight:600;">${metaText}</div>
                 </div>
             </div>`;
         });
     });
 }
-
 // =========================================================
 // 🖨️ STANDARDIZED LINE-BY-LINE A4 DOCUMENT CONROLLER
 // =========================================================
@@ -10278,7 +10295,7 @@ window.openScadaPrintDialog = () => {
     document.getElementById("printPlatformNo").value = "";
     document.getElementById("scadaPrintModal").classList.remove("hidden");
 };
-// --- STANDARD APPLICATION REFERENCE A4 SCADA PRINT GENERATOR ---
+// --- 3. CONSOLIDATED LOCAL SHIFT REPORT COPY SPAWNER (NATIVE POPUP WINDOW) ---
 window.executeScadaLocalPrint = () => {
     const corridor = document.getElementById("scadaPrintLineSelect").value;
     const station = document.getElementById("scadaPrintStationSelect").value;
@@ -10289,12 +10306,17 @@ window.executeScadaLocalPrint = () => {
         return alert("⚠️ Configuration Incomplete: Select both Corridor and Target Station.");
     }
 
+    // Gracefully dim local overlay configurations before spawning window process
     document.getElementById("scadaPrintModal").classList.add("hidden");
+    
     const printWin = window.open('', '_blank', 'width=1000,height=800');
+    if (!printWin) return alert("Pop-up blocked! Please enable pop-ups to print the shift report copy.");
     
     let tableRowsMarkup = "";
+    const activeCache = window.scadaLocalCache || {};
+
     Object.entries(window.SCADA_PROTOCOLS).forEach(([code, proto]) => {
-        const dbRecord = scadaLocalCache[code] || {};
+        const dbRecord = activeCache[code] || {};
         const status = dbRecord.status || "STANDBY";
         
         let statusPrintLabel = "OPEN / STANDBY";
@@ -10303,7 +10325,7 @@ window.executeScadaLocalPrint = () => {
         if(status === "VERIFIED") statusPrintLabel = "PASSED"; 
 
         tableRowsMarkup += `
-            <tr style="border-bottom: 1px solid var(--border-color); font-size: 13px;">
+            <tr style="border-bottom: 1px solid #e2e8f0; font-size: 13px;">
                 <td style="padding: 12px 10px; font-weight: bold; color: #1e293b; white-space: nowrap;">${code.replace('_', ' ')}</td>
                 <td style="padding: 12px 10px; text-align: left;">
                     <strong style="color: #0f172a; font-size: 13.5px;">${proto.title.toUpperCase()}</strong><br>
@@ -10319,7 +10341,7 @@ window.executeScadaLocalPrint = () => {
         <html lang="en">
         <head>
             <meta charset="UTF-8">
-            <title>System Implementation Status</title>
+            <title>System Implementation Status - Print Manifest</title>
             <style>
                 :root {
                     --metro-blue: #0f172a;
@@ -10330,11 +10352,10 @@ window.executeScadaLocalPrint = () => {
                 @media print {
                     @page { size: A4; margin: 15mm; }
                     body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; background: white; }
-                    .no-print { display: none !important; }
                 }
                 body { 
                     margin: 0; 
-                    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; 
+                    font-family: 'Inter', system-ui, sans-serif; 
                     background: var(--bg-color); 
                     color: #1e293b;
                     font-size: 14px;
@@ -10346,19 +10367,15 @@ window.executeScadaLocalPrint = () => {
                     background: white;
                     padding: 24px;
                 }
-
-                /* Header Match with Sticky Bar Themes */
                 .header-container { 
                     background: var(--metro-blue); 
                     color: white; 
                     padding: 24px; 
                     border-bottom: 3px solid var(--metro-gold);
                     display: flex;
-                    justify-content: space-between;
                     align-items: center;
                     border-radius: 4px;
                 }
-                .header-left { display: flex; align-items: center; }
                 .header-logo {
                     width: 45px; height: 45px; background: var(--metro-gold); color: white;
                     display: flex; align-items: center; justify-content: center;
@@ -10366,100 +10383,53 @@ window.executeScadaLocalPrint = () => {
                 }
                 .header-text h1 { margin: 0; line-height: 1.2; font-size: 1.3rem; letter-spacing: 0.5px; text-transform: uppercase; }
                 .header-text small { color: #cbd5e1; font-weight: 600; text-transform: uppercase; font-size: 10px; display: block; margin-top: 2px; }
-
-                /* Document Title Panel Section */
                 .panel-title-container {
-                    background: #ffffff;
                     padding: 20px 0;
                     margin-top: 20px;
                     border-bottom: 2px solid #f1f5f9;
                 }
                 .panel-title-container h3 {
-                    margin: 0;
-                    color: var(--metro-blue);
-                    font-size: 1.15rem;
-                    font-weight: 800;
-                    display: flex;
-                    align-items: center;
-                    gap: 10px;
+                    margin: 0; color: var(--metro-blue); font-size: 1.15rem; font-weight: 800; display: flex; align-items: center; gap: 10px;
                 }
-
-                /* Line-By-Line Metadata Box Block */
                 .meta-list-block { 
                     margin: 20px 0; 
                     background: #ffffff; 
                     padding: 20px; 
                     border: 1.5px solid var(--border-color); 
                     border-radius: 16px;
-                    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+                    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
                 }
                 .meta-row { 
-                    display: block; 
-                    font-size: 13px; 
-                    font-weight: 700; 
-                    padding: 10px 0; 
-                    border-bottom: 1px solid #f1f5f9; 
-                    text-transform: uppercase; 
-                    color: #475569;
+                    display: block; font-size: 13px; font-weight: 700; padding: 10px 0; border-bottom: 1px solid #f1f5f9; text-transform: uppercase; color: #475569;
                 }
                 .meta-row:last-child { border-bottom: none; }
                 .meta-row strong { color: var(--metro-blue); font-weight: 800; }
-
-                /* Standardized Print Data Grid Table */
                 .table-wrapper { border-radius: 12px; border: 1px solid var(--border-color); overflow: hidden; margin-top: 25px; }
                 table { width: 100%; border-collapse: collapse; font-size: 13px; background: white; }
                 th { 
-                    background: #f8fafc; 
-                    color: var(--metro-slate); 
-                    font-weight: 700; 
-                    text-transform: uppercase; 
-                    font-size: 11px; 
-                    padding: 16px;
-                    border-bottom: 2px solid var(--border-color);
-                    text-align: left;
+                    background: #f8fafc; color: var(--metro-slate); font-weight: 700; text-transform: uppercase; font-size: 11px; padding: 16px; border-bottom: 2px solid var(--border-color); text-align: left;
                 }
-                td { border-bottom: 1px solid var(--border-color); }
-
-                /* Sign-off Layout Alignment */
-                .signature-alignment { 
-                    margin-top: 50px; 
-                    display: flex; 
-                    justify-content: flex-start;
-                    padding: 0 10px;
-                }
+                .signature-alignment { margin-top: 60px; display: flex; justify-content: flex-start; }
                 .sig-line { border-top: 2px solid var(--metro-blue); width: 260px; margin-bottom: 6px; }
                 .sig-name { font-size: 13px; font-weight: bold; text-transform: uppercase; color: var(--metro-blue); }
-                .sig-title { font-size: 10px; color: var(--metro-slate); font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-                
+                .sig-title { font-size: 10px; color: var(--metro-slate); font-weight: 700; text-transform: uppercase; }
                 .system-footer-tag { 
-                    text-align: center; 
-                    margin-top: 60px; 
-                    font-size: 11px; 
-                    color: var(--metro-slate); 
-                    font-weight: bold;
-                    border-top: 1px dashed var(--border-color); 
-                    padding-top: 15px; 
-                    text-transform: uppercase; 
-                    letter-spacing: 0.5px; 
+                    text-align: center; margin-top: 60px; font-size: 11px; color: var(--metro-slate); font-weight: bold; border-top: 1px dashed var(--border-color); padding-top: 15px; text-transform: uppercase;
                 }
             </style>
         </head>
         <body>
             <div class="invoice-wrapper">
                 <div class="header-container">
-                    <div class="header-left">
-                        <div class="header-logo">M</div>
-                        <div class="header-text">
-                            <h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1>
-                            <small>INSTITUTE OF ENGINEERING AND MANAGEMENT • UNIVERSITY OF ENGINEERING AND MANAGEMENT</small>
-                        </div>
+                    <div class="header-logo">M</div>
+                    <div class="header-text">
+                        <h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1>
+                        <small>INSTITUTE OF ENGINEERING AND MANAGEMENT • UNIVERSITY OF ENGINEERING AND MANAGEMENT</small>
                     </div>
                 </div>
-
                 <div class="panel-title-container">
-                    <h3><i class="fas fa-file-contract"></i> SYSTEM IMPLEMENTATION STATUS</h3>
+                    <h3><i class="fas fa-file-contract"></i> SCADA SHIFT DEPLOYMENT MANIFEST</h3>
                 </div>
-
                 <div class="meta-list-block">
                     <div class="meta-row"><strong>Target Corridor:</strong> ${corridor.toUpperCase()}</div>
                     <div class="meta-row"><strong>Target Station:</strong> ${station.toUpperCase()}</div>
@@ -10467,7 +10437,6 @@ window.executeScadaLocalPrint = () => {
                     <div class="meta-row"><strong>Track Direction Side:</strong> ${sideName.toUpperCase()}</div>
                     <div class="meta-row"><strong>Generated Run Timestamp:</strong> ${new Date().toLocaleString('en-IN')}</div>
                 </div>
-
                 <div class="table-wrapper">
                     <table>
                         <thead>
@@ -10478,27 +10447,21 @@ window.executeScadaLocalPrint = () => {
                                 <th style="width: 18%; text-align: right; padding-right: 10px;">Stage Status</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            ${tableRowsMarkup}
-                        </tbody>
+                        <tbody>${tableRowsMarkup}</tbody>
                     </table>
                 </div>
-
                 <div class="signature-alignment">
                     <div>
                         <div class="sig-line"></div>
-                        <div class="sig-name">${(currentUser.name || 'SYSTEM ADMIN')}</div>
+                        <div class="sig-name">${(window.currentUser?.name || 'SYSTEM ADMIN')}</div>
                         <div class="sig-title">SUPERVISING INSPECTION OFFICER</div>
                     </div>
                 </div>
-
-                <div class="system-footer-tag">
-                    [ Official System Generated Record • MRPSP SCADA Operations Terminal ]
-                </div>
+                <div class="system-footer-tag">[ Official System Generated Manifest • MRPSP SCADA Shift Operations ]</div>
             </div>
             <script>
                 window.onload = function() {
-                    setTimeout(function() { window.print(); window.close(); }, 800);
+                    setTimeout(function() { window.print(); window.close(); }, 500);
                 };
             <\/script>
         </body>
