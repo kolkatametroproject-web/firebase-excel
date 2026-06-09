@@ -2282,20 +2282,27 @@ tr:hover { background: #fcfcfd; }
 
 <div id="scadaProofModal" class="modal-overlay hidden">
     <div class="panel" style="width:400px; text-align:center; background:#1e293b; border: 2px solid #3b82f6;">
-        <h3 style="color:white; border-bottom:1px solid #334155; padding-bottom:10px;">📸 Upload Field Evidence</h3>
+        <h3 style="color:white; border-bottom:1px solid #334155; padding-bottom:10px;">📸 Capture Field Evidence</h3>
         <input type="hidden" id="scadaActiveTaskCode">
         
-        <div style="background:black; width:100%; height:250px; margin-bottom:15px; border-radius:8px; border:2px dashed #64748b; display:flex; align-items:center; justify-content:center; overflow:hidden;">
-            <img id="scadaProofPreview" src="" style="max-width:100%; max-height:100%; display:none;">
-            <span id="scadaProofPlaceholder" style="color:#64748b; font-weight:bold;">No Image Selected</span>
+        <div id="scadaVideoContainer" style="background:black; width:100%; height:250px; margin-bottom:15px; border-radius:8px; border:2px dashed #64748b; overflow:hidden; position:relative;">
+            <video id="scadaVideoFeed" autoplay playsinline muted style="width:100%; height:100%; object-fit:cover;"></video>
+            <img id="scadaProofPreview" src="" style="width:100%; height:100%; object-fit:cover; display:none; position:absolute; top:0; left:0; z-index:2;">
         </div>
-
-        <input type="file" id="scadaProofInput" accept="image/*" capture="environment" style="margin-bottom:15px; background:white; color:black;" onchange="previewScadaProof(this)">
+        
+        <div id="scadaCameraControls" style="display:flex; gap:10px; margin-bottom:15px;">
+            <button class="info" style="flex:1; padding: 12px; font-weight: 900;" onclick="captureScadaFrame()">
+                <i class="fas fa-camera"></i> CLICK PHOTO
+            </button>
+            <button class="warning hidden" id="btnScadaRetake" style="flex:1; padding: 12px; font-weight: 900;" onclick="retakeScadaFrame()">
+                <i class="fas fa-redo"></i> RETAKE
+            </button>
+        </div>
         
         <div style="display:flex; gap:10px;">
-            <button class="secondary" style="flex:1;" onclick="document.getElementById('scadaProofModal').classList.add('hidden')">CANCEL</button>
-            <button class="success" style="flex:2;" onclick="submitScadaProof()">
-                <i class="fas fa-upload"></i> UPLOAD & MARK FOR REVIEW
+            <button class="secondary" style="flex:1;" onclick="closeScadaCamera()">CANCEL</button>
+            <button class="success" id="btnScadaSubmitProof" style="flex:2;" onclick="submitScadaProof()" disabled>
+                <i class="fas fa-upload"></i> UPLOAD & SUBMIT
             </button>
         </div>
     </div>
@@ -9868,33 +9875,85 @@ function renderScadaWorkbench() {
     });
 }
 
-// Camera/Proof Handling
+// --- EXACT REPLACEMENT FOR: Camera/Proof Handling ---
+let scadaStream = null;
 let scadaProofBase64 = null;
-window.openScadaCamera = (taskCode) => {
-    document.getElementById("scadaActiveTaskCode").value = taskCode;
-    document.getElementById("scadaProofInput").value = "";
-    document.getElementById("scadaProofPreview").style.display = "none";
-    document.getElementById("scadaProofPlaceholder").style.display = "block";
-    scadaProofBase64 = null;
-    document.getElementById("scadaProofModal").classList.remove("hidden");
-};
 
-window.previewScadaProof = (input) => {
-    if (input.files && input.files[0]) {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            scadaProofBase64 = e.target.result;
-            document.getElementById("scadaProofPreview").src = scadaProofBase64;
-            document.getElementById("scadaProofPreview").style.display = "block";
-            document.getElementById("scadaProofPlaceholder").style.display = "none";
-        };
-        reader.readAsDataURL(input.files[0]);
+// 1. Start the Live Camera
+window.openScadaCamera = async (taskCode) => {
+    document.getElementById("scadaActiveTaskCode").value = taskCode;
+    document.getElementById("scadaProofModal").classList.remove("hidden");
+    
+    // Reset UI for new capture
+    document.getElementById("scadaProofPreview").style.display = "none";
+    document.getElementById("scadaVideoFeed").style.display = "block";
+    document.getElementById("btnScadaRetake").classList.add("hidden");
+    document.getElementById("btnScadaSubmitProof").disabled = true;
+    document.getElementById("btnScadaSubmitProof").innerHTML = `<i class="fas fa-upload"></i> UPLOAD & SUBMIT`;
+    scadaProofBase64 = null;
+
+    // Request Camera Access (Prefers Back Camera on Mobile)
+    try {
+        const vid = document.getElementById("scadaVideoFeed");
+        scadaStream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: "environment" } 
+        });
+        vid.srcObject = scadaStream;
+    } catch(e) {
+        alert("Camera Error: Please grant camera permissions. " + e.message);
     }
 };
 
+// 2. Snap the Photo
+window.captureScadaFrame = () => {
+    const vid = document.getElementById("scadaVideoFeed");
+    if(!scadaStream) return alert("Camera not fully loaded yet.");
+    
+    // Draw current video frame to a hidden canvas
+    const canvas = document.createElement("canvas");
+    canvas.width = vid.videoWidth;
+    canvas.height = vid.videoHeight;
+    canvas.getContext('2d').drawImage(vid, 0, 0);
+    
+    // Convert to Base64 (0.8 quality for database optimization)
+    scadaProofBase64 = canvas.toDataURL('image/jpeg', 0.8);
+    
+    // Update UI to show the snapped photo
+    document.getElementById("scadaProofPreview").src = scadaProofBase64;
+    document.getElementById("scadaProofPreview").style.display = "block";
+    document.getElementById("scadaVideoFeed").style.display = "none";
+    
+    // Toggle Buttons
+    document.getElementById("btnScadaRetake").classList.remove("hidden");
+    document.getElementById("btnScadaSubmitProof").disabled = false;
+};
+
+// 3. Trash the photo and try again
+window.retakeScadaFrame = () => {
+    scadaProofBase64 = null;
+    document.getElementById("scadaProofPreview").style.display = "none";
+    document.getElementById("scadaVideoFeed").style.display = "block";
+    document.getElementById("btnScadaRetake").classList.add("hidden");
+    document.getElementById("btnScadaSubmitProof").disabled = true;
+};
+
+// 4. Safely shut down hardware camera
+window.closeScadaCamera = () => {
+    if(scadaStream) { 
+        scadaStream.getTracks().forEach(t => t.stop()); 
+        scadaStream = null; 
+    }
+    document.getElementById("scadaProofModal").classList.add("hidden");
+};
+
+// 5. Upload to Firebase
 window.submitScadaProof = async () => {
     const code = document.getElementById("scadaActiveTaskCode").value;
     if(!scadaProofBase64) return alert("Please capture an image first.");
+
+    const btn = document.getElementById("btnScadaSubmitProof");
+    btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> UPLOADING...`;
+    btn.disabled = true;
 
     try {
         await update(ref(db, `scada_network/${code}`), {
@@ -9902,13 +9961,15 @@ window.submitScadaProof = async () => {
             proofImage: scadaProofBase64,
             submittedAt: serverTimestamp()
         });
-        document.getElementById("scadaProofModal").classList.add("hidden");
-        alert("✅ Proof submitted. Awaiting Admin Audit.");
+        
+        closeScadaCamera(); // Turns off camera and hides modal
+        alert("✅ Proof submitted successfully. Awaiting Admin verification.");
     } catch(e) {
         alert("Upload Failed: " + e.message);
+        btn.innerHTML = `<i class="fas fa-upload"></i> UPLOAD & SUBMIT`;
+        btn.disabled = false;
     }
 };
-
 // --- 3. AUDIT TERMINAL (ADMIN VERIFICATION) ---
 function renderScadaAudit() {
     if (!isAdmin) return;
