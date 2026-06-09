@@ -10039,32 +10039,51 @@ window.switchTab = (t) => {
     }
 };
 
+// --- SCADA SUB-VIEW NAVIGATION SWITCHER CONTROLLER ---
 window.switchScadaMode = (mode) => {
-    // Gracefully cycle active button state within the local panel context
     const scadaTabContainer = document.getElementById('tab-scadaControl');
     if (!scadaTabContainer) return;
 
+    // --- CRITICAL VISIBILITY LOCK FOR USER SIDE ---
+    // Forcefully keep Admin-only workspace panels hidden from standard users
+    const auditBtn = document.getElementById("btnScadaSubAudit");
+    const dispatchBtn = document.getElementById("btnScadaSubDispatch");
+    const resetBtn = document.getElementById("btnGlobalScadaReset");
+
+    if (auditBtn) auditBtn.style.display = isAdmin ? "inline-flex" : "none";
+    if (dispatchBtn) dispatchBtn.style.display = isAdmin ? "inline-flex" : "none";
+    if (resetBtn) resetBtn.style.display = isAdmin ? "inline-flex" : "none";
+
+    // SECURITY GATING: Re-route a malicious or accidental user back to 'matrix' 
+    // if they explicitly try to invoke 'audit' or 'dispatch' states
+    if (!isAdmin && (mode === 'audit' || mode === 'dispatch')) {
+        console.warn("SCADA Routing Intercepted: Standard accounts cannot compile oversight arrays.");
+        mode = 'matrix'; 
+    }
+
+    // Toggle nav active state indicators inside the SCADA menu bar block
     scadaTabContainer.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
     
-    // Hard close view layers to enforce complete structural data isolation
+    // Clear sub-panel render registers cleanly
     const subViews = ['matrix', 'workbench', 'audit', 'dispatch'];
     subViews.forEach(m => {
         const viewEl = document.getElementById(`scada-${m}-view`);
         if (viewEl) viewEl.classList.add('hidden');
     });
     
-    // Display targeted node canvas layer
+    // Un-hide target viewport container element safely
     const targetView = document.getElementById(`scada-${mode}-view`);
     if (targetView) targetView.classList.remove('hidden');
 
+    // Re-apply active CSS class context markers
     const activeBtn = document.getElementById(`btnScadaSub${mode.charAt(0).toUpperCase() + mode.slice(1)}`);
     if (activeBtn) activeBtn.classList.add('active');
 
-    // Trigger local memory block arrays without leaking into adjacent tabs
+    // Run dynamic compilation data sync engines safely
     if (mode === 'matrix') renderScadaMatrix();
     if (mode === 'workbench') renderScadaWorkbench();
-    if (mode === 'audit') renderScadaAudit();
-    if (mode === 'dispatch') renderScadaDispatch();
+    if (mode === 'audit' && isAdmin) renderScadaAudit();
+    if (mode === 'dispatch' && isAdmin) renderScadaDispatch();
 };
 
 // =========================================================
@@ -10233,15 +10252,16 @@ window.submitScadaProof = async () => {
     btn.disabled = true;
 
     try {
-        // Splitting optimization prevents real-time memory throttling on low-spec units
+        // Update the operational phase registry node status
         await update(ref(db, `scada_network/${code}`), {
             status: "REVIEW",
             submittedAt: serverTimestamp()
         });
         
-        await set(ref(db, `scada_proofs/${code}`), {
-            image: scadaProofBase64
-        });
+        // FIX: Replaced standalone 'set()' call with explicit root object 'update()' pathing
+        const proofUpdate = {};
+        proofUpdate[`scada_proofs/${code}`] = { image: scadaProofBase64 };
+        await update(ref(db), proofUpdate);
         
         closeScadaCamera();
         alert("✅ Execution metrics logged. Sent for QA signature validation.");
@@ -10251,7 +10271,6 @@ window.submitScadaProof = async () => {
         btn.disabled = false;
     }
 };
-
 function renderScadaAudit() {
     if (!isAdmin) return;
     const container = document.getElementById("scadaAuditList");
