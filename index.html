@@ -3370,21 +3370,16 @@ window.loadInventory = () => {
 
         snap.forEach((c) => {
             const v = c.val();
-            const k = c.key;
-            total++;
+    const k = c.key;
+    
+    // Check specifically for "Sold Out"
+    const isSold = (v.status === "Sold Out");
 
-            // --- CRITICAL FIX: LOGIC FOR SOLD OUT VS IN STOCK ---
-            // An item is ONLY "Available" if it is NOT sold AND NOT checked out.
-            const isSold = (v.status === "Sold Out" || v.invoiceNo != null);
-            const isCheckedOut = (v.status === "Checked Out");
+    // Unified UI Styling
+    let statusStyle = isSold ? "background:#000; color:#fff; border: 1px solid #333;" : "background:#dcfce7; color:#166534;";
+    let displayStatus = isSold ? "Sold Out" : "In Stock";
 
-            if (!isSold && !isCheckedOut) {
-                available++;
-            }
-
-            // Define Status Badge Styling
-            let statusStyle = "background:#dcfce7; color:#166534; border: 1px solid #bbf7d0;"; // Default: In Stock
-            let displayStatus = v.status || "In Stock";
+            
 
             if (isSold) {
                 statusStyle = "background:#1e293b; color:#ffffff; border: 1px solid #0f172a;";
@@ -7926,25 +7921,21 @@ window.addScannedItemToBill = async () => {
     } catch (e) { console.error(e); }
 };
 window.finalizeDispatchRecords = async (targetStation) => {
-    // Only proceed if there are items/services to dispatch
     if(window.billCart.length === 0 && window.serviceCart.length === 0) return null;
 
     const dispatchNo = "MRPSP-DISP-" + Date.now(); 
-    const clientType = document.getElementById("billClientType").value;
-    const recipient = (clientType === "METRO") ? "KOLKATA METRO RAILWAY" : (document.getElementById("billCustName").value || "UNSPECIFIED");
-
     const updates = {};
     const dispatchTime = Date.now();
 
-    // Mark assets as dispatched
+    // Mark assets as SOLD OUT
     if (window.billCart.length > 0) {
         window.billCart.forEach(it => {
             if(it.dbKey) {
-                updates[`inventory/${it.dbKey}/status`] = "Dispatched";
-                updates[`inventory/${it.dbKey}/dispatchedAt`] = dispatchTime;
-                updates[`inventory/${it.dbKey}/invoiceNo`] = dispatchNo; // Keeping invoiceNo key for DB lookups
+                // CHANGED: Force status to "Sold Out"
+                updates[`inventory/${it.dbKey}/status`] = "Sold Out";
                 updates[`inventory/${it.dbKey}/assignedStation`] = targetStation;
                 updates[`inventory/${it.dbKey}/holder`] = targetStation;
+                updates[`inventory/${it.dbKey}/invoiceNo`] = dispatchNo;
             }
         });
     }
@@ -7952,13 +7943,12 @@ window.finalizeDispatchRecords = async (targetStation) => {
     try {
         await update(ref(db), updates);
         
+        // Log as a material movement
         await push(ref(db, "logs"), {
             type: "MATERIAL_DISPATCH",
             dispatchNo: dispatchNo,
             destination: targetStation,
-            billedTo: recipient,
             itemCount: window.billCart.length,
-            serviceCount: window.serviceCart.length,
             time: dispatchTime,
             by: currentUser.name || currentUser.email
         });
