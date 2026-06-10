@@ -10502,79 +10502,26 @@ window.executeScadaLocalPrint = () => {
     }, 500);
 };
 window.resetScadaNetwork = async () => {
-    if (!isAdmin) return alert("⛔ Access Denied.");
-    if (!confirm("⚠️ CRITICAL: This will PERMANENTLY clear all 16 Task assignments, asset accumulations, and proof imagery. Continue?")) return;
+    if (!isAdmin) return alert("Operation Restricted: Admin credentials required.");
+    if (!confirm("⚠️ CRITICAL RE-BOOT: Reset entire deployment matrix? This will clear all personnel locks.")) return;
 
     try {
-        const resetUpdates = {};
-        
-        // Wipe all dynamic nodes
-        resetUpdates['scada_network'] = null;
-        resetUpdates['scada_proofs'] = null;
-
-        await update(ref(db), resetUpdates);
-        
-        alert("✅ System Registry Purged. All Workbench nodes returned to STANDBY.");
-        window.switchScadaMode('matrix');
-    } catch(e) {
-        alert("Reset failed: " + e.message);
-    }
-};
-  window.accumulateAsset = async (taskCode) => {
-    // Set scan mode to add assets to the current task's accumulator
-    scanMode = 'SCADA_ASSET_SCAN';
-    document.getElementById("scadaActiveTaskCode").value = taskCode;
-    openBarcodeScanner('SCADA_ASSET_SCAN');
-};
-
-// Add this to your main onScanSuccess router
-async function handleScadaAssetAccumulation(barcode, taskCode) {
-    try {
-        const assetSnap = await get(query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode)));
-        if (!assetSnap.exists()) return alert("⚠️ Asset ID not recognized by system.");
-
-        let assetData;
-        assetSnap.forEach(c => assetData = c.val());
-
-        await push(ref(db, `scada_network/${taskCode}/assetsUsed`), {
-            barcode: barcode,
-            name: assetData.item,
-            timestamp: serverTimestamp(),
-            verifiedBy: currentUser.name || "Technician"
+        const updates = {};
+        Object.keys(window.SCADA_PROTOCOLS).forEach(code => {
+            updates[`scada_network/${code}`] = {
+                title: window.SCADA_PROTOCOLS[code].title,
+                status: "STANDBY",
+                assignedUid: null,
+                assignedName: null
+            };
+            updates[`scada_proofs/${code}`] = null;
         });
-        
-        alert("✅ Asset Accumulated: " + assetData.item);
-    } catch(e) {
-        console.error("Accumulation Error:", e);
-    }
-}
-  window.adminQrVerify = async (taskCode) => {
-    // 1. Ensure proof is validated first
-    const proofSnap = await get(ref(db, `scada_proofs/${taskCode}`));
-    if (!proofSnap.exists()) return alert("⚠️ Admin: Please validate photo evidence first.");
 
-    // 2. Start QR Scan to finalize
-    scanMode = 'ADMIN_PASS_VERIFY';
-    document.getElementById("scadaActiveTaskCode").value = taskCode;
-    openBarcodeScanner('ADMIN_PASS_VERIFY');
+        await update(ref(db), updates);
+        alert("✅ SCADA deployment array returned to standalone configuration states.");
+        switchScadaMode('matrix');
+    } catch(e) { alert("Reset Interrupted: " + e.message); }
 };
-
-// Use this inside your onScanSuccess logic for the Admin
-async function finalizeTaskAsPassed(taskCode, scannedCode) {
-    const taskSnap = await get(ref(db, `scada_network/${taskCode}`));
-    
-    // Safety check: The scanner must match the task reference ID or a master key
-    if (taskSnap.exists()) {
-        await update(ref(db, `scada_network/${taskCode}`), {
-            status: "VERIFIED",
-            auditedBy: currentUser.name,
-            auditedAt: serverTimestamp()
-        });
-        await set(ref(db, `scada_proofs/${taskCode}`), null); // Clear evidence to free memory
-        alert("✅ Task Status: PASSED (Verified)");
-        renderScadaAudit();
-    }
-}
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
