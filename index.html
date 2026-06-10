@@ -7458,6 +7458,17 @@ window.onScanSuccess = async function(decodedText) {
         else if (scanMode === 'ASSET_RECOVERY') {
             window.addToRecoveryCart(scannedInput);
         }
+      else if (scanMode === 'SCADA_ASSET') {
+    const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+    const snap = await get(q);
+    if(snap.exists()) {
+        snap.forEach(c => {
+            const itm = c.val();
+            window.activeSession.assetsUsed.push({ name: itm.item, tag: itm.barcode, qty: 1 });
+            renderAssetsUsedList();
+        });
+    } else { alert("Asset not found!"); }
+}
 
     } catch (err) { 
         console.error("Scanner Router Error:", err); 
@@ -10149,39 +10160,54 @@ window.dispatchScadaTask = async (code) => {
     });
     renderScadaDispatch();
 };
+// --- WORKBENCH ENGINE ---
+window.activeSession = null; // { taskCode, startTime, assetsUsed: [] }
 
 function renderScadaWorkbench() {
     const container = document.getElementById("scadaMyTasks");
-    container.innerHTML = `<div style="text-align:center; padding:20px;"><i class="fas fa-sync fa-spin"></i> Synchronization in progress...</div>`;
+    container.innerHTML = "";
 
     onValue(ref(db, "scada_network"), snap => {
         container.innerHTML = "";
         let hasTasks = false;
 
-        if (snap.exists()) {
-            snap.forEach(c => {
-                const v = c.val();
-                if (v.assignedUid === currentUser.uid && v.status === "WORKING") {
-                    hasTasks = true;
-                    const proto = window.SCADA_PROTOCOLS[c.key];
-                    container.innerHTML += `
-                    <div style="background:white; border:1px solid var(--border-color); border-left:6px solid #3b82f6; padding:18px; border-radius:12px; box-shadow:var(--card-shadow); margin-bottom:12px;">
-                        <h4 style="margin:0 0 5px 0; color:var(--metro-blue); font-size:15px; font-weight:900;">${v.title}</h4>
-                        <div class="scada-caution">${proto.caution}</div>
-                        <div style="margin-top:15px; display:flex; justify-content:space-between; align-items:center; border-top:1px solid #f1f5f9; padding-top:10px;">
-                            <span style="font-size:12px; color:var(--metro-slate); font-weight:600;">Control Vector Reference: <b>${v.assignedBy}</b></span>
-                            <button class="warning" onclick="openScadaCamera('${c.key}')" style="font-weight:900; background:#f59e0b; padding:10px 20px;">
-                                <i class="fas fa-video"></i> SHIFT FRAME CAPTURE
-                            </button>
-                        </div>
-                    </div>`;
-                }
-            });
-        }
-        if (!hasTasks) container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--metro-slate); font-weight:600; background:white; border-radius:12px; border:1px solid var(--border-color);">No verified operational items are currently mapped to your technician signature profile.</div>`;
+        snap.forEach(c => {
+            const v = c.val();
+            if (v.assignedUid === currentUser.uid && v.status === "WORKING") {
+                hasTasks = true;
+                container.innerHTML += `
+                <div class="panel" style="border-left:6px solid #3b82f6;">
+                    <h4>${v.title}</h4>
+                    <div id="sessionControls_${c.key}">
+                        <button class="info" onclick="startWorkSession('${c.key}')">🚀 START WORK</button>
+                    </div>
+                </div>`;
+            }
+        });
+        if(!hasTasks) container.innerHTML = "No active tasks.";
     });
 }
 
+// Start the timer
+window.startWorkSession = (code) => {
+    window.activeSession = { taskCode: code, startTime: new Date(), assetsUsed: [] };
+    const div = document.getElementById(`sessionControls_${code}`);
+    div.innerHTML = `
+    <div style="background:#fff; padding:15px; border-radius:8px; border:1px solid #ddd;">
+        <p>⏱ Started: ${window.activeSession.startTime.toLocaleTimeString()}</p>
+        <button class="warning" onclick="openBarcodeScanner('SCADA_ASSET')">📱 SCAN ASSET USED</button>
+        <div id="assetsUsedList"></div>
+        <div style="display:flex; gap:10px; margin-top:15px;">
+            <button class="info" onclick="generateWorkSlip()">🖨️ PRINT USAGE SLIP</button>
+            <button class="success" onclick="finalizeWorkSession()">✅ COMPLETE TASK</button>
+        </div>
+    </div>
+`;
+};
+function renderAssetsUsedList() {
+    const list = document.getElementById("assetsUsedList");
+    list.innerHTML = "<ul>" + window.activeSession.assetsUsed.map(a => `<li>${a.name} (${a.tag})</li>`).join("") + "</ul>";
+}
 // =========================================================
 // 📸 LIGHTWEIGHT SHIELD CAMERA EVIDENCE SYNC MODULE
 // =========================================================
@@ -10521,6 +10547,66 @@ window.resetScadaNetwork = async () => {
         alert("✅ SCADA deployment array returned to standalone configuration states.");
         switchScadaMode('matrix');
     } catch(e) { alert("Reset Interrupted: " + e.message); }
+};
+  // Update your existing reset button
+window.resetScadaNetwork = async () => {
+    if (!isAdmin) return;
+    if (!confirm("⚠️ RESET ALL SCADA DATA?")) return;
+    
+    // 1. Wipe DB (as you have)
+    await remove(ref(db, "scada_network"));
+    
+    // 2. Wipe Local Session
+    window.activeSession = null;
+    
+    // 3. Refresh View
+    renderScadaWorkbench(); 
+    alert("System Cleared.");
+};
+  window.generateWorkSlip = () => {
+    if (!window.activeSession || window.activeSession.assetsUsed.length === 0) {
+        return alert("⚠️ No assets recorded in this session.");
+    }
+
+    const reportContainer = document.getElementById("printableReportContainer");
+    const assetRows = window.activeSession.assetsUsed.map(a => `
+        <tr style="border-bottom: 2pt solid #000; font-size: 24pt;">
+            <td style="padding: 15px;">${a.name.toUpperCase()}</td>
+            <td style="padding: 15px; font-family: monospace;">${a.tag}</td>
+            <td style="padding: 15px; text-align: center;">${a.qty}</td>
+        </tr>
+    `).join("");
+
+    reportContainer.innerHTML = `
+    <style>
+        @media print { .no-print { display: none !important; } }
+        .slip-wrapper { width: 100%; max-width: 150mm; margin: 0 auto; font-family: sans-serif; padding: 20px; }
+        .header { text-align: center; border-bottom: 4pt solid #000; margin-bottom: 20px; }
+    </style>
+    <div class="no-print" style="text-align:center; padding:20px; background:#f8fafc;">
+        <button class="success" onclick="window.print()">🖨️ PRINT ASSET SLIP</button>
+        <button class="danger" onclick="closeReportPreview()">CLOSE</button>
+    </div>
+    <div class="slip-wrapper">
+        <div class="header">
+            <h1 style="margin:0; font-size: 24pt;">ASSET USAGE SLIP</h1>
+            <p style="font-size: 14pt;">Task: ${window.activeSession.taskCode}</p>
+        </div>
+        <table width="100%" style="border-collapse: collapse;">
+            <thead>
+                <tr style="border-bottom: 2pt solid #000;">
+                    <th style="text-align:left;">Item</th><th>Tag ID</th><th>Qty</th>
+                </tr>
+            </thead>
+            <tbody>${assetRows}</tbody>
+        </table>
+        <div style="margin-top: 50px; border-top: 2pt solid #000; padding-top: 10px;">
+            <p style="font-size: 12pt;"><b>Technician:</b> ${currentUser.name || 'N/A'}</p>
+            <p style="font-size: 12pt;"><b>Timestamp:</b> ${new Date().toLocaleString()}</p>
+        </div>
+    </div>`;
+    
+    reportContainer.classList.remove("hidden");
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
