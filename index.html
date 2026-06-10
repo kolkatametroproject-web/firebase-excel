@@ -6613,50 +6613,75 @@ window.generateFinalReport = async () => {
     }
 };
 // 3. UPDATED INVOICE (Your Original Content)
-window.generateInvoicePrint = async function() {
+window.generateDispatchPrint = async function() {
     const clientType = document.getElementById("billClientType").value;
     let targetStation = (clientType === "METRO") ? document.getElementById("billMetroStation").value : document.getElementById("billCustName").value;
     const issuingOfficer = (currentUser.name || "SOHAM PAL").toUpperCase();
     
-    const invoiceNo = await finalizeSaleRecords(targetStation); // Ensure finalizeSaleRecords also strips price updates
-    if(!invoiceNo) return;
+    // Call the updated dispatch function
+    const dispatchNo = await finalizeDispatchRecords(targetStation);
+    if(!dispatchNo) return;
 
-    let billRows = ""; 
+    let dispatchRows = ""; 
     const combinedItems = [...window.billCart, ...window.serviceCart.map(s => ({name: "SERVICE: "+s.desc, tag:"N/A"}))];
 
     combinedItems.forEach(it => {
-        billRows += `
+        dispatchRows += `
             <tr style="border-bottom: 5pt solid black; font-size: 55pt;">
                 <td style="padding: 30px 10px; text-align: left;">
                     <div style="font-weight: 900;">${it.name.toUpperCase()}</div>
-                    <div style="font-size: 35pt;">(TAG: ${it.tag})</div>
+                    <div style="font-size: 35pt;">(TAG ID: ${it.tag})</div>
                 </td>
                 <td style="text-align:center; font-weight: 900;">1 UNIT</td>
             </tr>`;
     });
 
     document.getElementById("printableReportContainer").innerHTML = `
+    <style>
+        @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } body { height: auto !important; } }
+        .invoice-wrapper { width: 92%; margin: 0 auto; font-family: "Arial Black", sans-serif; color: black; background: white; padding: 20px 30px; }
+        .header-title { font-size: 80pt; font-weight: 900; text-align: center; margin-bottom: 20px; line-height: 1; }
+        .inst-title { font-size: 40pt; font-weight: 900; text-align: center; line-height: 1.2; margin-bottom: 40px; border-top: 10pt solid black; padding-top: 20px; }
+        .doc-type-box { border: 15pt solid black; padding: 30px; display: inline-block; font-size: 55pt; font-weight: 900; text-align: center; width: 90%; margin: 0 auto 50px auto; }
+        .meta-row { display: block; font-size: 45pt; font-weight: 900; margin-bottom: 15px; text-transform: uppercase; }
+        .sig-line { border-top: 10pt solid black; width: 85%; margin-bottom: 10px; }
+    </style>
+    
+    <div class="no-print" style="text-align:center; padding:30px; position:sticky; top:0; background:white; z-index:100;">
+        <button onclick="window.print()" style="padding:40px 80px; font-size:30pt; font-weight:900; background:green; color:white; border-radius:20px;">🖨️ PRINT DISPATCH NOTE</button>
+        <button class="danger" onclick="closeReportPreview()" style="padding:40px 80px; font-size:30pt; font-weight:900; margin-left:20px;">CLOSE</button>
+    </div>
+
     <div class="invoice-wrapper">
-        <div class="header-title">MATERIAL REQUISITION NOTE</div>
-        <div class="meta-row">INV NO: ${invoiceNo}</div>
-        <div class="meta-row">BILLED TO: ${targetStation.toUpperCase()}</div>
+        <div class="header-title">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+        <div class="inst-title">INSTITUTE OF ENGINEERING AND MANAGEMENT<br>UNIVERSITY OF ENGINEERING AND MANAGEMENT</div>
+        <div style="text-align:center;"><div class="doc-type-box">DISPATCH NOTE</div></div>
         
+        <div style="text-align: left; margin-bottom: 50px;">
+            <span class="meta-row">DISPATCH NO: ${dispatchNo}</span>
+            <span class="meta-row">DATE: ${new Date().toLocaleDateString('en-IN')}</span>
+            <span class="meta-row">DESTINATION: ${targetStation.toUpperCase()}</span>
+            <span class="meta-row">ISSUED BY: ${issuingOfficer}</span>
+        </div>
+
         <table style="width:100%; border-collapse: collapse;">
             <thead>
                 <tr>
-                    <th style="font-size: 40pt; text-align:left;">ASSET DESCRIPTION</th>
-                    <th style="font-size: 40pt;">QUANTITY</th>
+                    <th style="font-size: 40pt; text-align:left; border-bottom: 10pt solid black; padding-bottom: 20px;">ASSET DESCRIPTION</th>
+                    <th style="font-size: 40pt; border-bottom: 10pt solid black; padding-bottom: 20px;">QUANTITY</th>
                 </tr>
             </thead>
-            <tbody>${billRows}</tbody>
+            <tbody>${dispatchRows}</tbody>
         </table>
         
-        <div class="sig-section">
+        <div style="margin-top: 100px;">
             <div class="sig-line"></div>
             <div style="font-size: 55pt; font-weight: 900;">${issuingOfficer}</div>
             <div style="font-size: 32pt; font-weight: 900;">AUTHORIZED ISSUING AUTHORITY</div>
         </div>
     </div>`;
+    
+    document.getElementById("printableReportContainer").classList.remove("hidden");
 };
 window.handleCommentLineChange = () => {
     const line = document.getElementById("commentLineSelect").value;
@@ -7900,51 +7925,47 @@ window.addScannedItemToBill = async () => {
         document.getElementById("billBarcodeInp").value = "";
     } catch (e) { console.error(e); }
 };
-window.finalizeSaleRecords = async (targetStation) => {
-    // ALLOW PROCEEDING if either Assets OR Services exist
+window.finalizeDispatchRecords = async (targetStation) => {
+    // Only proceed if there are items/services to dispatch
     if(window.billCart.length === 0 && window.serviceCart.length === 0) return null;
 
-    const invoiceNo = "MRPSP-INV-" + Date.now(); 
+    const dispatchNo = "MRPSP-DISP-" + Date.now(); 
     const clientType = document.getElementById("billClientType").value;
     const recipient = (clientType === "METRO") ? "KOLKATA METRO RAILWAY" : (document.getElementById("billCustName").value || "UNSPECIFIED");
 
     const updates = {};
-    const saleTime = Date.now();
+    const dispatchTime = Date.now();
 
-    // Only attempt to update inventory if there are assets in the cart
+    // Mark assets as dispatched
     if (window.billCart.length > 0) {
         window.billCart.forEach(it => {
             if(it.dbKey) {
-                updates[`inventory/${it.dbKey}/status`] = "Sold Out";
-                updates[`inventory/${it.dbKey}/soldAt`] = saleTime;
-                updates[`inventory/${it.dbKey}/invoiceNo`] = invoiceNo;
+                updates[`inventory/${it.dbKey}/status`] = "Dispatched";
+                updates[`inventory/${it.dbKey}/dispatchedAt`] = dispatchTime;
+                updates[`inventory/${it.dbKey}/invoiceNo`] = dispatchNo; // Keeping invoiceNo key for DB lookups
                 updates[`inventory/${it.dbKey}/assignedStation`] = targetStation;
                 updates[`inventory/${it.dbKey}/holder`] = targetStation;
-                updates[`inventory/${it.dbKey}/location`] = "DEEP INSTALLED";
             }
         });
     }
 
     try {
-        if (Object.keys(updates).length > 0) {
-            await update(ref(db), updates);
-        }
+        await update(ref(db), updates);
         
-        // Log the sale (whether it was assets, services, or both)
         await push(ref(db, "logs"), {
-            type: "SALE_FINALIZED",
-            invoice: invoiceNo,
-            assignedStation: targetStation,
+            type: "MATERIAL_DISPATCH",
+            dispatchNo: dispatchNo,
+            destination: targetStation,
             billedTo: recipient,
             itemCount: window.billCart.length,
             serviceCount: window.serviceCart.length,
-            time: saleTime,
+            time: dispatchTime,
             by: currentUser.name || currentUser.email
         });
 
-        return invoiceNo;
+        return dispatchNo;
     } catch (e) {
-        alert("Critical DB Error: " + e.message);
+        alert("Database Error: " + e.message);
         return null;
     }
 };
