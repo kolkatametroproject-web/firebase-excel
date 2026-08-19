@@ -2470,7 +2470,6 @@ tr:hover { background: #fcfcfd; }
     </div>
 
     <!-- NEW FUND REQUEST -->
-    <!-- NEW FUND REQUEST -->
     <div id="works-new-fund" class="panel hidden" style="border-top: 4px solid var(--success-green);">
         <h3 style="color:var(--success-green);"><i class="fas fa-file-invoice-dollar"></i> Initiate Fund / Product Request</h3>
         
@@ -2521,6 +2520,13 @@ tr:hover { background: #fcfcfd; }
         <div style="text-align:right; font-size:22px; margin-bottom:20px; background:#f8fafc; padding:15px; border-radius:6px; border-left:5px solid var(--success-green);">
             <strong style="color:var(--metro-slate);">GRAND TOTAL:</strong> 
             <span style="color:var(--success-green); font-weight:900;">₹ <span id="eoFundGrandTotal">0.00</span></span>
+        </div>
+
+        <!-- NEW: QR UPLOAD AT SUBMISSION -->
+        <div style="margin-bottom:20px; background:#fffbeb; padding:15px; border-radius:6px; border:1px solid #fde68a;">
+            <label style="font-size:11px; font-weight:bold; color:#d97706;"><i class="fas fa-qrcode"></i> UPLOAD PAYMENT QR (REQUIRED)</label>
+            <p style="font-size:10px; color:#64748b; margin:5px 0 10px 0;">Upload your UPI QR code now so the HOD can transfer funds immediately upon approval.</p>
+            <input type="file" id="eoFundQrInput" accept="image/*" style="width:100%; border:2px dashed #d97706; padding:10px; background:white; box-sizing: border-box;">
         </div>
 
         <button class="success" onclick="submitEOfficeRequest('FUND')" style="width:100%; font-size:16px; font-weight:900; padding:15px; letter-spacing:1px;">
@@ -10005,10 +10011,41 @@ window.submitEOfficeRequest = async (type) => {
     if (isFund) {
         if (window.eoFundCart.length === 0) return alert("⚠️ Please add at least one item to the list.");
         
+        const fileInput = document.getElementById("eoFundQrInput");
+        const file = fileInput.files[0];
+        if (!file) return alert("⚠️ Please upload your Payment QR code image.");
+
         const grandTotal = window.eoFundCart.reduce((sum, it) => sum + it.amount, 0);
         data.items = window.eoFundCart;
         data.totalAmount = grandTotal;
         data.fileId = `FR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        const btn = document.activeElement;
+        btn.innerText = "⏳ Uploading & Submitting...";
+        btn.disabled = true;
+
+        // Convert image to Base64 and submit
+        const reader = new FileReader();
+        reader.onload = async function(e) {
+            data.qrImage = e.target.result;
+            try {
+                await push(ref(db, "eoffice_requests"), data);
+                alert(`✅ Request Submitted. File ID: ${data.fileId}`);
+                window.toggleWorksMode('dashboard');
+                
+                // Clear form
+                window.eoFundCart = [];
+                window.renderEoFundCart();
+                document.getElementById("eoFundQrInput").value = "";
+            } catch (err) { 
+                alert("Error: " + err.message); 
+            } finally {
+                btn.innerHTML = `<i class="fas fa-paper-plane"></i> SUBMIT FINAL REQUEST`;
+                btn.disabled = false;
+            }
+        };
+        reader.readAsDataURL(file);
+        
     } else {
         const tType = document.getElementById("eoTechType").value;
         const loc = document.getElementById("eoTechLoc").value.trim();
@@ -10020,23 +10057,17 @@ window.submitEOfficeRequest = async (type) => {
         data.title = title;
         data.desc = desc;
         data.fileId = `TR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    }
 
-    try {
-        await push(ref(db, "eoffice_requests"), data);
-        alert(`✅ Request Submitted. File ID: ${data.fileId}`);
-        window.toggleWorksMode('dashboard');
-        
-        // Clear forms
-        if(isFund) {
-            window.eoFundCart = [];
-            window.renderEoFundCart();
-        } else {
+        try {
+            await push(ref(db, "eoffice_requests"), data);
+            alert(`✅ Request Submitted. File ID: ${data.fileId}`);
+            window.toggleWorksMode('dashboard');
+            
             document.getElementById("eoTechTitle").value = "";
             document.getElementById("eoTechDesc").value = "";
             document.getElementById("eoTechLoc").value = "";
-        }
-    } catch (e) { alert("Error: " + e.message); }
+        } catch (e) { alert("Error: " + e.message); }
+    }
 };
 
 window.loadWorksDashboard = () => {
@@ -10078,6 +10109,7 @@ window.loadWorksDashboard = () => {
 
             let actions = `<button class="secondary" onclick="viewFileHistory('${r.key}')" style="padding:4px 8px; font-size:10px;">Details & Track</button>`;
 
+            // -- WORKFLOW LOGIC --
             if (r.stage === 'SUBMITTED' && isPH) {
                 actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'PH_VERIFIED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Verify</button>`;
                 actions += `<button class="danger" onclick="updateEOfficeStage('${r.key}', 'REJECTED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Reject</button>`;
@@ -10089,12 +10121,11 @@ window.loadWorksDashboard = () => {
                     actions += `<button class="info" onclick="processHODTechAssign('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Assign Teacher</button>`;
                 }
             }
-            else if (r.stage === 'HOD_APPROVED' && r.type === 'FUND' && isMine) {
-                actions += `<button class="warning" onclick="uploadMemberQR('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Upload QR</button>`;
-            }
-            else if (r.stage === 'QR_UPLOADED' && r.type === 'FUND' && isHOD) {
+            // NEW: Since QR is already uploaded, HOD can immediately Make Payment after approving
+            else if (r.stage === 'HOD_APPROVED' && r.type === 'FUND' && isHOD) {
                 actions += `<button class="success" onclick="processHODPayment('${r.key}', '${r.qrImage}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Make Payment</button>`;
             }
+            // Technical Workflow
             else if (r.stage === 'TEACHER_ASSIGNED' && r.type === 'TECH' && isAssignedTeacher) {
                 actions += `<button class="warning" onclick="updateEOfficeStage('${r.key}', 'TECH_EXECUTION')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Start Work</button>`;
             }
