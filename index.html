@@ -635,8 +635,8 @@ tr:hover { background: #fcfcfd; }
     <button class="nav-btn" onclick="switchTab('scadaControl')" id="btnScada">
     <i class="fas fa-network-wired"></i> SCADA Control
 </button>
-    <button class="nav-btn" onclick="switchTab('delivery')" id="btnDelivery">
-        <i class="fas fa-shipping-fast"></i> Fulfillment & Logistics
+    <button class="nav-btn" onclick="switchTab('works')" id="btnWorks">
+        <i class="fas fa-briefcase"></i> eOffice Works
     </button>
     <span id="adminBadge" class="hidden" style="margin-left:auto; background:var(--metro-red); color:white; padding:6px 12px; border-radius:20px; font-size:10px; font-weight:bold; display:flex; align-items:center; letter-spacing: 0.5px;">
         <i class="fas fa-shield-alt" style="margin-right:5px;"></i> AUDITOR
@@ -2439,6 +2439,81 @@ tr:hover { background: #fcfcfd; }
                 <i class="fas fa-file-invoice"></i> SPAWN PRINT COPY
             </button>
         </div>
+    </div>
+</div>
+  <div id="tab-works" class="hidden">
+    <div style="margin-bottom:20px; display:flex; gap:10px; flex-wrap:wrap; padding: 10px; background: #e2e8f0; border-radius: 6px;">
+        <button onclick="toggleWorksMode('dashboard')" class="info"><i class="fas fa-desktop"></i> Dashboard</button>
+        <button onclick="toggleWorksMode('new-fund')" class="success"><i class="fas fa-money-bill"></i> Fund Request</button>
+        <button onclick="toggleWorksMode('new-tech')" class="warning"><i class="fas fa-wrench"></i> Technical Work</button>
+    </div>
+
+    <!-- DASHBOARD VIEW -->
+    <div id="works-dashboard" class="panel">
+        <h3 style="color:var(--metro-blue); border-bottom: 2px solid var(--metro-gold);"><i class="fas fa-inbox"></i> eOffice Action Queue</h3>
+        <div class="table-wrapper">
+            <table style="width:100%">
+                <thead>
+                    <tr>
+                        <th>File ID</th>
+                        <th>Type / Details</th>
+                        <th>Initiator</th>
+                        <th>Status / Stage</th>
+                        <th style="text-align:center;">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="worksTableBody">
+                    <tr><td colspan="5" style="text-align:center;">Loading eOffice Files...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- NEW FUND REQUEST -->
+    <div id="works-new-fund" class="panel hidden" style="border-top: 4px solid var(--success-green);">
+        <h3 style="color:var(--success-green);"><i class="fas fa-file-invoice-dollar"></i> Initiate Fund / Product Request</h3>
+        <div style="display:grid; grid-template-columns: 2fr 1fr; gap:15px; max-width: 600px;">
+            <div>
+                <label style="font-size:11px; font-weight:bold;">Product Name</label>
+                <input id="eoFundItem" placeholder="e.g. ESP8266">
+            </div>
+            <div>
+                <label style="font-size:11px; font-weight:bold;">Quantity</label>
+                <input type="number" id="eoFundQty" placeholder="0">
+            </div>
+        </div>
+        <button class="success" onclick="submitEOfficeRequest('FUND')" style="margin-top:15px;"><i class="fas fa-paper-plane"></i> SUBMIT REQUEST</button>
+    </div>
+
+    <!-- NEW TECHNICAL REQUEST -->
+    <div id="works-new-tech" class="panel hidden" style="border-top: 4px solid #d97706;">
+        <h3 style="color:#d97706;"><i class="fas fa-tools"></i> Initiate Technical Work</h3>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
+            <div>
+                <label style="font-size:11px; font-weight:bold;">Work Type</label>
+                <select id="eoTechType">
+                    <option value="Installation">Installation</option>
+                    <option value="Maintenance">Maintenance</option>
+                    <option value="Modification">Modification / Upgradation</option>
+                    <option value="Testing">Testing & Commissioning</option>
+                    <option value="Safety">Safety Work</option>
+                    <option value="Emergency">Emergency Work</option>
+                </select>
+            </div>
+            <div>
+                <label style="font-size:11px; font-weight:bold;">Location</label>
+                <input id="eoTechLoc" placeholder="e.g. Platform 1">
+            </div>
+        </div>
+        <div style="margin-top:15px;">
+            <label style="font-size:11px; font-weight:bold;">Work Title</label>
+            <input id="eoTechTitle" placeholder="Brief Title">
+        </div>
+        <div style="margin-top:15px;">
+            <label style="font-size:11px; font-weight:bold;">Brief Requirement</label>
+            <textarea id="eoTechDesc" rows="3" placeholder="Describe the technical requirement..."></textarea>
+        </div>
+        <button class="warning" onclick="submitEOfficeRequest('TECH')" style="margin-top:15px;"><i class="fas fa-paper-plane"></i> SUBMIT WORK</button>
     </div>
 </div>
 </section>
@@ -6351,7 +6426,7 @@ window.switchTab = (t) => {
     const allTabs = [
         'newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 
         'dataView', 'printReport', 'funds', 'purchase', 'comments', 
-        'directives', 'billing', 'warranty', 'attendance', 'delivery', 'scadaControl'
+        'directives', 'billing', 'warranty', 'attendance', 'delivery', 'scadaControl', 'works'
     ];
 
     // Hide all tabs safely
@@ -6410,6 +6485,7 @@ window.switchTab = (t) => {
     else if (t === 'directives') window.populateDirectiveUsers();
     else if (t === 'comments') window.populateCommentUsers();
     else if (t === 'delivery') window.populateShipStations();
+    else if (t === 'works') window.loadWorksDashboard();
 
     window.scrollTo(0, 0);
 };
@@ -9707,7 +9783,204 @@ const initAttendanceSystem = () => {
 
     window.loadAttendanceLog = () => window.calcProfitEngine();
 };
+// =========================================================
+// 🏢 eOFFICE ENGINE: FUND & TECHNICAL WORKFLOW
+// =========================================================
 
+// Config Roles (Update emails as per your organization)
+const eOfficeRoles = {
+    PH: "soham@metro.project", // Project Head
+    HOD: "hodee@metro.project" // Head of Department
+};
+
+window.toggleWorksMode = (mode) => {
+    ['dashboard', 'new-fund', 'new-tech'].forEach(m => {
+        const el = document.getElementById(`works-${m}`);
+        if(el) el.classList.add('hidden');
+    });
+    document.getElementById(`works-${mode}`).classList.remove('hidden');
+    if(mode === 'dashboard') window.loadWorksDashboard();
+};
+
+window.submitEOfficeRequest = async (type) => {
+    const isFund = (type === 'FUND');
+    let data = {
+        type: type,
+        initiator: currentUser.name || currentUser.email,
+        initiatorEmail: currentUser.email,
+        stage: "SUBMITTED",
+        history: [{ stage: "Submitted", by: currentUser.name || currentUser.email, time: Date.now() }],
+        timestamp: serverTimestamp()
+    };
+
+    if (isFund) {
+        const item = document.getElementById("eoFundItem").value.trim();
+        const qty = document.getElementById("eoFundQty").value.trim();
+        if (!item || !qty) return alert("Product Name and Quantity required.");
+        data.item = item;
+        data.qty = qty;
+        data.fileId = `FR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    } else {
+        const tType = document.getElementById("eoTechType").value;
+        const loc = document.getElementById("eoTechLoc").value.trim();
+        const title = document.getElementById("eoTechTitle").value.trim();
+        const desc = document.getElementById("eoTechDesc").value.trim();
+        if (!title || !desc) return alert("Title and Requirement are required.");
+        data.techType = tType;
+        data.location = loc;
+        data.title = title;
+        data.desc = desc;
+        data.fileId = `TR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    }
+
+    try {
+        await push(ref(db, "eoffice_requests"), data);
+        alert(`✅ Request Submitted. File ID: ${data.fileId}`);
+        window.toggleWorksMode('dashboard');
+        // Clear forms
+        document.getElementById("eoFundItem").value = "";
+        document.getElementById("eoFundQty").value = "";
+        document.getElementById("eoTechTitle").value = "";
+        document.getElementById("eoTechDesc").value = "";
+    } catch (e) { alert("Error: " + e.message); }
+};
+
+window.loadWorksDashboard = () => {
+    const tbody = document.getElementById("worksTableBody");
+    if(!tbody) return;
+
+    onValue(ref(db, "eoffice_requests"), (snap) => {
+        tbody.innerHTML = "";
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No Active Files.</td></tr>";
+            return;
+        }
+
+        const myEmail = currentUser.email.toLowerCase();
+        const isPH = myEmail === eOfficeRoles.PH.toLowerCase();
+        const isHOD = myEmail === eOfficeRoles.HOD.toLowerCase();
+
+        const reqs = [];
+        snap.forEach(c => reqs.push({ key: c.key, ...c.val() }));
+        reqs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+        reqs.forEach(r => {
+            // Role-based visibility filtering
+            const isMine = r.initiatorEmail.toLowerCase() === myEmail;
+            const isAssignedTeacher = r.assignedTeacherEmail === myEmail;
+            
+            // Show to Initiator, Assigned Teacher, Admin, PH, or HOD
+            if (!isMine && !isAssignedTeacher && !isAdmin && !isPH && !isHOD) return;
+
+            let details = r.type === 'FUND' 
+                ? `<b>${r.item}</b> (Qty: ${r.qty})` 
+                : `<b>${r.title}</b><br><small>${r.location} | ${r.techType}</small>`;
+            
+            let stageBadge = `<span style="background:#e2e8f0; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">${r.stage}</span>`;
+            if (r.stage === 'CLOSED') stageBadge = `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">CLOSED</span>`;
+
+            // Action Buttons Logic based on Workflow Rules
+            let actions = `<button class="secondary" onclick="viewFileHistory('${r.key}')" style="padding:4px 8px; font-size:10px;">Tracking</button>`;
+
+            if (r.stage === 'SUBMITTED' && isPH) {
+                actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'PH_VERIFIED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Verify</button>`;
+                actions += `<button class="danger" onclick="updateEOfficeStage('${r.key}', 'REJECTED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Reject</button>`;
+            } 
+            else if (r.stage === 'PH_VERIFIED' && isHOD) {
+                if(r.type === 'FUND') {
+                    actions += `<button class="info" onclick="processHODFundApprove('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Approve Fund</button>`;
+                } else {
+                    actions += `<button class="info" onclick="processHODTechAssign('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Assign Teacher</button>`;
+                }
+            }
+            else if (r.stage === 'HOD_APPROVED' && r.type === 'FUND' && isMine) {
+                actions += `<button class="warning" onclick="uploadMemberQR('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Upload QR</button>`;
+            }
+            else if (r.stage === 'QR_UPLOADED' && r.type === 'FUND' && isHOD) {
+                actions += `<button class="success" onclick="processHODPayment('${r.key}', '${r.qrImage}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Make Payment</button>`;
+            }
+            else if (r.stage === 'TEACHER_ASSIGNED' && r.type === 'TECH' && isAssignedTeacher) {
+                actions += `<button class="warning" onclick="updateEOfficeStage('${r.key}', 'TECH_EXECUTION')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Start Work</button>`;
+            }
+            else if (r.stage === 'TECH_EXECUTION' && r.type === 'TECH' && isAssignedTeacher) {
+                actions += `<button class="success" onclick="submitTechWork('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Submit Evidences</button>`;
+            }
+            else if (r.stage === 'TECH_VERIFIED' && r.type === 'TECH' && isPH) {
+                actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'CLOSED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Accept & Close</button>`;
+            }
+
+            tbody.innerHTML += `
+                <tr style="border-bottom:1px solid #f1f5f9;">
+                    <td style="font-family:monospace; font-weight:bold; color:var(--metro-blue);">${r.fileId}</td>
+                    <td>${details}</td>
+                    <td style="font-size:11px;">${r.initiator}</td>
+                    <td style="text-align:center;">${stageBadge}</td>
+                    <td style="text-align:center; white-space:nowrap;">${actions}</td>
+                </tr>
+            `;
+        });
+    });
+};
+
+window.updateEOfficeStage = async (key, nextStage, extraPayload = {}) => {
+    if(!confirm(`Move File to stage: ${nextStage}?`)) return;
+    try {
+        const snap = await get(ref(db, `eoffice_requests/${key}`));
+        const data = snap.val();
+        let hist = data.history || [];
+        hist.push({ stage: nextStage, by: currentUser.name || currentUser.email, time: Date.now() });
+        
+        await update(ref(db, `eoffice_requests/${key}`), { stage: nextStage, history: hist, ...extraPayload });
+    } catch(e) { alert("Error: " + e.message); }
+};
+
+window.processHODFundApprove = async (key) => {
+    const amt = prompt("Enter Approved Amount (₹):");
+    if(!amt || isNaN(amt)) return alert("Valid amount required.");
+    window.updateEOfficeStage(key, 'HOD_APPROVED', { approvedAmount: amt });
+};
+
+window.processHODTechAssign = async (key) => {
+    const tEmail = prompt("Enter Lead Teacher Email to Assign:");
+    if(!tEmail) return;
+    window.updateEOfficeStage(key, 'TEACHER_ASSIGNED', { assignedTeacherEmail: tEmail.toLowerCase() });
+};
+
+window.uploadMemberQR = async (key) => {
+    // For simplicity, we trigger a prompt for a Base64 string or Drive Link. 
+    // In production, attach a hidden <input type="file">.
+    const link = prompt("Enter UPI QR Image Link / Drive Link:");
+    if(!link) return;
+    window.updateEOfficeStage(key, 'QR_UPLOADED', { qrImage: link });
+};
+
+window.processHODPayment = async (key, qrLink) => {
+    const mode = prompt(`Member QR: ${qrLink}\n\nEnter Payment Mode (UPI, Cash, Bank Transfer):`, "UPI");
+    if(!mode) return;
+    
+    let utr = "N/A";
+    if(mode.toUpperCase() === "UPI") {
+        utr = prompt("Enter Last 5 Digits of UTR:");
+        if(!utr) return alert("UTR required for UPI.");
+    }
+    window.updateEOfficeStage(key, 'CLOSED', { paymentMode: mode, utrLast5: utr });
+};
+
+window.submitTechWork = async (key) => {
+    const remarks = prompt("Enter Completion Remarks:");
+    if(!remarks) return;
+    window.updateEOfficeStage(key, 'TECH_VERIFIED', { teacherRemarks: remarks });
+};
+
+window.viewFileHistory = async (key) => {
+    const snap = await get(ref(db, `eoffice_requests/${key}`));
+    const data = snap.val();
+    let text = `FILE MOVEMENT: ${data.fileId}\n\n`;
+    (data.history || []).forEach(h => {
+        text += `[${new Date(h.time).toLocaleString('en-IN')}] ${h.stage} (By: ${h.by})\n`;
+    });
+    alert(text);
+};
 initAttendanceSystem();
  // --- 1. POPULATE THE BOX WITH A MANUAL INPUT (No Checkboxes) ---
 window.populateDirectiveUsers = () => {
