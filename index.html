@@ -10097,21 +10097,24 @@ window.submitEOfficeRequest = async (type) => {
         } catch (e) { alert("Error: " + e.message); }
     }
 };
-// --- DASHBOARD LOADER ---
+
+// --- CRASH-PROOF DASHBOARD LOADER ---
 window.loadWorksDashboard = () => {
     const tbody = document.getElementById("worksTableBody");
     if(!tbody) return;
 
-    // Listen to changes in the eoffice_requests node
-    onValue(ref(db, "eoffice_requests"), (snap) => {
+    // PREVENT MEMORY LEAKS: Turn off the old listener before starting a new one
+    if (window.worksDashboardListener) {
+        off(ref(db, "eoffice_requests"), "value", window.worksDashboardListener);
+    }
+
+    window.worksDashboardListener = onValue(ref(db, "eoffice_requests"), (snap) => {
         if (!snap.exists()) {
             tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No Active Files in Database.</td></tr>";
             return;
         }
 
-        tbody.innerHTML = ""; // Clear table
         let visibleCount = 0;
-
         const myEmail = (currentUser && currentUser.email) ? currentUser.email.toLowerCase() : "";
         const isPH = window.eOfficeRoles.PH.toLowerCase() === myEmail;
         const isHOD = window.eOfficeRoles.HOD_LEVEL_USERS.some(email => email.toLowerCase() === myEmail);
@@ -10119,8 +10122,15 @@ window.loadWorksDashboard = () => {
         const reqs = [];
         snap.forEach(c => reqs.push({ key: c.key, ...c.val() }));
         
-        // Sort newest first
-        reqs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+        // 🛑 CRITICAL FIX: Safe Sorting! 
+        // Handles cases where timestamp is an Object (NaN) by falling back to the integer Date.now() history array.
+        reqs.sort((a,b) => {
+            const timeA = (typeof a.timestamp === 'number') ? a.timestamp : (a.history && a.history[0] ? a.history[0].time : 0);
+            const timeB = (typeof b.timestamp === 'number') ? b.timestamp : (b.history && b.history[0] ? b.history[0].time : 0);
+            return timeB - timeA;
+        });
+
+        let rowsHtml = "";
 
         reqs.forEach(r => {
             try {
@@ -10130,15 +10140,11 @@ window.loadWorksDashboard = () => {
                 const isMine = (reqEmail === myEmail);
                 const isAssignedTeacher = (techEmail === myEmail);
                 
-                // --- VISIBILITY CHECK ---
-                // Show if you are Admin, PH, HOD, the person who made it, or the assigned teacher.
-                if (!isMine && !isAssignedTeacher && !isAdmin && !isPH && !isHOD) {
-                    return; // Skip rendering this row for this user
-                }
+                // Visibility Check
+                if (!isMine && !isAssignedTeacher && !isAdmin && !isPH && !isHOD) return;
 
                 visibleCount++;
 
-                // Format Details
                 let details = "";
                 if (r.type === 'FUND') {
                     const itemCount = r.items ? r.items.length : 0;
@@ -10148,16 +10154,14 @@ window.loadWorksDashboard = () => {
                     details = `<b>${r.title || 'Untitled'}</b><br><small>${r.location || 'N/A'} | ${r.techType || 'N/A'}</small>`;
                 }
                 
-                // Format Stage Badge
                 let stageBadge = `<span style="background:#e2e8f0; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">${r.stage || 'UNKNOWN'}</span>`;
                 if (r.stage === 'CLOSED') {
                     stageBadge = `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">CLOSED</span>`;
                 }
 
-                // Base Action
                 let actions = `<button class="secondary" onclick="viewFileHistory('${r.key}')" style="padding:4px 8px; font-size:10px;">Details & Track</button>`;
 
-                // -- WORKFLOW LOGIC (Always shows if user is Admin, PH, or HOD) --
+                // -- WORKFLOW LOGIC --
                 if (r.stage === 'SUBMITTED' && (isPH || isAdmin)) {
                     actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'PH_VERIFIED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Verify</button>`;
                     actions += `<button class="danger" onclick="updateEOfficeStage('${r.key}', 'REJECTED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Reject</button>`;
@@ -10182,8 +10186,8 @@ window.loadWorksDashboard = () => {
                     actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'CLOSED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Accept & Close</button>`;
                 }
 
-                // Add Row to Table
-                tbody.innerHTML += `
+                // Batch HTML for fast rendering
+                rowsHtml += `
                     <tr style="border-bottom:1px solid #f1f5f9;">
                         <td style="font-family:monospace; font-weight:bold; color:var(--metro-blue);">${r.fileId || 'N/A'}</td>
                         <td>${details}</td>
@@ -10197,9 +10201,11 @@ window.loadWorksDashboard = () => {
             }
         });
 
-        // Fail-safe: If data exists but none of it belongs to this user
         if (visibleCount === 0) {
             tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#64748b; padding:20px;'>You do not have any active files in your queue.</td></tr>";
+        } else {
+            // Apply all HTML at once to prevent screen flickering
+            tbody.innerHTML = rowsHtml;
         }
     });
 };
