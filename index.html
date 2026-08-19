@@ -2630,6 +2630,29 @@ tr:hover { background: #fcfcfd; }
         </div>
     </div>
 </div>
+  <!-- 4. File Tracking & Details Modal -->
+<div id="eoTrackingModal" class="modal-overlay hidden">
+    <div class="panel" style="width:500px; max-width:95%; max-height:85vh; display:flex; flex-direction:column; padding:0; overflow:hidden; border:none;">
+        
+        <!-- Header -->
+        <div style="background:var(--metro-blue); color:white; padding:15px 20px; display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0; color:white; border:none; padding:0; font-size:16px;">
+                <i class="fas fa-search"></i> File Details & Tracking
+            </h3>
+            <button onclick="document.getElementById('eoTrackingModal').classList.add('hidden')" style="background:transparent; border:none; color:white; font-size:24px; cursor:pointer;">&times;</button>
+        </div>
+        
+        <!-- Scrollable Content Body -->
+        <div id="eoTrackingBody" style="overflow-y:auto; padding:20px; flex-grow:1; background:#f8fafc;">
+            <!-- JS will inject content here -->
+        </div>
+        
+        <!-- Footer -->
+        <div style="padding:15px; background:white; border-top:1px solid #e2e8f0; text-align:right;">
+            <button class="secondary" onclick="document.getElementById('eoTrackingModal').classList.add('hidden')" style="font-weight:bold;">Close Window</button>
+        </div>
+    </div>
+</div>
 </section>
 <script type="module">
 // --- FIREBASE IMPORTS (Standard Stable Version) ---
@@ -10081,70 +10104,77 @@ window.loadWorksDashboard = () => {
             return;
         }
 
-        const myEmail = currentUser.email.toLowerCase();
+        const myEmail = (currentUser.email || "").toLowerCase();
         const isPH = myEmail === eOfficeRoles.PH.toLowerCase();
         const isHOD = eOfficeRoles.HOD_LEVEL_USERS.some(email => email.toLowerCase() === myEmail);
 
         const reqs = [];
         snap.forEach(c => reqs.push({ key: c.key, ...c.val() }));
+        
+        // Sort safely (handle cases where timestamp might be missing)
         reqs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         reqs.forEach(r => {
-            const isMine = r.initiatorEmail.toLowerCase() === myEmail;
-            const isAssignedTeacher = r.assignedTeacherEmail === myEmail;
-            
-            if (!isMine && !isAssignedTeacher && !isAdmin && !isPH && !isHOD) return;
+            try {
+                // 🛑 CRITICAL FIX: Safe checks prevent crashes from old/corrupt test data
+                const isMine = r.initiatorEmail ? r.initiatorEmail.toLowerCase() === myEmail : false;
+                const isAssignedTeacher = r.assignedTeacherEmail ? r.assignedTeacherEmail.toLowerCase() === myEmail : false;
+                
+                // Role Visibility Filter
+                if (!isMine && !isAssignedTeacher && !isAdmin && !isPH && !isHOD) return;
 
-            let details = "";
-            if (r.type === 'FUND') {
-                const itemCount = r.items ? r.items.length : 0;
-                const totalAmt = r.totalAmount || 0;
-                details = `<b>Requisition (${itemCount} Items)</b><br><small style="color:var(--success-green); font-weight:bold;">Total: ₹ ${totalAmt.toLocaleString('en-IN')}</small>`;
-            } else {
-                details = `<b>${r.title}</b><br><small>${r.location} | ${r.techType}</small>`;
-            }
-            
-            let stageBadge = `<span style="background:#e2e8f0; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">${r.stage}</span>`;
-            if (r.stage === 'CLOSED') stageBadge = `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">CLOSED</span>`;
-
-            let actions = `<button class="secondary" onclick="viewFileHistory('${r.key}')" style="padding:4px 8px; font-size:10px;">Details & Track</button>`;
-
-            // -- WORKFLOW LOGIC --
-            if (r.stage === 'SUBMITTED' && isPH) {
-                actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'PH_VERIFIED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Verify</button>`;
-                actions += `<button class="danger" onclick="updateEOfficeStage('${r.key}', 'REJECTED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Reject</button>`;
-            } 
-            else if (r.stage === 'PH_VERIFIED' && isHOD) {
-                if(r.type === 'FUND') {
-                    actions += `<button class="info" onclick="processHODFundApprove('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Approve Fund</button>`;
+                let details = "";
+                if (r.type === 'FUND') {
+                    const itemCount = r.items ? r.items.length : 0;
+                    const totalAmt = r.totalAmount || 0;
+                    details = `<b>Requisition (${itemCount} Items)</b><br><small style="color:var(--success-green); font-weight:bold;">Total: ₹ ${totalAmt.toLocaleString('en-IN')}</small>`;
                 } else {
-                    actions += `<button class="info" onclick="processHODTechAssign('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Assign Teacher</button>`;
+                    details = `<b>${r.title || 'Untitled'}</b><br><small>${r.location || 'N/A'} | ${r.techType || 'N/A'}</small>`;
                 }
-            }
-            // NEW: Since QR is already uploaded, HOD can immediately Make Payment after approving
-            else if (r.stage === 'HOD_APPROVED' && r.type === 'FUND' && isHOD) {
-                actions += `<button class="success" onclick="processHODPayment('${r.key}', '${r.qrImage}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Make Payment</button>`;
-            }
-            // Technical Workflow
-            else if (r.stage === 'TEACHER_ASSIGNED' && r.type === 'TECH' && isAssignedTeacher) {
-                actions += `<button class="warning" onclick="updateEOfficeStage('${r.key}', 'TECH_EXECUTION')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Start Work</button>`;
-            }
-            else if (r.stage === 'TECH_EXECUTION' && r.type === 'TECH' && isAssignedTeacher) {
-                actions += `<button class="success" onclick="submitTechWork('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Submit Evidences</button>`;
-            }
-            else if (r.stage === 'TECH_VERIFIED' && r.type === 'TECH' && isPH) {
-                actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'CLOSED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Accept & Close</button>`;
-            }
+                
+                let stageBadge = `<span style="background:#e2e8f0; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">${r.stage}</span>`;
+                if (r.stage === 'CLOSED') stageBadge = `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">CLOSED</span>`;
 
-            tbody.innerHTML += `
-                <tr style="border-bottom:1px solid #f1f5f9;">
-                    <td style="font-family:monospace; font-weight:bold; color:var(--metro-blue);">${r.fileId}</td>
-                    <td>${details}</td>
-                    <td style="font-size:11px;">${r.initiator}</td>
-                    <td style="text-align:center;">${stageBadge}</td>
-                    <td style="text-align:center; white-space:nowrap;">${actions}</td>
-                </tr>
-            `;
+                let actions = `<button class="secondary" onclick="viewFileHistory('${r.key}')" style="padding:4px 8px; font-size:10px;">Details & Track</button>`;
+
+                // -- WORKFLOW LOGIC --
+                if (r.stage === 'SUBMITTED' && isPH) {
+                    actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'PH_VERIFIED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Verify</button>`;
+                    actions += `<button class="danger" onclick="updateEOfficeStage('${r.key}', 'REJECTED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Reject</button>`;
+                } 
+                else if (r.stage === 'PH_VERIFIED' && isHOD) {
+                    if(r.type === 'FUND') {
+                        actions += `<button class="info" onclick="processHODFundApprove('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Approve Fund</button>`;
+                    } else {
+                        actions += `<button class="info" onclick="processHODTechAssign('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Assign Teacher</button>`;
+                    }
+                }
+                else if (r.stage === 'HOD_APPROVED' && r.type === 'FUND' && isHOD) {
+                    actions += `<button class="success" onclick="processHODPayment('${r.key}', '${r.qrImage}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Make Payment</button>`;
+                }
+                else if (r.stage === 'TEACHER_ASSIGNED' && r.type === 'TECH' && isAssignedTeacher) {
+                    actions += `<button class="warning" onclick="updateEOfficeStage('${r.key}', 'TECH_EXECUTION')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Start Work</button>`;
+                }
+                else if (r.stage === 'TECH_EXECUTION' && r.type === 'TECH' && isAssignedTeacher) {
+                    actions += `<button class="success" onclick="submitTechWork('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Submit Evidences</button>`;
+                }
+                else if (r.stage === 'TECH_VERIFIED' && r.type === 'TECH' && isPH) {
+                    actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'CLOSED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Accept & Close</button>`;
+                }
+
+                tbody.innerHTML += `
+                    <tr style="border-bottom:1px solid #f1f5f9;">
+                        <td style="font-family:monospace; font-weight:bold; color:var(--metro-blue);">${r.fileId || 'N/A'}</td>
+                        <td>${details}</td>
+                        <td style="font-size:11px;">${r.initiator || 'Unknown'}</td>
+                        <td style="text-align:center;">${stageBadge}</td>
+                        <td style="text-align:center; white-space:nowrap;">${actions}</td>
+                    </tr>
+                `;
+            } catch (rowErr) {
+                // If a specific row is completely corrupted, skip it instead of crashing the whole table
+                console.warn("Skipping corrupted eOffice row:", rowErr);
+            }
         });
     });
 };
@@ -10163,38 +10193,108 @@ window.updateEOfficeStage = async (key, nextStage, extraPayload = {}) => {
 
 window.viewFileHistory = async (key) => {
     const snap = await get(ref(db, `eoffice_requests/${key}`));
+    if (!snap.exists()) return alert("File not found in database.");
     const data = snap.val();
     
-    let text = `FILE ID: ${data.fileId}\n`;
-    text += `INITIATOR: ${data.initiator}\n`;
-    text += `===============================\n`;
+    const modalBody = document.getElementById("eoTrackingBody");
     
+    // --- 1. BUILD DETAILS SECTION ---
+    let html = `
+        <div style="background:white; padding:20px; border-radius:8px; border:1px solid #cbd5e1; margin-bottom:20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                    <div style="font-size:11px; color:var(--metro-slate); font-weight:bold; text-transform:uppercase;">File ID</div>
+                    <div style="font-size:20px; font-family:monospace; font-weight:900; color:var(--metro-blue); margin-bottom:10px;">${data.fileId}</div>
+                </div>
+                <div style="background:#e2e8f0; padding:4px 10px; border-radius:12px; font-size:11px; font-weight:bold; color:var(--metro-blue);">
+                    ${data.stage}
+                </div>
+            </div>
+            
+            <div style="font-size:11px; color:var(--metro-slate); font-weight:bold; text-transform:uppercase;">Initiator</div>
+            <div style="font-size:14px; font-weight:bold; margin-bottom:5px;">${data.initiator}</div>
+            <div style="font-size:11px; color:var(--metro-slate); margin-bottom:10px;">${data.initiatorEmail}</div>
+    `;
+
+    // FUND DATA Formatting
     if (data.type === 'FUND') {
-        text += `REQUESTED ITEMS:\n`;
-        (data.items || []).forEach((it, i) => {
-            text += `${i+1}. ${it.item} | Qty: ${it.qty} | ₹${it.rate}/unit | Total: ₹${it.amount}\n`;
+        html += `<div style="font-size:11px; color:var(--metro-slate); font-weight:bold; text-transform:uppercase; margin-top:15px; border-top:1px solid #e2e8f0; padding-top:15px;">Requested Items</div>`;
+        html += `<div style="background:#f1f5f9; padding:10px; border-radius:6px; border:1px solid #e2e8f0; margin-top:5px;">`;
+        (data.items || []).forEach(it => {
+            html += `<div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:13px; border-bottom:1px solid #cbd5e1; padding-bottom:5px;">
+                        <span><b>${it.item}</b> (x${it.qty})</span>
+                        <span>₹${it.amount.toFixed(2)}</span>
+                     </div>`;
         });
-        text += `-------------------------------\n`;
-        text += `GRAND TOTAL: ₹${data.totalAmount}\n`;
-        if(data.approvedAmount) text += `HOD APPROVED AMT: ₹${data.approvedAmount}\n`;
-        if(data.paymentMode) text += `PAID VIA: ${data.paymentMode} (UTR: ${data.utrLast5 || 'N/A'})\n`;
-    } else {
-        text += `WORK TITLE: ${data.title}\n`;
-        text += `TYPE: ${data.techType} | LOC: ${data.location}\n`;
-        text += `REQUIREMENT: ${data.desc}\n`;
-        if(data.assignedTeacherEmail) text += `ASSIGNED TO: ${data.assignedTeacherEmail}\n`;
-        if(data.teacherRemarks) text += `COMPLETION NOTE: ${data.teacherRemarks}\n`;
+        html += `</div>`;
+        
+        html += `<div style="margin-top:15px; font-size:16px; text-align:right;">Request Total: <b style="color:var(--metro-blue);">₹${(data.totalAmount || 0).toLocaleString('en-IN')}</b></div>`;
+        
+        if (data.approvedAmount) {
+            html += `<div style="margin-top:10px; padding:10px; background:#fef3c7; border:1px solid #fde68a; border-radius:6px; font-size:15px; color:#d97706; text-align:right;">
+                        HOD Approved Amount: <b>₹${data.approvedAmount.toLocaleString('en-IN')}</b>
+                     </div>`;
+        }
+        if (data.paymentMode) {
+            html += `<div style="margin-top:10px; font-size:13px; color:var(--success-green); font-weight:bold; text-align:right;">
+                        <i class="fas fa-check-circle"></i> Paid via ${data.paymentMode} ${data.utrLast5 && data.utrLast5 !== 'N/A' ? '(UTR: '+data.utrLast5+')' : ''}
+                     </div>`;
+        }
+    } 
+    // TECHNICAL DATA Formatting
+    else {
+        html += `<div style="font-size:11px; color:var(--metro-slate); font-weight:bold; text-transform:uppercase; margin-top:15px; border-top:1px solid #e2e8f0; padding-top:15px;">Work Requirement</div>`;
+        html += `<div style="font-size:16px; font-weight:900; color:var(--metro-blue); margin-top:5px;">${data.title}</div>`;
+        html += `<div style="font-size:12px; color:var(--metro-red); font-weight:bold; margin-bottom:10px;">${data.techType} | Site: ${data.location}</div>`;
+        html += `<div style="font-size:13px; background:#f1f5f9; padding:15px; border-radius:6px; border:1px solid #cbd5e1; margin-bottom:10px; font-style:italic;">"${data.desc}"</div>`;
+        
+        if (data.assignedTeacherEmail) {
+            html += `<div style="margin-top:15px; font-size:13px; border-top:1px solid #e2e8f0; padding-top:10px;">
+                        Assigned Executing Officer: <b style="color:var(--metro-blue);">${data.assignedTeacherEmail}</b>
+                     </div>`;
+        }
+        if (data.teacherRemarks) {
+            html += `<div style="margin-top:10px; padding:10px; background:#dcfce7; border:1px solid #bbf7d0; border-radius:6px; font-size:13px; color:#166534;">
+                        <b>Completion Remarks:</b> "${data.teacherRemarks}"
+                     </div>`;
+        }
     }
     
-    text += `===============================\n`;
-    text += `FILE TRACKING HISTORY:\n`;
-    (data.history || []).forEach(h => {
-        text += `> [${new Date(h.time).toLocaleDateString('en-IN')} ${new Date(h.time).toLocaleTimeString('en-IN')}] : ${h.stage} (By: ${h.by})\n`;
-    });
-    
-    alert(text);
-};
+    html += `</div>`; // Close Details Box
 
+    // --- 2. BUILD TIMELINE / HISTORY SECTION ---
+    html += `<h4 style="color:var(--metro-blue); margin-bottom:15px; border-bottom:2px solid var(--metro-gold); padding-bottom:5px; font-size:14px;"><i class="fas fa-history"></i> File Movement History</h4>`;
+    html += `<div style="display:flex; flex-direction:column; gap:10px;">`;
+    
+    // Read history chronologically
+    (data.history || []).forEach((h, i) => {
+        const dateObj = new Date(h.time);
+        const dateStr = dateObj.toLocaleDateString('en-IN');
+        const timeStr = dateObj.toLocaleTimeString('en-IN', {hour: '2-digit', minute:'2-digit'});
+        
+        const isLast = (i === data.history.length - 1);
+        const isClosed = (h.stage === 'CLOSED');
+        
+        // Style latest item with green border, past items with gray
+        let borderStyle = isLast ? 'border-left: 5px solid var(--success-green);' : 'border-left: 5px solid #cbd5e1; opacity: 0.8;';
+        if(isClosed) borderStyle = 'border-left: 5px solid var(--success-green); background:#f0fdf4;';
+
+        html += `
+            <div style="background:white; padding:12px 15px; border-radius:6px; border:1px solid #e2e8f0; ${borderStyle} box-shadow:0 1px 2px rgba(0,0,0,0.05);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                    <span style="font-weight:900; font-size:13px; color:var(--text-main);">${h.stage.replace(/_/g, ' ')}</span>
+                    <span style="font-size:10px; color:#64748b; font-family:monospace; font-weight:bold;">${dateStr} ${timeStr}</span>
+                </div>
+                <div style="font-size:11px; color:#475569;">Action by: <b style="color:var(--metro-blue);">${h.by}</b></div>
+            </div>
+        `;
+    });
+    html += `</div>`;
+
+    // Inject and show
+    modalBody.innerHTML = html;
+    document.getElementById("eoTrackingModal").classList.remove("hidden");
+};
 // =========================================================
 // eOFFICE UI MODAL CONTROLLERS (Replaces Prompts)
 // =========================================================
