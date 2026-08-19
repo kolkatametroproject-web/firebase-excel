@@ -10086,33 +10086,43 @@ window.loadWorksDashboard = () => {
     const tbody = document.getElementById("worksTableBody");
     if(!tbody) return;
 
+    // Listen to changes in the eoffice_requests node
     onValue(ref(db, "eoffice_requests"), (snap) => {
         if (!snap.exists()) {
             tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No Active Files in Database.</td></tr>";
             return;
         }
 
-        tbody.innerHTML = "";
+        tbody.innerHTML = ""; // Clear table
         let visibleCount = 0;
 
-        const myEmail = (currentUser.email || "").toLowerCase();
+        const myEmail = (currentUser && currentUser.email) ? currentUser.email.toLowerCase() : "";
         const isPH = window.eOfficeRoles.PH.toLowerCase() === myEmail;
         const isHOD = window.eOfficeRoles.HOD_LEVEL_USERS.some(email => email.toLowerCase() === myEmail);
 
         const reqs = [];
         snap.forEach(c => reqs.push({ key: c.key, ...c.val() }));
+        
+        // Sort newest first
         reqs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         reqs.forEach(r => {
             try {
-                const isMine = r.initiatorEmail ? r.initiatorEmail.toLowerCase() === myEmail : false;
-                const isAssignedTeacher = r.assignedTeacherEmail ? r.assignedTeacherEmail.toLowerCase() === myEmail : false;
+                const reqEmail = (r.initiatorEmail || "").toLowerCase();
+                const techEmail = (r.assignedTeacherEmail || "").toLowerCase();
+
+                const isMine = (reqEmail === myEmail);
+                const isAssignedTeacher = (techEmail === myEmail);
                 
-                // Role Visibility Filter
-                if (!isMine && !isAssignedTeacher && !isAdmin && !isPH && !isHOD) return;
+                // --- VISIBILITY CHECK ---
+                // Show if you are Admin, PH, HOD, the person who made it, or the assigned teacher.
+                if (!isMine && !isAssignedTeacher && !isAdmin && !isPH && !isHOD) {
+                    return; // Skip rendering this row for this user
+                }
 
                 visibleCount++;
 
+                // Format Details
                 let details = "";
                 if (r.type === 'FUND') {
                     const itemCount = r.items ? r.items.length : 0;
@@ -10122,38 +10132,41 @@ window.loadWorksDashboard = () => {
                     details = `<b>${r.title || 'Untitled'}</b><br><small>${r.location || 'N/A'} | ${r.techType || 'N/A'}</small>`;
                 }
                 
-                let stageBadge = `<span style="background:#e2e8f0; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">${r.stage}</span>`;
-                if (r.stage === 'CLOSED') stageBadge = `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">CLOSED</span>`;
+                // Format Stage Badge
+                let stageBadge = `<span style="background:#e2e8f0; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">${r.stage || 'UNKNOWN'}</span>`;
+                if (r.stage === 'CLOSED') {
+                    stageBadge = `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">CLOSED</span>`;
+                }
 
+                // Base Action
                 let actions = `<button class="secondary" onclick="viewFileHistory('${r.key}')" style="padding:4px 8px; font-size:10px;">Details & Track</button>`;
 
-                // -- WORKFLOW LOGIC --
-                if (r.stage === 'SUBMITTED' && isPH) {
+                // -- WORKFLOW LOGIC (Always shows if user is Admin, PH, or HOD) --
+                if (r.stage === 'SUBMITTED' && (isPH || isAdmin)) {
                     actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'PH_VERIFIED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Verify</button>`;
                     actions += `<button class="danger" onclick="updateEOfficeStage('${r.key}', 'REJECTED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Reject</button>`;
                 } 
-                else if (r.stage === 'PH_VERIFIED' && isHOD) {
+                else if (r.stage === 'PH_VERIFIED' && (isHOD || isAdmin)) {
                     if(r.type === 'FUND') {
                         actions += `<button class="info" onclick="processHODFundApprove('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Approve Fund</button>`;
                     } else {
                         actions += `<button class="info" onclick="processHODTechAssign('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Assign Teacher</button>`;
                     }
                 }
-                // HOD CAN PAY IMMEDIATELY AFTER APPROVING (QR is already uploaded)
-                else if (r.stage === 'HOD_APPROVED' && r.type === 'FUND' && isHOD) {
+                else if (r.stage === 'HOD_APPROVED' && r.type === 'FUND' && (isHOD || isAdmin)) {
                     actions += `<button class="success" onclick="processHODPayment('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Make Payment</button>`;
                 }
-                // TECHNICAL WORKFLOW
-                else if (r.stage === 'TEACHER_ASSIGNED' && r.type === 'TECH' && isAssignedTeacher) {
+                else if (r.stage === 'TEACHER_ASSIGNED' && r.type === 'TECH' && (isAssignedTeacher || isAdmin)) {
                     actions += `<button class="warning" onclick="updateEOfficeStage('${r.key}', 'TECH_EXECUTION')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Start Work</button>`;
                 }
-                else if (r.stage === 'TECH_EXECUTION' && r.type === 'TECH' && isAssignedTeacher) {
+                else if (r.stage === 'TECH_EXECUTION' && r.type === 'TECH' && (isAssignedTeacher || isAdmin)) {
                     actions += `<button class="success" onclick="submitTechWork('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Submit Evidences</button>`;
                 }
-                else if (r.stage === 'TECH_VERIFIED' && r.type === 'TECH' && isPH) {
+                else if (r.stage === 'TECH_VERIFIED' && r.type === 'TECH' && (isPH || isAdmin)) {
                     actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'CLOSED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Accept & Close</button>`;
                 }
 
+                // Add Row to Table
                 tbody.innerHTML += `
                     <tr style="border-bottom:1px solid #f1f5f9;">
                         <td style="font-family:monospace; font-weight:bold; color:var(--metro-blue);">${r.fileId || 'N/A'}</td>
@@ -10168,6 +10181,7 @@ window.loadWorksDashboard = () => {
             }
         });
 
+        // Fail-safe: If data exists but none of it belongs to this user
         if (visibleCount === 0) {
             tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#64748b; padding:20px;'>You do not have any active files in your queue.</td></tr>";
         }
