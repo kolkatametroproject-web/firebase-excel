@@ -2470,19 +2470,62 @@ tr:hover { background: #fcfcfd; }
     </div>
 
     <!-- NEW FUND REQUEST -->
+    <!-- NEW FUND REQUEST -->
     <div id="works-new-fund" class="panel hidden" style="border-top: 4px solid var(--success-green);">
         <h3 style="color:var(--success-green);"><i class="fas fa-file-invoice-dollar"></i> Initiate Fund / Product Request</h3>
-        <div style="display:grid; grid-template-columns: 2fr 1fr; gap:15px; max-width: 600px;">
-            <div>
-                <label style="font-size:11px; font-weight:bold;">Product Name</label>
-                <input id="eoFundItem" placeholder="e.g. ESP8266">
+        
+        <!-- Cart Input Area -->
+        <div style="background:#f1f5f9; padding:15px; border-radius:8px; margin-bottom:15px; border: 1px solid #cbd5e1;">
+            <div style="display:grid; grid-template-columns: 2fr 1fr 1fr 1.5fr; gap:10px; align-items:end;">
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--metro-slate);">Product Name</label>
+                    <input id="eoFundItem" placeholder="e.g. ESP8266" style="margin:0;">
+                </div>
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--metro-slate);">Qty</label>
+                    <input type="number" id="eoFundQty" placeholder="0" style="margin:0;" oninput="calcEoFundAmount()">
+                </div>
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--metro-slate);">Rate (₹)</label>
+                    <input type="number" id="eoFundRate" placeholder="0.00" style="margin:0;" oninput="calcEoFundAmount()">
+                </div>
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--metro-blue);">Amount (₹)</label>
+                    <input id="eoFundAmount" placeholder="0.00" disabled style="margin:0; background:#e2e8f0; font-weight:bold; border-color:var(--border-color);">
+                </div>
             </div>
-            <div>
-                <label style="font-size:11px; font-weight:bold;">Quantity</label>
-                <input type="number" id="eoFundQty" placeholder="0">
-            </div>
+            <button class="info" onclick="addEoFundItem()" style="margin-top:15px; width:100%; font-weight:bold;">
+                <i class="fas fa-plus"></i> ADD TO LIST
+            </button>
         </div>
-        <button class="success" onclick="submitEOfficeRequest('FUND')" style="margin-top:15px;"><i class="fas fa-paper-plane"></i> SUBMIT REQUEST</button>
+
+        <!-- Cart Table -->
+        <div class="table-wrapper" style="margin-bottom:15px;">
+            <table style="width:100%">
+                <thead style="background:var(--metro-blue); color:white;">
+                    <tr>
+                        <th style="color:white;">Item Description</th>
+                        <th style="color:white; text-align:center;">Qty</th>
+                        <th style="color:white; text-align:right;">Rate (₹)</th>
+                        <th style="color:white; text-align:right;">Total (₹)</th>
+                        <th style="color:white; text-align:center;">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="eoFundCartBody">
+                    <tr><td colspan="5" style="text-align:center; color:#64748b; padding:15px;">List is empty. Add items above.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Grand Total -->
+        <div style="text-align:right; font-size:22px; margin-bottom:20px; background:#f8fafc; padding:15px; border-radius:6px; border-left:5px solid var(--success-green);">
+            <strong style="color:var(--metro-slate);">GRAND TOTAL:</strong> 
+            <span style="color:var(--success-green); font-weight:900;">₹ <span id="eoFundGrandTotal">0.00</span></span>
+        </div>
+
+        <button class="success" onclick="submitEOfficeRequest('FUND')" style="width:100%; font-size:16px; font-weight:900; padding:15px; letter-spacing:1px;">
+            <i class="fas fa-paper-plane"></i> SUBMIT FINAL REQUEST
+        </button>
     </div>
 
     <!-- NEW TECHNICAL REQUEST -->
@@ -9787,10 +9830,75 @@ const initAttendanceSystem = () => {
 // 🏢 eOFFICE ENGINE: FUND & TECHNICAL WORKFLOW
 // =========================================================
 
-// Config Roles (Update emails as per your organization)
 const eOfficeRoles = {
-    PH: "soham@metro.project", // Project Head
-    HOD: "hodee@metro.project" // Head of Department
+    PH: "soham@metro.project", 
+    HOD_LEVEL_USERS: [
+        "hodee@metro.project",
+        "dsen@metro.project",
+        "teacher2@metro.project"
+    ]
+};
+
+// --- NEW FUND CART LOGIC ---
+window.eoFundCart = [];
+
+window.calcEoFundAmount = () => {
+    const qty = parseFloat(document.getElementById("eoFundQty").value) || 0;
+    const rate = parseFloat(document.getElementById("eoFundRate").value) || 0;
+    document.getElementById("eoFundAmount").value = (qty * rate).toFixed(2);
+};
+
+window.addEoFundItem = () => {
+    const item = document.getElementById("eoFundItem").value.trim();
+    const qty = parseFloat(document.getElementById("eoFundQty").value) || 0;
+    const rate = parseFloat(document.getElementById("eoFundRate").value) || 0;
+    const amount = qty * rate;
+
+    if(!item || qty <= 0 || rate <= 0) return alert("⚠️ Please enter a valid Product Name, Quantity, and Rate.");
+
+    window.eoFundCart.push({ item, qty, rate, amount });
+    window.renderEoFundCart();
+    
+    document.getElementById("eoFundItem").value = "";
+    document.getElementById("eoFundQty").value = "";
+    document.getElementById("eoFundRate").value = "";
+    document.getElementById("eoFundAmount").value = "";
+};
+
+window.removeEoFundItem = (index) => {
+    window.eoFundCart.splice(index, 1);
+    window.renderEoFundCart();
+};
+
+window.renderEoFundCart = () => {
+    const tbody = document.getElementById("eoFundCartBody");
+    const totalEl = document.getElementById("eoFundGrandTotal");
+    
+    if(window.eoFundCart.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#64748b; padding:15px;">List is empty. Add items above.</td></tr>';
+        totalEl.innerText = "0.00";
+        return;
+    }
+
+    tbody.innerHTML = "";
+    let grandTotal = 0;
+
+    window.eoFundCart.forEach((it, i) => {
+        grandTotal += it.amount;
+        tbody.innerHTML += `
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="font-weight:bold;">${it.item}</td>
+                <td style="text-align:center;">${it.qty}</td>
+                <td style="text-align:right;">₹ ${it.rate.toFixed(2)}</td>
+                <td style="text-align:right; font-weight:bold; color:var(--success-green);">₹ ${it.amount.toFixed(2)}</td>
+                <td style="text-align:center;">
+                    <button class="danger" onclick="removeEoFundItem(${i})" style="padding:4px 8px; font-size:10px;"><i class="fas fa-trash"></i></button>
+                </td>
+            </tr>
+        `;
+    });
+    
+    totalEl.innerText = grandTotal.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 };
 
 window.toggleWorksMode = (mode) => {
@@ -9814,11 +9922,11 @@ window.submitEOfficeRequest = async (type) => {
     };
 
     if (isFund) {
-        const item = document.getElementById("eoFundItem").value.trim();
-        const qty = document.getElementById("eoFundQty").value.trim();
-        if (!item || !qty) return alert("Product Name and Quantity required.");
-        data.item = item;
-        data.qty = qty;
+        if (window.eoFundCart.length === 0) return alert("⚠️ Please add at least one item to the list.");
+        
+        const grandTotal = window.eoFundCart.reduce((sum, it) => sum + it.amount, 0);
+        data.items = window.eoFundCart;
+        data.totalAmount = grandTotal;
         data.fileId = `FR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
     } else {
         const tType = document.getElementById("eoTechType").value;
@@ -9837,11 +9945,16 @@ window.submitEOfficeRequest = async (type) => {
         await push(ref(db, "eoffice_requests"), data);
         alert(`✅ Request Submitted. File ID: ${data.fileId}`);
         window.toggleWorksMode('dashboard');
+        
         // Clear forms
-        document.getElementById("eoFundItem").value = "";
-        document.getElementById("eoFundQty").value = "";
-        document.getElementById("eoTechTitle").value = "";
-        document.getElementById("eoTechDesc").value = "";
+        if(isFund) {
+            window.eoFundCart = [];
+            window.renderEoFundCart();
+        } else {
+            document.getElementById("eoTechTitle").value = "";
+            document.getElementById("eoTechDesc").value = "";
+            document.getElementById("eoTechLoc").value = "";
+        }
     } catch (e) { alert("Error: " + e.message); }
 };
 
@@ -9858,29 +9971,31 @@ window.loadWorksDashboard = () => {
 
         const myEmail = currentUser.email.toLowerCase();
         const isPH = myEmail === eOfficeRoles.PH.toLowerCase();
-        const isHOD = myEmail === eOfficeRoles.HOD.toLowerCase();
+        const isHOD = eOfficeRoles.HOD_LEVEL_USERS.some(email => email.toLowerCase() === myEmail);
 
         const reqs = [];
         snap.forEach(c => reqs.push({ key: c.key, ...c.val() }));
         reqs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         reqs.forEach(r => {
-            // Role-based visibility filtering
             const isMine = r.initiatorEmail.toLowerCase() === myEmail;
             const isAssignedTeacher = r.assignedTeacherEmail === myEmail;
             
-            // Show to Initiator, Assigned Teacher, Admin, PH, or HOD
             if (!isMine && !isAssignedTeacher && !isAdmin && !isPH && !isHOD) return;
 
-            let details = r.type === 'FUND' 
-                ? `<b>${r.item}</b> (Qty: ${r.qty})` 
-                : `<b>${r.title}</b><br><small>${r.location} | ${r.techType}</small>`;
+            let details = "";
+            if (r.type === 'FUND') {
+                const itemCount = r.items ? r.items.length : 0;
+                const totalAmt = r.totalAmount || 0;
+                details = `<b>Requisition (${itemCount} Items)</b><br><small style="color:var(--success-green); font-weight:bold;">Total: ₹ ${totalAmt.toLocaleString('en-IN')}</small>`;
+            } else {
+                details = `<b>${r.title}</b><br><small>${r.location} | ${r.techType}</small>`;
+            }
             
             let stageBadge = `<span style="background:#e2e8f0; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">${r.stage}</span>`;
             if (r.stage === 'CLOSED') stageBadge = `<span style="background:#dcfce7; color:#166534; padding:3px 8px; border-radius:12px; font-size:10px; font-weight:bold;">CLOSED</span>`;
 
-            // Action Buttons Logic based on Workflow Rules
-            let actions = `<button class="secondary" onclick="viewFileHistory('${r.key}')" style="padding:4px 8px; font-size:10px;">Tracking</button>`;
+            let actions = `<button class="secondary" onclick="viewFileHistory('${r.key}')" style="padding:4px 8px; font-size:10px;">Details & Track</button>`;
 
             if (r.stage === 'SUBMITTED' && isPH) {
                 actions += `<button class="success" onclick="updateEOfficeStage('${r.key}', 'PH_VERIFIED')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Verify</button>`;
@@ -9935,7 +10050,7 @@ window.updateEOfficeStage = async (key, nextStage, extraPayload = {}) => {
 };
 
 window.processHODFundApprove = async (key) => {
-    const amt = prompt("Enter Approved Amount (₹):");
+    const amt = prompt("Enter Final Approved Amount (₹):");
     if(!amt || isNaN(amt)) return alert("Valid amount required.");
     window.updateEOfficeStage(key, 'HOD_APPROVED', { approvedAmount: amt });
 };
@@ -9947,8 +10062,6 @@ window.processHODTechAssign = async (key) => {
 };
 
 window.uploadMemberQR = async (key) => {
-    // For simplicity, we trigger a prompt for a Base64 string or Drive Link. 
-    // In production, attach a hidden <input type="file">.
     const link = prompt("Enter UPI QR Image Link / Drive Link:");
     if(!link) return;
     window.updateEOfficeStage(key, 'QR_UPLOADED', { qrImage: link });
@@ -9975,10 +10088,34 @@ window.submitTechWork = async (key) => {
 window.viewFileHistory = async (key) => {
     const snap = await get(ref(db, `eoffice_requests/${key}`));
     const data = snap.val();
-    let text = `FILE MOVEMENT: ${data.fileId}\n\n`;
+    
+    let text = `FILE ID: ${data.fileId}\n`;
+    text += `INITIATOR: ${data.initiator}\n`;
+    text += `===============================\n`;
+    
+    if (data.type === 'FUND') {
+        text += `REQUESTED ITEMS:\n`;
+        (data.items || []).forEach((it, i) => {
+            text += `${i+1}. ${it.item} | Qty: ${it.qty} | ₹${it.rate}/unit | Total: ₹${it.amount}\n`;
+        });
+        text += `-------------------------------\n`;
+        text += `GRAND TOTAL: ₹${data.totalAmount}\n`;
+        if(data.approvedAmount) text += `HOD APPROVED AMT: ₹${data.approvedAmount}\n`;
+        if(data.paymentMode) text += `PAID VIA: ${data.paymentMode} (UTR: ${data.utrLast5 || 'N/A'})\n`;
+    } else {
+        text += `WORK TITLE: ${data.title}\n`;
+        text += `TYPE: ${data.techType} | LOC: ${data.location}\n`;
+        text += `REQUIREMENT: ${data.desc}\n`;
+        if(data.assignedTeacherEmail) text += `ASSIGNED TO: ${data.assignedTeacherEmail}\n`;
+        if(data.teacherRemarks) text += `COMPLETION NOTE: ${data.teacherRemarks}\n`;
+    }
+    
+    text += `===============================\n`;
+    text += `FILE TRACKING HISTORY:\n`;
     (data.history || []).forEach(h => {
-        text += `[${new Date(h.time).toLocaleString('en-IN')}] ${h.stage} (By: ${h.by})\n`;
+        text += `> [${new Date(h.time).toLocaleDateString('en-IN')} ${new Date(h.time).toLocaleTimeString('en-IN')}] : ${h.stage} (By: ${h.by})\n`;
     });
+    
     alert(text);
 };
 initAttendanceSystem();
