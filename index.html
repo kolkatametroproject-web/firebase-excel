@@ -2559,6 +2559,71 @@ tr:hover { background: #fcfcfd; }
         <button class="warning" onclick="submitEOfficeRequest('TECH')" style="margin-top:15px;"><i class="fas fa-paper-plane"></i> SUBMIT WORK</button>
     </div>
 </div>
+  <!-- ================= eOFFICE MODALS ================= -->
+
+<!-- 1. General Action Modal (Approve Fund / Assign Teacher) -->
+<div id="eoActionModal" class="modal-overlay hidden">
+    <div class="panel" style="width:400px; border-top: 4px solid var(--metro-blue);">
+        <h3 id="eoActionTitle">Action</h3>
+        <input type="hidden" id="eoActionKey">
+        <input type="hidden" id="eoActionType">
+        <div id="eoActionBody"></div>
+        <div style="display:flex; gap:10px; margin-top:20px;">
+            <button class="secondary" style="flex:1;" onclick="document.getElementById('eoActionModal').classList.add('hidden')">Cancel</button>
+            <button class="success" style="flex:2;" id="eoActionSubmitBtn" onclick="executeEoAction()">Confirm & Proceed</button>
+        </div>
+    </div>
+</div>
+
+<!-- 2. QR Upload Modal (For Student/Member) -->
+<div id="eoQrModal" class="modal-overlay hidden">
+    <div class="panel" style="width:400px; border-top: 4px solid #d97706;">
+        <h3 style="color:#d97706;"><i class="fas fa-qrcode"></i> Upload Payment QR</h3>
+        <input type="hidden" id="eoQrFileKey">
+        <p style="font-size:11px; color:#64748b; margin-bottom:15px;">Upload a screenshot of your UPI QR code so the HOD can scan and transfer the approved funds.</p>
+        
+        <input type="file" id="eoQrFileInput" accept="image/*" style="margin-bottom:15px; border:2px dashed #cbd5e1; padding:10px; width:100%;">
+        
+        <div style="display:flex; gap:10px; margin-top:10px;">
+            <button class="secondary" style="flex:1;" onclick="document.getElementById('eoQrModal').classList.add('hidden')">Cancel</button>
+            <button class="info" style="flex:2; font-weight:bold;" onclick="executeQrUpload()"><i class="fas fa-upload"></i> Upload QR</button>
+        </div>
+    </div>
+</div>
+
+<!-- 3. HOD Payment Modal (Shows QR and Asks for UTR) -->
+<div id="eoPaymentModal" class="modal-overlay hidden">
+    <div class="panel" style="width:450px; border-top: 5px solid var(--success-green);">
+        <h3 style="color:var(--success-green);"><i class="fas fa-money-check-alt"></i> Complete Payment</h3>
+        <input type="hidden" id="eoPayFileKey">
+        
+        <div style="text-align:center; background:#f8fafc; padding:15px; border-radius:8px; border:1px solid #cbd5e1; margin-bottom:15px;">
+            <h4 style="margin:0 0 10px 0; color:var(--metro-blue);">STUDENT QR CODE</h4>
+            <div id="eoPayQrError" style="color:red; font-size:11px; display:none;">No valid QR image found.</div>
+            <img id="eoPayQrImage" src="" style="max-width:250px; max-height:250px; border:2px solid #000; border-radius:8px; object-fit:contain; display:none;">
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+            <div>
+                <label style="font-size:11px; font-weight:bold;">Payment Mode</label>
+                <select id="eoPayMode" onchange="toggleEoPayUtr()" style="font-weight:bold;">
+                    <option value="UPI">UPI Payment</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Cash">Cash</option>
+                </select>
+            </div>
+            <div id="divEoPayUtr">
+                <label style="font-size:11px; font-weight:bold; color:var(--metro-blue);">Last 5 Digits of UTR</label>
+                <input id="eoPayUtr" placeholder="e.g. 12345" maxlength="5" style="font-weight:bold; border-color:var(--metro-blue);">
+            </div>
+        </div>
+
+        <div style="display:flex; gap:10px; margin-top:20px;">
+            <button class="secondary" style="flex:1;" onclick="document.getElementById('eoPaymentModal').classList.add('hidden')">Cancel</button>
+            <button class="success" style="flex:2; font-weight:900; font-size:14px;" onclick="executeHodPayment()"><i class="fas fa-check-double"></i> MARK AS PAID</button>
+        </div>
+    </div>
+</div>
 </section>
 <script type="module">
 // --- FIREBASE IMPORTS (Standard Stable Version) ---
@@ -9855,7 +9920,7 @@ const eOfficeRoles = {
     ]
 };
 
-// --- NEW FUND CART LOGIC ---
+// --- FUND CART LOGIC ---
 window.eoFundCart = [];
 
 window.calcEoFundAmount = () => {
@@ -10065,42 +10130,6 @@ window.updateEOfficeStage = async (key, nextStage, extraPayload = {}) => {
     } catch(e) { alert("Error: " + e.message); }
 };
 
-window.processHODFundApprove = async (key) => {
-    const amt = prompt("Enter Final Approved Amount (₹):");
-    if(!amt || isNaN(amt)) return alert("Valid amount required.");
-    window.updateEOfficeStage(key, 'HOD_APPROVED', { approvedAmount: amt });
-};
-
-window.processHODTechAssign = async (key) => {
-    const tEmail = prompt("Enter Lead Teacher Email to Assign:");
-    if(!tEmail) return;
-    window.updateEOfficeStage(key, 'TEACHER_ASSIGNED', { assignedTeacherEmail: tEmail.toLowerCase() });
-};
-
-window.uploadMemberQR = async (key) => {
-    const link = prompt("Enter UPI QR Image Link / Drive Link:");
-    if(!link) return;
-    window.updateEOfficeStage(key, 'QR_UPLOADED', { qrImage: link });
-};
-
-window.processHODPayment = async (key, qrLink) => {
-    const mode = prompt(`Member QR: ${qrLink}\n\nEnter Payment Mode (UPI, Cash, Bank Transfer):`, "UPI");
-    if(!mode) return;
-    
-    let utr = "N/A";
-    if(mode.toUpperCase() === "UPI") {
-        utr = prompt("Enter Last 5 Digits of UTR:");
-        if(!utr) return alert("UTR required for UPI.");
-    }
-    window.updateEOfficeStage(key, 'CLOSED', { paymentMode: mode, utrLast5: utr });
-};
-
-window.submitTechWork = async (key) => {
-    const remarks = prompt("Enter Completion Remarks:");
-    if(!remarks) return;
-    window.updateEOfficeStage(key, 'TECH_VERIFIED', { teacherRemarks: remarks });
-};
-
 window.viewFileHistory = async (key) => {
     const snap = await get(ref(db, `eoffice_requests/${key}`));
     const data = snap.val();
@@ -10133,6 +10162,140 @@ window.viewFileHistory = async (key) => {
     });
     
     alert(text);
+};
+
+// =========================================================
+// eOFFICE UI MODAL CONTROLLERS (Replaces Prompts)
+// =========================================================
+
+// 1. OPEN HOD APPROVE MODAL
+window.processHODFundApprove = (key) => {
+    document.getElementById("eoActionKey").value = key;
+    document.getElementById("eoActionType").value = "FUND_APPROVE";
+    document.getElementById("eoActionTitle").innerHTML = "<i class='fas fa-check-circle'></i> Approve Fund Request";
+    
+    document.getElementById("eoActionBody").innerHTML = `
+        <label style="font-size:11px; font-weight:bold; color:var(--metro-blue);">Enter Final Approved Amount (₹)</label>
+        <input type="number" id="eoActionInput" placeholder="e.g. 2500" style="margin-top:5px; font-weight:bold; color:var(--metro-blue); font-size:20px; height:50px;">
+    `;
+    document.getElementById("eoActionModal").classList.remove("hidden");
+};
+
+// 2. OPEN HOD ASSIGN TEACHER MODAL
+window.processHODTechAssign = (key) => {
+    document.getElementById("eoActionKey").value = key;
+    document.getElementById("eoActionType").value = "TECH_ASSIGN";
+    document.getElementById("eoActionTitle").innerHTML = "<i class='fas fa-user-plus'></i> Assign Technical Work";
+    
+    document.getElementById("eoActionBody").innerHTML = `
+        <label style="font-size:11px; font-weight:bold;">Enter Assigned Teacher's Email</label>
+        <input type="email" id="eoActionInput" placeholder="teacher@metro.project" style="margin-top:5px; font-weight:bold;">
+    `;
+    document.getElementById("eoActionModal").classList.remove("hidden");
+};
+
+// 3. EXECUTE GENERIC ACTION (Approve or Assign)
+window.executeEoAction = async () => {
+    const key = document.getElementById("eoActionKey").value;
+    const type = document.getElementById("eoActionType").value;
+    const inputVal = document.getElementById("eoActionInput").value.trim();
+
+    if (type === "FUND_APPROVE") {
+        if(!inputVal || isNaN(inputVal)) return alert("Valid numeric amount required.");
+        await window.updateEOfficeStage(key, 'HOD_APPROVED', { approvedAmount: parseFloat(inputVal) });
+    } 
+    else if (type === "TECH_ASSIGN") {
+        if(!inputVal) return alert("Teacher email required.");
+        await window.updateEOfficeStage(key, 'TEACHER_ASSIGNED', { assignedTeacherEmail: inputVal.toLowerCase() });
+    }
+
+    document.getElementById("eoActionModal").classList.add("hidden");
+};
+
+// 4. OPEN QR UPLOAD MODAL (Student)
+window.uploadMemberQR = (key) => {
+    document.getElementById("eoQrFileKey").value = key;
+    document.getElementById("eoQrFileInput").value = ""; // clear old file
+    document.getElementById("eoQrModal").classList.remove("hidden");
+};
+
+// 5. PROCESS IMAGE TO BASE64 AND UPLOAD
+window.executeQrUpload = () => {
+    const fileInput = document.getElementById("eoQrFileInput");
+    const file = fileInput.files[0];
+    const key = document.getElementById("eoQrFileKey").value;
+
+    if(!file) return alert("⚠️ Please select a QR code image file first.");
+
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+        const base64QR = e.target.result; // Convert image to text string
+        try {
+            await window.updateEOfficeStage(key, 'QR_UPLOADED', { qrImage: base64QR });
+            document.getElementById('eoQrModal').classList.add('hidden');
+            alert("✅ QR Code Uploaded Successfully. The HOD has been notified.");
+        } catch(err) {
+            alert("Database Error: " + err.message);
+        }
+    };
+    reader.readAsDataURL(file);
+};
+
+// 6. OPEN PAYMENT MODAL (HOD)
+window.processHODPayment = (key, qrImageBase64) => {
+    document.getElementById("eoPayFileKey").value = key;
+    
+    // Display the image
+    const imgEl = document.getElementById("eoPayQrImage");
+    const errEl = document.getElementById("eoPayQrError");
+    
+    if(qrImageBase64 && (qrImageBase64.startsWith("data:image") || qrImageBase64.startsWith("http"))) {
+        imgEl.src = qrImageBase64;
+        imgEl.style.display = "inline-block";
+        errEl.style.display = "none";
+    } else {
+        imgEl.style.display = "none";
+        errEl.style.display = "block";
+    }
+    
+    // Reset Form
+    document.getElementById("eoPayMode").value = "UPI";
+    document.getElementById("eoPayUtr").value = "";
+    document.getElementById("divEoPayUtr").style.display = "block";
+
+    document.getElementById("eoPaymentModal").classList.remove("hidden");
+};
+
+// Toggle UTR input based on payment mode
+window.toggleEoPayUtr = () => {
+    const mode = document.getElementById("eoPayMode").value;
+    document.getElementById("divEoPayUtr").style.display = (mode === "UPI") ? "block" : "none";
+};
+
+// 7. FINALIZE PAYMENT & CLOSE FILE
+window.executeHodPayment = async () => {
+    const key = document.getElementById("eoPayFileKey").value;
+    const mode = document.getElementById("eoPayMode").value;
+    const utr = document.getElementById("eoPayUtr").value.trim();
+
+    if (mode === "UPI" && (!utr || utr.length < 4)) {
+        return alert("⚠️ Please enter the last 5 digits of the UTR for UPI records.");
+    }
+
+    try {
+        await window.updateEOfficeStage(key, 'CLOSED', { paymentMode: mode, utrLast5: utr || "N/A" });
+        document.getElementById("eoPaymentModal").classList.add("hidden");
+        alert("✅ Payment Logged Successfully! File is now CLOSED.");
+    } catch(e) {
+        alert("Error: " + e.message);
+    }
+};
+
+// 8. Teacher Submit Work (Browser Prompt for remarks)
+window.submitTechWork = async (key) => {
+    const remarks = prompt("Enter Completion Remarks (What was done?):");
+    if(!remarks) return;
+    window.updateEOfficeStage(key, 'TECH_VERIFIED', { teacherRemarks: remarks });
 };
 initAttendanceSystem();
  // --- 1. POPULATE THE BOX WITH A MANUAL INPUT (No Checkboxes) ---
