@@ -9940,7 +9940,7 @@ const initAttendanceSystem = () => {
 // 🏢 eOFFICE ENGINE: FUND & TECHNICAL WORKFLOW
 // =========================================================
 
-const eOfficeRoles = {
+window.eOfficeRoles = {
     PH: "soham@metro.project", 
     HOD_LEVEL_USERS: [
         "hodee@metro.project",
@@ -10020,6 +10020,7 @@ window.toggleWorksMode = (mode) => {
     if(mode === 'dashboard') window.loadWorksDashboard();
 };
 
+// --- SUBMIT REQUEST (WITH QR UPLOAD ATTACHED) ---
 window.submitEOfficeRequest = async (type) => {
     const isFund = (type === 'FUND');
     let data = {
@@ -10036,7 +10037,7 @@ window.submitEOfficeRequest = async (type) => {
         
         const fileInput = document.getElementById("eoFundQrInput");
         const file = fileInput.files[0];
-        if (!file) return alert("⚠️ Please upload your Payment QR code image.");
+        if (!file) return alert("⚠️ Please upload your Payment QR code image before submitting.");
 
         const grandTotal = window.eoFundCart.reduce((sum, it) => sum + it.amount, 0);
         data.items = window.eoFundCart;
@@ -10050,7 +10051,7 @@ window.submitEOfficeRequest = async (type) => {
         // Convert image to Base64 and submit
         const reader = new FileReader();
         reader.onload = async function(e) {
-            data.qrImage = e.target.result;
+            data.qrImage = e.target.result; // Attach the QR image directly to the file data
             try {
                 await push(ref(db, "eoffice_requests"), data);
                 alert(`✅ Request Submitted. File ID: ${data.fileId}`);
@@ -10075,6 +10076,7 @@ window.submitEOfficeRequest = async (type) => {
         const title = document.getElementById("eoTechTitle").value.trim();
         const desc = document.getElementById("eoTechDesc").value.trim();
         if (!title || !desc) return alert("Title and Requirement are required.");
+        
         data.techType = tType;
         data.location = loc;
         data.title = title;
@@ -10093,35 +10095,37 @@ window.submitEOfficeRequest = async (type) => {
     }
 };
 
+// --- DASHBOARD LOADER ---
 window.loadWorksDashboard = () => {
     const tbody = document.getElementById("worksTableBody");
     if(!tbody) return;
 
     onValue(ref(db, "eoffice_requests"), (snap) => {
-        tbody.innerHTML = "";
         if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No Active Files.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No Active Files in Database.</td></tr>";
             return;
         }
 
+        tbody.innerHTML = "";
+        let visibleCount = 0;
+
         const myEmail = (currentUser.email || "").toLowerCase();
-        const isPH = myEmail === eOfficeRoles.PH.toLowerCase();
-        const isHOD = eOfficeRoles.HOD_LEVEL_USERS.some(email => email.toLowerCase() === myEmail);
+        const isPH = window.eOfficeRoles.PH.toLowerCase() === myEmail;
+        const isHOD = window.eOfficeRoles.HOD_LEVEL_USERS.some(email => email.toLowerCase() === myEmail);
 
         const reqs = [];
         snap.forEach(c => reqs.push({ key: c.key, ...c.val() }));
-        
-        // Sort safely (handle cases where timestamp might be missing)
         reqs.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         reqs.forEach(r => {
             try {
-                // 🛑 CRITICAL FIX: Safe checks prevent crashes from old/corrupt test data
                 const isMine = r.initiatorEmail ? r.initiatorEmail.toLowerCase() === myEmail : false;
                 const isAssignedTeacher = r.assignedTeacherEmail ? r.assignedTeacherEmail.toLowerCase() === myEmail : false;
                 
                 // Role Visibility Filter
                 if (!isMine && !isAssignedTeacher && !isAdmin && !isPH && !isHOD) return;
+
+                visibleCount++;
 
                 let details = "";
                 if (r.type === 'FUND') {
@@ -10149,9 +10153,11 @@ window.loadWorksDashboard = () => {
                         actions += `<button class="info" onclick="processHODTechAssign('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Assign Teacher</button>`;
                     }
                 }
+                // HOD CAN PAY IMMEDIATELY AFTER APPROVING (QR is already uploaded)
                 else if (r.stage === 'HOD_APPROVED' && r.type === 'FUND' && isHOD) {
-                    actions += `<button class="success" onclick="processHODPayment('${r.key}', '${r.qrImage}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Make Payment</button>`;
+                    actions += `<button class="success" onclick="processHODPayment('${r.key}')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Make Payment</button>`;
                 }
+                // TECHNICAL WORKFLOW
                 else if (r.stage === 'TEACHER_ASSIGNED' && r.type === 'TECH' && isAssignedTeacher) {
                     actions += `<button class="warning" onclick="updateEOfficeStage('${r.key}', 'TECH_EXECUTION')" style="padding:4px 8px; font-size:10px; margin-left:5px;">Start Work</button>`;
                 }
@@ -10172,10 +10178,13 @@ window.loadWorksDashboard = () => {
                     </tr>
                 `;
             } catch (rowErr) {
-                // If a specific row is completely corrupted, skip it instead of crashing the whole table
                 console.warn("Skipping corrupted eOffice row:", rowErr);
             }
         });
+
+        if (visibleCount === 0) {
+            tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#64748b; padding:20px;'>You do not have any active files in your queue.</td></tr>";
+        }
     });
 };
 
@@ -10191,6 +10200,7 @@ window.updateEOfficeStage = async (key, nextStage, extraPayload = {}) => {
     } catch(e) { alert("Error: " + e.message); }
 };
 
+// --- NEW BEAUTIFUL TRACKING MODAL ---
 window.viewFileHistory = async (key) => {
     const snap = await get(ref(db, `eoffice_requests/${key}`));
     if (!snap.exists()) return alert("File not found in database.");
@@ -10198,7 +10208,7 @@ window.viewFileHistory = async (key) => {
     
     const modalBody = document.getElementById("eoTrackingBody");
     
-    // --- 1. BUILD DETAILS SECTION ---
+    // 1. DETAILS SECTION
     let html = `
         <div style="background:white; padding:20px; border-radius:8px; border:1px solid #cbd5e1; margin-bottom:20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
@@ -10216,7 +10226,6 @@ window.viewFileHistory = async (key) => {
             <div style="font-size:11px; color:var(--metro-slate); margin-bottom:10px;">${data.initiatorEmail}</div>
     `;
 
-    // FUND DATA Formatting
     if (data.type === 'FUND') {
         html += `<div style="font-size:11px; color:var(--metro-slate); font-weight:bold; text-transform:uppercase; margin-top:15px; border-top:1px solid #e2e8f0; padding-top:15px;">Requested Items</div>`;
         html += `<div style="background:#f1f5f9; padding:10px; border-radius:6px; border:1px solid #e2e8f0; margin-top:5px;">`;
@@ -10227,7 +10236,6 @@ window.viewFileHistory = async (key) => {
                      </div>`;
         });
         html += `</div>`;
-        
         html += `<div style="margin-top:15px; font-size:16px; text-align:right;">Request Total: <b style="color:var(--metro-blue);">₹${(data.totalAmount || 0).toLocaleString('en-IN')}</b></div>`;
         
         if (data.approvedAmount) {
@@ -10241,7 +10249,6 @@ window.viewFileHistory = async (key) => {
                      </div>`;
         }
     } 
-    // TECHNICAL DATA Formatting
     else {
         html += `<div style="font-size:11px; color:var(--metro-slate); font-weight:bold; text-transform:uppercase; margin-top:15px; border-top:1px solid #e2e8f0; padding-top:15px;">Work Requirement</div>`;
         html += `<div style="font-size:16px; font-weight:900; color:var(--metro-blue); margin-top:5px;">${data.title}</div>`;
@@ -10249,33 +10256,26 @@ window.viewFileHistory = async (key) => {
         html += `<div style="font-size:13px; background:#f1f5f9; padding:15px; border-radius:6px; border:1px solid #cbd5e1; margin-bottom:10px; font-style:italic;">"${data.desc}"</div>`;
         
         if (data.assignedTeacherEmail) {
-            html += `<div style="margin-top:15px; font-size:13px; border-top:1px solid #e2e8f0; padding-top:10px;">
-                        Assigned Executing Officer: <b style="color:var(--metro-blue);">${data.assignedTeacherEmail}</b>
-                     </div>`;
+            html += `<div style="margin-top:15px; font-size:13px; border-top:1px solid #e2e8f0; padding-top:10px;">Assigned Executing Officer: <b style="color:var(--metro-blue);">${data.assignedTeacherEmail}</b></div>`;
         }
         if (data.teacherRemarks) {
-            html += `<div style="margin-top:10px; padding:10px; background:#dcfce7; border:1px solid #bbf7d0; border-radius:6px; font-size:13px; color:#166534;">
-                        <b>Completion Remarks:</b> "${data.teacherRemarks}"
-                     </div>`;
+            html += `<div style="margin-top:10px; padding:10px; background:#dcfce7; border:1px solid #bbf7d0; border-radius:6px; font-size:13px; color:#166534;"><b>Completion Remarks:</b> "${data.teacherRemarks}"</div>`;
         }
     }
     
-    html += `</div>`; // Close Details Box
+    html += `</div>`; 
 
-    // --- 2. BUILD TIMELINE / HISTORY SECTION ---
+    // 2. TIMELINE SECTION
     html += `<h4 style="color:var(--metro-blue); margin-bottom:15px; border-bottom:2px solid var(--metro-gold); padding-bottom:5px; font-size:14px;"><i class="fas fa-history"></i> File Movement History</h4>`;
     html += `<div style="display:flex; flex-direction:column; gap:10px;">`;
     
-    // Read history chronologically
     (data.history || []).forEach((h, i) => {
         const dateObj = new Date(h.time);
         const dateStr = dateObj.toLocaleDateString('en-IN');
         const timeStr = dateObj.toLocaleTimeString('en-IN', {hour: '2-digit', minute:'2-digit'});
-        
         const isLast = (i === data.history.length - 1);
         const isClosed = (h.stage === 'CLOSED');
         
-        // Style latest item with green border, past items with gray
         let borderStyle = isLast ? 'border-left: 5px solid var(--success-green);' : 'border-left: 5px solid #cbd5e1; opacity: 0.8;';
         if(isClosed) borderStyle = 'border-left: 5px solid var(--success-green); background:#f0fdf4;';
 
@@ -10291,20 +10291,18 @@ window.viewFileHistory = async (key) => {
     });
     html += `</div>`;
 
-    // Inject and show
     modalBody.innerHTML = html;
     document.getElementById("eoTrackingModal").classList.remove("hidden");
 };
+
 // =========================================================
-// eOFFICE UI MODAL CONTROLLERS (Replaces Prompts)
+// eOFFICE UI MODAL CONTROLLERS
 // =========================================================
 
-// 1. OPEN HOD APPROVE MODAL
 window.processHODFundApprove = (key) => {
     document.getElementById("eoActionKey").value = key;
     document.getElementById("eoActionType").value = "FUND_APPROVE";
     document.getElementById("eoActionTitle").innerHTML = "<i class='fas fa-check-circle'></i> Approve Fund Request";
-    
     document.getElementById("eoActionBody").innerHTML = `
         <label style="font-size:11px; font-weight:bold; color:var(--metro-blue);">Enter Final Approved Amount (₹)</label>
         <input type="number" id="eoActionInput" placeholder="e.g. 2500" style="margin-top:5px; font-weight:bold; color:var(--metro-blue); font-size:20px; height:50px;">
@@ -10312,12 +10310,10 @@ window.processHODFundApprove = (key) => {
     document.getElementById("eoActionModal").classList.remove("hidden");
 };
 
-// 2. OPEN HOD ASSIGN TEACHER MODAL
 window.processHODTechAssign = (key) => {
     document.getElementById("eoActionKey").value = key;
     document.getElementById("eoActionType").value = "TECH_ASSIGN";
     document.getElementById("eoActionTitle").innerHTML = "<i class='fas fa-user-plus'></i> Assign Technical Work";
-    
     document.getElementById("eoActionBody").innerHTML = `
         <label style="font-size:11px; font-weight:bold;">Enter Assigned Teacher's Email</label>
         <input type="email" id="eoActionInput" placeholder="teacher@metro.project" style="margin-top:5px; font-weight:bold;">
@@ -10325,7 +10321,6 @@ window.processHODTechAssign = (key) => {
     document.getElementById("eoActionModal").classList.remove("hidden");
 };
 
-// 3. EXECUTE GENERIC ACTION (Approve or Assign)
 window.executeEoAction = async () => {
     const key = document.getElementById("eoActionKey").value;
     const type = document.getElementById("eoActionType").value;
@@ -10339,44 +10334,17 @@ window.executeEoAction = async () => {
         if(!inputVal) return alert("Teacher email required.");
         await window.updateEOfficeStage(key, 'TEACHER_ASSIGNED', { assignedTeacherEmail: inputVal.toLowerCase() });
     }
-
     document.getElementById("eoActionModal").classList.add("hidden");
 };
 
-// 4. OPEN QR UPLOAD MODAL (Student)
-window.uploadMemberQR = (key) => {
-    document.getElementById("eoQrFileKey").value = key;
-    document.getElementById("eoQrFileInput").value = ""; // clear old file
-    document.getElementById("eoQrModal").classList.remove("hidden");
-};
-
-// 5. PROCESS IMAGE TO BASE64 AND UPLOAD
-window.executeQrUpload = () => {
-    const fileInput = document.getElementById("eoQrFileInput");
-    const file = fileInput.files[0];
-    const key = document.getElementById("eoQrFileKey").value;
-
-    if(!file) return alert("⚠️ Please select a QR code image file first.");
-
-    const reader = new FileReader();
-    reader.onload = async function(e) {
-        const base64QR = e.target.result; // Convert image to text string
-        try {
-            await window.updateEOfficeStage(key, 'QR_UPLOADED', { qrImage: base64QR });
-            document.getElementById('eoQrModal').classList.add('hidden');
-            alert("✅ QR Code Uploaded Successfully. The HOD has been notified.");
-        } catch(err) {
-            alert("Database Error: " + err.message);
-        }
-    };
-    reader.readAsDataURL(file);
-};
-
-// 6. OPEN PAYMENT MODAL (HOD)
-window.processHODPayment = (key, qrImageBase64) => {
+window.processHODPayment = async (key) => {
     document.getElementById("eoPayFileKey").value = key;
     
-    // Display the image
+    // Safely Fetch QR image directly from DB so it doesn't break the HTML DOM
+    const snap = await get(ref(db, `eoffice_requests/${key}`));
+    const data = snap.val();
+    const qrImageBase64 = data.qrImage;
+
     const imgEl = document.getElementById("eoPayQrImage");
     const errEl = document.getElementById("eoPayQrError");
     
@@ -10389,40 +10357,31 @@ window.processHODPayment = (key, qrImageBase64) => {
         errEl.style.display = "block";
     }
     
-    // Reset Form
     document.getElementById("eoPayMode").value = "UPI";
     document.getElementById("eoPayUtr").value = "";
     document.getElementById("divEoPayUtr").style.display = "block";
-
     document.getElementById("eoPaymentModal").classList.remove("hidden");
 };
 
-// Toggle UTR input based on payment mode
 window.toggleEoPayUtr = () => {
     const mode = document.getElementById("eoPayMode").value;
     document.getElementById("divEoPayUtr").style.display = (mode === "UPI") ? "block" : "none";
 };
 
-// 7. FINALIZE PAYMENT & CLOSE FILE
 window.executeHodPayment = async () => {
     const key = document.getElementById("eoPayFileKey").value;
     const mode = document.getElementById("eoPayMode").value;
     const utr = document.getElementById("eoPayUtr").value.trim();
 
-    if (mode === "UPI" && (!utr || utr.length < 4)) {
-        return alert("⚠️ Please enter the last 5 digits of the UTR for UPI records.");
-    }
+    if (mode === "UPI" && (!utr || utr.length < 4)) return alert("⚠️ Please enter the last 5 digits of the UTR for UPI records.");
 
     try {
         await window.updateEOfficeStage(key, 'CLOSED', { paymentMode: mode, utrLast5: utr || "N/A" });
         document.getElementById("eoPaymentModal").classList.add("hidden");
         alert("✅ Payment Logged Successfully! File is now CLOSED.");
-    } catch(e) {
-        alert("Error: " + e.message);
-    }
+    } catch(e) { alert("Error: " + e.message); }
 };
 
-// 8. Teacher Submit Work (Browser Prompt for remarks)
 window.submitTechWork = async (key) => {
     const remarks = prompt("Enter Completion Remarks (What was done?):");
     if(!remarks) return;
