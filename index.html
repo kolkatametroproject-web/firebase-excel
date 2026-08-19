@@ -10006,7 +10006,7 @@ window.toggleWorksMode = (mode) => {
     if(mode === 'dashboard') window.loadWorksDashboard();
 };
 
-// --- SUBMIT REQUEST (WITH QR UPLOAD ATTACHED) ---
+// --- SUBMIT REQUEST (WITH AUTO-COMPRESSION FOR QR CODE) ---
 window.submitEOfficeRequest = async (type) => {
     const isFund = (type === 'FUND');
     let data = {
@@ -10031,28 +10031,45 @@ window.submitEOfficeRequest = async (type) => {
         data.fileId = `FR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
         const btn = document.activeElement;
-        btn.innerText = "⏳ Uploading & Submitting...";
+        btn.innerText = "⏳ Compressing & Uploading...";
         btn.disabled = true;
 
-        // Convert image to Base64 and submit
+        // Read and Compress Image before Uploading
         const reader = new FileReader();
-        reader.onload = async function(e) {
-            data.qrImage = e.target.result; // Attach the QR image directly to the file data
-            try {
-                await push(ref(db, "eoffice_requests"), data);
-                alert(`✅ Request Submitted. File ID: ${data.fileId}`);
-                window.toggleWorksMode('dashboard');
-                
-                // Clear form
-                window.eoFundCart = [];
-                window.renderEoFundCart();
-                document.getElementById("eoFundQrInput").value = "";
-            } catch (err) { 
-                alert("Error: " + err.message); 
-            } finally {
-                btn.innerHTML = `<i class="fas fa-paper-plane"></i> SUBMIT FINAL REQUEST`;
-                btn.disabled = false;
-            }
+        reader.onload = function(e) {
+            const img = new Image();
+            img.onload = async function() {
+                // 1. Create a canvas to resize the image
+                const canvas = document.createElement("canvas");
+                const MAX_WIDTH = 500; // Shrink to 500px wide
+                const scaleSize = MAX_WIDTH / img.width;
+                canvas.width = MAX_WIDTH;
+                canvas.height = img.height * scaleSize;
+
+                // 2. Draw the resized image
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                // 3. Compress to JPEG at 60% quality (Reduces 5MB to ~50KB)
+                data.qrImage = canvas.toDataURL("image/jpeg", 0.6);
+
+                try {
+                    await push(ref(db, "eoffice_requests"), data);
+                    alert(`✅ Request Submitted. File ID: ${data.fileId}`);
+                    window.toggleWorksMode('dashboard');
+                    
+                    // Clear form
+                    window.eoFundCart = [];
+                    window.renderEoFundCart();
+                    document.getElementById("eoFundQrInput").value = "";
+                } catch (err) { 
+                    alert("Error: " + err.message); 
+                } finally {
+                    btn.innerHTML = `<i class="fas fa-paper-plane"></i> SUBMIT FINAL REQUEST`;
+                    btn.disabled = false;
+                }
+            };
+            img.src = e.target.result;
         };
         reader.readAsDataURL(file);
         
@@ -10080,7 +10097,6 @@ window.submitEOfficeRequest = async (type) => {
         } catch (e) { alert("Error: " + e.message); }
     }
 };
-
 // --- DASHBOARD LOADER ---
 window.loadWorksDashboard = () => {
     const tbody = document.getElementById("worksTableBody");
