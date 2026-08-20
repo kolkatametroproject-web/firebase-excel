@@ -10668,8 +10668,7 @@ const generateCaseId = () => {
     const rand = Math.floor(100000 + Math.random() * 900000);
     return `FM-${year}-${rand}`;
 };
-
-// Submit Request
+// Submit Request (With Millisecond Fallback)
 window.fmSubmitRequest = async () => {
     if(window.fmCart.length === 0) return alert("Add at least one requirement.");
     
@@ -10693,13 +10692,13 @@ window.fmSubmitRequest = async () => {
                 applicantName: currentUser.name || currentUser.email,
                 project: "Metro Railway Platform Safety Project", 
                 team: "MRPSP Operations",                      
-                purpose: document.getElementById("fmPurpose").value,
-                reqDate: document.getElementById("fmReqDate").value,
+                purpose: document.getElementById("fmPurpose").value || "Project requirement",
+                reqDate: document.getElementById("fmReqDate").value || new Date().toISOString().split('T')[0],
                 items: window.fmCart,
                 totalAmount: totalAmt,
                 qrCode: qrBase64,
                 status: "UNDER PROJECT HEAD REVIEW",
-                timestamp: serverTimestamp()
+                timestamp: Date.now() // Uses integer timestamp to prevent NaN sorting errors
             };
 
             await update(ref(db, `fund_workflows/${caseId}`), payload);
@@ -10716,85 +10715,91 @@ window.fmSubmitRequest = async () => {
     }
 };
 
-// Load Dashboard & Filter by Roles (FIXED TIMESTAMP BUG)
+// Load Dashboard with Full Role Permissions
 window.fmLoadDashboard = () => {
     const tbody = document.getElementById("fm-case-list");
     if (!tbody) return;
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Dashboard...</td></tr>";
 
-    onValue(ref(db, "fund_workflows"), snap => {
+    onValue(ref(db, "fund_workflows"), (snap) => {
         tbody.innerHTML = "";
         let counts = { phReview: 0, hodReview: 0, payPending: 0, closed: 0 };
-        
-        if(!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#64748b; padding:20px;'>No case files found.</td></tr>";
+
+        if (!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#64748b; padding:20px;'>No fund cases found.</td></tr>";
             return;
         }
 
         const cases = [];
-        snap.forEach(c => cases.push(c.val()));
-        
-        // FIX: Safe timestamp sorting
+        snap.forEach((c) => {
+            const val = c.val();
+            if (val) cases.push(val);
+        });
+
+        // Safe integer timestamp sorting
         cases.sort((a, b) => {
-            const timeA = (typeof a.timestamp === 'number') ? a.timestamp : Date.now();
-            const timeB = (typeof b.timestamp === 'number') ? b.timestamp : Date.now();
+            const timeA = typeof a.timestamp === 'number' ? a.timestamp : 0;
+            const timeB = typeof b.timestamp === 'number' ? b.timestamp : 0;
             return timeB - timeA;
         });
 
-        // Determine user roles safely
+        // Email normalization
         const myEmail = (currentUser?.email || "").trim().toLowerCase();
-        let isPH = false;
-        let isHOD = false;
-        
-        if (window.PH_EMAILS && Array.isArray(window.PH_EMAILS)) {
-            isPH = window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
-        }
-        if (window.HOD_EMAILS && Array.isArray(window.HOD_EMAILS)) {
-            isHOD = window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
-        }
+        const isPH = (window.PH_EMAILS || []).some(e => e.trim().toLowerCase() === myEmail);
+        const isHOD = (window.HOD_EMAILS || []).some(e => e.trim().toLowerCase() === myEmail);
         const isPrivileged = (window.isAdmin === true) || isPH || isHOD;
 
-        cases.forEach(c => {
-            const isMine = (c.applicantUid === currentUser.uid);
-            
-            // STRICT FILTERING: Hide if not privileged AND not the applicant
-            if (!isPrivileged && !isMine) return; 
+        let visibleCount = 0;
 
-            // Counters
-            if(c.status === "UNDER PROJECT HEAD REVIEW") counts.phReview++;
-            if(c.status === "PENDING HOD APPROVAL") counts.hodReview++;
-            if(c.status === "PAYMENT PENDING") counts.payPending++;
-            if(c.status === "CASE CLOSED") counts.closed++;
+        cases.forEach((c) => {
+            const isMine = (c.applicantUid === currentUser?.uid);
 
-            // Status Badge Colors
+            // Access Gate: Privileged roles see all student cases; applicants see their own
+            if (!isPrivileged && !isMine) return;
+
+            visibleCount++;
+
+            // Count metrics
+            if (c.status === "UNDER PROJECT HEAD REVIEW") counts.phReview++;
+            if (c.status === "PENDING HOD APPROVAL") counts.hodReview++;
+            if (c.status === "PAYMENT PENDING") counts.payPending++;
+            if (c.status === "CASE CLOSED") counts.closed++;
+
+            // Badge color scheme
             let color = "#64748b";
-            if(c.status.includes("REVIEW") || c.status.includes("PENDING")) color = "#d97706";
-            if(c.status.includes("REJECTED")) color = "#b91c1c";
-            if(c.status === "CASE CLOSED") color = "#15803d";
+            if (c.status.includes("REVIEW") || c.status.includes("PENDING")) color = "#d97706";
+            if (c.status.includes("REJECTED")) color = "#b91c1c";
+            if (c.status === "CASE CLOSED") color = "#15803d";
 
             tbody.innerHTML += `
                 <tr>
                     <td style="font-weight:900; font-family:monospace; color:var(--metro-blue);">${c.caseId}</td>
                     <td><b>${c.project || 'Project'}</b></td>
-                    <td>${c.applicantName}</td>
+                    <td>${c.applicantName || 'Applicant'}</td>
                     <td style="font-weight:900; color:var(--metro-red);">₹${(c.totalAmount || 0).toLocaleString('en-IN')}</td>
                     <td><span style="background:${color}20; color:${color}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${c.status}</span></td>
                     <td>
-                        <button class="info" onclick="window.fmOpenCase('${c.caseId}')" style="padding:4px 10px; font-size:11px; font-weight:bold;">VIEW CASE</button>
+                        <button class="info" onclick="window.fmOpenCase('${c.caseId}')" style="padding:4px 10px; font-size:11px; font-weight:bold;">OPEN CASE →</button>
                     </td>
                 </tr>`;
         });
 
-        // Ensure the cards exist before updating
-        const cardsContainer = document.getElementById("fm-dashboard-cards");
-        if (cardsContainer) {
-            cardsContainer.innerHTML = `
+        if (visibleCount === 0) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#64748b; padding:20px;'>No active cases in your queue.</td></tr>";
+        }
+
+        const cardArea = document.getElementById("fm-dashboard-cards");
+        if (cardArea) {
+            cardArea.innerHTML = `
                 <div class="fm-status-card" style="border-left-color: #d97706;"><span>PH Review Queue</span><h2>${counts.phReview}</h2></div>
                 <div class="fm-status-card" style="border-left-color: #0284c7;"><span>HOD Approval Queue</span><h2>${counts.hodReview}</h2></div>
                 <div class="fm-status-card" style="border-left-color: #b91c1c;"><span>Payment Pending</span><h2>${counts.payPending}</h2></div>
                 <div class="fm-status-card" style="border-left-color: #15803d;"><span>Cases Closed</span><h2>${counts.closed}</h2></div>
             `;
         }
+    }, (error) => {
+        console.error("Database sync error:", error);
+        tbody.innerHTML = `<tr><td colspan='6' style='text-align:center; color:red; padding:20px;'>Permission Denied or Connection Failed: ${error.message}</td></tr>`;
     });
 };
 
