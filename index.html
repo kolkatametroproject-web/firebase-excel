@@ -10637,11 +10637,14 @@ window.fmVerifyPurchaseBill = async (caseId, isApproved) => {
     const actionLogText = isApproved ? "Purchase Bill Approved" : "Purchase Bill Rejected - Re-upload Required";
 
     try {
-        // Auto-download the bill if approved
+        // Auto-download the bill with CORRECT EXTENSION (PDF/JPG)
         if (isApproved && window.fmCurrentCase && window.fmCurrentCase.billProof) {
+            const isPdf = window.fmCurrentCase.billType ? window.fmCurrentCase.billType.includes("pdf") : window.fmCurrentCase.billProof.startsWith("data:application/pdf");
+            const ext = isPdf ? "pdf" : "jpg";
+
             const link = document.createElement('a');
             link.href = window.fmCurrentCase.billProof;
-            link.download = `Purchase_Bill_${caseId}.jpg`;
+            link.download = `Purchase_Bill_${caseId}.${ext}`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -10655,6 +10658,7 @@ window.fmVerifyPurchaseBill = async (caseId, isApproved) => {
         // If rejected, wipe the bad bill so the student can re-upload
         if (!isApproved) {
             updatePayload.billProof = null;
+            updatePayload.billType = null;
         }
 
         await update(ref(db, `fund_workflows/${caseId}`), updatePayload);
@@ -10976,10 +10980,33 @@ window.fmOpenCase = async (caseId) => {
         `;
     } 
     // 4. NEW: BILL VERIFICATION (PH & HOD)
+    // 4. NEW: BILL VERIFICATION (PH & HOD)
     else if ((isPH || isHOD || window.isAdmin) && c.status === "PENDING BILL VERIFICATION") {
-        let billPreview = c.billProof 
-            ? `<div style="margin: 15px 0;"><a href="${c.billProof}" download="Bill_${c.caseId}.jpg" target="_blank"><img src="${c.billProof}" style="max-width:100%; max-height:250px; border:2px solid #cbd5e1; border-radius:8px;" alt="Purchase Bill"></a><br><small style="color:var(--metro-slate);">Click image to download/view manually</small></div>`
-            : `<p style="color:red; font-weight:bold;">No document uploaded.</p>`;
+        let billPreview = "";
+        
+        if (c.billProof) {
+            // Detect if uploaded document is a PDF
+            const isPdf = c.billType ? c.billType.includes("pdf") : c.billProof.startsWith("data:application/pdf");
+            const ext = isPdf ? "pdf" : "jpg";
+
+            if (isPdf) {
+                billPreview = `
+                    <div style="margin: 15px 0; padding:20px; background:#fff1f2; border:1px solid #fecdd3; border-radius:8px; text-align:center;">
+                        <i class="fas fa-file-pdf" style="font-size:40px; color:#be123c; margin-bottom:10px;"></i><br>
+                        <a href="${c.billProof}" download="Bill_${c.caseId}.pdf" style="font-weight:bold; color:#be123c; text-decoration:underline; cursor:pointer;">📄 Download / View PDF Bill</a>
+                    </div>`;
+            } else {
+                billPreview = `
+                    <div style="margin: 15px 0;">
+                        <a href="${c.billProof}" download="Bill_${c.caseId}.jpg" target="_blank">
+                            <img src="${c.billProof}" style="max-width:100%; max-height:250px; border:2px solid #cbd5e1; border-radius:8px;" alt="Purchase Bill">
+                        </a><br>
+                        <small style="color:var(--metro-slate);">Click image to download/view manually</small>
+                    </div>`;
+            }
+        } else {
+            billPreview = `<p style="color:red; font-weight:bold;">No document uploaded.</p>`;
+        }
 
         coreActions = `
             <div style="background:#fffbeb; padding:20px; border-radius:8px; border:1px solid #fde68a;">
@@ -11005,9 +11032,35 @@ window.fmOpenCase = async (caseId) => {
             coreActions = `
                 <div style="background:#f8fafc; padding:15px; border-radius:8px; border:1px solid #cbd5e1;">
                     <h4 style="margin:0 0 10px 0; color:var(--metro-blue);"><i class="fas fa-file-invoice"></i> Upload Purchase Proof</h4>
-                    <p style="font-size:11px; color:#64748b;">Upload the final tax invoice or vendor receipt within 30 days.</p>
-                    <input type="file" id="fmBillUpload" accept="image/*,application/pdf" style="margin-bottom:10px; width:100%;">
-                    <button onclick="window.fmSubmitProof('${c.caseId}')" class="info" style="width:100%; font-weight:bold;">SUBMIT INVOICE</button>
+                    <p style="font-size:11px; color:#64748b;">Capture a live photo of the bill or upload a PDF/Image.</p>
+
+                    <!-- LIVE CAMERA SECTION -->
+                    <div style="margin-bottom:15px; padding:15px; border:2px dashed #cbd5e1; text-align:center; background:#fff; border-radius:6px;">
+                        <div id="fmVideoContainer" style="display:none; width:100%; max-width:300px; margin:0 auto 10px auto; border-radius:4px; overflow:hidden;">
+                            <video id="fmVideoFeed" autoplay playsinline style="width:100%; height:auto;"></video>
+                        </div>
+                        <img id="fmPhotoPreview" style="display:none; width:100%; max-width:300px; margin:0 auto 10px auto; border:2px solid #10b981; border-radius:4px;">
+
+                        <div id="fmCamControls">
+                            <button onclick="window.startFmCamera()" class="info" style="font-size:11px; padding:8px; font-weight:bold;"><i class="fas fa-camera"></i> LIVE CAPTURE BILL</button>
+                        </div>
+                        <div id="fmCaptureControls" class="hidden" style="display:flex; gap:5px; justify-content:center;">
+                            <button onclick="window.captureFmPhoto()" class="warning" style="font-size:11px; padding:8px; font-weight:bold;"><i class="fas fa-camera"></i> SNAP PHOTO</button>
+                            <button onclick="window.stopFmCamera()" class="danger" style="font-size:11px; padding:8px;"><i class="fas fa-times"></i></button>
+                        </div>
+                        <div id="fmRetakeControls" class="hidden">
+                            <button onclick="window.retakeFmPhoto()" class="secondary" style="font-size:11px; padding:8px; font-weight:bold;"><i class="fas fa-redo"></i> RETAKE</button>
+                        </div>
+                    </div>
+
+                    <div style="display:flex; align-items:center; margin:15px 0;">
+                        <div style="flex:1; height:1px; background:#cbd5e1;"></div>
+                        <div style="padding:0 10px; font-size:11px; font-weight:bold; color:#64748b;">OR UPLOAD FILE</div>
+                        <div style="flex:1; height:1px; background:#cbd5e1;"></div>
+                    </div>
+
+                    <input type="file" id="fmBillUpload" accept="image/*,application/pdf" style="margin-bottom:15px; width:100%;">
+                    <button onclick="window.fmSubmitProof('${c.caseId}')" class="success" style="width:100%; font-weight:900; padding:12px;"><i class="fas fa-upload"></i> SUBMIT INVOICE TO ADMIN</button>
                 </div>
             `;
         }
@@ -11147,32 +11200,109 @@ window.fmRecordPayment = async (caseId) => {
 };
 
 window.fmSubmitProof = async (caseId) => {
-    const file = document.getElementById("fmBillUpload").files[0];
-    if(!file) return alert("Upload a document.");
+    const fileInput = document.getElementById("fmBillUpload");
+    const file = fileInput ? fileInput.files[0] : null;
+
+    if(!file && !window.fmCapturedBillBase64) {
+        return alert("⚠️ Please capture a live photo or upload a PDF/Image document.");
+    }
     
     const btn = document.activeElement;
+    const originalText = btn.innerText;
     btn.innerText = "⏳ UPLOADING...";
     btn.disabled = true;
 
-    const reader = new FileReader();
-    reader.onload = async (e) => {
+    const uploadToDb = async (base64Data, fileType) => {
         try {
-            // Send to verification stage instead of directly to inventory
             await update(ref(db, `fund_workflows/${caseId}`), { 
                 status: "PENDING BILL VERIFICATION", 
-                billProof: e.target.result 
+                billProof: base64Data,
+                billType: fileType // Saves file type to distinguish PDFs
             });
             await window.fmLogAudit(caseId, "Purchase Bill Submitted", "Document uploaded by student. Pending Officer Verification.");
             
             alert("✅ Bill Submitted! Awaiting Officer Verification.");
+            window.stopFmCamera();
             window.fmOpenCase(caseId);
         } catch (err) {
             alert("Upload failed: " + err.message);
-            btn.innerText = "SUBMIT INVOICE";
+            btn.innerText = originalText;
             btn.disabled = false;
         }
     };
-    reader.readAsDataURL(file);
+
+    if (file) {
+        // Size limits
+        if(file.type.includes("pdf") && file.size > 3*1024*1024) { btn.disabled=false; btn.innerText=originalText; return alert("PDF too large (Max 3MB)"); }
+        if(file.type.includes("image") && file.size > 10*1024*1024) { btn.disabled=false; btn.innerText=originalText; return alert("Image too large (Max 10MB)"); }
+
+        const reader = new FileReader();
+        reader.onload = (e) => uploadToDb(e.target.result, file.type);
+        reader.readAsDataURL(file);
+    } else {
+        // Process Live Camera Photo
+        uploadToDb(window.fmCapturedBillBase64, "image/jpeg");
+    }
+};
+  // --- LIVE BILL CAPTURE SYSTEM ---
+window.fmCapturedBillBase64 = null;
+window.fmVideoStream = null;
+
+window.startFmCamera = async () => {
+    const vid = document.getElementById("fmVideoFeed");
+    document.getElementById("fmVideoContainer").style.display = "block";
+    document.getElementById("fmPhotoPreview").style.display = "none";
+    document.getElementById("fmCamControls").classList.add("hidden");
+    document.getElementById("fmCaptureControls").classList.remove("hidden");
+    document.getElementById("fmRetakeControls").classList.add("hidden");
+    window.fmCapturedBillBase64 = null;
+
+    try {
+        window.fmVideoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        vid.srcObject = window.fmVideoStream;
+    } catch(e) {
+        alert("Camera Error: " + e.message);
+        window.stopFmCamera();
+    }
+};
+
+window.captureFmPhoto = () => {
+    const vid = document.getElementById("fmVideoFeed");
+    const canvas = document.createElement("canvas");
+    canvas.width = vid.videoWidth;
+    canvas.height = vid.videoHeight;
+    canvas.getContext('2d').drawImage(vid, 0, 0);
+
+    window.fmCapturedBillBase64 = canvas.toDataURL('image/jpeg', 0.85);
+
+    document.getElementById("fmPhotoPreview").src = window.fmCapturedBillBase64;
+    document.getElementById("fmPhotoPreview").style.display = "block";
+    document.getElementById("fmVideoContainer").style.display = "none";
+
+    document.getElementById("fmCaptureControls").classList.add("hidden");
+    document.getElementById("fmRetakeControls").classList.remove("hidden");
+
+    if(window.fmVideoStream) window.fmVideoStream.getTracks().forEach(t => t.stop());
+};
+
+window.retakeFmPhoto = () => {
+    window.startFmCamera();
+};
+
+window.stopFmCamera = () => {
+    if(window.fmVideoStream) window.fmVideoStream.getTracks().forEach(t => t.stop());
+    document.getElementById("fmVideoContainer").style.display = "none";
+    document.getElementById("fmPhotoPreview").style.display = "none";
+    
+    const capControls = document.getElementById("fmCaptureControls");
+    const retControls = document.getElementById("fmRetakeControls");
+    const camControls = document.getElementById("fmCamControls");
+    
+    if(capControls) capControls.classList.add("hidden");
+    if(retControls) retControls.classList.add("hidden");
+    if(camControls) camControls.classList.remove("hidden");
+    
+    window.fmCapturedBillBase64 = null;
 };
 window.fmAttemptClosure = async (caseId) => {
     if(!confirm("Are all purchased items scanned and verified via Inventory?")) return;
