@@ -10578,7 +10578,7 @@ window.resetScadaNetwork = async () => {
 
 // 1. DEFINE ROLES HERE (LOWERCASE EMAILS)
 window.PH_EMAILS = ["soham@metro.project"];
-window.HOD_EMAILS = ["hodee@metro.project", "ahodee@metro.project", "dsen@metro.project"];
+window.HOD_EMAILS = ["hodee@metro.project", "ahodee@metro.project", "dsen@metro.project", "teacher1@metro.project", "teacher2@metro.project", "teacher3@metro.project"];
 
 window.fmCart = [];
 window.fmCurrentCase = null;
@@ -10716,74 +10716,79 @@ window.fmSubmitRequest = async () => {
     }
 };
 
-// Load Dashboard & Filter by Roles
+// Load Dashboard & Filter by Roles (FIXED TIMESTAMP BUG)
 window.fmLoadDashboard = () => {
     const tbody = document.getElementById("fm-case-list");
     if (!tbody) return;
-    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Syncing Cases...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Dashboard...</td></tr>";
 
-    onValue(ref(db, "fund_workflows"), (snap) => {
+    onValue(ref(db, "fund_workflows"), snap => {
         tbody.innerHTML = "";
         let counts = { phReview: 0, hodReview: 0, payPending: 0, closed: 0 };
-
-        if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#64748b;'>No fund cases found.</td></tr>";
+        
+        if(!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#64748b; padding:20px;'>No case files found.</td></tr>";
             return;
         }
 
         const cases = [];
-        snap.forEach((c) => cases.push(c.val()));
-        cases.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        snap.forEach(c => cases.push(c.val()));
+        
+        // FIX: Safe timestamp sorting
+        cases.sort((a, b) => {
+            const timeA = (typeof a.timestamp === 'number') ? a.timestamp : Date.now();
+            const timeB = (typeof b.timestamp === 'number') ? b.timestamp : Date.now();
+            return timeB - timeA;
+        });
 
-        // Sanitize and check active user role
+        // Determine user roles safely
         const myEmail = (currentUser?.email || "").trim().toLowerCase();
-        const isPH = window.PH_EMAILS.map(e => e.toLowerCase()).includes(myEmail);
-        const isHOD = window.HOD_EMAILS.map(e => e.toLowerCase()).includes(myEmail);
-        const isPrivileged = isAdmin || isPH || isHOD;
+        let isPH = false;
+        let isHOD = false;
+        
+        if (window.PH_EMAILS && Array.isArray(window.PH_EMAILS)) {
+            isPH = window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
+        }
+        if (window.HOD_EMAILS && Array.isArray(window.HOD_EMAILS)) {
+            isHOD = window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
+        }
+        const isPrivileged = (window.isAdmin === true) || isPH || isHOD;
 
-        cases.forEach((c) => {
+        cases.forEach(c => {
             const isMine = (c.applicantUid === currentUser.uid);
+            
+            // STRICT FILTERING: Hide if not privileged AND not the applicant
+            if (!isPrivileged && !isMine) return; 
 
-            // Access Control: Privileged roles see all student requests; students see only their own
-            if (!isPrivileged && !isMine) return;
+            // Counters
+            if(c.status === "UNDER PROJECT HEAD REVIEW") counts.phReview++;
+            if(c.status === "PENDING HOD APPROVAL") counts.hodReview++;
+            if(c.status === "PAYMENT PENDING") counts.payPending++;
+            if(c.status === "CASE CLOSED") counts.closed++;
 
-            // Counter Tallies
-            if (c.status === "UNDER PROJECT HEAD REVIEW") counts.phReview++;
-            if (c.status === "PENDING HOD APPROVAL") counts.hodReview++;
-            if (c.status === "PAYMENT PENDING") counts.payPending++;
-            if (c.status === "CASE CLOSED") counts.closed++;
-
-            // Status Styling
-            let badgeBg = "#f1f5f9";
-            let badgeColor = "#475569";
-            if (c.status === "UNDER PROJECT HEAD REVIEW") { badgeBg = "#fef3c7"; badgeColor = "#d97706"; }
-            else if (c.status === "PENDING HOD APPROVAL") { badgeBg = "#e0f2fe"; badgeColor = "#0284c7"; }
-            else if (c.status === "PAYMENT PENDING") { badgeBg = "#fee2e2"; badgeColor = "#b91c1c"; }
-            else if (c.status === "CASE CLOSED") { badgeBg = "#dcfce7"; badgeColor = "#15803d"; }
+            // Status Badge Colors
+            let color = "#64748b";
+            if(c.status.includes("REVIEW") || c.status.includes("PENDING")) color = "#d97706";
+            if(c.status.includes("REJECTED")) color = "#b91c1c";
+            if(c.status === "CASE CLOSED") color = "#15803d";
 
             tbody.innerHTML += `
                 <tr>
                     <td style="font-weight:900; font-family:monospace; color:var(--metro-blue);">${c.caseId}</td>
-                    <td><b>${c.project || 'Metro Safety'}</b></td>
+                    <td><b>${c.project || 'Project'}</b></td>
                     <td>${c.applicantName}</td>
                     <td style="font-weight:900; color:var(--metro-red);">₹${(c.totalAmount || 0).toLocaleString('en-IN')}</td>
+                    <td><span style="background:${color}20; color:${color}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${c.status}</span></td>
                     <td>
-                        <span style="background:${badgeBg}; color:${badgeColor}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:800;">
-                            ${c.status}
-                        </span>
-                    </td>
-                    <td>
-                        <button class="info" onclick="window.fmOpenCase('${c.caseId}')" style="padding:4px 10px; font-size:11px; font-weight:bold;">
-                            OPEN CASE →
-                        </button>
+                        <button class="info" onclick="window.fmOpenCase('${c.caseId}')" style="padding:4px 10px; font-size:11px; font-weight:bold;">VIEW CASE</button>
                     </td>
                 </tr>`;
         });
 
-        // Top Metrics Cards
-        const cardArea = document.getElementById("fm-dashboard-cards");
-        if (cardArea) {
-            cardArea.innerHTML = `
+        // Ensure the cards exist before updating
+        const cardsContainer = document.getElementById("fm-dashboard-cards");
+        if (cardsContainer) {
+            cardsContainer.innerHTML = `
                 <div class="fm-status-card" style="border-left-color: #d97706;"><span>PH Review Queue</span><h2>${counts.phReview}</h2></div>
                 <div class="fm-status-card" style="border-left-color: #0284c7;"><span>HOD Approval Queue</span><h2>${counts.hodReview}</h2></div>
                 <div class="fm-status-card" style="border-left-color: #b91c1c;"><span>Payment Pending</span><h2>${counts.payPending}</h2></div>
@@ -10805,7 +10810,7 @@ window.fmLogAudit = async (caseId, action, comment) => {
 
 window.fmOpenCase = async (caseId) => {
     const snap = await get(ref(db, `fund_workflows/${caseId}`));
-    if (!snap.exists()) return;
+    if(!snap.exists()) return;
     window.fmCurrentCase = snap.val();
     const c = window.fmCurrentCase;
 
@@ -10815,25 +10820,25 @@ window.fmOpenCase = async (caseId) => {
     document.getElementById("fmCaseMetadata").innerHTML = `
         <b>Applicant:</b> ${c.applicantName}<br>
         <b>Project:</b> ${c.project} (${c.team || 'Operations'})<br>
-        <b>Required By:</b> ${c.reqDate || 'N/A'}<br>
-        <b>Purpose:</b> <i>${c.purpose || 'Not stated'}</i><br>
-        <div style="margin-top:10px;">
-            <a href="${c.qrCode}" target="_blank" style="color:var(--metro-blue); font-weight:bold; text-decoration:underline;">
-                <i class="fas fa-qrcode"></i> View Student Payment QR
-            </a>
-        </div>
+        <b>Req Date:</b> ${c.reqDate || 'N/A'}<br>
+        <b>Purpose:</b> <i>${c.purpose || 'No description'}</i><br>
+        <div style="margin-top:10px;"><a href="${c.qrCode}" target="_blank" style="color:var(--metro-blue); text-decoration:underline;"><b>[View Payment QR Code]</b></a></div>
     `;
 
+    // Role calculations for inside the Case screen
     const myEmail = (currentUser?.email || "").trim().toLowerCase();
-    const isPH = window.PH_EMAILS.map(e => e.toLowerCase()).includes(myEmail);
-    const isHOD = window.HOD_EMAILS.map(e => e.toLowerCase()).includes(myEmail);
+    
+    let isPH = false, isHOD = false;
+    if (window.PH_EMAILS && Array.isArray(window.PH_EMAILS)) isPH = window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
+    if (window.HOD_EMAILS && Array.isArray(window.HOD_EMAILS)) isHOD = window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
+    
     const isApplicant = (c.applicantUid === currentUser.uid);
 
-    // Item List Renderer (PH Item Verification)
+    // Render Items
     let itemsHtml = "";
-    c.items.forEach((it, idx) => {
+    (c.items || []).forEach((it, idx) => {
         let itStatus = it.phStatus === "PASSED" ? '<span style="color:green; font-weight:bold;">✓ Passed</span>' : 
-                      (it.phStatus === "FAILED" ? '<span style="color:red; font-weight:bold;">✕ Failed</span>' : '<span style="color:#d97706;">Pending Review</span>');
+                      (it.phStatus === "FAILED" ? '<span style="color:red; font-weight:bold;">✕ Failed</span>' : '<span style="color:#d97706; font-weight:bold;">Pending Review</span>');
         
         itemsHtml += `
             <div style="border: 1px solid #e2e8f0; padding: 12px; margin-bottom: 10px; border-radius: 6px; background: white;">
@@ -10841,11 +10846,9 @@ window.fmOpenCase = async (caseId) => {
                     <span style="font-size:14px; font-weight:bold;">${it.name}</span>
                     <span style="font-weight:900; font-size:14px; color:var(--metro-blue);">₹${it.amount}</span>
                 </div>
-                <div style="font-size:11px; color:#64748b; margin-top:4px;">
-                    Qty: <b>${it.qty}</b> × ₹${it.rate} | Review: ${itStatus}
-                </div>
-                ${c.status === "UNDER PROJECT HEAD REVIEW" && (isPH || isAdmin) ? `
-                    <div style="margin-top:8px; display:flex; gap:8px;">
+                <div style="font-size:11px; color:#64748b; margin-top:4px;">Qty: <b>${it.qty}</b> × ₹${it.rate} | Review: ${itStatus}</div>
+                ${c.status === "UNDER PROJECT HEAD REVIEW" && (isPH || window.isAdmin) ? `
+                    <div style="margin-top:10px; display:flex; gap:8px;">
                         <button onclick="window.fmPHItemJudge('${c.caseId}', ${idx}, 'PASSED')" class="success" style="padding:4px 12px; font-size:10px;">PASS</button>
                         <button onclick="window.fmPHItemJudge('${c.caseId}', ${idx}, 'FAILED')" class="danger" style="padding:4px 12px; font-size:10px;">FAIL</button>
                     </div>` : ''}
@@ -10853,11 +10856,17 @@ window.fmOpenCase = async (caseId) => {
     });
     document.getElementById("fmCaseItemsContainer").innerHTML = itemsHtml;
 
-    // Timeline Rendering
+    // Load Audit Timeline (FIXED TIMESTAMP BUG HERE TOO)
     let timelineHtml = "";
-    if (c.audit) {
-        Object.values(c.audit).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)).forEach(a => {
-            let tDate = a.timestamp ? new Date(a.timestamp).toLocaleString('en-IN') : "Logged";
+    if(c.audit) {
+        const sortedAudit = Object.values(c.audit).sort((a,b) => {
+            const timeA = (typeof a.timestamp === 'number') ? a.timestamp : Date.now();
+            const timeB = (typeof b.timestamp === 'number') ? b.timestamp : Date.now();
+            return timeA - timeB;
+        });
+
+        sortedAudit.forEach(a => {
+            let tDate = (typeof a.timestamp === 'number') ? new Date(a.timestamp).toLocaleString('en-IN') : "Logged";
             timelineHtml += `
                 <div class="fm-timeline-item">
                     <div style="font-size:10px; color:#64748b;">${tDate} - <b>${a.by}</b></div>
@@ -10868,63 +10877,53 @@ window.fmOpenCase = async (caseId) => {
     }
     document.getElementById("fmCaseTimeline").innerHTML = timelineHtml;
 
-    // Strict Role-Based Action Box
+    // Build Action Area Based on Role & State
     const actionArea = document.getElementById("fmCaseActionArea");
     actionArea.innerHTML = "";
 
-    // 1. PROJECT HEAD CONTROLS (Verification Only)
-    if ((isPH || isAdmin) && c.status === "UNDER PROJECT HEAD REVIEW") {
+    // PROJECT HEAD CONTROLS
+    if ((isPH || window.isAdmin) && c.status === "UNDER PROJECT HEAD REVIEW") {
         const allChecked = c.items.every(it => it.phStatus && it.phStatus !== "PENDING");
         actionArea.innerHTML = `
             <div style="background:#fffbeb; padding:15px; border-radius:8px; border:1px solid #fde68a;">
                 <h4 style="margin:0 0 10px 0; color:#92400e;"><i class="fas fa-user-check"></i> Project Head Verification</h4>
                 <label style="font-size:11px; font-weight:bold;">Review Comments / Reason:</label>
-                <input id="fmActionComment" placeholder="Provide notes on requirement validity..." style="margin-bottom:10px; width:100%;">
+                <input id="fmActionComment" placeholder="Provide notes..." style="margin-bottom:10px; width:100%;">
                 <div style="display:flex; gap:10px;">
-                    <button onclick="window.fmAdvanceCase('${c.caseId}', 'PENDING HOD APPROVAL')" class="info" ${!allChecked ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''}>
-                        ✓ FORWARD TO HOD
-                    </button>
-                    <button onclick="window.fmAdvanceCase('${c.caseId}', 'PROJECT HEAD REJECTED')" class="danger">
-                        ✕ REJECT REQUEST
-                    </button>
+                    <button onclick="window.fmAdvanceCase('${c.caseId}', 'PENDING HOD APPROVAL')" class="info" ${!allChecked ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''}>✓ FORWARD TO HOD</button>
+                    <button onclick="window.fmAdvanceCase('${c.caseId}', 'PROJECT HEAD REJECTED')" class="danger">✕ REJECT REQUEST</button>
                 </div>
                 ${!allChecked ? '<p style="font-size:10px; color:#b91c1c; font-weight:bold; margin-top:8px;">* Mark all items as Pass or Fail above to unlock forward button.</p>' : ''}
             </div>
         `;
     } 
-    // 2. HOD CONTROLS (Approval & Fund Release)
-    else if ((isHOD || isAdmin) && c.status === "PENDING HOD APPROVAL") {
+    // HOD CONTROLS (Approval)
+    else if ((isHOD || window.isAdmin) && c.status === "PENDING HOD APPROVAL") {
         actionArea.innerHTML = `
             <div style="background:#f0f9ff; padding:15px; border-radius:8px; border:1px solid #bae6fd;">
                 <h4 style="margin:0 0 10px 0; color:#0369a1;"><i class="fas fa-stamp"></i> HOD Approval Desk</h4>
                 <label style="font-size:11px; font-weight:bold;">Administrative Remarks:</label>
                 <input id="fmActionComment" placeholder="Official remarks..." style="margin-bottom:10px; width:100%;">
                 <div style="display:flex; gap:10px;">
-                    <button onclick="window.fmAdvanceCase('${c.caseId}', 'PAYMENT PENDING')" class="success">
-                        APPROVE FUND SANCTION
-                    </button>
-                    <button onclick="window.fmAdvanceCase('${c.caseId}', 'HOD REJECTED')" class="danger">
-                        REJECT
-                    </button>
+                    <button onclick="window.fmAdvanceCase('${c.caseId}', 'PAYMENT PENDING')" class="success">APPROVE FUND SANCTION</button>
+                    <button onclick="window.fmAdvanceCase('${c.caseId}', 'HOD REJECTED')" class="danger">REJECT</button>
                 </div>
             </div>
         `;
     }
-    // 3. HOD PAYMENT RELEASE
-    else if ((isHOD || isAdmin) && c.status === "PAYMENT PENDING") {
+    // HOD CONTROLS (Payment)
+    else if ((isHOD || window.isAdmin) && c.status === "PAYMENT PENDING") {
         actionArea.innerHTML = `
             <div style="background:#fdf2f8; padding:15px; border-radius:8px; border:1px solid #fbcfe8;">
                 <h4 style="margin:0 0 10px 0; color:#9d174d;"><i class="fas fa-hand-holding-usd"></i> Fund Disbursement & Release</h4>
                 <p style="font-size:11px; color:#64748b; margin-bottom:10px;">Scan student QR above, execute transfer, and log the transaction details.</p>
                 <label style="font-size:11px; font-weight:bold;">Transaction Reference / UPI Ref (Last 5 digits minimum):</label>
                 <input id="fmTxnId" placeholder="e.g. UPI-94821 / TXN84920" style="margin-bottom:10px; width:100%; font-family:monospace; font-weight:bold;">
-                <button onclick="window.fmRecordPayment('${c.caseId}')" class="success" style="width:100%; font-weight:900;">
-                    RELEASE FUNDS & MARK PAID
-                </button>
+                <button onclick="window.fmRecordPayment('${c.caseId}')" class="success" style="width:100%; font-weight:900;">RELEASE FUNDS & MARK PAID</button>
             </div>
         `;
     } 
-    // 4. STUDENT POST-PAYMENT ACTIONS
+    // STUDENT CONTROLS
     else if (isApplicant) {
         if (c.status === "PURCHASE DOCUMENT PENDING") {
             actionArea.innerHTML = `
@@ -10932,9 +10931,7 @@ window.fmOpenCase = async (caseId) => {
                     <h4 style="margin:0 0 10px 0; color:var(--metro-blue);"><i class="fas fa-file-invoice"></i> Upload Purchase Proof</h4>
                     <p style="font-size:11px; color:#64748b;">Upload the final tax invoice or vendor receipt within 15 days.</p>
                     <input type="file" id="fmBillUpload" accept="image/*,application/pdf" style="margin-bottom:10px; width:100%;">
-                    <button onclick="window.fmSubmitProof('${c.caseId}')" class="info" style="width:100%; font-weight:bold;">
-                        SUBMIT INVOICE
-                    </button>
+                    <button onclick="window.fmSubmitProof('${c.caseId}')" class="info" style="width:100%; font-weight:bold;">SUBMIT INVOICE</button>
                 </div>
             `;
         }
@@ -10942,14 +10939,10 @@ window.fmOpenCase = async (caseId) => {
             actionArea.innerHTML = `
                 <div style="background:#f8fafc; padding:15px; border-radius:8px; border:1px solid #cbd5e1;">
                     <h4 style="margin:0 0 10px 0; color:var(--metro-blue);"><i class="fas fa-barcode"></i> Inventory Inward Verification</h4>
-                    <p style="font-size:11px; color:#64748b;">Scan the physical asset barcodes registered in the Asset Tracking tab.</p>
-                    <button onclick="window.openBarcodeScanner('FUND_INVENTORY_VERIFY')" class="warning" style="width:100%; padding:12px;">
-                        <i class="fas fa-qrcode"></i> SCAN PHYSICAL TAG
-                    </button>
+                    <p style="font-size:11px; color:#64748b;">Register items in Asset Tracking tab first. Then scan the generated physical tags here.</p>
+                    <button onclick="window.openBarcodeScanner('FUND_INVENTORY_VERIFY')" class="warning" style="width:100%; padding:12px;"><i class="fas fa-qrcode"></i> SCAN PHYSICAL TAG</button>
                     <div id="fmInventoryScanLog" style="margin-top:10px; font-size:11px; font-family:monospace;"></div>
-                    <button onclick="window.fmAttemptClosure('${c.caseId}')" class="success" style="width:100%; margin-top:15px; font-weight:bold;">
-                        FINALIZE CASE CLOSURE
-                    </button>
+                    <button onclick="window.fmAttemptClosure('${c.caseId}')" class="success" style="width:100%; margin-top:15px; font-weight:bold;">FINALIZE CASE CLOSURE</button>
                 </div>
             `;
         }
@@ -10965,17 +10958,11 @@ window.fmOpenCase = async (caseId) => {
 
     window.fmShowView('case');
 };
+
 window.fmPHItemJudge = async (caseId, itemIndex, judgeStatus) => {
-    // 1. Update the local memory
     const c = window.fmCurrentCase;
     c.items[itemIndex].phStatus = judgeStatus;
-    
-    // 2. FIX: Target the specific item inside the array using its index
-    await update(ref(db, `fund_workflows/${caseId}/items/${itemIndex}`), { 
-        phStatus: judgeStatus 
-    });
-    
-    // 3. Refresh the UI
+    await update(ref(db, `fund_workflows/${caseId}/items/${itemIndex}`), { phStatus: judgeStatus });
     window.fmOpenCase(caseId); 
 };
 
@@ -11034,7 +11021,7 @@ window.generateCaseFilePrint = async (caseId) => {
     if(!c) return;
 
     let itemsRows = "";
-    c.items.forEach((it, i) => {
+    (c.items || []).forEach((it, i) => {
         itemsRows += `
             <tr style="border-bottom: 2pt solid #ddd; font-size: 26pt;">
                 <td style="padding: 15px 5px; text-align: left;">${i+1}. ${it.name.toUpperCase()}</td>
@@ -11046,12 +11033,12 @@ window.generateCaseFilePrint = async (caseId) => {
 
     let timelineRows = "";
     if(c.audit) {
-        Object.values(c.audit).sort((a,b) => a.timestamp - b.timestamp).forEach(a => {
-            let tDate = a.timestamp ? new Date(a.timestamp).toLocaleString('en-IN') : "N/A";
+        Object.values(c.audit).sort((a,b) => (a.timestamp||0) - (b.timestamp||0)).forEach(a => {
+            let tDate = a.timestamp ? new Date(a.timestamp).toLocaleString('en-IN') : "Logged";
             timelineRows += `
                 <div style="border-left: 4pt solid black; margin-left: 20px; padding-left: 20px; margin-bottom: 20px;">
-                    <div style="font-size: 24pt; color: #555;">${tDate} - <b>${a.by.toUpperCase()}</b></div>
-                    <div style="font-size: 32pt; font-weight: 900;">${a.action.toUpperCase()}</div>
+                    <div style="font-size: 24pt; color: #555;">${tDate} - <b>${(a.by||'').toUpperCase()}</b></div>
+                    <div style="font-size: 32pt; font-weight: 900;">${(a.action||'').toUpperCase()}</div>
                 </div>`;
         });
     }
@@ -11079,9 +11066,9 @@ window.generateCaseFilePrint = async (caseId) => {
             <div style="text-align:center;"><div class="doc-type-box">OFFICIAL CASE FILE: ${c.caseId}</div></div>
             
             <div class="meta-block">
-                <div>APPLICANT: ${c.applicantName.toUpperCase()}</div>
-                <div style="text-align:right;">PROJECT: ${c.project.toUpperCase()}</div>
-                <div>REQ DATE: ${c.reqDate}</div>
+                <div>APPLICANT: ${(c.applicantName||'').toUpperCase()}</div>
+                <div style="text-align:right;">PROJECT: ${(c.project||'').toUpperCase()}</div>
+                <div>REQ DATE: ${c.reqDate || 'N/A'}</div>
                 <div style="text-align:right; color:#b91c1c;">FINAL STATUS: ${c.status}</div>
             </div>
 
@@ -11091,7 +11078,7 @@ window.generateCaseFilePrint = async (caseId) => {
                 <tbody>${itemsRows}</tbody>
             </table>
             
-            <div style="text-align:right; font-size: 55pt; font-weight: 900; margin-bottom: 60px;">NET DISBURSED: ₹${c.totalAmount.toLocaleString('en-IN')}</div>
+            <div style="text-align:right; font-size: 55pt; font-weight: 900; margin-bottom: 60px;">NET DISBURSED: ₹${(c.totalAmount||0).toLocaleString('en-IN')}</div>
 
             <div style="font-size: 45pt; font-weight: 900; background: black; color: white; padding: 15px; text-align: center; -webkit-print-color-adjust: exact; margin-bottom: 30px;">AUDIT TIMELINE</div>
             ${timelineRows}
