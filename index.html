@@ -10668,7 +10668,6 @@ const generateCaseId = () => {
     const rand = Math.floor(100000 + Math.random() * 900000);
     return `FM-${year}-${rand}`;
 };
-// Submit Request (With Millisecond Fallback)
 window.fmSubmitRequest = async () => {
     if(window.fmCart.length === 0) return alert("Add at least one requirement.");
     
@@ -10692,13 +10691,13 @@ window.fmSubmitRequest = async () => {
                 applicantName: currentUser.name || currentUser.email,
                 project: "Metro Railway Platform Safety Project", 
                 team: "MRPSP Operations",                      
-                purpose: document.getElementById("fmPurpose").value || "Project requirement",
+                purpose: document.getElementById("fmPurpose").value || "Project Requirement",
                 reqDate: document.getElementById("fmReqDate").value || new Date().toISOString().split('T')[0],
                 items: window.fmCart,
                 totalAmount: totalAmt,
                 qrCode: qrBase64,
                 status: "UNDER PROJECT HEAD REVIEW",
-                timestamp: Date.now() // Uses integer timestamp to prevent NaN sorting errors
+                timestamp: Date.now() // FIX: Forces a clean integer to prevent sorting crash
             };
 
             await update(ref(db, `fund_workflows/${caseId}`), payload);
@@ -10714,72 +10713,72 @@ window.fmSubmitRequest = async () => {
         btn.disabled = false;
     }
 };
-
-// Load Dashboard with Full Role Permissions
 window.fmLoadDashboard = () => {
     const tbody = document.getElementById("fm-case-list");
     if (!tbody) return;
-    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Dashboard...</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Syncing Queue...</td></tr>";
 
-    onValue(ref(db, "fund_workflows"), (snap) => {
+    onValue(ref(db, "fund_workflows"), snap => {
         tbody.innerHTML = "";
         let counts = { phReview: 0, hodReview: 0, payPending: 0, closed: 0 };
-
-        if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#64748b; padding:20px;'>No fund cases found.</td></tr>";
+        
+        if(!snap.exists()) {
+            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#64748b; padding:20px;'>No case files found.</td></tr>";
             return;
         }
 
         const cases = [];
-        snap.forEach((c) => {
-            const val = c.val();
-            if (val) cases.push(val);
+        snap.forEach(c => {
+            if(c.val()) cases.push(c.val());
         });
-
-        // Safe integer timestamp sorting
+        
+        // FIX: Safe integer timestamp sorting
         cases.sort((a, b) => {
             const timeA = typeof a.timestamp === 'number' ? a.timestamp : 0;
             const timeB = typeof b.timestamp === 'number' ? b.timestamp : 0;
             return timeB - timeA;
         });
 
-        // Email normalization
         const myEmail = (currentUser?.email || "").trim().toLowerCase();
-        const isPH = (window.PH_EMAILS || []).some(e => e.trim().toLowerCase() === myEmail);
-        const isHOD = (window.HOD_EMAILS || []).some(e => e.trim().toLowerCase() === myEmail);
-        const isPrivileged = (window.isAdmin === true) || isPH || isHOD;
-
+        let isPH = false; let isHOD = false;
+        
+        if (window.PH_EMAILS && Array.isArray(window.PH_EMAILS)) {
+            isPH = window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
+        }
+        if (window.HOD_EMAILS && Array.isArray(window.HOD_EMAILS)) {
+            isHOD = window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
+        }
+        
+        const isPrivileged = isAdmin === true || isPH || isHOD;
         let visibleCount = 0;
 
-        cases.forEach((c) => {
-            const isMine = (c.applicantUid === currentUser?.uid);
-
-            // Access Gate: Privileged roles see all student cases; applicants see their own
-            if (!isPrivileged && !isMine) return;
+        cases.forEach(c => {
+            const isMine = (c.applicantUid === currentUser.uid);
+            
+            // FIX: Privilege check ensures PH and HOD can see all student submissions
+            if (!isPrivileged && !isMine) return; 
 
             visibleCount++;
 
-            // Count metrics
-            if (c.status === "UNDER PROJECT HEAD REVIEW") counts.phReview++;
-            if (c.status === "PENDING HOD APPROVAL") counts.hodReview++;
-            if (c.status === "PAYMENT PENDING") counts.payPending++;
-            if (c.status === "CASE CLOSED") counts.closed++;
+            if(c.status === "UNDER PROJECT HEAD REVIEW") counts.phReview++;
+            if(c.status === "PENDING HOD APPROVAL") counts.hodReview++;
+            if(c.status === "PAYMENT PENDING") counts.payPending++;
+            if(c.status === "CASE CLOSED") counts.closed++;
 
-            // Badge color scheme
             let color = "#64748b";
-            if (c.status.includes("REVIEW") || c.status.includes("PENDING")) color = "#d97706";
-            if (c.status.includes("REJECTED")) color = "#b91c1c";
-            if (c.status === "CASE CLOSED") color = "#15803d";
+            if(c.status.includes("REVIEW") || c.status.includes("PENDING")) color = "#d97706";
+            if(c.status.includes("REJECTED")) color = "#b91c1c";
+            if(c.status === "CASE CLOSED") color = "#15803d";
 
             tbody.innerHTML += `
                 <tr>
                     <td style="font-weight:900; font-family:monospace; color:var(--metro-blue);">${c.caseId}</td>
                     <td><b>${c.project || 'Project'}</b></td>
-                    <td>${c.applicantName || 'Applicant'}</td>
+                    <td>${c.applicantName}</td>
                     <td style="font-weight:900; color:var(--metro-red);">₹${(c.totalAmount || 0).toLocaleString('en-IN')}</td>
                     <td><span style="background:${color}20; color:${color}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${c.status}</span></td>
                     <td>
-                        <button class="info" onclick="window.fmOpenCase('${c.caseId}')" style="padding:4px 10px; font-size:11px; font-weight:bold;">OPEN CASE →</button>
+                        <button class="info" onclick="window.fmOpenCase('${c.caseId}')" style="padding:4px 10px; font-size:11px; font-weight:bold;">OPEN CASE</button>
                     </td>
                 </tr>`;
         });
@@ -10797,12 +10796,8 @@ window.fmLoadDashboard = () => {
                 <div class="fm-status-card" style="border-left-color: #15803d;"><span>Cases Closed</span><h2>${counts.closed}</h2></div>
             `;
         }
-    }, (error) => {
-        console.error("Database sync error:", error);
-        tbody.innerHTML = `<tr><td colspan='6' style='text-align:center; color:red; padding:20px;'>Permission Denied or Connection Failed: ${error.message}</td></tr>`;
     });
 };
-
 // Central Audit Logger
 window.fmLogAudit = async (caseId, action, comment) => {
     await push(ref(db, `fund_workflows/${caseId}/audit`), {
@@ -10821,7 +10816,7 @@ window.fmOpenCase = async (caseId) => {
     document.getElementById("fmCaseIdTitle").innerText = c.caseId;
     document.getElementById("fmCaseStatusBadge").innerText = c.status;
     
-    // Show Image properly, or show "Deleted" if payment was already made
+    // Displays image visibly or states it was deleted after payment
     const qrDisplay = c.qrCode 
         ? `<div style="margin-top:10px;"><img src="${c.qrCode}" style="max-width:200px; max-height:200px; border:2px solid #cbd5e1; border-radius:8px;"></div>`
         : `<div style="margin-top:10px; color:#b91c1c; font-weight:bold; font-size:11px;">[QR Code Deleted Automatically After Payment]</div>`;
@@ -10837,8 +10832,8 @@ window.fmOpenCase = async (caseId) => {
 
     const myEmail = (currentUser?.email || "").trim().toLowerCase();
     let isPH = false, isHOD = false;
-    if (window.PH_EMAILS) isPH = window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
-    if (window.HOD_EMAILS) isHOD = window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
+    if (window.PH_EMAILS && Array.isArray(window.PH_EMAILS)) isPH = window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
+    if (window.HOD_EMAILS && Array.isArray(window.HOD_EMAILS)) isHOD = window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
     const isApplicant = (c.applicantUid === currentUser.uid);
 
     // Render Items
@@ -10854,7 +10849,7 @@ window.fmOpenCase = async (caseId) => {
                     <span style="font-weight:900; font-size:14px; color:var(--metro-blue);">₹${it.amount}</span>
                 </div>
                 <div style="font-size:11px; color:#64748b; margin-top:4px;">Qty: <b>${it.qty}</b> × ₹${it.rate} | Review: ${itStatus}</div>
-                ${c.status === "UNDER PROJECT HEAD REVIEW" && isPH ? `
+                ${c.status === "UNDER PROJECT HEAD REVIEW" && (isPH || isAdmin) ? `
                     <div style="margin-top:10px; display:flex; gap:8px;">
                         <button onclick="window.fmPHItemJudge('${c.caseId}', ${idx}, 'PASSED')" class="success" style="padding:4px 12px; font-size:10px;">PASS</button>
                         <button onclick="window.fmPHItemJudge('${c.caseId}', ${idx}, 'FAILED')" class="danger" style="padding:4px 12px; font-size:10px;">FAIL</button>
@@ -10884,22 +10879,14 @@ window.fmOpenCase = async (caseId) => {
     }
     document.getElementById("fmCaseTimeline").innerHTML = timelineHtml;
 
-    // Build Action Area Based on Role & State
     const actionArea = document.getElementById("fmCaseActionArea");
     actionArea.innerHTML = "";
+    let coreActions = "";
 
-    // PH DELETE BUTTON LOGIC (Admin/PH can delete rejected or closed files)
-    let deleteBtnHtml = "";
-    if (isPH || window.isAdmin) {
-        if (c.status === "CASE CLOSED" || c.status === "PROJECT HEAD REJECTED" || c.status === "HOD REJECTED") {
-            deleteBtnHtml = `<button onclick="window.fmDeleteCase('${c.caseId}')" class="danger" style="width:100%; margin-top:15px; padding:10px; font-weight:bold; background:#991b1b;"><i class="fas fa-trash"></i> PERMANENTLY DELETE CASE</button>`;
-        }
-    }
-
-    // 1. PROJECT HEAD CONTROLS (Strictly isPH)
-    if (isPH && c.status === "UNDER PROJECT HEAD REVIEW") {
+    // 1. PROJECT HEAD CONTROLS
+    if ((isPH || isAdmin) && c.status === "UNDER PROJECT HEAD REVIEW") {
         const allChecked = c.items.every(it => it.phStatus && it.phStatus !== "PENDING");
-        actionArea.innerHTML = `
+        coreActions = `
             <div style="background:#fffbeb; padding:15px; border-radius:8px; border:1px solid #fde68a;">
                 <h4 style="margin:0 0 10px 0; color:#92400e;"><i class="fas fa-user-check"></i> Project Head Verification</h4>
                 <label style="font-size:11px; font-weight:bold;">Review Comments / Reason:</label>
@@ -10912,9 +10899,9 @@ window.fmOpenCase = async (caseId) => {
             </div>
         `;
     } 
-    // 2. HOD CONTROLS (Approval) (Strictly isHOD)
-    else if (isHOD && c.status === "PENDING HOD APPROVAL") {
-        actionArea.innerHTML = `
+    // 2. HOD CONTROLS (Approval)
+    else if ((isHOD || isAdmin) && c.status === "PENDING HOD APPROVAL") {
+        coreActions = `
             <div style="background:#f0f9ff; padding:15px; border-radius:8px; border:1px solid #bae6fd;">
                 <h4 style="margin:0 0 10px 0; color:#0369a1;"><i class="fas fa-stamp"></i> HOD Approval Desk</h4>
                 <label style="font-size:11px; font-weight:bold;">Administrative Remarks:</label>
@@ -10926,9 +10913,9 @@ window.fmOpenCase = async (caseId) => {
             </div>
         `;
     }
-    // 3. HOD CONTROLS (Payment) (Strictly isHOD)
-    else if (isHOD && c.status === "PAYMENT PENDING") {
-        actionArea.innerHTML = `
+    // 3. HOD CONTROLS (Payment)
+    else if ((isHOD || isAdmin) && c.status === "PAYMENT PENDING") {
+        coreActions = `
             <div style="background:#fdf2f8; padding:15px; border-radius:8px; border:1px solid #fbcfe8;">
                 <h4 style="margin:0 0 10px 0; color:#9d174d;"><i class="fas fa-hand-holding-usd"></i> Fund Disbursement & Release</h4>
                 <p style="font-size:11px; color:#64748b; margin-bottom:10px;">Scan student QR above, execute transfer, and log the transaction details.</p>
@@ -10941,7 +10928,7 @@ window.fmOpenCase = async (caseId) => {
     // 4. STUDENT CONTROLS
     else if (isApplicant) {
         if (c.status === "PURCHASE DOCUMENT PENDING") {
-            actionArea.innerHTML = `
+            coreActions = `
                 <div style="background:#f8fafc; padding:15px; border-radius:8px; border:1px solid #cbd5e1;">
                     <h4 style="margin:0 0 10px 0; color:var(--metro-blue);"><i class="fas fa-file-invoice"></i> Upload Purchase Proof</h4>
                     <p style="font-size:11px; color:#64748b;">Upload the final tax invoice or vendor receipt within 15 days.</p>
@@ -10951,7 +10938,7 @@ window.fmOpenCase = async (caseId) => {
             `;
         }
         else if (c.status === "INVENTORY VERIFICATION PENDING") {
-            actionArea.innerHTML = `
+            coreActions = `
                 <div style="background:#f8fafc; padding:15px; border-radius:8px; border:1px solid #cbd5e1;">
                     <h4 style="margin:0 0 10px 0; color:var(--metro-blue);"><i class="fas fa-barcode"></i> Inventory Inward Verification</h4>
                     <p style="font-size:11px; color:#64748b;">Register items in Asset Tracking tab first. Then scan the generated physical tags here.</p>
@@ -10964,16 +10951,20 @@ window.fmOpenCase = async (caseId) => {
     }
 
     if (c.status === "CASE CLOSED") {
-        actionArea.innerHTML = `
+        coreActions = `
             <button onclick="window.generateCaseFilePrint('${c.caseId}')" class="info" style="width:100%; padding:15px; font-size:14px; background:#0f172a; font-weight:900;">
                 <i class="fas fa-print"></i> GENERATE OFFICIAL CASE FILE (PRINT)
             </button>
-            ${deleteBtnHtml}
         `;
-    } else if (c.status === "PROJECT HEAD REJECTED" || c.status === "HOD REJECTED") {
-        actionArea.innerHTML = deleteBtnHtml;
     }
 
+    // NEW: Project Head / Admin Delete Button attached universally at the bottom
+    let deleteBtnHtml = "";
+    if (isPH || isAdmin) {
+        deleteBtnHtml = `<button onclick="window.fmDeleteCase('${c.caseId}')" class="danger" style="width:100%; margin-top:15px; padding:12px; font-weight:bold; background:#991b1b; color:white; border-radius:6px; border:none; cursor:pointer;"><i class="fas fa-trash"></i> PERMANENTLY DELETE CASE</button>`;
+    }
+
+    actionArea.innerHTML = coreActions + deleteBtnHtml;
     window.fmShowView('case');
 };
 window.fmPHItemJudge = async (caseId, itemIndex, judgeStatus) => {
@@ -10982,7 +10973,17 @@ window.fmPHItemJudge = async (caseId, itemIndex, judgeStatus) => {
     await update(ref(db, `fund_workflows/${caseId}/items/${itemIndex}`), { phStatus: judgeStatus });
     window.fmOpenCase(caseId); 
 };
-
+window.fmDeleteCase = async (caseId) => {
+    if (!confirm(`⚠️ CRITICAL: PERMANENTLY DELETE CASE ${caseId}?\n\nThis action cannot be undone and will erase the entire audit trail.`)) return;
+    
+    try {
+        await remove(ref(db, `fund_workflows/${caseId}`));
+        alert("✅ Case deleted successfully.");
+        window.fmShowView('dashboard');
+    } catch(e) {
+        alert("Delete failed: " + e.message);
+    }
+};
 window.fmAdvanceCase = async (caseId, newStatus) => {
     const comment = document.getElementById("fmActionComment")?.value || "";
     if (newStatus.includes("REJECTED") && !comment) return alert("Rejection reason is mandatory.");
