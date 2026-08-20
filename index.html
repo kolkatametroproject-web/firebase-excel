@@ -10909,15 +10909,20 @@ window.fmOpenCase = async (caseId) => {
             </div>
         `;
     } 
-    // 2. HOD CONTROLS (Approval)
-    else if ((isHOD || window.isAdmin) && c.status === "PENDING HOD APPROVAL") {
+    // 2. HOD CONTROLS (Approval & Bill Verification)
+    else if ((isHOD || window.isAdmin) && (c.status === "PENDING HOD APPROVAL" || c.status === "PURCHASE PROOF REVIEW")) {
+        let billViewer = c.billProof ? `<div style="margin:10px 0;"><a href="${c.billProof}" target="_blank" style="color:var(--metro-blue); font-weight:bold; text-decoration:underline;"><i class="fas fa-file-invoice"></i> View Uploaded Purchase Bill / Invoice</a></div>` : '<div style="color:red; font-size:11px;">No bill uploaded yet.</div>';
+
         coreActions = `
             <div style="background:#f0f9ff; padding:15px; border-radius:8px; border:1px solid #bae6fd;">
-                <h4 style="margin:0 0 10px 0; color:#0369a1;"><i class="fas fa-stamp"></i> HOD Approval Desk</h4>
-                <label style="font-size:11px; font-weight:bold;">Administrative Remarks:</label>
+                <h4 style="margin:0 0 10px 0; color:#0369a1;"><i class="fas fa-stamp"></i> HOD Verification & Approval Desk</h4>
+                ${c.status === "PURCHASE PROOF REVIEW" ? `<div style="background:white; padding:10px; border-radius:6px; border:1px solid #e2e8f0; margin-bottom:10px;"><strong>Submitted Purchase Proof:</strong>${billViewer}</div>` : ''}
+                <label style="font-size:11px; font-weight:bold;">Administrative / Audit Remarks:</label>
                 <input id="fmActionComment" placeholder="Official remarks..." style="margin-bottom:10px; width:100%;">
                 <div style="display:flex; gap:10px;">
-                    <button onclick="window.fmAdvanceCase('${c.caseId}', 'PAYMENT PENDING')" class="success">APPROVE FUND SANCTION</button>
+                    <button onclick="window.fmAdvanceCase('${c.caseId}', '${c.status === "PENDING HOD APPROVAL" ? "PAYMENT PENDING" : "INVENTORY VERIFICATION PENDING"}')" class="success">
+                        ${c.status === "PENDING HOD APPROVAL" ? "APPROVE FUND SANCTION" : "APPROVE BILL & UNLOCK INVENTORY"}
+                    </button>
                     <button onclick="window.fmAdvanceCase('${c.caseId}', 'HOD REJECTED')" class="danger">REJECT</button>
                 </div>
             </div>
@@ -11076,16 +11081,30 @@ window.fmRecordPayment = async (caseId) => {
 
 window.fmSubmitProof = async (caseId) => {
     const file = document.getElementById("fmBillUpload").files[0];
-    if(!file) return alert("Upload a document.");
+    if(!file) return alert("Please upload a purchase document/invoice.");
+    
+    const btn = document.activeElement;
+    btn.innerText = "⏳ UPLOADING BILL...";
+    btn.disabled = true;
+
     const reader = new FileReader();
     reader.onload = async (e) => {
-        await update(ref(db, `fund_workflows/${caseId}`), { status: "INVENTORY VERIFICATION PENDING", billProof: e.target.result });
-        await window.fmLogAudit(caseId, "Purchase Bill Submitted", "Document uploaded by student.");
-        window.fmOpenCase(caseId);
+        try {
+            await update(ref(db, `fund_workflows/${caseId}`), { 
+                status: "PURCHASE PROOF REVIEW", 
+                billProof: e.target.result 
+            });
+            await window.fmLogAudit(caseId, "Purchase Bill Submitted", "Invoice uploaded by student for HOD review.");
+            alert("✅ Bill uploaded successfully! Sent to HOD for verification.");
+            window.fmOpenCase(caseId);
+        } catch (err) {
+            alert("Upload failed: " + err.message);
+            btn.innerText = "SUBMIT INVOICE";
+            btn.disabled = false;
+        }
     };
     reader.readAsDataURL(file);
 };
-
 window.fmAttemptClosure = async (caseId) => {
     if(!confirm("Are all purchased items scanned and verified via Inventory?")) return;
     
