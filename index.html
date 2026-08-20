@@ -493,6 +493,19 @@ tr:hover { background: #fcfcfd; }
     z-index: 10;
     color: white;
 }
+  /* --- FUND MANAGEMENT WORKFLOW STYLES --- */
+.fm-dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 25px; }
+.fm-status-card { background: white; padding: 20px; border-radius: 12px; border-left: 6px solid var(--metro-slate); box-shadow: var(--card-shadow); cursor: pointer; transition: transform 0.2s; }
+.fm-status-card:hover { transform: translateY(-3px); }
+.fm-status-card h2 { margin: 0; font-size: 28px; color: var(--metro-blue); }
+.fm-status-card span { font-size: 11px; font-weight: bold; text-transform: uppercase; color: var(--metro-slate); }
+
+.fm-cart-item { background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 15px; margin-bottom: 10px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 15px; align-items: center; }
+.fm-cart-total { background: var(--metro-blue); color: var(--metro-gold); padding: 15px 20px; border-radius: 8px; font-size: 18px; font-weight: 900; text-align: right; margin-top: 15px; }
+
+.fm-timeline { border-left: 3px solid #cbd5e1; margin-left: 15px; padding-left: 20px; }
+.fm-timeline-item { position: relative; margin-bottom: 20px; }
+.fm-timeline-item::before { content: ''; position: absolute; left: -28px; top: 0; width: 12px; height: 12px; border-radius: 50%; background: var(--metro-blue); border: 3px solid white; box-shadow: 0 0 0 1px var(--metro-blue); }
 </style>
 </head>
 
@@ -10739,6 +10752,80 @@ window.fmLogAudit = async (caseId, action, comment) => {
         by: currentUser.name || currentUser.email,
         timestamp: serverTimestamp()
     });
+};
+  // A4 Print Formatting for Closed Case
+window.generateCaseFilePrint = async (caseId) => {
+    const c = window.fmCurrentCase;
+    if(!c) return;
+
+    let itemsRows = "";
+    c.items.forEach((it, i) => {
+        itemsRows += `
+            <tr style="border-bottom: 2pt solid #ddd; font-size: 26pt;">
+                <td style="padding: 15px 5px; text-align: left;">${i+1}. ${it.name.toUpperCase()}</td>
+                <td style="padding: 15px 5px; text-align: center;">${it.qty}</td>
+                <td style="padding: 15px 5px; text-align: right;">${it.rate}</td>
+                <td style="padding: 15px 5px; text-align: right; font-weight: 900;">₹${it.amount}</td>
+            </tr>`;
+    });
+
+    let timelineRows = "";
+    if(c.audit) {
+        Object.values(c.audit).sort((a,b) => a.timestamp - b.timestamp).forEach(a => {
+            let tDate = a.timestamp ? new Date(a.timestamp).toLocaleString('en-IN') : "N/A";
+            timelineRows += `
+                <div style="border-left: 4pt solid black; margin-left: 20px; padding-left: 20px; margin-bottom: 20px;">
+                    <div style="font-size: 24pt; color: #555;">${tDate} - <b>${a.by.toUpperCase()}</b></div>
+                    <div style="font-size: 32pt; font-weight: 900;">${a.action.toUpperCase()}</div>
+                </div>`;
+        });
+    }
+
+    const reportContainer = document.getElementById("printableReportContainer");
+    
+    reportContainer.innerHTML = `
+        <style>
+            @media print { @page { size: A4; margin: 0; } .no-print { display: none !important; } body { height: auto !important; -webkit-print-color-adjust: exact !important; } }
+            .invoice-wrapper { width: 92%; margin: 0 auto; font-family: "Arial Black", sans-serif; color: black; background: white; padding: 20px 40px; }
+            .header-title { font-size: 75pt; font-weight: 900; text-align: center; margin-bottom: 20px; line-height: 1; }
+            .doc-type-box { border: 12pt solid black; padding: 25px; display: inline-block; font-size: 55pt; font-weight: 900; text-align: center; width: 90%; margin: 0 auto 50px auto; text-transform: uppercase; }
+            .meta-block { display: grid; grid-template-columns: 1fr 1fr; font-size: 35pt; font-weight: 900; line-height: 1.5; margin-bottom: 40px; border-bottom: 8pt solid black; padding-bottom: 20px; }
+        </style>
+        
+        <div class="no-print" style="text-align:center; padding:30px; position:sticky; top:0; background:white; z-index:100; border-bottom: 2px solid #ddd;">
+            <button onclick="window.print()" style="padding:40px 80px; font-size:30pt; font-weight:900; background:black; color:white; border-radius:10px; cursor:pointer;">🖨️ PRINT CASE FILE</button>
+            <button class="danger" onclick="closeReportPreview()" style="padding:40px 80px; font-size:30pt; font-weight:900; margin-left:20px; cursor:pointer;">CLOSE</button>
+        </div>
+
+        <div class="invoice-wrapper">
+            <div class="header-title">METRO RAILWAY<br>PLATFORM SAFETY PROJECT</div>
+            <div style="font-size: 35pt; font-weight: 900; text-align: center; margin-bottom: 40px;">INSTITUTE OF ENGINEERING AND MANAGEMENT</div>
+            
+            <div style="text-align:center;"><div class="doc-type-box">OFFICIAL CASE FILE: ${c.caseId}</div></div>
+            
+            <div class="meta-block">
+                <div>APPLICANT: ${c.applicantName.toUpperCase()}</div>
+                <div style="text-align:right;">PROJECT: ${c.project.toUpperCase()}</div>
+                <div>REQ DATE: ${c.reqDate}</div>
+                <div style="text-align:right; color:#b91c1c;">FINAL STATUS: ${c.status}</div>
+            </div>
+
+            <div style="font-size: 45pt; font-weight: 900; background: black; color: white; padding: 15px; text-align: center; -webkit-print-color-adjust: exact;">APPROVED BILL OF MATERIALS</div>
+            <table style="width:100%; border-collapse: collapse; margin-top: 20px; margin-bottom: 50px;">
+                <thead><tr style="border-bottom: 8pt solid black; font-size: 30pt; font-weight: 900;"><th style="text-align:left;">DESCRIPTION</th><th>QTY</th><th style="text-align:right;">RATE</th><th style="text-align:right;">TOTAL</th></tr></thead>
+                <tbody>${itemsRows}</tbody>
+            </table>
+            
+            <div style="text-align:right; font-size: 55pt; font-weight: 900; margin-bottom: 60px;">NET DISBURSED: ₹${c.totalAmount.toLocaleString('en-IN')}</div>
+
+            <div style="font-size: 45pt; font-weight: 900; background: black; color: white; padding: 15px; text-align: center; -webkit-print-color-adjust: exact; margin-bottom: 30px;">AUDIT TIMELINE</div>
+            ${timelineRows}
+
+            <div style="margin-top: 150px; text-align: center; font-size: 30pt; border-top: 5pt dashed black; padding-top: 30px; font-weight: 900;">END OF RECORD • SYSTEM GENERATED AUDIT FILE</div>
+        </div>`;
+
+    reportContainer.classList.remove("hidden");
+    window.scrollTo(0,0);
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
