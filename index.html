@@ -10571,9 +10571,14 @@ window.resetScadaNetwork = async () => {
         switchScadaMode('matrix');
     } catch(e) { alert("Reset Interrupted: " + e.message); }
 };
-  // ==========================================
-// 🏢 FUND MANAGEMENT WORKFLOW ENGINE
 // ==========================================
+// 🏢 FUND MANAGEMENT WORKFLOW ENGINE (WITH ROLES)
+// ==========================================
+
+// 1. DEFINE ROLES HERE (LOWERCASE EMAILS)
+window.PH_EMAILS = ["soham@metro.project"];
+window.HOD_EMAILS = ["hodee@metro.project", "ahodee@metro.project", "dsen@metro.project"];
+
 window.fmCart = [];
 window.fmCurrentCase = null;
 
@@ -10583,16 +10588,15 @@ window.fmShowView = (viewName) => {
     document.getElementById("fm-view-new").classList.add("hidden");
     document.getElementById("fm-view-case").classList.add("hidden");
     document.getElementById(`fm-view-${viewName}`).classList.remove("hidden");
-    if(viewName === 'dashboard') fmLoadDashboard();
+    if(viewName === 'dashboard') window.fmLoadDashboard();
 };
 
 window.fmOpenNewRequest = () => {
     window.fmCart = [];
-    // Project and Team fields removed
     document.getElementById("fmPurpose").value = "";
     document.getElementById("fmQrUpload").value = "";
-    fmRenderCart();
-    fmShowView('new');
+    window.fmRenderCart();
+    window.fmShowView('new');
 };
 
 // Cart Logic
@@ -10608,22 +10612,19 @@ window.fmAddToCart = () => {
     document.getElementById("fmItemName").value = "";
     document.getElementById("fmItemQty").value = "1";
     document.getElementById("fmItemRate").value = "";
-    fmRenderCart();
+    window.fmRenderCart();
 };
 
-// --- UPDATED CART RENDERER (TABLE ROW LAYOUT) ---
 window.fmRenderCart = () => {
     const container = document.getElementById("fm-cart-container");
     let total = 0;
     
-    // Show empty state if cart is empty
     if (window.fmCart.length === 0) {
         container.innerHTML = "<div style='text-align:center; padding:20px; color:#64748b; background:#f8fafc; border-radius:8px; border:1px solid #e2e8f0;'>Cart is empty. Add items above.</div>";
         document.getElementById("fm-cart-total-val").innerText = "0.00";
         return;
     }
 
-    // Build standard table layout
     let tableHtml = `
         <div class="table-wrapper" style="margin-bottom: 15px;">
             <table style="width: 100%; border-collapse: collapse;">
@@ -10648,7 +10649,7 @@ window.fmRenderCart = () => {
                 <td style="text-align:right; padding: 12px;">₹${item.rate.toLocaleString('en-IN')}</td>
                 <td style="text-align:right; font-weight:900; color:var(--metro-blue); padding: 12px;">₹${item.amount.toLocaleString('en-IN')}</td>
                 <td style="text-align:center; padding: 12px;">
-                    <button onclick="window.fmCart.splice(${index}, 1); fmRenderCart();" class="danger" style="padding:6px 10px; border-radius:4px;" title="Remove Item">
+                    <button onclick="window.fmCart.splice(${index}, 1); window.fmRenderCart();" class="danger" style="padding:6px 10px; border-radius:4px;" title="Remove Item">
                         <i class="fas fa-trash"></i>
                     </button>
                 </td>
@@ -10656,8 +10657,6 @@ window.fmRenderCart = () => {
     });
 
     tableHtml += `</tbody></table></div>`;
-    
-    // Inject the table and update the total
     container.innerHTML = tableHtml;
     document.getElementById("fm-cart-total-val").innerText = total.toLocaleString('en-IN');
 };
@@ -10670,7 +10669,6 @@ const generateCaseId = () => {
 };
 
 // Submit Request
-// Submit Request
 window.fmSubmitRequest = async () => {
     if(window.fmCart.length === 0) return alert("Add at least one requirement.");
     
@@ -10682,7 +10680,6 @@ window.fmSubmitRequest = async () => {
     btn.disabled = true;
 
     try {
-        // Convert QR to Base64
         const reader = new FileReader();
         reader.onload = async (e) => {
             const qrBase64 = e.target.result;
@@ -10693,8 +10690,8 @@ window.fmSubmitRequest = async () => {
                 caseId: caseId,
                 applicantUid: currentUser.uid,
                 applicantName: currentUser.name || currentUser.email,
-                project: "Metro Railway Platform Safety Project", // Hardcoded default
-                team: "MRPSP Operations",                       // Hardcoded default
+                project: "Metro Railway Platform Safety Project", 
+                team: "MRPSP Operations",                      
                 purpose: document.getElementById("fmPurpose").value,
                 reqDate: document.getElementById("fmReqDate").value,
                 items: window.fmCart,
@@ -10704,12 +10701,11 @@ window.fmSubmitRequest = async () => {
                 timestamp: serverTimestamp()
             };
 
-            // FIX: Changed 'set' to 'update' here to prevent the ReferenceError crash
             await update(ref(db, `fund_workflows/${caseId}`), payload);
-            await fmLogAudit(caseId, "Request Submitted", `Total ₹${totalAmt} requested.`);
+            await window.fmLogAudit(caseId, "Request Submitted", `Total ₹${totalAmt} requested.`);
             
             alert(`✅ Request Submitted!\nCase Number: ${caseId}`);
-            fmShowView('dashboard');
+            window.fmShowView('dashboard');
         };
         reader.readAsDataURL(qrFile);
     } catch (err) {
@@ -10737,15 +10733,21 @@ window.fmLoadDashboard = () => {
         snap.forEach(c => cases.push(c.val()));
         cases.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
+        // Determine user roles
+        const myEmail = (currentUser.email || "").toLowerCase();
+        const isPH = window.PH_EMAILS.includes(myEmail);
+        const isHOD = window.HOD_EMAILS.includes(myEmail);
+
         cases.forEach(c => {
+            // Role Based Visibility
+            const isMine = (c.applicantUid === currentUser.uid);
+            if (!isAdmin && !isPH && !isHOD && !isMine) return; // Hide from unauthorized eyes
+
             // Count logic
             if(c.status === "UNDER PROJECT HEAD REVIEW") counts.phReview++;
             if(c.status === "PENDING HOD APPROVAL") counts.hodReview++;
             if(c.status === "PAYMENT PENDING") counts.payPending++;
             if(c.status === "CASE CLOSED") counts.closed++;
-
-            // Visibility Logic: Students see own, Admins see all.
-            if(!isAdmin && c.applicantUid !== currentUser.uid) return;
 
             let color = "#64748b";
             if(c.status.includes("REVIEW") || c.status.includes("PENDING")) color = "#d97706";
@@ -10760,12 +10762,11 @@ window.fmLoadDashboard = () => {
                     <td style="font-weight:900; color:var(--metro-red);">₹${c.totalAmount.toLocaleString('en-IN')}</td>
                     <td><span style="background:${color}20; color:${color}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${c.status}</span></td>
                     <td>
-                        <button class="info" onclick="fmOpenCase('${c.caseId}')" style="padding:4px 10px; font-size:11px;">VIEW CASE</button>
+                        <button class="info" onclick="window.fmOpenCase('${c.caseId}')" style="padding:4px 10px; font-size:11px;">VIEW CASE</button>
                     </td>
                 </tr>`;
         });
 
-        // Update Top Cards
         document.getElementById("fm-dashboard-cards").innerHTML = `
             <div class="fm-status-card" style="border-left-color: #d97706;"><span>PH Review Pending</span><h2>${counts.phReview}</h2></div>
             <div class="fm-status-card" style="border-left-color: #0284c7;"><span>HOD Approval Pending</span><h2>${counts.hodReview}</h2></div>
@@ -10784,7 +10785,188 @@ window.fmLogAudit = async (caseId, action, comment) => {
         timestamp: serverTimestamp()
     });
 };
-  // A4 Print Formatting for Closed Case
+
+window.fmOpenCase = async (caseId) => {
+    const snap = await get(ref(db, `fund_workflows/${caseId}`));
+    if(!snap.exists()) return;
+    window.fmCurrentCase = snap.val();
+    const c = window.fmCurrentCase;
+
+    document.getElementById("fmCaseIdTitle").innerText = c.caseId;
+    document.getElementById("fmCaseStatusBadge").innerText = c.status;
+    
+    document.getElementById("fmCaseMetadata").innerHTML = `
+        <b>Applicant:</b> ${c.applicantName}<br>
+        <b>Project:</b> ${c.project} (${c.team})<br>
+        <b>Req Date:</b> ${c.reqDate}<br>
+        <b>Purpose:</b> <i>${c.purpose}</i><br>
+        <div style="margin-top:10px;"><a href="${c.qrCode}" target="_blank" style="color:var(--metro-blue); text-decoration:underline;"><b>[View Payment QR Code]</b></a></div>
+    `;
+
+    // Role calculations for inside the Case screen
+    const myEmail = (currentUser.email || "").toLowerCase();
+    const isPH = window.PH_EMAILS.includes(myEmail) || isAdmin;
+    const isHOD = window.HOD_EMAILS.includes(myEmail) || isAdmin;
+
+    // Render Items
+    let itemsHtml = "";
+    c.items.forEach((it, idx) => {
+        let itStatus = it.phStatus === "PASSED" ? '<span style="color:green">✓ Passed</span>' : 
+                      (it.phStatus === "FAILED" ? '<span style="color:red">✕ Failed</span>' : 'Pending');
+        
+        itemsHtml += `
+            <div style="border: 1px solid #e2e8f0; padding: 10px; margin-bottom: 10px; border-radius: 6px; background: white;">
+                <div style="display:flex; justify-content:space-between;">
+                    <b>${it.name}</b>
+                    <span style="font-weight:900;">₹${it.amount}</span>
+                </div>
+                <div style="font-size:11px; color:#64748b; margin-top:5px;">Qty: ${it.qty} @ ₹${it.rate} | Status: ${itStatus}</div>
+                ${c.status === "UNDER PROJECT HEAD REVIEW" && isPH ? `
+                    <div style="margin-top:10px; display:flex; gap:5px;">
+                        <button onclick="window.fmPHItemJudge('${c.caseId}', ${idx}, 'PASSED')" class="success" style="padding:2px 10px; font-size:10px;">PASS</button>
+                        <button onclick="window.fmPHItemJudge('${c.caseId}', ${idx}, 'FAILED')" class="danger" style="padding:2px 10px; font-size:10px;">FAIL</button>
+                    </div>` : ''}
+            </div>`;
+    });
+    document.getElementById("fmCaseItemsContainer").innerHTML = itemsHtml;
+
+    // Load Audit Timeline
+    let timelineHtml = "";
+    if(c.audit) {
+        Object.values(c.audit).sort((a,b) => a.timestamp - b.timestamp).forEach(a => {
+            let tDate = a.timestamp ? new Date(a.timestamp).toLocaleString('en-IN') : "Just now";
+            timelineHtml += `
+                <div class="fm-timeline-item">
+                    <div style="font-size:10px; color:#64748b;">${tDate} - <b>${a.by}</b></div>
+                    <div style="font-weight:bold;">${a.action}</div>
+                    ${a.comment ? `<div style="font-size:11px; font-style:italic;">"${a.comment}"</div>` : ''}
+                </div>`;
+        });
+    }
+    document.getElementById("fmCaseTimeline").innerHTML = timelineHtml;
+
+    // Build Action Area Based on Role & State
+    const actionArea = document.getElementById("fmCaseActionArea");
+    actionArea.innerHTML = "";
+
+    // PROJECT HEAD CONTROLS
+    if (isPH && c.status === "UNDER PROJECT HEAD REVIEW") {
+        const allChecked = c.items.every(it => it.phStatus !== "PENDING");
+        actionArea.innerHTML = `
+            <label style="font-size:11px; font-weight:bold;">Project Head Comment / Reason:</label>
+            <input id="fmActionComment" style="margin-bottom:10px; width:100%;">
+            <div style="display:flex; gap:10px;">
+                <button onclick="window.fmAdvanceCase('${c.caseId}', 'PENDING HOD APPROVAL')" class="info" ${!allChecked ? 'disabled style="opacity:0.5;"' : ''}>APPROVE TO HOD</button>
+                <button onclick="window.fmAdvanceCase('${c.caseId}', 'PROJECT HEAD REJECTED')" class="danger">REJECT REQUEST</button>
+            </div>
+            ${!allChecked ? '<p style="font-size:10px; color:red; margin-top:5px;">* All items must be marked Pass/Fail before approval.</p>' : ''}
+        `;
+    } 
+    // HOD CONTROLS
+    else if (isHOD && c.status === "PENDING HOD APPROVAL") {
+        actionArea.innerHTML = `
+            <label style="font-size:11px; font-weight:bold;">HOD Comment:</label>
+            <input id="fmActionComment" style="margin-bottom:10px; width:100%;">
+            <div style="display:flex; gap:10px;">
+                <button onclick="window.fmAdvanceCase('${c.caseId}', 'PAYMENT PENDING')" class="success">APPROVE FUND RELEASE</button>
+                <button onclick="window.fmAdvanceCase('${c.caseId}', 'HOD REJECTED')" class="danger">REJECT</button>
+            </div>
+        `;
+    }
+    else if (isHOD && c.status === "PAYMENT PENDING") {
+        actionArea.innerHTML = `
+            <label style="font-size:11px; font-weight:bold;">Transaction ID (Last 5 Digits) / Ref No:</label>
+            <input id="fmTxnId" style="margin-bottom:10px; width:100%; font-family:monospace; font-weight:bold; letter-spacing:2px;" placeholder="e.g. 48291">
+            <button onclick="window.fmRecordPayment('${c.caseId}')" class="success" style="width:100%;">CONFIRM PAYMENT TO STUDENT</button>
+        `;
+    } 
+    // STUDENT CONTROLS
+    else if (c.applicantUid === currentUser.uid) {
+        if (c.status === "PURCHASE DOCUMENT PENDING") {
+            actionArea.innerHTML = `
+                <label style="font-size:11px; font-weight:bold;">Upload Purchase Bill / Invoice:</label>
+                <input type="file" id="fmBillUpload" accept="image/*,application/pdf" style="margin-bottom:10px; width:100%;">
+                <button onclick="window.fmSubmitProof('${c.caseId}')" class="info" style="width:100%;"><i class="fas fa-upload"></i> SUBMIT BILL</button>
+            `;
+        }
+        else if (c.status === "INVENTORY VERIFICATION PENDING") {
+            actionArea.innerHTML = `
+                <p style="font-size:12px; font-weight:bold; color:var(--metro-red);">Register items in Inventory Tab first. Then scan the generated Tags here.</p>
+                <button onclick="window.openBarcodeScanner('FUND_INVENTORY_VERIFY')" class="warning" style="width:100%; padding:15px; font-size:14px;"><i class="fas fa-qrcode"></i> SCAN INVENTORY TAGS</button>
+                <div id="fmInventoryScanLog" style="margin-top:10px; font-size:11px; font-family:monospace;"></div>
+                <button onclick="window.fmAttemptClosure('${c.caseId}')" class="success" style="width:100%; margin-top:15px;">FINALIZE & CLOSE CASE</button>
+            `;
+        }
+    }
+
+    if (c.status === "CASE CLOSED") {
+        actionArea.innerHTML = `
+            <button onclick="window.generateCaseFilePrint('${c.caseId}')" class="info" style="width:100%; padding:15px; font-size:14px; background:#000;">
+                <i class="fas fa-print"></i> GENERATE OFFICIAL CASE FILE (PRINT)
+            </button>
+        `;
+    }
+
+    window.fmShowView('case');
+};
+
+window.fmPHItemJudge = async (caseId, itemIndex, judgeStatus) => {
+    const c = window.fmCurrentCase;
+    c.items[itemIndex].phStatus = judgeStatus;
+    await update(ref(db, `fund_workflows/${caseId}/items`), c.items);
+    window.fmOpenCase(caseId); 
+};
+
+window.fmAdvanceCase = async (caseId, newStatus) => {
+    const comment = document.getElementById("fmActionComment")?.value || "";
+    if (newStatus.includes("REJECTED") && !comment) return alert("Rejection reason is mandatory.");
+    
+    await update(ref(db, `fund_workflows/${caseId}`), { status: newStatus });
+    await window.fmLogAudit(caseId, `Status changed to: ${newStatus}`, comment);
+    
+    alert(`Case moved to: ${newStatus}`);
+    window.fmOpenCase(caseId);
+};
+
+window.fmRecordPayment = async (caseId) => {
+    const txn = document.getElementById("fmTxnId").value.trim();
+    if(!txn) return alert("Transaction ID is required.");
+    
+    await update(ref(db, `fund_workflows/${caseId}`), { status: "PURCHASE DOCUMENT PENDING", txnRef: txn });
+    await window.fmLogAudit(caseId, "Payment Completed", `Txn Ref: ${txn}`);
+    
+    await push(ref(db, "finance"), {
+        type: "DEBIT", amount: window.fmCurrentCase.totalAmount,
+        desc: `Project Fund: ${window.fmCurrentCase.project} [${caseId}]`,
+        status: "Approved", mode: `Txn: ${txn}`, by: currentUser.name, timestamp: serverTimestamp()
+    });
+
+    alert("Payment Logged Successfully!");
+    window.fmOpenCase(caseId);
+};
+
+window.fmSubmitProof = async (caseId) => {
+    const file = document.getElementById("fmBillUpload").files[0];
+    if(!file) return alert("Upload a document.");
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        await update(ref(db, `fund_workflows/${caseId}`), { status: "INVENTORY VERIFICATION PENDING", billProof: e.target.result });
+        await window.fmLogAudit(caseId, "Purchase Bill Submitted", "Document uploaded by student.");
+        window.fmOpenCase(caseId);
+    };
+    reader.readAsDataURL(file);
+};
+
+window.fmAttemptClosure = async (caseId) => {
+    if(!confirm("Are all purchased items scanned and verified via Inventory?")) return;
+    
+    await update(ref(db, `fund_workflows/${caseId}`), { status: "CASE CLOSED" });
+    await window.fmLogAudit(caseId, "Inventory Verified", "All assets confirmed in DB. Case closed.");
+    
+    alert("✅ Verification Complete. Case Closed.");
+    window.fmOpenCase(caseId);
+};
+
 window.generateCaseFilePrint = async (caseId) => {
     const c = window.fmCurrentCase;
     if(!c) return;
@@ -10825,7 +11007,7 @@ window.generateCaseFilePrint = async (caseId) => {
         
         <div class="no-print" style="text-align:center; padding:30px; position:sticky; top:0; background:white; z-index:100; border-bottom: 2px solid #ddd;">
             <button onclick="window.print()" style="padding:40px 80px; font-size:30pt; font-weight:900; background:black; color:white; border-radius:10px; cursor:pointer;">🖨️ PRINT CASE FILE</button>
-            <button class="danger" onclick="closeReportPreview()" style="padding:40px 80px; font-size:30pt; font-weight:900; margin-left:20px; cursor:pointer;">CLOSE</button>
+            <button class="danger" onclick="window.closeReportPreview()" style="padding:40px 80px; font-size:30pt; font-weight:900; margin-left:20px; cursor:pointer;">CLOSE</button>
         </div>
 
         <div class="invoice-wrapper">
