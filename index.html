@@ -10812,7 +10812,6 @@ window.fmLogAudit = async (caseId, action, comment) => {
         timestamp: serverTimestamp()
     });
 };
-
 window.fmOpenCase = async (caseId) => {
     const snap = await get(ref(db, `fund_workflows/${caseId}`));
     if(!snap.exists()) return;
@@ -10822,21 +10821,24 @@ window.fmOpenCase = async (caseId) => {
     document.getElementById("fmCaseIdTitle").innerText = c.caseId;
     document.getElementById("fmCaseStatusBadge").innerText = c.status;
     
+    // Show Image properly, or show "Deleted" if payment was already made
+    const qrDisplay = c.qrCode 
+        ? `<div style="margin-top:10px;"><img src="${c.qrCode}" style="max-width:200px; max-height:200px; border:2px solid #cbd5e1; border-radius:8px;"></div>`
+        : `<div style="margin-top:10px; color:#b91c1c; font-weight:bold; font-size:11px;">[QR Code Deleted Automatically After Payment]</div>`;
+
     document.getElementById("fmCaseMetadata").innerHTML = `
         <b>Applicant:</b> ${c.applicantName}<br>
         <b>Project:</b> ${c.project} (${c.team || 'Operations'})<br>
         <b>Req Date:</b> ${c.reqDate || 'N/A'}<br>
         <b>Purpose:</b> <i>${c.purpose || 'No description'}</i><br>
-        <div style="margin-top:10px;"><a href="${c.qrCode}" target="_blank" style="color:var(--metro-blue); text-decoration:underline;"><b>[View Payment QR Code]</b></a></div>
+        <div style="margin-top:10px; font-weight:bold;">Student Payment QR:</div>
+        ${qrDisplay}
     `;
 
-    // Role calculations for inside the Case screen
     const myEmail = (currentUser?.email || "").trim().toLowerCase();
-    
     let isPH = false, isHOD = false;
-    if (window.PH_EMAILS && Array.isArray(window.PH_EMAILS)) isPH = window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
-    if (window.HOD_EMAILS && Array.isArray(window.HOD_EMAILS)) isHOD = window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
-    
+    if (window.PH_EMAILS) isPH = window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
+    if (window.HOD_EMAILS) isHOD = window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
     const isApplicant = (c.applicantUid === currentUser.uid);
 
     // Render Items
@@ -10852,7 +10854,7 @@ window.fmOpenCase = async (caseId) => {
                     <span style="font-weight:900; font-size:14px; color:var(--metro-blue);">₹${it.amount}</span>
                 </div>
                 <div style="font-size:11px; color:#64748b; margin-top:4px;">Qty: <b>${it.qty}</b> × ₹${it.rate} | Review: ${itStatus}</div>
-                ${c.status === "UNDER PROJECT HEAD REVIEW" && (isPH || window.isAdmin) ? `
+                ${c.status === "UNDER PROJECT HEAD REVIEW" && isPH ? `
                     <div style="margin-top:10px; display:flex; gap:8px;">
                         <button onclick="window.fmPHItemJudge('${c.caseId}', ${idx}, 'PASSED')" class="success" style="padding:4px 12px; font-size:10px;">PASS</button>
                         <button onclick="window.fmPHItemJudge('${c.caseId}', ${idx}, 'FAILED')" class="danger" style="padding:4px 12px; font-size:10px;">FAIL</button>
@@ -10861,7 +10863,7 @@ window.fmOpenCase = async (caseId) => {
     });
     document.getElementById("fmCaseItemsContainer").innerHTML = itemsHtml;
 
-    // Load Audit Timeline (FIXED TIMESTAMP BUG HERE TOO)
+    // Load Audit Timeline
     let timelineHtml = "";
     if(c.audit) {
         const sortedAudit = Object.values(c.audit).sort((a,b) => {
@@ -10886,8 +10888,16 @@ window.fmOpenCase = async (caseId) => {
     const actionArea = document.getElementById("fmCaseActionArea");
     actionArea.innerHTML = "";
 
-    // PROJECT HEAD CONTROLS
-    if ((isPH || window.isAdmin) && c.status === "UNDER PROJECT HEAD REVIEW") {
+    // PH DELETE BUTTON LOGIC (Admin/PH can delete rejected or closed files)
+    let deleteBtnHtml = "";
+    if (isPH || window.isAdmin) {
+        if (c.status === "CASE CLOSED" || c.status === "PROJECT HEAD REJECTED" || c.status === "HOD REJECTED") {
+            deleteBtnHtml = `<button onclick="window.fmDeleteCase('${c.caseId}')" class="danger" style="width:100%; margin-top:15px; padding:10px; font-weight:bold; background:#991b1b;"><i class="fas fa-trash"></i> PERMANENTLY DELETE CASE</button>`;
+        }
+    }
+
+    // 1. PROJECT HEAD CONTROLS (Strictly isPH)
+    if (isPH && c.status === "UNDER PROJECT HEAD REVIEW") {
         const allChecked = c.items.every(it => it.phStatus && it.phStatus !== "PENDING");
         actionArea.innerHTML = `
             <div style="background:#fffbeb; padding:15px; border-radius:8px; border:1px solid #fde68a;">
@@ -10902,8 +10912,8 @@ window.fmOpenCase = async (caseId) => {
             </div>
         `;
     } 
-    // HOD CONTROLS (Approval)
-    else if ((isHOD || window.isAdmin) && c.status === "PENDING HOD APPROVAL") {
+    // 2. HOD CONTROLS (Approval) (Strictly isHOD)
+    else if (isHOD && c.status === "PENDING HOD APPROVAL") {
         actionArea.innerHTML = `
             <div style="background:#f0f9ff; padding:15px; border-radius:8px; border:1px solid #bae6fd;">
                 <h4 style="margin:0 0 10px 0; color:#0369a1;"><i class="fas fa-stamp"></i> HOD Approval Desk</h4>
@@ -10916,8 +10926,8 @@ window.fmOpenCase = async (caseId) => {
             </div>
         `;
     }
-    // HOD CONTROLS (Payment)
-    else if ((isHOD || window.isAdmin) && c.status === "PAYMENT PENDING") {
+    // 3. HOD CONTROLS (Payment) (Strictly isHOD)
+    else if (isHOD && c.status === "PAYMENT PENDING") {
         actionArea.innerHTML = `
             <div style="background:#fdf2f8; padding:15px; border-radius:8px; border:1px solid #fbcfe8;">
                 <h4 style="margin:0 0 10px 0; color:#9d174d;"><i class="fas fa-hand-holding-usd"></i> Fund Disbursement & Release</h4>
@@ -10928,7 +10938,7 @@ window.fmOpenCase = async (caseId) => {
             </div>
         `;
     } 
-    // STUDENT CONTROLS
+    // 4. STUDENT CONTROLS
     else if (isApplicant) {
         if (c.status === "PURCHASE DOCUMENT PENDING") {
             actionArea.innerHTML = `
@@ -10958,12 +10968,14 @@ window.fmOpenCase = async (caseId) => {
             <button onclick="window.generateCaseFilePrint('${c.caseId}')" class="info" style="width:100%; padding:15px; font-size:14px; background:#0f172a; font-weight:900;">
                 <i class="fas fa-print"></i> GENERATE OFFICIAL CASE FILE (PRINT)
             </button>
+            ${deleteBtnHtml}
         `;
+    } else if (c.status === "PROJECT HEAD REJECTED" || c.status === "HOD REJECTED") {
+        actionArea.innerHTML = deleteBtnHtml;
     }
 
     window.fmShowView('case');
 };
-
 window.fmPHItemJudge = async (caseId, itemIndex, judgeStatus) => {
     const c = window.fmCurrentCase;
     c.items[itemIndex].phStatus = judgeStatus;
