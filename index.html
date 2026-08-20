@@ -11261,18 +11261,43 @@ window.fmToggleAllScans = (masterCheckbox) => {
     window.fmEvaluateFinalizeBtn();
 };
 
-// Enables/Disables the final Submit button based on ticks
+// Enables/Disables the final Submit button based on ticks AND Cycle Count
 window.fmEvaluateFinalizeBtn = () => {
     const checkboxes = document.querySelectorAll(".fm-asset-check:checked");
     const btn = document.getElementById("fmBtnFinalize");
-    if (checkboxes.length > 0) {
-        btn.disabled = false;
-        btn.style.opacity = "1";
-        btn.style.cursor = "pointer";
-    } else {
+    
+    // If nothing is selected, lock the button
+    if (checkboxes.length === 0) {
         btn.disabled = true;
         btn.style.opacity = "0.5";
         btn.style.cursor = "not-allowed";
+        btn.innerText = "FINALIZE CASE CLOSURE";
+        return;
+    }
+
+    // Check if ANY selected item has a bad cycle count
+    let hasInvalidCycle = false;
+    checkboxes.forEach(cb => {
+        const asset = window.fmScannedAssetsData.find(a => a.barcode === cb.value);
+        if (asset && (asset.usageCount > 1)) {
+            hasInvalidCycle = true;
+        }
+    });
+
+    // If even one selected item fails the rule, lock the button
+    if (hasInvalidCycle) {
+        btn.disabled = true;
+        btn.style.opacity = "0.5";
+        btn.style.cursor = "not-allowed";
+        btn.style.background = "#991b1b"; // Dark Red
+        btn.innerText = "⛔ INVALID CYCLE COUNT SELECTED";
+    } else {
+        // All selected items are valid, unlock the button
+        btn.disabled = false;
+        btn.style.opacity = "1";
+        btn.style.cursor = "pointer";
+        btn.style.background = "#10b981"; // Success Green
+        btn.innerText = "FINALIZE CASE CLOSURE";
     }
 };
 
@@ -11281,7 +11306,7 @@ window.fmAttemptClosure = async (caseId) => {
     const checkboxes = document.querySelectorAll(".fm-asset-check:checked");
     if (checkboxes.length === 0) return alert("Select at least one verified item.");
     
-    // Logic Verification: Cycle Count Rules
+    // Logic Verification: Cycle Count Rules (Hard Stop)
     let allPassed = true;
     let failedItems = [];
     
@@ -11289,7 +11314,7 @@ window.fmAttemptClosure = async (caseId) => {
         const asset = window.fmScannedAssetsData.find(a => a.barcode === cb.value);
         if (asset && (asset.usageCount > 1)) {
             allPassed = false;
-            failedItems.push(`${asset.item} (Cycle: ${asset.usageCount})`);
+            failedItems.push(`- ${asset.item} (Cycle: ${asset.usageCount})`);
         }
     });
     
@@ -11299,11 +11324,21 @@ window.fmAttemptClosure = async (caseId) => {
     
     if(!confirm(`Validate ${checkboxes.length} items and permanently close this case?`)) return;
     
-    await update(ref(db, `fund_workflows/${caseId}`), { status: "CASE CLOSED" });
-    await window.fmLogAudit(caseId, "Inventory Verified", `${checkboxes.length} assets batch-verified by student in DB. Case closed.`);
-    
-    alert("✅ System Verification Complete. Case Closed.");
-    window.fmOpenCase(caseId);
+    const btn = document.getElementById("fmBtnFinalize");
+    btn.disabled = true;
+    btn.innerText = "⏳ CLOSING CASE...";
+
+    try {
+        await update(ref(db, `fund_workflows/${caseId}`), { status: "CASE CLOSED" });
+        await window.fmLogAudit(caseId, "Inventory Verified", `${checkboxes.length} assets batch-verified in DB. Case closed.`);
+        
+        alert("✅ System Verification Complete. Case Closed.");
+        window.fmOpenCase(caseId);
+    } catch(e) {
+        alert("Closure failed: " + e.message);
+        btn.disabled = false;
+        btn.innerText = "FINALIZE CASE CLOSURE";
+    }
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
