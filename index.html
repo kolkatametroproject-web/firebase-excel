@@ -7261,6 +7261,7 @@ function renderRow(k, v, i) {
         </tr>`;
 }
 // --- LOAD INVENTORY (STABLE VERSION) ---
+// --- LOAD INVENTORY (STABLE VERSION) ---
 function loadInventory() {
     const b = document.getElementById("inventoryBody");
     const summaryEl = document.getElementById("stockSummaryText");
@@ -7278,18 +7279,21 @@ function loadInventory() {
 
         snap.forEach(c => {
             const v = c.val(), k = c.key;
-            total++;
             
             const isSold = v.status === "Sold Out";
-            if(!isSold && v.status !== "Checked Out") available++;
+            
+            // Only count active items towards the "Total Assets" and "Available" labels
+            if(!isSold) {
+                total++;
+                if(v.status !== "Checked Out") available++;
+            }
 
             // STATUS UI STYLING
             let statusStyle = "background:#dcfce7; color:#166534;"; 
             if(v.status === "Checked Out") statusStyle = "background:#fef3c7; color:#d97706;";
             if(isSold) statusStyle = "background:#000; color:#fff; border: 1px solid #333;";
 
-            // --- RE-STOCK OPTION DELETED FROM HERE ---
-            // Only Edit (if not sold) and Delete (if admin) remain.
+            // Action Buttons
             const editBtn = isSold ? 
                 `<button disabled style="opacity:0.3; cursor:not-allowed; padding:2px 6px; font-size:10px;">EDIT</button>` : 
                 `<button class="warning" onclick="editExistingItem('${k}')" style="padding:2px 6px; font-size:10px;">EDIT</button>`;
@@ -7301,8 +7305,9 @@ function loadInventory() {
             const invoiceLabel = v.invoiceNo ? `<div style="font-size:9px; color:#64748b; font-family:monospace; margin-top:2px;">📜 ID: ${v.invoiceNo}</div>` : "";
             const stationLabel = v.assignedStation ? `<div style="color:#B91C1C; font-weight:bold; font-size:10px; margin-top:2px;">📍 ${v.assignedStation}</div>` : "";
 
+            // NOTE: data-sold="${isSold}" and display:none are added to the <tr> below
             b.innerHTML += `
-            <tr class="stock-row" data-invoice="${v.invoiceNo || ''}" style="${isSold ? 'background:#f1f5f9; color:#64748b;' : ''}">
+            <tr class="stock-row" data-sold="${isSold}" data-invoice="${v.invoiceNo || ''}" style="${isSold ? 'display:none; background:#f1f5f9; color:#64748b;' : ''}">
                 <td style="font-family:monospace; font-weight:bold;">${v.barcode || '--'}</td>
                 <td style="font-weight:bold;">
                     ${v.item}
@@ -7326,7 +7331,7 @@ function loadInventory() {
         });
 
         if(summaryEl) {
-            summaryEl.innerHTML = `Total Assets: ${total} | <span style="color:green; font-weight:bold;">Ready for Use: ${available}</span>`;
+            summaryEl.innerHTML = `Total Active Assets: ${total} | <span style="color:green; font-weight:bold;">Ready for Use: ${available}</span>`;
         }
     });
 }
@@ -7574,12 +7579,26 @@ window.filterStockTable = () => {
         const name = row.cells[1].innerText.toLowerCase();
         const station = row.cells[3].innerText.toLowerCase();
         const invoice = row.getAttribute("data-invoice") ? row.getAttribute("data-invoice").toLowerCase() : "";
+        
+        // Check if this specific row is marked as sold
+        const isSold = row.getAttribute("data-sold") === "true";
 
-        // Show row if input matches Tag, Name, Station, or Invoice No.
-        if (name.includes(input) || barcode.includes(input) || station.includes(input) || invoice.includes(input)) {
-            row.style.display = "";
+        if (input === "") {
+            // Default view: Hide sold items, show active stock
+            row.style.display = isSold ? "none" : "";
         } else {
-            row.style.display = "none";
+            // Search active
+            let match = false;
+            
+            if (isSold) {
+                // If it is a sold item, ONLY reveal it if they search by Tag ID (barcode)
+                match = barcode.includes(input);
+            } else {
+                // Normal items can be searched by name, tag, station, or invoice
+                match = name.includes(input) || barcode.includes(input) || station.includes(input) || invoice.includes(input);
+            }
+
+            row.style.display = match ? "" : "none";
         }
     });
 };
