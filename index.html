@@ -7956,187 +7956,7 @@ window.executeTagPrint = () => {
 
 // --- 4. SCANNER VERIFICATION (MATH-MATCH LOCK) ---
 const baseOnScanSuccess = window.onScanSuccess; 
-window.onScanSuccess = async function(decodedText) {
-    if (!decodedText) return;
 
-    // 1. Close scanner modal immediately
-    closeBarcodeScanner();
-
-    const scannedInput = decodedText.trim();
-    console.log("Scanner Read:", scannedInput, " | Mode:", window.scanMode);
-
-    // 2. ADMIN VERIFY MODE (The "Key" to unlock the photo)
-    if (window.scanMode === 'ADMIN_VERIFY') {
-        if (scannedInput === window.activeAuditTargetBarcode) {
-            alert("✅ ASSET MATCH CONFIRMED!");
-            // Reveal the photo proof
-            const proofArea = document.getElementById(`proof_area_${window.activeAuditKey}`);
-            const statusLabel = document.getElementById(`status_${window.activeAuditKey}`);
-            
-            if(proofArea) proofArea.classList.remove("hidden");
-            if(statusLabel) {
-                statusLabel.innerText = "✅ VERIFIED";
-                statusLabel.style.color = "green";
-            }
-        } else {
-            alert("❌ MISMATCH: This asset does not match the record.");
-        }
-        return;
-    }
-
-    // 3. DATABASE MODES (Logistics, Inventory, SOP)
-    try {
-        // --- LOGISTICS MODES ---
-        if (scanMode === 'SHIP_PACK') {
-            document.getElementById('shipScanInput').value = scannedInput;
-            window.addShipmentItem();
-        } 
-        else if (scanMode === 'SHIP_TRANSIT') {
-            document.getElementById('transitAwbInput').value = scannedInput;
-        } 
-        else if (scanMode === 'SHIP_TRACK') {
-            document.getElementById('shipTrackInput').value = scannedInput;
-            window.trackShipment();
-        } 
-        else if (scanMode === 'SHIP_RETURN') {
-            document.getElementById('shipReturnInput').value = scannedInput;
-        }
-
-        // --- INVENTORY & SYSTEM MODES ---
-        else if (scanMode === 'REGISTRATION_VERIFY') {
-            const barcodeInput = document.getElementById("invBarcode");
-            barcodeInput.value = scannedInput;
-
-            if (pendingTagData && scannedInput === pendingTagData.barcode) {
-                barcodeInput.style.borderColor = "var(--success-green)";
-                barcodeInput.style.color = "var(--success-green)";
-                const finalData = {...pendingTagData};
-                const existingKey = finalData.dbKey;
-                delete finalData.dbKey; 
-
-                if(existingKey) await update(ref(db, `inventory/${existingKey}`), finalData);
-                else await push(ref(db, "inventory"), finalData);
-
-                alert("✅ VERIFICATION SUCCESSFUL: Asset registered.");
-                pendingTagData = null; 
-                document.getElementById('tagPrintModal').classList.add('hidden');
-                resetInvForm();
-                toggleInvMode('list'); 
-            } else {
-                alert("❌ SECURITY ALERT: Barcode mismatch!");
-            }
-        }
-
-        else if (scanMode === 'TECH_TICKET_SCAN') {
-            // Your Ticket Logic
-            const allClaims = await get(ref(db, "warranty_claims"));
-            let found = false;
-            allClaims.forEach(c => {
-                const shortId = c.key.substring(1, 10).toUpperCase();
-                if (shortId === scannedInput.replace("#", "").toUpperCase() || c.key === scannedInput) {
-                    techVerifiedTicket = c.val();
-                    techVerifiedTicketKey = c.key;
-                    found = true;
-                }
-            });
-            if(found) {
-                document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
-                document.getElementById("btnScanProduct").disabled = false;
-                document.getElementById("techStepTitle").innerText = "STEP 2: SCAN PHYSICAL ASSET";
-            } else { alert("❌ Ticket ID not recognized."); }
-        }
-
-       // --- NEW: INVENTORY BATCH SCANNING ---
-        else if (scanMode === 'BATCH_CHECKOUT' || scanMode === 'BATCH_RETURN') {
-            const type = scanMode.split('_')[1]; // "CHECKOUT" or "RETURN"
-            
-            // 1. Prevent duplicate scans in same batch
-            if (window.invBatchCarts[type].some(it => it.barcode === scannedInput)) {
-                return; // Ignore, already scanned
-            }
-
-            // 2. Fetch from DB
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
-            const snap = await get(q);
-            
-            if (!snap.exists()) return alert(`❌ Tag ${scannedInput} Not Registered.`);
-            
-            let item; snap.forEach(c => item = {key: c.key, ...c.val()});
-
-            // 3. Logic Gates
-            if (type === 'CHECKOUT') {
-                if (item.status === "Checked Out") return alert(`⛔ ${item.item} is already in the field.`);
-                if (item.status === "Sold Out") return alert(`⛔ ${item.item} is Sold Out.`);
-            } else {
-                if (item.status === "In Stock") return alert(`⚠️ ${item.item} is already In Stock.`);
-                if (item.status === "Sold Out") return alert(`⛔ ${item.item} was Sold Out. Use Asset Recovery.`);
-            }
-
-            // 4. Add to cart & flash screen
-            window.invBatchCarts[type].push(item);
-            window.renderInvBatchUI(type);
-
-            const overlay = document.getElementById("scanSuccessOverlay");
-            const itemText = document.getElementById("scanSuccessItem");
-            if (overlay && itemText) {
-                itemText.innerText = `ADDED: ${item.item}`;
-                overlay.classList.remove("hidden");
-                setTimeout(() => overlay.classList.add("hidden"), 800);
-            }
-
-            // 5. Auto-close scanner if batch reaches 6
-            if (window.invBatchCarts[type].length >= 6) {
-                closeBarcodeScanner();
-                const closeBtn = document.querySelector("#barcodeModal .danger");
-                if(closeBtn) { closeBtn.innerText = "CANCEL SCAN"; closeBtn.style.background = "var(--metro-red)"; }
-                alert("Maximum batch size of 6 reached.");
-            }
-            return;
-        }
-        // --- OTHER MODES ---
-        else if (scanMode === 'AUDIT_SEARCH') { 
-            document.getElementById("auditSearchInput").value = scannedInput; 
-            fetchAuditHistory(scannedInput); 
-        }
-        else if (scanMode === 'BILLING_SCAN') { 
-            document.getElementById("billBarcodeInp").value = scannedInput; 
-            addScannedItemToBill(); 
-        }
-        else if (scanMode === 'SEARCH_STOCK') { 
-            document.getElementById("mainStockSearch").value = scannedInput; 
-            filterStockTable(); 
-        }
-        else if (scanMode === 'ASSET_RECOVERY') {
-            window.addToRecoveryCart(scannedInput);
-        }
-      // --- MODE G: FUND MANAGEMENT INVENTORY VERIFY ---
-        else if (scanMode === 'FUND_INVENTORY_VERIFY') {
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
-            const snap = await get(q);
-            
-            if (!snap.exists()) return alert("❌ Error: Tag not found in Inventory system.");
-            
-            let item; snap.forEach(c => item = c.val());
-            
-            // Validate Logic (Cycle count rule)
-            if (item.usageCount > 1) {
-                alert(`❌ Verification Failed.\nAsset: ${item.item}\nReason: Cycle count is ${item.usageCount} (Must be 0 or 1).`);
-                return;
-            }
-
-            // Log it in the Case UI
-            const logDiv = document.getElementById("fmInventoryScanLog");
-            if(logDiv) {
-                logDiv.innerHTML += `<div style="color:green; margin-bottom:4px;">✓ Verified: ${item.item} [${scannedInput}]</div>`;
-            }
-            alert(`✅ Validated: ${item.item}\nCycle Count: ${item.usageCount || 0}`);
-        }
-
-    } catch (err) { 
-        console.error("Scanner Router Error:", err); 
-        alert("Scan processing failed: " + err.message);
-    }
-};
 // --- 5. DIRECT UPDATE (FOR EDITS) ---
 window.executeDirectUpdate = async () => {
     const key = document.getElementById("editItemKey").value;
@@ -9791,42 +9611,92 @@ window.resetTechVerification = () => {
         loadInventory();
     } catch(e) { alert(e.message); }
 };
+  // ==========================================
+// 📷 MASTER SCANNER ROUTER (FIXED BATCH MODE)
+// ==========================================
 window.onScanSuccess = async function(decodedText) {
     if (!decodedText) return;
     
-    // 1. DO NOT close scanner instantly if in Batch Mode
-    if (window.scanMode !== 'FUND_BATCH_SCAN') {
+    // 1. Identify if we are in any Continuous Batch Mode
+    const isBatchMode = window.scanMode && window.scanMode.includes('BATCH');
+    
+    // 2. Only close the camera if it is a SINGLE scan mode
+    if (!isBatchMode) {
         closeBarcodeScanner();
     }
     
     const scannedInput = decodedText.trim();
+    console.log("Scanner Read:", scannedInput, " | Mode:", window.scanMode);
 
     try {
-        // --- NEW: FUND MANAGEMENT BATCH SCANNING ---
-        if (window.scanMode === 'FUND_BATCH_SCAN') {
-            // Prevent spamming the same barcode 50 times a second
-            if (window.fmScannedTagIds && window.fmScannedTagIds.includes(scannedInput)) {
-                return; 
-            }
+        // --- 🟢 NEW: INVENTORY BATCH SCANNING (CHECKOUT/RETURN) ---
+        if (window.scanMode === 'BATCH_CHECKOUT' || window.scanMode === 'BATCH_RETURN') {
+            const type = window.scanMode.split('_')[1]; // Extracts "CHECKOUT" or "RETURN"
             
+            // 1. Prevent duplicate scans in the same batch
+            if (window.invBatchCarts[type].some(it => it.barcode === scannedInput)) {
+                return; // Ignore silently, already scanned
+            }
+
+            // 2. Fetch Item from DB
+            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const snap = await get(q);
+            
+            if (!snap.exists()) return alert(`❌ Tag ${scannedInput} Not Registered.`);
+            
+            let item; snap.forEach(c => item = {key: c.key, ...c.val()});
+
+            // 3. Logic Status Gates
+            if (type === 'CHECKOUT') {
+                if (item.status === "Checked Out") return alert(`⛔ ${item.item} is already in the field.`);
+                if (item.status === "Sold Out") return alert(`⛔ ${item.item} is Sold Out.`);
+            } else {
+                if (item.status === "In Stock") return alert(`⚠️ ${item.item} is already In Stock.`);
+                if (item.status === "Sold Out") return alert(`⛔ ${item.item} was Sold Out. Use Asset Recovery.`);
+            }
+
+            // 4. Add to Swipe Cart & Render UI
+            window.invBatchCarts[type].push(item);
+            window.renderInvBatchUI(type);
+
+            // 5. Flash Green Success Screen without closing camera
+            const overlay = document.getElementById("scanSuccessOverlay");
+            const itemText = document.getElementById("scanSuccessItem");
+            if (overlay && itemText) {
+                itemText.innerText = `ADDED: ${item.item}`;
+                overlay.classList.remove("hidden");
+                setTimeout(() => overlay.classList.add("hidden"), 800);
+            }
+
+            // 6. Auto-close only if maximum batch size (6) is reached
+            if (window.invBatchCarts[type].length >= 6) {
+                closeBarcodeScanner();
+                const closeBtn = document.querySelector("#barcodeModal .danger");
+                if(closeBtn) { 
+                    closeBtn.innerText = "CANCEL SCAN"; 
+                    closeBtn.style.background = "var(--metro-red)"; 
+                }
+                alert("Maximum batch size of 6 reached. Please swipe to submit.");
+            }
+            return;
+        }
+
+        // --- 🟢 MODE: FUND MANAGEMENT BATCH SCANNING ---
+        else if (window.scanMode === 'FUND_BATCH_SCAN') {
+            if (window.fmScannedTagIds && window.fmScannedTagIds.includes(scannedInput)) return; 
             window.fmScannedTagIds.push(scannedInput);
             
-            // Flash Green Success Screen
             const overlay = document.getElementById("scanSuccessOverlay");
             const itemText = document.getElementById("scanSuccessItem");
             if (overlay && itemText) {
                 itemText.innerText = "TAG: " + scannedInput;
                 overlay.classList.remove("hidden");
-                
-                // Hide flash after 800ms so they can scan the next one
-                setTimeout(() => {
-                    overlay.classList.add("hidden");
-                }, 800);
+                setTimeout(() => overlay.classList.add("hidden"), 800);
             }
-            return; // Exit here so it keeps scanning
+            return;
         }
 
-        // --- MODE A: ASSET REGISTRATION VERIFICATION ---
+        // --- 🟢 MODE: ASSET REGISTRATION VERIFICATION ---
         else if (scanMode === 'REGISTRATION_VERIFY') {
             const barcodeInput = document.getElementById("invBarcode");
             barcodeInput.value = scannedInput;
@@ -9840,13 +9710,10 @@ window.onScanSuccess = async function(decodedText) {
                     const existingKey = finalData.dbKey;
                     delete finalData.dbKey; 
 
-                    if(existingKey) {
-                        await update(ref(db, `inventory/${existingKey}`), finalData);
-                    } else {
-                        await push(ref(db, "inventory"), finalData);
-                    }
+                    if(existingKey) await update(ref(db, `inventory/${existingKey}`), finalData);
+                    else await push(ref(db, "inventory"), finalData);
 
-                    alert("✅ VERIFICATION SUCCESSFUL\nAsset has been officially registered in the Master Database.");
+                    alert("✅ VERIFICATION SUCCESSFUL\nAsset has been officially registered.");
                     
                     pendingTagData = null; 
                     document.getElementById('tagPrintModal').classList.add('hidden');
@@ -9860,101 +9727,16 @@ window.onScanSuccess = async function(decodedText) {
 
                     resetInvForm();
                     toggleInvMode('list'); 
-                    
-                } catch(e) { 
-                    alert("❌ Database Save Error: " + e.message); 
-                }
+                } catch(e) { alert("❌ Database Error: " + e.message); }
             } else {
                 barcodeInput.style.borderColor = "var(--metro-red)";
                 barcodeInput.style.color = "var(--metro-red)";
                 barcodeInput.value = "MISMATCH: " + scannedInput;
-                alert("❌ SECURITY ALERT: Scanned tag ID does not match the generated session. Please scan the correct printed tag.");
-                document.getElementById("registrationStatusMsg").innerText = "⚠️ MISMATCH DETECTED. Please re-scan the printed tag.";
-            }
-            return;
-        }
-
-        // --- MODE B: TICKET SYSTEM (TECH TICKET SCAN) ---
-        if (scanMode === 'TECH_TICKET_SCAN') {
-            const cleanId = scannedInput.replace("#", "").toUpperCase();
-            const allClaims = await get(ref(db, "warranty_claims"));
-            let found = false;
-            
-            allClaims.forEach(c => {
-                const shortId = c.key.substring(1, 10).toUpperCase();
-                if (shortId === cleanId || c.key === scannedInput) {
-                    techVerifiedTicket = c.val();
-                    techVerifiedTicketKey = c.key;
-                    found = true;
-                }
-            });
-
-            if (found) {
-                document.getElementById("ticketVerifiedLabel").classList.remove("hidden");
-                document.getElementById("btnScanProduct").disabled = false;
-                
-                const assetInput = document.getElementById("manualProductInp");
-                const assetBtn = document.getElementById("btnManualProduct");
-                
-                if(assetInput) {
-                    assetInput.disabled = false;
-                    assetInput.placeholder = "Enter Asset Tag ID...";
-                    assetInput.focus();
-                }
-                
-                if(assetBtn) assetBtn.disabled = false;
-                
-                document.getElementById("techStepTitle").innerText = "STEP 2: ENTER OR SCAN PHYSICAL ASSET";
-            } else { 
-                alert("❌ Error: Ticket ID not recognized."); 
+                alert("❌ SECURITY ALERT: Scanned tag ID does not match.");
             }
         }
 
-        // --- MODE C: PRODUCT VERIFY (TECH) ---
-        else if (scanMode === 'TECH_PRODUCT_VERIFY') {
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
-            const snap = await get(q);
-            let itemData = null;
-            if (snap.exists()) snap.forEach(c => itemData = c.val());
-
-            if (itemData && itemData.item === techVerifiedTicket.item) {
-                document.getElementById("productVerifiedLabel").classList.remove("hidden");
-                renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
-            } else {
-                alert("⚠️ ASSET MISMATCH: The scanned tag does not match the reported item.");
-            }
-        }
-
-        // --- MODE D: ASSET MOVEMENT (CHECKOUT/RETURN) ---
-        else if (scanMode === 'CHECKOUT' || scanMode === 'RETURN') {
-            const isOut = (scanMode === 'CHECKOUT');
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
-            const snap = await get(q);
-            
-            if (!snap.exists()) return alert("❌ Tag Not Registered in System");
-            
-            let itm; snap.forEach(c => itm = {key: c.key, ...c.val()});
-
-            if (isOut) {
-                if (itm.status === "Checked Out") return alert("⛔ Item already in the field.");
-                if (itm.status === "Sold Out") return alert("⛔ Item has been installed/sold.");
-                
-                document.getElementById("checkout_display").classList.remove("hidden");
-                document.getElementById("checkout_item_name").innerHTML = `✔ ${itm.item}`;
-                document.getElementById("checkout_item_code").innerText = itm.barcode;
-            } else {
-                if (itm.status === "In Stock") return alert("⚠️ Item is already In Stock.");
-                
-                document.getElementById("return_display").classList.remove("hidden");
-                document.getElementById("return_item_name").innerHTML = `✔ ${itm.item}`;
-                document.getElementById("return_item_code").innerText = itm.barcode;
-            }
-
-            pendingTransactionItem = itm;
-            currentTransactionType = scanMode; 
-        }
-
-        // --- MODE E: WARRANTY CLAIM ---
+        // --- 🟢 MODE: WARRANTY CLAIM ---
         else if (scanMode === 'WARRANTY_CLAIM') {
             const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
             const snap = await get(qWar);
@@ -9978,7 +9760,7 @@ window.onScanSuccess = async function(decodedText) {
             }
         }
 
-        // --- MODE F: BINDING TO INPUTS ---
+        // --- 🟢 SINGLE PASS-THROUGH MODES ---
         else if (scanMode === 'AUDIT_SEARCH') { 
             document.getElementById("auditSearchInput").value = scannedInput; 
             fetchAuditHistory(scannedInput); 
@@ -9999,9 +9781,9 @@ window.onScanSuccess = async function(decodedText) {
                 statusDiv.style.color = "green";
             }
         }
-
+        
     } catch (err) { 
-        console.error("Scanner Error:", err); 
+        console.error("Scanner Router Error:", err); 
         alert("Scan processing failed.");
     }
 };
