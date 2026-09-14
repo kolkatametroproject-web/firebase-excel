@@ -12304,12 +12304,35 @@ window.pipLoadAdminRecords = () => {
                 }
             }
 
-            // --- DECLARE UI VARIABLES (Fixes the ReferenceError crash) ---
+            // ============================================================
+            // 🟢 APPROVED / PASSED STATE (HIDE CLUTTER ON ADMIN SIDE TOO)
+            // ============================================================
+            if (pip.status === "PIP_PASSED") {
+                tbody.innerHTML += `
+                    <tr style="background:#ecfdf5;">
+                        <td style="padding:15px;">
+                            <b style="font-size:14px;">${pip.targetName}</b><br>
+                            <small style="color:#065f46; font-weight:bold;">PIP_PASSED</small>
+                        </td>
+                        <td colspan="4" style="text-align:center; color:#065f46; font-weight:bold; font-size:13px;">
+                            <i class="fas fa-check-circle"></i> Case Satisfactorily Closed. All other data purged from view.
+                        </td>
+                        <td style="text-align:center; vertical-align:middle;">
+                            <button onclick="pipGenerateResultPDF('${uid}', true, ${JSON.stringify(pip.assessmentResult).replace(/"/g, '&quot;')})" class="info" style="width:100%; font-weight:900; background:#0f172a; margin-bottom:5px;"><i class="fas fa-file-pdf"></i> EXAM RESULT</button>
+                            <button onclick="pipGenerateFinalActionPDF('${uid}')" class="success" style="width:100%; font-weight:900;"><i class="fas fa-print"></i> FINAL RECORD</button>
+                        </td>
+                    </tr>
+                `;
+                return; // Skip normal rendering
+            }
+
+            // ============================================================
+            // 🔴 ACTIVE PIP RENDER
+            // ============================================================
             let reportBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SUBMISSION PENDING</span>`;
             let actions = `<small style="color:#64748b;">Awaiting Report</small>`;
             let assessmentText = `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`;
 
-            // --- EVALUATE REPORT STATUS ---
             if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
                 reportBadge = `<span style="background:#dbeafe; color:#1e40af; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">REPORT READY</span>`;
                 actions = `<button onclick="pipOpenReviewModal('${uid}')" class="info" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-eye"></i> REVIEW PDF</button>`;
@@ -12328,7 +12351,6 @@ window.pipLoadAdminRecords = () => {
                 </div>`;
             }
 
-            // --- ASSESSMENT BUTTON INJECTIONS ---
             let assessActions = "";
             let statusDisplay = pip.status;
 
@@ -12339,13 +12361,11 @@ window.pipLoadAdminRecords = () => {
                 assessActions = `<button onclick="pipOpenFailDecision('${uid}')" class="danger" style="width:100%; font-weight:900;"><i class="fas fa-gavel"></i> DECISION REQ</button>`;
                 statusDisplay = `<span style="color:#e11d48; font-weight:bold;">FAILED EXAM</span>`;
             } 
-            else if (["PIP_PASSED", "DEMOTED", "TERMINATED"].includes(pip.status)) {
-                let col = pip.status === "PIP_PASSED" ? "green" : "red";
-                statusDisplay = `<span style="color:${col}; font-weight:bold;">${pip.status}</span>`;
+            else if (["DEMOTED", "TERMINATED"].includes(pip.status)) {
+                statusDisplay = `<span style="color:red; font-weight:bold;">${pip.status}</span>`;
                 assessActions = `<button onclick="pipGenerateFinalActionPDF('${uid}')" class="info" style="width:100%; font-weight:900; background:#0f172a;"><i class="fas fa-print"></i> PRINT RECORD</button>`;
             }
 
-            // --- RENDER ROW TO TABLE ---
             tbody.innerHTML += `
                 <tr>
                     <td>
@@ -12470,11 +12490,12 @@ window.pipConfirmAssessmentAndNotify = async () => {
     window.pipLoadAdminRecords();
 };
 
-// --- MEMBER WORKSPACE: VIEW DIRECTIVES & SUBMIT REPORT ---
 window.pipLoadMemberWorkspace = () => {
     onValue(ref(db, `pip_records/${currentUser.uid}`), snap => {
+        const container = document.getElementById("pipMemberView");
+        
         if (!snap.exists()) {
-            document.getElementById("pipMemberView").innerHTML = `
+            container.innerHTML = `
                 <div style="text-align:center; padding:50px;">
                     <i class="fas fa-shield-check" style="font-size:50px; color:#10b981; margin-bottom:15px;"></i>
                     <h2>No Active Performance Improvement Plan</h2>
@@ -12485,49 +12506,129 @@ window.pipLoadMemberWorkspace = () => {
         }
 
         const pip = snap.val();
-        document.getElementById("pipMemberStatusBadge").innerText = pip.status;
 
-        // Populate Directives & Milestones
-        document.getElementById("pipMemberDirectives").innerHTML = `
-            <b>Reason:</b> <span style="color:#991b1b; font-weight:bold;">${pip.reason}</span><br><br>
-            <b>Directives & Actionable Objectives:</b><br>
-            <div style="background:#fff; border:1px solid #e2e8f0; padding:12px; border-radius:6px; margin-top:5px; white-space:pre-wrap;">${pip.tasks}</div>
-            ${pip.adminRemarks ? `<br><b>Latest Authority Feedback:</b><div style="background:#fef2f2; border-left:4px solid #ef4444; padding:10px; border-radius:4px; color:#7f1d1d; font-style:italic;">"${pip.adminRemarks}"</div>` : ''}
-        `;
+        // ============================================================
+        // 🟢 APPROVED / PASSED STATE (SHOW ONLY PDF AND HIDE EVERYTHING ELSE)
+        // ============================================================
+        if (pip.status === "PIP_PASSED") {
+            let marksHtml = "";
+            if (pip.assessmentResult && pip.assessmentResult.log) {
+                pip.assessmentResult.log.forEach(q => {
+                    marksHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #a7f3d0; padding:8px 0;">
+                        <span>Question ${q.qn}</span>
+                        <b>${q.marks} / ${q.max}</b>
+                    </div>`;
+                });
+            }
 
-        document.getElementById("pipMemberTimeline").innerHTML = `
-            <b>Plan Duration:</b> ${pip.startDate} to ${pip.endDate}<br>
-            <b>Submission Deadline:</b> <span style="color:var(--metro-red); font-weight:bold;">${new Date(pip.submissionDeadline).toLocaleString('en-IN')}</span><br>
-            <b>Report Status:</b> <span style="font-weight:bold;">${pip.reportStatus}</span>
-        `;
+            container.innerHTML = `
+                <div style="background:#ecfdf5; border:2px solid #34d399; padding:30px; border-radius:12px; text-align:center; margin-top:20px;">
+                    <i class="fas fa-check-circle" style="font-size:50px; color:#10b981; margin-bottom:15px;"></i>
+                    <h2 style="color:#065f46; margin:0 0 10px 0;">PIP Satisfactorily Cleared</h2>
+                    <p style="color:#047857; font-size:14px; margin-bottom:20px;">Your performance plan is officially closed. All directives and timelines have been purged. Below is your final assessment score and official document.</p>
+                    
+                    <div style="background:white; border:2px solid #34d399; border-radius:8px; padding:20px; margin-bottom:25px; max-width:450px; margin-left:auto; margin-right:auto; text-align:left;">
+                        <h4 style="margin:0 0 10px 0; color:#065f46; border-bottom:2px solid #a7f3d0; padding-bottom:5px;">Final Assessment Breakdown</h4>
+                        ${marksHtml}
+                        <div style="display:flex; justify-content:space-between; margin-top:15px; font-size:18px; color:#065f46;">
+                            <span><b>Total Score:</b></span>
+                            <b>${pip.assessmentResult.totalScored} / ${pip.assessmentResult.totalMax} (${pip.assessmentResult.percentage}%)</b>
+                        </div>
+                    </div>
 
-        // Submission Controls State Gate
-        const submitNotice = document.getElementById("pipSubmitNotice");
-        const uploadControls = document.getElementById("pipUploadControls");
-
-        if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
-            submitNotice.innerHTML = `<div style="color:#1e40af; font-weight:bold;">✅ Report submitted! Awaiting administrator audit and evaluation.</div>`;
-            uploadControls.style.display = "none";
-        } else if (pip.reportStatus === "APPROVED") {
-            submitNotice.innerHTML = `<div style="color:#065f46; font-weight:bold;">✅ PIP Report officially verified and approved. Check below for offline assessment arrangements.</div>`;
-            uploadControls.style.display = "none";
-        } else {
-            submitNotice.innerHTML = `<span style="color:#991b1b; font-weight:bold;">⚠️ Document submission is OPEN. Only PDF deliverables are accepted.</span>`;
-            uploadControls.style.display = "block";
-        }
-
-        // Offline Assessment Notice (Member Side)
-        const assessCard = document.getElementById("pipMemberAssessmentCard");
-        if (pip.assessment) {
-            assessCard.classList.remove("hidden");
-            document.getElementById("pipMemberAssessmentDetails").innerHTML = `
-                <b>Assessment Time:</b> ${new Date(pip.assessment.dateTime).toLocaleString('en-IN')}<br>
-                <b>Assigned Venue:</b> ${pip.assessment.location}<br>
-                <b>Instructions:</b> Arrive 15 minutes prior with printed hardware specifications and site documentation.
+                    <button onclick="pipGenerateResultPDF('${currentUser.uid}', true, ${JSON.stringify(pip.assessmentResult).replace(/"/g, '&quot;')})" class="success" style="padding:15px 30px; font-size:16px; font-weight:900; background:#065f46; border:none; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                        <i class="fas fa-file-pdf"></i> VIEW OFFICIAL RESULT PDF
+                    </button>
+                </div>
             `;
-        } else {
-            assessCard.classList.add("hidden");
+            return; // 🛑 Stops here. No other UI elements are loaded.
         }
+
+        // ============================================================
+        // 🔴 ACTIVE STATE (STANDARD PIP UI)
+        // ============================================================
+        let marksHtml = "";
+        if (pip.assessmentResult && pip.assessmentResult.log) {
+            marksHtml = `<div class="panel" style="margin-top:20px; border-top: 4px solid var(--metro-gold); background:#fffbeb;">
+                <h4 style="margin:0 0 10px 0; color:#b45309;"><i class="fas fa-poll"></i> Assessment Marks Breakdown</h4>`;
+            pip.assessmentResult.log.forEach(q => {
+                marksHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #fde68a; padding:8px 0; font-size:13px; color:#92400e;">
+                    <span>Question ${q.qn}</span>
+                    <b>${q.marks} / ${q.max}</b>
+                </div>`;
+            });
+            marksHtml += `<div style="display:flex; justify-content:space-between; margin-top:10px; font-size:14px; color:#b45309;">
+                <span><b>Total Score:</b></span>
+                <b>${pip.assessmentResult.totalScored} / ${pip.assessmentResult.totalMax} (${pip.assessmentResult.percentage}%)</b>
+            </div></div>`;
+        }
+
+        let submitSection = "";
+        if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
+            submitSection = `<div class="panel" style="background:#f0f9ff; border:1px solid #bae6fd;"><div style="color:#0369a1; font-weight:bold;"><i class="fas fa-clock"></i> Report submitted! Awaiting administrator audit and evaluation.</div></div>`;
+        } else if (pip.reportStatus === "APPROVED") {
+            submitSection = `<div class="panel" style="background:#ecfdf5; border:1px solid #a7f3d0;"><div style="color:#065f46; font-weight:bold;"><i class="fas fa-check-circle"></i> PIP Report officially verified and approved. Check below for offline assessment arrangements.</div></div>`;
+        } else {
+            submitSection = `
+            <div class="panel" style="border:2px dashed var(--metro-blue);">
+                <h4 style="margin-top:0; color:var(--metro-blue);"><i class="fas fa-file-arrow-up"></i> Deliverable Submission (PDF Mode Only)</h4>
+                <div style="font-size:12px; color:#991b1b; font-weight:bold; margin-bottom:15px;">⚠️ Document submission is OPEN. Only PDF deliverables are accepted.</div>
+                <input type="file" id="pipPdfFile" accept="application/pdf" style="margin-bottom:15px; border:2px solid #cbd5e1; width:100%; padding:10px; box-sizing:border-box;">
+                <button onclick="pipSubmitMemberReport()" class="success" style="width:100%; padding:15px; font-weight:900;">
+                    <i class="fas fa-paper-plane"></i> SUBMIT FORMAL PIP REPORT
+                </button>
+            </div>`;
+        }
+
+        let assessCard = "";
+        if (pip.assessment) {
+            assessCard = `
+            <div class="panel" style="background:#fff1f2; border:2px solid #fecaca; margin-top:20px;">
+                <h4 style="margin-top:0; color:#be123c;"><i class="fas fa-calendar-check"></i> Offline Assessment Notice</h4>
+                <div style="font-size:13px; line-height:1.8; color:#991b1b;">
+                    <b>Assessment Time:</b> ${new Date(pip.assessment.dateTime).toLocaleString('en-IN')}<br>
+                    <b>Assigned Venue:</b> ${pip.assessment.location}<br>
+                    <b>Mandatory Rules:</b> Arrive exactly on time with printed hardware specifications and site documentation. No delays entertained.
+                </div>
+            </div>`;
+        }
+
+        container.innerHTML = `
+            <div style="background:#fff1f2; border:2px solid #fecaca; padding:20px; border-radius:12px; margin-bottom:25px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0; color:#991b1b; border:none; padding:0;">
+                        <i class="fas fa-exclamation-circle"></i> Performance Improvement Plan Notice
+                    </h3>
+                    <span style="background:#991b1b; color:white; padding:6px 14px; border-radius:20px; font-weight:bold; font-size:11px;">${pip.status.replace(/_/g, ' ')}</span>
+                </div>
+                <p style="margin:10px 0 0 0; color:#475569; font-size:13px;">
+                    You are currently placed on an active Performance Improvement Plan. Follow the objectives, guidelines, and deadlines laid out by the reviewing authority.
+                </p>
+            </div>
+
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; margin-bottom:25px;">
+                <div class="panel" style="margin:0; background:#f8fafc;">
+                    <h4 style="margin:0 0 10px 0; color:var(--metro-blue);"><i class="fas fa-clipboard-list"></i> Directives & Reasons</h4>
+                    <div style="font-size:13px; line-height:1.7;">
+                        <b>Reason:</b> <span style="color:#991b1b; font-weight:bold;">${pip.reason}</span><br><br>
+                        <b>Directives & Actionable Objectives:</b><br>
+                        <div style="background:#fff; border:1px solid #e2e8f0; padding:12px; border-radius:6px; margin-top:5px; white-space:pre-wrap;">${pip.tasks}</div>
+                        ${pip.adminRemarks ? `<br><b>Latest Authority Feedback:</b><div style="background:#fef2f2; border-left:4px solid #ef4444; padding:10px; border-radius:4px; color:#7f1d1d; font-style:italic;">"${pip.adminRemarks}"</div>` : ''}
+                    </div>
+                </div>
+                <div class="panel" style="margin:0; background:#f8fafc;">
+                    <h4 style="margin:0 0 10px 0; color:var(--metro-blue);"><i class="fas fa-calendar-alt"></i> Deadlines & Milestones</h4>
+                    <div style="font-size:13px; line-height:1.7;">
+                        <b>Plan Duration:</b> ${pip.startDate} to ${pip.endDate}<br>
+                        <b>Submission Deadline:</b> <span style="color:var(--metro-red); font-weight:bold;">${new Date(pip.submissionDeadline).toLocaleString('en-IN')}</span><br>
+                        <b>Report Status:</b> <span style="font-weight:bold;">${pip.reportStatus}</span>
+                    </div>
+                </div>
+            </div>
+            ${submitSection}
+            ${assessCard}
+            ${marksHtml}
+        `;
     });
 };
 
