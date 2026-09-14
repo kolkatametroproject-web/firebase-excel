@@ -12273,7 +12273,6 @@ window.pipSaveNewPlan = async () => {
         alert("Execution Error: " + e.message);
     }
 };
-
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
@@ -12294,14 +12293,36 @@ window.pipLoadAdminRecords = () => {
 
             // --- 10 DAY AUTO-CLEANUP ---
             if (pip.completedAt) {
-                const completedTime = typeof pip.completedAt === 'number' ? pip.completedAt : NOW; // Fallback if serverTimestamp hasn't resolved
+                const completedTime = typeof pip.completedAt === 'number' ? pip.completedAt : NOW;
                 if (NOW - completedTime > TEN_DAYS_MS) {
                     remove(ref(db, `pip_records/${uid}`));
-                    return; // Skip rendering
+                    return; // Skip rendering, delete from DB
                 }
             }
 
-            // ... (keep existing reportBadge logic) ...
+            // --- DECLARE UI VARIABLES (Fixes the ReferenceError crash) ---
+            let reportBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SUBMISSION PENDING</span>`;
+            let actions = `<small style="color:#64748b;">Awaiting Report</small>`;
+            let assessmentText = `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`;
+
+            // --- EVALUATE REPORT STATUS ---
+            if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
+                reportBadge = `<span style="background:#dbeafe; color:#1e40af; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">REPORT READY</span>`;
+                actions = `<button onclick="pipOpenReviewModal('${uid}')" class="info" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-eye"></i> REVIEW PDF</button>`;
+            } else if (pip.reportStatus === "RESUBMISSION_REQUESTED") {
+                reportBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">RESUBMISSION PENDING</span>`;
+                actions = `<button onclick="pipOpenReviewModal('${uid}')" class="secondary" style="padding:5px 10px; font-size:11px;">PREVIOUS PDF</button>`;
+            } else if (pip.reportStatus === "APPROVED") {
+                reportBadge = `<span style="background:#dcfce7; color:#15803d; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">APPROVED</span>`;
+                actions = `<button onclick="pipOpenAssessmentModal('${uid}')" class="success" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-calendar-plus"></i> SCHEDULE OFFLINE</button>`;
+            }
+
+            if (pip.assessment) {
+                assessmentText = `<div style="font-size:11px; font-weight:bold; color:#065f46;">
+                    📅 ${new Date(pip.assessment.dateTime).toLocaleString('en-IN')}<br>
+                    📍 ${pip.assessment.location}
+                </div>`;
+            }
 
             // --- ASSESSMENT BUTTON INJECTIONS ---
             let assessActions = "";
@@ -12320,8 +12341,7 @@ window.pipLoadAdminRecords = () => {
                 assessActions = `<button onclick="pipGenerateFinalActionPDF('${uid}')" class="info" style="width:100%; font-weight:900; background:#0f172a;"><i class="fas fa-print"></i> PRINT RECORD</button>`;
             }
 
-            // ... (keep existing assessmentText logic) ...
-
+            // --- RENDER ROW TO TABLE ---
             tbody.innerHTML += `
                 <tr>
                     <td>
