@@ -3059,6 +3059,72 @@ tr:hover { background: #fcfcfd; }
         </div>
     </div>
 </div>
+  <!-- MODAL: LIVE OFFLINE ASSESSMENT (ADMIN) -->
+<div id="pipLiveAssessmentModal" class="modal-overlay hidden">
+    <div class="panel" style="width:450px; max-width:95%; border-top:6px solid #f59e0b;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h3 style="margin:0; color:#b45309; border:none; padding:0;">
+                <i class="fas fa-clipboard-question"></i> Live Offline Assessment
+            </h3>
+            <button onclick="pipCancelAssessment()" style="background:none; border:none; font-size:24px; color:#64748b; cursor:pointer;">&times;</button>
+        </div>
+        
+        <input type="hidden" id="pipLiveUid">
+        
+        <div style="background:#fffbeb; border:1px solid #fde68a; padding:15px; border-radius:8px; margin-bottom:20px;">
+            <h4 id="pipLiveQnTitle" style="margin:0 0 10px 0; color:#92400e; font-size:16px;">Question 1</h4>
+            <label style="font-size:11px; font-weight:bold;">MARKS SCORED (OUT OF 5)</label>
+            <input type="number" id="pipLiveMarks" min="0" max="5" placeholder="0 - 5" style="font-size:24px; font-weight:bold; text-align:center; height:60px;">
+            
+            <div style="display:flex; gap:10px; margin-top:10px;">
+                <button onclick="pipNextQuestion()" class="info" style="flex:1; font-weight:bold; background:#0284c7;">
+                    NEXT QN <i class="fas fa-arrow-right"></i>
+                </button>
+            </div>
+        </div>
+
+        <div style="max-height:150px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:6px; padding:10px; margin-bottom:15px; background:#f8fafc;" id="pipLiveLog">
+            <div style="text-align:center; color:#94a3b8; font-size:11px;">No questions scored yet.</div>
+        </div>
+
+        <button onclick="pipEndAssessment()" class="success" style="width:100%; font-weight:900; padding:15px;">
+            <i class="fas fa-flag-checkered"></i> END ASSESSMENT & CALCULATE
+        </button>
+    </div>
+</div>
+
+<!-- MODAL: POST-FAILURE DECISION (ADMIN) -->
+<div id="pipFailDecisionModal" class="modal-overlay hidden">
+    <div class="panel" style="width:500px; max-width:95%; border-top:6px solid #e11d48;">
+        <h3 style="margin-top:0; color:#be123c; border-bottom:2px solid #fecaca; padding-bottom:10px;">
+            <i class="fas fa-gavel"></i> Post-Failure Admin Decision
+        </h3>
+        <input type="hidden" id="pipFailUid">
+        
+        <label style="font-size:11px; font-weight:bold;">SELECT FURTHER ACTION</label>
+        <select id="pipFailAction" onchange="pipToggleFailAction()" style="border:2px solid #be123c; font-weight:bold;">
+            <option value="">-- Select Action --</option>
+            <option value="REATTEMPT">Extra Chance (Re-Schedule Assessment)</option>
+            <option value="DEMOTION">Demotion to Lower Post</option>
+            <option value="TERMINATION">Immediate Termination</option>
+        </select>
+
+        <div id="pipDemotionInput" class="hidden" style="margin-top:15px; background:#f8fafc; padding:15px; border-radius:6px; border:1px solid #cbd5e1;">
+            <label style="font-size:11px; font-weight:bold; color:var(--metro-blue);">NEW POST / DESIGNATION</label>
+            <input type="text" id="pipNewPost" placeholder="e.g. Assistant Technician">
+        </div>
+
+        <div id="pipTerminationInput" class="hidden" style="margin-top:15px; background:#fff1f2; padding:15px; border-radius:6px; border:1px solid #fecaca;">
+            <label style="font-size:11px; font-weight:bold; color:#be123c;">TERMINATION LETTER REMARKS</label>
+            <textarea id="pipTermLetter" rows="4" placeholder="Detail the reasons for termination due to PIP failure..."></textarea>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
+            <button onclick="document.getElementById('pipFailDecisionModal').classList.add('hidden')" class="secondary">Cancel</button>
+            <button onclick="pipSubmitFailDecision()" class="danger" style="font-weight:900;">EXECUTE DECISION</button>
+        </div>
+    </div>
+</div>
 </section>
 <script type="module">
 // --- FIREBASE IMPORTS (Standard Stable Version) ---
@@ -12208,7 +12274,6 @@ window.pipSaveNewPlan = async () => {
     }
 };
 
-// --- ADMIN: LOAD AUDIT RECORDS ---
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
@@ -12220,46 +12285,63 @@ window.pipLoadAdminRecords = () => {
             return;
         }
 
+        const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+        const NOW = Date.now();
+
         snap.forEach(c => {
             const pip = c.val();
             const uid = c.key;
 
-            let reportBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SUBMISSION PENDING</span>`;
-            let actions = `<small style="color:#64748b;">Awaiting Report</small>`;
-
-            if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
-                reportBadge = `<span style="background:#dbeafe; color:#1e40af; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">REPORT READY</span>`;
-                actions = `<button onclick="pipOpenReviewModal('${uid}')" class="info" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-eye"></i> REVIEW PDF</button>`;
-            } else if (pip.reportStatus === "RESUBMISSION_REQUESTED") {
-                reportBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">RESUBMISSION PENDING</span>`;
-                actions = `<button onclick="pipOpenReviewModal('${uid}')" class="secondary" style="padding:5px 10px; font-size:11px;">PREVIOUS PDF</button>`;
-            } else if (pip.reportStatus === "APPROVED") {
-                reportBadge = `<span style="background:#dcfce7; color:#15803d; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">APPROVED</span>`;
-                actions = `<button onclick="pipOpenAssessmentModal('${uid}')" class="success" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-calendar-plus"></i> SCHEDULE OFFLINE</button>`;
+            // --- 10 DAY AUTO-CLEANUP ---
+            if (pip.completedAt) {
+                const completedTime = typeof pip.completedAt === 'number' ? pip.completedAt : NOW; // Fallback if serverTimestamp hasn't resolved
+                if (NOW - completedTime > TEN_DAYS_MS) {
+                    remove(ref(db, `pip_records/${uid}`));
+                    return; // Skip rendering
+                }
             }
 
-            let assessmentText = `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`;
-            if (pip.assessment) {
-                assessmentText = `<div style="font-size:11px; font-weight:bold; color:#065f46;">
-                    📅 ${new Date(pip.assessment.dateTime).toLocaleString('en-IN')}<br>
-                    📍 ${pip.assessment.location}
-                </div>`;
+            // ... (keep existing reportBadge logic) ...
+
+            // --- ASSESSMENT BUTTON INJECTIONS ---
+            let assessActions = "";
+            let statusDisplay = pip.status;
+
+            if (pip.status === "ASSESSMENT_SCHEDULED" || pip.status === "REATTEMPT_SCHEDULED") {
+                assessActions = `<button onclick="pipStartAssessment('${uid}')" class="warning" style="width:100%; font-weight:900;"><i class="fas fa-play"></i> START EXAM</button>`;
+            } 
+            else if (pip.status === "PIP_FAILED_AWAITING_DECISION") {
+                assessActions = `<button onclick="pipOpenFailDecision('${uid}')" class="danger" style="width:100%; font-weight:900;"><i class="fas fa-gavel"></i> DECISION REQ</button>`;
+                statusDisplay = `<span style="color:#e11d48; font-weight:bold;">FAILED EXAM</span>`;
+            } 
+            else if (["PIP_PASSED", "DEMOTED", "TERMINATED"].includes(pip.status)) {
+                let col = pip.status === "PIP_PASSED" ? "green" : "red";
+                statusDisplay = `<span style="color:${col}; font-weight:bold;">${pip.status}</span>`;
+                assessActions = `<button onclick="pipGenerateFinalActionPDF('${uid}')" class="info" style="width:100%; font-weight:900; background:#0f172a;"><i class="fas fa-print"></i> PRINT RECORD</button>`;
             }
+
+            // ... (keep existing assessmentText logic) ...
 
             tbody.innerHTML += `
                 <tr>
-                    <td><b>${pip.targetName}</b><br><small style="color:#64748b;">By: ${pip.issuedBy}</small></td>
+                    <td>
+                        <b>${pip.targetName}</b><br>
+                        <small style="color:#64748b;">Status: ${statusDisplay}</small>
+                    </td>
                     <td style="font-size:11px;">
                         <b>Span:</b> ${pip.startDate} to ${pip.endDate}<br>
                         <span style="color:var(--metro-red);"><b>Deadline:</b> ${new Date(pip.submissionDeadline).toLocaleString('en-IN')}</span>
                     </td>
                     <td style="font-size:12px;">
                         <b>${pip.reason}</b><br>
-                        <i style="color:#475569;">${pip.tasks.substring(0, 60)}...</i>
+                        <i style="color:#475569;">${pip.tasks.substring(0, 40)}...</i>
                     </td>
                     <td style="text-align:center;">${reportBadge}</td>
                     <td>${assessmentText}</td>
-                    <td style="text-align:center;">${actions}</td>
+                    <td style="text-align:center; vertical-align:middle;">
+                        ${actions} 
+                        <div style="margin-top:5px;">${assessActions}</div>
+                    </td>
                 </tr>
             `;
         });
@@ -12448,6 +12530,244 @@ window.pipSubmitMemberReport = () => {
         }
     };
     reader.readAsDataURL(file);
+};
+  // --- LIVE ASSESSMENT GLOBALS ---
+let pipCurrentQn = 1;
+let pipAssessmentLog = [];
+
+window.pipStartAssessment = (uid) => {
+    pipCurrentQn = 1;
+    pipAssessmentLog = [];
+    document.getElementById("pipLiveUid").value = uid;
+    document.getElementById("pipLiveQnTitle").innerText = `Question 1`;
+    document.getElementById("pipLiveMarks").value = "";
+    document.getElementById("pipLiveLog").innerHTML = `<div style="text-align:center; color:#94a3b8; font-size:11px;">Exam Started. Enter marks above.</div>`;
+    
+    document.getElementById("pipLiveAssessmentModal").classList.remove("hidden");
+};
+
+window.pipCancelAssessment = () => {
+    if(confirm("Cancel live assessment? Data will be lost.")) {
+        document.getElementById("pipLiveAssessmentModal").classList.add("hidden");
+    }
+};
+
+window.pipNextQuestion = () => {
+    const marksInp = document.getElementById("pipLiveMarks");
+    const marks = parseFloat(marksInp.value);
+    
+    if (isNaN(marks) || marks < 0 || marks > 5) {
+        return alert("⚠️ Please enter valid marks between 0 and 5.");
+    }
+    
+    // Log Question
+    pipAssessmentLog.push({ qn: pipCurrentQn, marks: marks, max: 5 });
+    
+    // Update UI Log
+    const logDiv = document.getElementById("pipLiveLog");
+    if (pipCurrentQn === 1) logDiv.innerHTML = ""; // clear empty msg
+    logDiv.innerHTML += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #eee; padding:4px 0;"><span>Question ${pipCurrentQn}</span><b>${marks} / 5</b></div>`;
+    
+    // Increment & Reset
+    pipCurrentQn++;
+    document.getElementById("pipLiveQnTitle").innerText = `Question ${pipCurrentQn}`;
+    marksInp.value = "";
+    marksInp.focus();
+};
+
+window.pipEndAssessment = async () => {
+    const uid = document.getElementById("pipLiveUid").value;
+    
+    if (pipAssessmentLog.length === 0) return alert("⚠️ You must score at least 1 question.");
+    if (!confirm("Are you sure you want to end and evaluate this assessment?")) return;
+    
+    let totalScored = 0;
+    let totalMax = pipAssessmentLog.length * 5;
+    pipAssessmentLog.forEach(q => totalScored += q.marks);
+    
+    const percentage = (totalScored / totalMax) * 100;
+    const isPass = percentage >= 80;
+    
+    const resultPayload = {
+        totalScored,
+        totalMax,
+        percentage: percentage.toFixed(2),
+        isPass,
+        log: pipAssessmentLog,
+        evaluatedAt: serverTimestamp(),
+        evaluatedBy: currentUser.name || currentUser.email
+    };
+    
+    let newStatus = isPass ? "PIP_PASSED" : "PIP_FAILED_AWAITING_DECISION";
+    
+    try {
+        await update(ref(db, `pip_records/${uid}`), {
+            assessmentResult: resultPayload,
+            status: newStatus,
+            completedAt: isPass ? serverTimestamp() : null // Only close case if passed
+        });
+        
+        document.getElementById("pipLiveAssessmentModal").classList.add("hidden");
+        window.pipGenerateResultPDF(uid, isPass, resultPayload);
+        alert(isPass ? `✅ PASSED (${percentage.toFixed(1)}%). Case Closed.` : `❌ FAILED (${percentage.toFixed(1)}%). Awaiting further decision.`);
+        
+        window.pipLoadAdminRecords();
+    } catch (e) {
+        alert("Error saving assessment: " + e.message);
+    }
+};
+  window.pipOpenFailDecision = (uid) => {
+    document.getElementById("pipFailUid").value = uid;
+    document.getElementById("pipFailAction").value = "";
+    pipToggleFailAction();
+    document.getElementById("pipFailDecisionModal").classList.remove("hidden");
+};
+
+window.pipToggleFailAction = () => {
+    const action = document.getElementById("pipFailAction").value;
+    document.getElementById("pipDemotionInput").classList.add("hidden");
+    document.getElementById("pipTerminationInput").classList.add("hidden");
+    
+    if (action === "DEMOTION") document.getElementById("pipDemotionInput").classList.remove("hidden");
+    if (action === "TERMINATION") document.getElementById("pipTerminationInput").classList.remove("hidden");
+};
+
+window.pipSubmitFailDecision = async () => {
+    const uid = document.getElementById("pipFailUid").value;
+    const action = document.getElementById("pipFailAction").value;
+    
+    if (!action) return alert("Select an action.");
+    
+    const updates = {};
+    let printType = "";
+    
+    if (action === "REATTEMPT") {
+        if(!confirm("Grant an extra chance? This will allow you to schedule a new assessment.")) return;
+        updates.status = "APPROVED"; // Returns to scheduling phase
+        updates.assessmentResult = null; // Clear old result
+        updates.assessment = null; // Clear old schedule
+        printType = "REATTEMPT";
+    } 
+    else if (action === "DEMOTION") {
+        const newPost = document.getElementById("pipNewPost").value.trim();
+        if(!newPost) return alert("Provide the new designation.");
+        updates.status = "DEMOTED";
+        updates.demotionRole = newPost;
+        updates.completedAt = serverTimestamp();
+        printType = "DEMOTION";
+    } 
+    else if (action === "TERMINATION") {
+        const letter = document.getElementById("pipTermLetter").value.trim();
+        if(!letter) return alert("Provide termination remarks.");
+        updates.status = "TERMINATED";
+        updates.terminationRemarks = letter;
+        updates.completedAt = serverTimestamp();
+        printType = "TERMINATION";
+    }
+    
+    try {
+        await update(ref(db, `pip_records/${uid}`), updates);
+        document.getElementById("pipFailDecisionModal").classList.add("hidden");
+        
+        if (printType === "DEMOTION" || printType === "TERMINATION") {
+            window.pipGenerateFinalActionPDF(uid);
+        } else {
+            alert("✅ Reattempt granted. Please schedule the new assessment.");
+            window.pipOpenAssessmentModal(uid);
+        }
+        
+        window.pipLoadAdminRecords();
+    } catch(e) {
+        alert("Error updating decision: " + e.message);
+    }
+};
+  window.pipGenerateResultPDF = async (uid, isPass, result) => {
+    const snap = await get(ref(db, `pip_records/${uid}`));
+    const pip = snap.val();
+    const container = document.getElementById("printableReportContainer");
+
+    const statusHeader = isPass ? "SATISFACTORY - CLEARED" : "UNSATISFACTORY - FAILED";
+    const statusColor = isPass ? "green" : "red";
+
+    container.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:20px; background:white; position:sticky; top:0;">
+            <button onclick="window.print()" class="success" style="padding:15px 30px; font-size:24pt; font-weight:900;">🖨️ PRINT RESULT</button>
+            <button onclick="closeReportPreview()" class="danger" style="padding:15px 30px; font-size:24pt; font-weight:900; margin-left:15px;">CLOSE</button>
+        </div>
+        <div style="width:210mm; min-height:297mm; margin:0 auto; background:white; color:black; padding:20mm; font-family:'Arial Black', sans-serif;">
+            <style>@media print { @page { size: A4; margin: 0; } body { -webkit-print-color-adjust: exact; } .no-print { display:none !important; } }</style>
+            <h1 style="font-size:50pt; text-align:center; margin-bottom:10px;">METRO RAILWAY</h1>
+            <h2 style="font-size:30pt; text-align:center; border-bottom:5pt solid black; padding-bottom:20px;">PERFORMANCE IMPROVEMENT PLAN (PIP) - EXAM RESULT</h2>
+            
+            <div style="margin-top:40px; font-size:24pt; line-height:1.6;">
+                <b>PERSONNEL:</b> ${pip.targetName.toUpperCase()}<br>
+                <b>EVALUATED BY:</b> ${result.evaluatedBy.toUpperCase()}<br>
+                <b>DATE:</b> ${new Date().toLocaleDateString('en-IN')}<br>
+                <b>SCORE:</b> ${result.totalScored} / ${result.totalMax} (${result.percentage}%)
+            </div>
+
+            <div style="margin-top:50px; border:10pt solid ${statusColor}; color:${statusColor}; padding:30px; text-align:center; font-size:45pt; font-weight:900;">
+                RESULT: ${statusHeader}
+            </div>
+            
+            <div style="margin-top:40px; font-size:20pt;">
+                ${isPass ? "The personnel has successfully completed the PIP objectives and retains their original position." : "The personnel failed to meet the 80% passing threshold. Pending further administrative action."}
+            </div>
+        </div>
+    `;
+    container.classList.remove("hidden");
+};
+
+window.pipGenerateFinalActionPDF = async (uid) => {
+    const snap = await get(ref(db, `pip_records/${uid}`));
+    const pip = snap.val();
+    const container = document.getElementById("printableReportContainer");
+
+    let actionBody = "";
+    let title = "";
+
+    if (pip.status === "PIP_PASSED") {
+        title = "REINSTATEMENT NOTICE";
+        actionBody = `Based on the satisfactory completion of the Offline Assessment (${pip.assessmentResult.percentage}%), the member is hereby cleared of PIP protocols and returned to normal duties.`;
+    } 
+    else if (pip.status === "DEMOTION") {
+        title = "OFFICIAL DEMOTION ORDER";
+        actionBody = `Due to failure in meeting the Performance Improvement Plan standards (Score: ${pip.assessmentResult.percentage}%), the administrative board has ordered an immediate demotion.<br><br><b>NEW DESIGNATION:</b> ${pip.demotionRole.toUpperCase()}`;
+    } 
+    else if (pip.status === "TERMINATED") {
+        title = "NOTICE OF TERMINATION";
+        actionBody = `Due to failure in meeting the Performance Improvement Plan standards (Score: ${pip.assessmentResult.percentage}%), employment/association is hereby terminated immediately.<br><br><b>AUTHORITY REMARKS:</b><br>${pip.terminationRemarks}`;
+    }
+
+    container.innerHTML = `
+        <div class="no-print" style="text-align:center; padding:20px; background:white; position:sticky; top:0;">
+            <button onclick="window.print()" class="success" style="padding:15px 30px; font-size:24pt; font-weight:900;">🖨️ PRINT DOCUMENT</button>
+            <button onclick="closeReportPreview()" class="danger" style="padding:15px 30px; font-size:24pt; font-weight:900; margin-left:15px;">CLOSE</button>
+        </div>
+        <div style="width:210mm; min-height:297mm; margin:0 auto; background:white; color:black; padding:20mm; font-family:'Arial Black', sans-serif;">
+            <style>@media print { @page { size: A4; margin: 0; } body { -webkit-print-color-adjust: exact; } .no-print { display:none !important; } }</style>
+            <h1 style="font-size:50pt; text-align:center; margin-bottom:10px;">METRO RAILWAY</h1>
+            <div style="font-size:35pt; text-align:center; border:8pt solid black; padding:15px; margin:40px 0;">${title}</div>
+            
+            <div style="margin-top:40px; font-size:24pt; line-height:1.6;">
+                <b>TO:</b> ${pip.targetName.toUpperCase()}<br>
+                <b>DATE OF ACTION:</b> ${new Date().toLocaleDateString('en-IN')}<br>
+                <b>REFERENCE PIP ISSUE DATE:</b> ${pip.startDate}
+            </div>
+
+            <div style="margin-top:60px; font-size:26pt; line-height:1.5; border-top:4pt solid black; padding-top:30px;">
+                ${actionBody}
+            </div>
+            
+            <div style="margin-top:150px; border-top:6pt solid black; width:50%;">
+                <div style="font-size:30pt; font-weight:900; padding-top:10px;">AUTHORIZED SIGNATORY</div>
+                <div style="font-size:20pt;">PROJECT ADMINISTRATION</div>
+            </div>
+            
+            <div style="text-align:center; font-size:14pt; margin-top:80px; color:#555;">[ RECORD WILL BE PURGED IN 10 DAYS PER DATA POLICY ]</div>
+        </div>
+    `;
+    container.classList.remove("hidden");
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
