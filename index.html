@@ -12398,7 +12398,7 @@ window.pipSubmitPermissionLetter = async () => {
         uploadToDb(window.pipCapturedImageBase64);
     }
 };
-// --- UPDATED ADMIN RECORDS (AUTO-WIPES LATE FILES & SHOW CAUSE TRIGGER) ---
+// --- UPDATED ADMIN RECORDS (RESTORED PRINT BUTTONS FOR CLOSED CASES) ---
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
@@ -12416,7 +12416,26 @@ window.pipLoadAdminRecords = () => {
             const pip = c.val();
             const uid = c.key;
 
-            if (pip.status === "PIP_PASSED") return; 
+            // --- RESTORED: CLOSED CASE RENDERING (PASSED) ---
+            // This ensures the Admin can still see the print buttons for passed students
+            if (pip.status === "PIP_PASSED") {
+                tbody.innerHTML += `
+                    <tr style="background:#ecfdf5;">
+                        <td style="padding:15px;">
+                            <b style="font-size:14px;">${pip.targetName}</b><br>
+                            <small style="color:#065f46; font-weight:bold;">PIP_PASSED</small>
+                        </td>
+                        <td colspan="4" style="text-align:center; color:#065f46; font-weight:bold; font-size:13px;">
+                            <i class="fas fa-check-circle"></i> Case Satisfactorily Closed. All other data purged from view.
+                        </td>
+                        <td style="text-align:center; vertical-align:middle;">
+                            <button onclick="pipGenerateResultPDF('${uid}', true, ${JSON.stringify(pip.assessmentResult).replace(/"/g, '&quot;')})" class="info" style="width:100%; font-weight:900; background:#0f172a; margin-bottom:5px;"><i class="fas fa-file-pdf"></i> EXAM RESULT</button>
+                            <button onclick="pipGenerateFinalActionPDF('${uid}')" class="success" style="width:100%; font-weight:900;"><i class="fas fa-print"></i> FINAL RECORD</button>
+                        </td>
+                    </tr>
+                `;
+                return; 
+            }
 
             const deadlineMs = new Date(pip.submissionDeadline).getTime();
             const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
@@ -12441,7 +12460,7 @@ window.pipLoadAdminRecords = () => {
                 actions = `
                     <div style="display:flex; flex-direction:column; gap:5px;">
                         <small style="color:#b91c1c; font-weight:bold;">Awaiting Board Clearance</small>
-                        <button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}', true)" class="secondary" style="padding:4px 8px; font-size:10px; font-weight:bold; background:#e2e8f0; color:#0f172a; border:none; cursor:pointer;"><i class="fab fa-whatsapp"></i> RESEND NOTICE</button>
+                        <button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}', true)" class="secondary" style="padding:4px 8px; font-size:10px; font-weight:bold; background:#e2e8f0; border:none;"><i class="fab fa-whatsapp"></i> RESEND NOTICE</button>
                     </div>`;
             }
             else if (pip.reportStatus === "PERMISSION_SUBMITTED") {
@@ -12455,13 +12474,12 @@ window.pipLoadAdminRecords = () => {
             else if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
                 const timeVal = typeof pip.submittedAt === 'number' ? pip.submittedAt : Date.now();
                 const isLate = timeVal > (deadlineMs + GRACE_PERIOD_MS);
-                
                 const bg = isLate ? "#fee2e2" : "#dbeafe";
                 const color = isLate ? "#b91c1c" : "#1e40af";
                 const label = isLate ? "SUBMITTED LATE" : "REPORT READY";
 
                 reportBadge = `<span style="background:${bg}; color:${color}; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">${label}</span>`;
-                actions = `<button onclick="pipOpenReviewModal('${uid}')" class="info" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-eye"></i> REVIEW PDF</button>`;
+                actions = `<button onclick="pipOpenReviewModal('${uid}')" class="info" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-eye"></i> REVIEW DOC</button>`;
             } 
 
             let assessActions = "";
@@ -12472,6 +12490,16 @@ window.pipLoadAdminRecords = () => {
             } else if (pip.status === "PIP_FAILED_AWAITING_DECISION") {
                 assessActions = `<button onclick="pipOpenFailDecision('${uid}')" class="danger" style="width:100%; font-weight:900;"><i class="fas fa-gavel"></i> DECISION REQ</button>`;
                 statusDisplay = `<span style="color:#b91c1c; font-weight:bold;">FAILED / AWAITING DECISION</span>`;
+            } 
+            // --- RESTORED: CLOSED CASE RENDERING (DEMOTED / TERMINATED) ---
+            else if (["DEMOTED", "TERMINATED"].includes(pip.status)) {
+                statusDisplay = `<span style="color:red; font-weight:bold;">${pip.status}</span>`;
+                assessActions = `<button onclick="pipGenerateFinalActionPDF('${uid}')" class="info" style="width:100%; font-weight:900; background:#0f172a;"><i class="fas fa-print"></i> PRINT RECORD</button>`;
+            }
+
+            let assessmentText = `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`;
+            if (pip.assessment) {
+                assessmentText = `<div style="font-size:11px; font-weight:bold; color:#065f46;">📅 ${new Date(pip.assessment.dateTime).toLocaleString('en-IN')}</div>`;
             }
 
             tbody.innerHTML += `
@@ -12480,7 +12508,7 @@ window.pipLoadAdminRecords = () => {
                     <td style="font-size:11px;"><span style="color:var(--metro-red);"><b>Deadline:</b> ${new Date(pip.submissionDeadline).toLocaleString('en-IN')}</span></td>
                     <td style="font-size:12px;"><b>${pip.reason}</b><br><i style="color:#475569;">${pip.tasks.substring(0, 40)}...</i></td>
                     <td style="text-align:center;">${reportBadge}</td>
-                    <td>${pip.assessment ? `<div style="font-size:11px; font-weight:bold; color:#065f46;">📅 ${new Date(pip.assessment.dateTime).toLocaleString('en-IN')}</div>` : `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`}</td>
+                    <td>${assessmentText}</td>
                     <td style="text-align:center; vertical-align:middle;">${actions} <div style="margin-top:5px;">${assessActions}</div></td>
                 </tr>
             `;
