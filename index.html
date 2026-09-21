@@ -12235,14 +12235,21 @@ window.pipToggleResubmitField = () => {
     document.getElementById("pipMainAuditBtns").classList.add("hidden");
     document.getElementById("pipAdminRemarks").focus();
 };
-// --- STRICT UPLOAD: 1-HOUR GRACE PERIOD & SHOW CAUSE LOCKOUT ---
+  // --- NEW NATIVE WHATSAPP URL GENERATOR ---
+window.getProfessionalWhatsappUrl = (phone, message) => {
+    let cleanMessage = message.toUpperCase().replace(/[*_~`]/g, '');
+    cleanMessage = cleanMessage.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '');
+    return `https://api.whatsapp.com/send?phone=${phone.replace(/[^0-9]/g, '')}&text=${encodeURIComponent(cleanMessage)}`;
+};
+
+// --- STRICT UPLOAD: UNIVERSAL 1-HOUR GRACE PERIOD & SHOW CAUSE LOCKOUT ---
 window.pipSubmitMemberReport = async () => {
     const file = document.getElementById("pipPdfFile")?.files[0];
     if (!file) return alert("⚠️ Please select your PIP PDF report file.");
     if (file.type !== "application/pdf") return alert("⛔ Invalid format: Deliverable must be a valid PDF document.");
     if (file.size > 10 * 1024 * 1024) return alert("⛔ File size exceeded: Maximum size is 10MB.");
 
-    const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour in milliseconds
+    const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour
     const snap = await get(ref(db, `pip_records/${currentUser.uid}`));
     
     let isResubmission = false;
@@ -12252,7 +12259,7 @@ window.pipSubmitMemberReport = async () => {
         const deadlineMs = new Date(pipData.submissionDeadline).getTime();
         isResubmission = pipData.reportStatus === "RESUBMISSION_REQUESTED" || pipData.reportStatus === "RESUBMISSION_EXPIRED";
         
-        // Lock out if current time exceeds deadline + 1 hour grace period
+        // UNIVERSAL LOCKOUT: Triggers if current time exceeds deadline + grace period
         if (Date.now() > (deadlineMs + GRACE_PERIOD_MS)) {
             await update(ref(db, `pip_records/${currentUser.uid}`), {
                 reportPdf: null,
@@ -12290,7 +12297,9 @@ window.pipSubmitMemberReport = async () => {
     };
     reader.readAsDataURL(file);
 };
-// --- UPDATED MEMBER WORKSPACE (STRICT DATABASE AUTO-LOCKER) ---
+
+
+// --- UPDATED MEMBER WORKSPACE (UNIVERSAL AUTO-LOCKER) ---
 window.pipLoadMemberWorkspace = () => {
     onValue(ref(db, `pip_records/${currentUser.uid}`), snap => {
         const container = document.getElementById("pipMemberView");
@@ -12307,6 +12316,7 @@ window.pipLoadMemberWorkspace = () => {
                 <div style="background:#ecfdf5; border:2px solid #34d399; padding:30px; border-radius:12px; text-align:center; margin-top:20px;">
                     <i class="fas fa-check-circle" style="font-size:50px; color:#10b981; margin-bottom:15px;"></i>
                     <h2 style="color:#065f46; margin:0 0 10px 0;">PIP Satisfactorily Cleared</h2>
+                    <p style="color:#047857; font-size:14px; margin-bottom:20px;">Your performance plan is officially closed. All directives and timelines have been purged.</p>
                     <button onclick="pipGenerateResultPDF('${currentUser.uid}', true, ${JSON.stringify(pip.assessmentResult || {}).replace(/"/g, '&quot;')})" class="success" style="padding:15px 30px; font-size:16px; font-weight:900; background:#065f46; border:none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-top:20px;">
                         <i class="fas fa-file-pdf"></i> VIEW OFFICIAL RESULT PDF
                     </button>
@@ -12319,14 +12329,14 @@ window.pipLoadMemberWorkspace = () => {
         const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour
         const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
         
-        // 🚨 1. AUTO-LOCKER: If time expired and no file submitted, force DB update to expired
+        // 🚨 UNIVERSAL AUTO-LOCKER: Applies to initial submissions and resubmissions
         if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
             const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
             update(ref(db, `pip_records/${currentUser.uid}`), { reportStatus: newStatus });
-            return; // Exit and wait for the database listener to trigger a fresh render
+            return; // Wait for the listener to trigger fresh UI
         }
 
-        // 🚨 2. AUTO-WIPE LATE FILES: If they somehow bypassed UI and uploaded late
+        // 🚨 UNIVERSAL AUTO-WIPE: Catch files that somehow bypassed UI upload checks
         if (pip.submittedAt && pip.submittedAt > (deadlineMs + GRACE_PERIOD_MS) && (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED")) {
             const newStatus = pip.reportStatus === "RESUBMITTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
             update(ref(db, `pip_records/${currentUser.uid}`), {
@@ -12339,24 +12349,26 @@ window.pipLoadMemberWorkspace = () => {
 
         let uploadTimeHtml = "";
         if (pip.submittedAt) {
+            const timeVal = typeof pip.submittedAt === 'number' ? pip.submittedAt : Date.now();
+            const isLate = timeVal > (deadlineMs + GRACE_PERIOD_MS);
             uploadTimeHtml = `
                 <div style="font-size:12px; color:#1e293b; background:#f8fafc; padding:12px; border-radius:6px; border:1px solid #cbd5e1; margin-top:15px; font-weight:bold; display:flex; align-items:center; justify-content:space-between;">
-                    <div><i class="fas fa-clock" style="color:#0ea5e9; margin-right:5px;"></i> Uploaded At: ${new Date(pip.submittedAt).toLocaleString('en-IN')}</div>
-                    <span style="background:#10b981; color:white; padding:4px 8px; border-radius:4px; font-size:10px;">ON TIME</span>
+                    <div><i class="fas fa-clock" style="color:#0ea5e9; margin-right:5px;"></i> Uploaded At: ${new Date(timeVal).toLocaleString('en-IN')}</div>
+                    ${isLate ? `<span style="background:#b91c1c; color:white; padding:4px 8px; border-radius:4px; font-size:10px;">LATE EXCEEDED</span>` : `<span style="background:#10b981; color:white; padding:4px 8px; border-radius:4px; font-size:10px;">ON TIME</span>`}
                 </div>
             `;
         }
 
         let submitSection = "";
         
-        // 🔴 STRICT SHOW CAUSE LOCKOUT (Triggers cleanly off DB state)
+        // 🔴 STRICT SHOW CAUSE LOCKOUT (Initial & Resubmissions)
         if (pip.reportStatus === "SUBMISSION_EXPIRED" || pip.reportStatus === "RESUBMISSION_EXPIRED" || pip.reportStatus === "SHOW_CAUSE_ISSUED") {
             submitSection = `
             <div class="panel" style="border:2px solid #991b1b; background:#fff1f2;">
                 <h4 style="margin-top:0; color:#991b1b;"><i class="fas fa-lock"></i> SYSTEM LOCKED</h4>
                 <div style="font-size:12px; color:#7f1d1d; font-weight:bold; text-transform:uppercase; line-height:1.5;">
-                    YOU HAVE FAILED TO MEET THE FINAL DEADLINE AND GRACE PERIOD. YOUR UPLOAD PORTAL IS NOW PERMANENTLY LOCKED.<br><br>
-                    AWAIT AN OFFICIAL SHOW CAUSE NOTICE FROM YOUR MENTOR REGARDING ADMINISTRATIVE ACTION.
+                    YOU HAVE FAILED TO MEET THE FINAL DEADLINE AND GRACE PERIOD FOR YOUR DELIVERABLE.<br><br>
+                    YOUR UPLOAD PORTAL IS NOW PERMANENTLY LOCKED. AWAIT AN OFFICIAL SHOW CAUSE NOTICE FROM YOUR MENTOR REGARDING ADMINISTRATIVE ACTION.
                 </div>
             </div>`;
         } 
@@ -12385,6 +12397,7 @@ window.pipLoadMemberWorkspace = () => {
                 <button onclick="pipSubmitMemberReport()" class="success" style="width:100%; padding:15px; font-weight:900;">
                     <i class="fas fa-paper-plane"></i> SUBMIT FORMAL PIP REPORT
                 </button>
+                ${uploadTimeHtml}
             </div>`;
         }
 
@@ -12448,106 +12461,7 @@ window.pipLoadMemberWorkspace = () => {
 };
 
 
-// --- UPDATED ADMIN RECORDS (STRICT DATABASE AUTO-LOCKER) ---
-window.pipLoadAdminRecords = () => {
-    const tbody = document.getElementById("pipAdminTableBody");
-    tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
-
-    onValue(ref(db, "pip_records"), snap => {
-        tbody.innerHTML = "";
-        if (!snap.exists()) {
-            tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#64748b;'>No active PIP records on system.</td></tr>";
-            return;
-        }
-
-        const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour
-
-        snap.forEach(c => {
-            const pip = c.val();
-            const uid = c.key;
-
-            if (pip.status === "PIP_PASSED") return; 
-
-            const deadlineMs = new Date(pip.submissionDeadline).getTime();
-            const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
-
-            // 🚨 1. AUTO-LOCKER: If time expired and no file submitted, force DB update
-            if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
-                const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
-                update(ref(db, `pip_records/${uid}`), { reportStatus: newStatus });
-                return; // Wait for listener to trigger fresh UI
-            }
-
-            // 🚨 2. AUTO-WIPE LATE FILES: Wipe files submitted after the grace period
-            if (pip.submittedAt && pip.submittedAt > (deadlineMs + GRACE_PERIOD_MS) && (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED")) {
-                const newStatus = pip.reportStatus === "RESUBMITTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
-                update(ref(db, `pip_records/${uid}`), {
-                    reportPdf: null,
-                    reportStatus: newStatus,
-                    submittedAt: null
-                });
-                return; 
-            }
-
-            let reportBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SUBMISSION PENDING</span>`;
-            let actions = `<small style="color:#64748b;">Awaiting Report</small>`;
-
-            // 🔴 ADMIN UI FOR SHOW CAUSE (Draws cleanly from DB state)
-            if (pip.reportStatus === "SHOW_CAUSE_ISSUED") {
-                reportBadge = `<span style="background:#000; color:#fff; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SHOW CAUSE ISSUED</span>`;
-                actions = `<small style="color:#b91c1c; font-weight:bold;">Awaiting Board Decision</small>`;
-            }
-            else if (pip.reportStatus === "SUBMISSION_EXPIRED" || pip.reportStatus === "RESUBMISSION_EXPIRED") {
-                reportBadge = `<span style="background:#fecaca; color:#7f1d1d; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">DEADLINE EXCEEDED</span>`;
-                actions = `<button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}')" class="danger" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-gavel"></i> ISSUE SHOW CAUSE</button>`;
-            }
-            // 🟡 NORMAL SUBMITTED FLOWS
-            else if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
-                // If it reached here, we guarantee it is ON TIME due to the auto-wipe logic above.
-                reportBadge = `<span style="background:#dbeafe; color:#1e40af; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">REPORT READY</span>`;
-                actions = `<button onclick="pipOpenReviewModal('${uid}')" class="info" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-eye"></i> REVIEW PDF</button>`;
-            }
-
-            let assessmentText = `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`;
-            if (pip.assessment) {
-                assessmentText = `<div style="font-size:11px; font-weight:bold; color:#065f46;">📅 ${new Date(pip.assessment.dateTime).toLocaleString('en-IN')}</div>`;
-            }
-
-            let assessActions = "";
-            let statusDisplay = pip.status.replace(/_/g, ' ');
-
-            if (pip.status === "ASSESSMENT_SCHEDULED" || pip.status === "REATTEMPT_SCHEDULED") {
-                assessActions = `<button onclick="pipStartAssessment('${uid}')" class="warning" style="width:100%; font-weight:900;"><i class="fas fa-play"></i> START EXAM</button>`;
-            } else if (pip.status === "PIP_FAILED_AWAITING_DECISION") {
-                assessActions = `<button onclick="pipOpenFailDecision('${uid}')" class="danger" style="width:100%; font-weight:900;"><i class="fas fa-gavel"></i> DECISION REQ</button>`;
-                statusDisplay = `<span style="color:#b91c1c; font-weight:bold;">FAILED / AWAITING DECISION</span>`;
-            }
-
-            tbody.innerHTML += `
-                <tr>
-                    <td>
-                        <b>${pip.targetName}</b><br>
-                        <small style="color:#64748b;">Status: ${statusDisplay}</small>
-                    </td>
-                    <td style="font-size:11px;">
-                        <span style="color:var(--metro-red);"><b>Deadline:</b> ${new Date(pip.submissionDeadline).toLocaleString('en-IN')}</span>
-                    </td>
-                    <td style="font-size:12px;">
-                        <b>${pip.reason}</b><br>
-                        <i style="color:#475569;">${pip.tasks.substring(0, 40)}...</i>
-                    </td>
-                    <td style="text-align:center;">${reportBadge}</td>
-                    <td>${pip.assessment ? `<div style="font-size:11px; font-weight:bold; color:#065f46;">📅 ${new Date(pip.assessment.dateTime).toLocaleString('en-IN')}</div>` : `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`}</td>
-                    <td style="text-align:center; vertical-align:middle;">
-                        ${actions} 
-                        <div style="margin-top:5px;">${assessActions}</div>
-                    </td>
-                </tr>
-            `;
-        });
-    });
-};
-// --- UPDATED ADMIN RECORDS (AUTO-WIPES LATE FILES & SHOW CAUSE TRIGGER + RESEND) ---
+// --- UPDATED ADMIN RECORDS (UNIVERSAL SHOW CAUSE GENERATOR) ---
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
@@ -12568,8 +12482,15 @@ window.pipLoadAdminRecords = () => {
             if (pip.status === "PIP_PASSED") return; 
 
             const deadlineMs = new Date(pip.submissionDeadline).getTime();
+            const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
 
-            // 🚨 SELF-HEALING: Wipe late submissions (Initial & Resubmissions)
+            // 🚨 UNIVERSAL AUTO-LOCKER & WIPE FOR ADMIN VIEW
+            if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
+                const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
+                update(ref(db, `pip_records/${uid}`), { reportStatus: newStatus });
+                return; 
+            }
+
             if (pip.submittedAt && pip.submittedAt > (deadlineMs + GRACE_PERIOD_MS) && (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED")) {
                 const newStatus = pip.reportStatus === "RESUBMITTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
                 update(ref(db, `pip_records/${uid}`), {
@@ -12580,12 +12501,10 @@ window.pipLoadAdminRecords = () => {
                 return; 
             }
 
-            const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
-
             let reportBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SUBMISSION PENDING</span>`;
             let actions = `<small style="color:#64748b;">Awaiting Report</small>`;
 
-            // 🔴 ADMIN UI FOR SHOW CAUSE (WITH WHATSAPP RESEND CAPABILITY)
+            // 🔴 ADMIN UI FOR SHOW CAUSE
             if (pip.reportStatus === "SHOW_CAUSE_ISSUED") {
                 reportBadge = `<span style="background:#000; color:#fff; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SHOW CAUSE ISSUED</span>`;
                 actions = `
@@ -12595,16 +12514,22 @@ window.pipLoadAdminRecords = () => {
                     </div>
                 `;
             }
-            else if (pip.reportStatus === "SUBMISSION_EXPIRED" || pip.reportStatus === "RESUBMISSION_EXPIRED" || (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED"))) {
+            else if (pip.reportStatus === "SUBMISSION_EXPIRED" || pip.reportStatus === "RESUBMISSION_EXPIRED") {
                 reportBadge = `<span style="background:#fecaca; color:#7f1d1d; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">DEADLINE EXCEEDED</span>`;
                 actions = `<button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}', false)" class="danger" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-gavel"></i> ISSUE SHOW CAUSE</button>`;
             }
-            // 🟡 NORMAL SUBMITTED FLOWS
+            // 🟡 NORMAL FLOWS
             else if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
-                // If it reached here, we guarantee it is ON TIME due to the auto-wipe logic above.
-                reportBadge = `<span style="background:#dbeafe; color:#1e40af; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">REPORT READY</span>`;
+                const timeVal = typeof pip.submittedAt === 'number' ? pip.submittedAt : Date.now();
+                const isLate = timeVal > (deadlineMs + GRACE_PERIOD_MS);
+                
+                const bg = isLate ? "#fee2e2" : "#dbeafe";
+                const color = isLate ? "#b91c1c" : "#1e40af";
+                const label = isLate ? "SUBMITTED LATE" : "REPORT READY";
+
+                reportBadge = `<span style="background:${bg}; color:${color}; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">${label}</span>`;
                 actions = `<button onclick="pipOpenReviewModal('${uid}')" class="info" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-eye"></i> REVIEW PDF</button>`;
-            }
+            } 
 
             let assessmentText = `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`;
             if (pip.assessment) {
@@ -12645,7 +12570,9 @@ window.pipLoadAdminRecords = () => {
         });
     });
 };
-// --- NEW FUNCTION: DYNAMIC SHOW CAUSE ISSUER VIA WHATSAPP ---
+
+
+// --- DYNAMIC SHOW CAUSE ISSUER (NO EXTENSIONS, DIRECT REPORTING SELECTION) ---
 window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
     const targetName = decodeURIComponent(encodedTargetName);
     
@@ -12653,17 +12580,15 @@ window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
         if(!confirm(`⚠️ CRITICAL ACTION\n\nIssue an official Show Cause Notice to ${targetName} for failing to meet the PIP deadline? This will immediately escalate the case to the Final Decision board.`)) return;
     }
 
-    // 1. DYNAMICALLY CREATE MODAL UI
     const modalId = "dynamicShowCauseModal";
     let modal = document.getElementById(modalId);
-    if(modal) modal.remove(); // Clean up if it already exists
+    if(modal) modal.remove();
 
     modal = document.createElement("div");
     modal.id = modalId;
     modal.className = "modal-overlay";
     modal.style.zIndex = "3000";
 
-    // Build the dropdown options dynamically from the Admin array
     let adminOpts = "<option value=''>-- Select Authority --</option>";
     if (typeof ADMIN_EMAILS !== 'undefined' && Array.isArray(ADMIN_EMAILS)) {
         ADMIN_EMAILS.forEach(email => { 
@@ -12704,7 +12629,6 @@ window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
 
     document.body.appendChild(modal);
 
-    // 2. HANDLE SUBMISSION LOGIC
     document.getElementById("btnDispatchSc").onclick = async () => {
         const phone = document.getElementById("scPhone").value.trim();
         const reportTo = document.getElementById("scReportTo").value;
@@ -12719,7 +12643,6 @@ window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
 
         try {
             if (!isResend) {
-                // Automatically escalate the case to failed decision state and log the chosen authorities
                 await update(ref(db, `pip_records/${uid}`), {
                     reportStatus: "SHOW_CAUSE_ISSUED",
                     status: "PIP_FAILED_AWAITING_DECISION",
@@ -12727,7 +12650,6 @@ window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
                 });
             }
 
-            // Strict, symbol-free professional message with dynamic injections
             const msg = `METRO RAILWAY PLATFORM SAFETY PROJECT NOTICE. OFFICIAL COMMUNICATION. SHOW CAUSE NOTICE. YOU HAVE FAILED TO SUBMIT YOUR PERFORMANCE IMPROVEMENT PLAN DELIVERABLE WITHIN THE STIPULATED DEADLINE AND GRACE PERIOD. YOUR ACCESS IS NOW LOCKED. YOU ARE HEREBY DIRECTED TO SHOW CAUSE AS TO WHY ADMINISTRATIVE ACTION SHOULD NOT BE TAKEN AGAINST YOU. YOU MUST REPORT TO ${reportTo} IMMEDIATELY. OFFICIAL CLEARANCE AND PERMISSION TO RESUME OPERATIONS IS STRICTLY REQUIRED FROM ${permissionFrom}.`;
             
             waWindow.location.href = window.getProfessionalWhatsappUrl(phone, msg);
@@ -12736,7 +12658,7 @@ window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
                 alert("✅ Show Cause Notice dispatched. Case moved to Final Decision phase.");
                 window.pipLoadAdminRecords();
             }
-            modal.remove(); // Clean up modal
+            modal.remove(); 
             
         } catch (e) {
             waWindow.close();
@@ -12746,7 +12668,6 @@ window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
         }
     };
 };
-
 // --- CLEANED UP REVIEW MODAL (REMOVED EXTENSION BUTTONS) ---
 window.pipOpenReviewModal = async (uid) => {
     activePipReviewUid = uid;
@@ -12858,13 +12779,6 @@ window.pipSubmitFailDecision = async () => {
         alert("Error updating decision: " + e.message);
     }
 };
-  // --- NEW NATIVE WHATSAPP URL GENERATOR ---
-window.getProfessionalWhatsappUrl = (phone, message) => {
-    let cleanMessage = message.toUpperCase().replace(/[*_~`]/g, '');
-    cleanMessage = cleanMessage.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '');
-    return `https://api.whatsapp.com/send?phone=${phone.replace(/[^0-9]/g, '')}&text=${encodeURIComponent(cleanMessage)}`;
-};
-
 // --- PRINT: EXTENSION LETTER (NATIVE TAB - ERROR FIXED) ---
 window.pipGenerateExtensionLetter = () => {
     const adminEmail = document.getElementById("pipExtensionAdmin").value;
