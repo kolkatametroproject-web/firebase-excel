@@ -12605,66 +12605,60 @@ window.pipProcessExtension = async (decision) => {
         alert("System Error: " + e.message);
     }
 };
-  // --- LIVE CAMERA LOGIC FOR PERMISSION LETTERS ---
-window.pipCapturedLetterBase64 = null;
-window.pipVideoStream = null;
 
-window.startPipCamera = async () => {
-    const vid = document.getElementById("pipVideoFeed");
-    document.getElementById("pipVideoContainer").style.display = "block";
-    document.getElementById("pipPhotoPreview").style.display = "none";
-    document.getElementById("pipCamControls").classList.add("hidden");
-    document.getElementById("pipCaptureControls").classList.remove("hidden");
-    document.getElementById("pipRetakeControls").classList.add("hidden");
-    window.pipCapturedLetterBase64 = null;
+  // --- STRICT UPLOAD: STANDARD REPORT = PDF ONLY ---
+window.pipSubmitMemberReport = async () => {
+    const file = document.getElementById("pipPdfFile")?.files[0];
+    if (!file) return alert("⚠️ Please select your PIP PDF report file.");
+    if (file.type !== "application/pdf") return alert("⛔ Invalid format: Deliverable must be a valid PDF document.");
+    if (file.size > 10 * 1024 * 1024) return alert("⛔ File size exceeded: Maximum size is 10MB.");
 
-    try {
-        window.pipVideoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        vid.srcObject = window.pipVideoStream;
-    } catch(e) {
-        alert("Camera Error: " + e.message);
-        window.stopPipCamera();
+    const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour
+    const snap = await get(ref(db, `pip_records/${currentUser.uid}`));
+    let isResubmission = false;
+
+    if (snap.exists()) {
+        const pipData = snap.val();
+        const deadlineMs = new Date(pipData.submissionDeadline).getTime();
+        isResubmission = pipData.reportStatus === "RESUBMISSION_REQUESTED" || pipData.reportStatus === "RESUBMISSION_EXPIRED";
+        
+        if (Date.now() > (deadlineMs + GRACE_PERIOD_MS)) {
+            await update(ref(db, `pip_records/${currentUser.uid}`), {
+                reportPdf: null,
+                reportStatus: isResubmission ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED",
+                submittedAt: null
+            });
+            alert("⛔ DEADLINE EXCEEDED: The 1-hour grace period has passed. Your portal is now permanently locked.");
+            window.pipLoadMemberWorkspace(); 
+            return; 
+        }
     }
+
+    const btn = document.activeElement;
+    const originalText = btn.innerText;
+    btn.innerText = "⏳ UPLOADING...";
+    btn.disabled = true;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const base64Pdf = e.target.result;
+        try {
+            await update(ref(db, `pip_records/${currentUser.uid}`), {
+                reportPdf: base64Pdf,
+                reportStatus: isResubmission ? "RESUBMITTED" : "SUBMITTED",
+                submittedAt: serverTimestamp()
+            });
+            alert("✅ Formal PIP PDF report submitted. The administrator has been notified.");
+            window.pipLoadMemberWorkspace();
+        } catch (err) {
+            alert("Upload Error: " + err.message);
+            btn.innerText = originalText;
+            btn.disabled = false;
+        }
+    };
+    reader.readAsDataURL(file);
 };
-
-window.capturePipPhoto = () => {
-    const vid = document.getElementById("pipVideoFeed");
-    const canvas = document.createElement("canvas");
-    canvas.width = vid.videoWidth;
-    canvas.height = vid.videoHeight;
-    canvas.getContext('2d').drawImage(vid, 0, 0);
-
-    window.pipCapturedLetterBase64 = canvas.toDataURL('image/jpeg', 0.85);
-
-    document.getElementById("pipPhotoPreview").src = window.pipCapturedLetterBase64;
-    document.getElementById("pipPhotoPreview").style.display = "block";
-    document.getElementById("pipVideoContainer").style.display = "none";
-
-    document.getElementById("pipCaptureControls").classList.add("hidden");
-    document.getElementById("pipRetakeControls").classList.remove("hidden");
-
-    if(window.pipVideoStream) window.pipVideoStream.getTracks().forEach(t => t.stop());
-};
-
-window.retakePipPhoto = () => {
-    window.startPipCamera();
-};
-
-window.stopPipCamera = () => {
-    if(window.pipVideoStream) window.pipVideoStream.getTracks().forEach(t => t.stop());
-    document.getElementById("pipVideoContainer").style.display = "none";
-    document.getElementById("pipPhotoPreview").style.display = "none";
-    
-    const capControls = document.getElementById("pipCaptureControls");
-    const retControls = document.getElementById("pipRetakeControls");
-    const camControls = document.getElementById("pipCamControls");
-    
-    if(capControls) capControls.classList.add("hidden");
-    if(retControls) retControls.classList.add("hidden");
-    if(camControls) camControls.classList.remove("hidden");
-    
-    window.pipCapturedLetterBase64 = null;
-};// --- LIVE CAMERA & IMAGE LOGIC FOR PIP REPORTS & CLEARANCE LETTERS ---
+// --- LIVE CAMERA & IMAGE LOGIC FOR PIP REPORTS & CLEARANCE LETTERS ---
 window.pipCapturedImageBase64 = null;
 window.pipVideoStream = null;
 
@@ -12724,66 +12718,13 @@ window.stopPipCamera = () => {
     
     window.pipCapturedImageBase64 = null;
 };
-  // --- STRICT UPLOAD: STANDARD REPORT = PDF ONLY ---
-window.pipSubmitMemberReport = async () => {
-    const file = document.getElementById("pipPdfFile")?.files[0];
-    if (!file) return alert("⚠️ Please select your PIP PDF report file.");
-    if (file.type !== "application/pdf") return alert("⛔ Invalid format: Deliverable must be a valid PDF document.");
-    if (file.size > 10 * 1024 * 1024) return alert("⛔ File size exceeded: Maximum size is 10MB.");
 
-    const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour
-    const snap = await get(ref(db, `pip_records/${currentUser.uid}`));
-    let isResubmission = false;
-
-    if (snap.exists()) {
-        const pipData = snap.val();
-        const deadlineMs = new Date(pipData.submissionDeadline).getTime();
-        isResubmission = pipData.reportStatus === "RESUBMISSION_REQUESTED" || pipData.reportStatus === "RESUBMISSION_EXPIRED";
-        
-        if (Date.now() > (deadlineMs + GRACE_PERIOD_MS)) {
-            await update(ref(db, `pip_records/${currentUser.uid}`), {
-                reportPdf: null,
-                reportStatus: isResubmission ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED",
-                submittedAt: null
-            });
-            alert("⛔ DEADLINE EXCEEDED: The 1-hour grace period has passed. Your portal is now permanently locked.");
-            window.pipLoadMemberWorkspace(); 
-            return; 
-        }
-    }
-
-    const btn = document.activeElement;
-    const originalText = btn.innerText;
-    btn.innerText = "⏳ UPLOADING...";
-    btn.disabled = true;
-
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-        const base64Pdf = e.target.result;
-        try {
-            await update(ref(db, `pip_records/${currentUser.uid}`), {
-                reportPdf: base64Pdf,
-                reportStatus: isResubmission ? "RESUBMITTED" : "SUBMITTED",
-                submittedAt: serverTimestamp()
-            });
-            alert("✅ Formal PIP PDF report submitted. The administrator has been notified.");
-            window.pipLoadMemberWorkspace();
-        } catch (err) {
-            alert("Upload Error: " + err.message);
-            btn.innerText = originalText;
-            btn.disabled = false;
-        }
-    };
-    reader.readAsDataURL(file);
-};
-
-// --- STRICT UPLOAD: CLEARANCE LETTER = IMAGE/CAMERA ONLY ---
 window.pipSubmitPermissionLetter = async () => {
     const fileInput = document.getElementById("pipImageFile");
     const file = fileInput ? fileInput.files[0] : null;
 
-    if (!file && !window.pipCapturedImageBase64) return alert("⚠️ Please capture a photo of the clearance letter.");
-    if (file && !file.type.startsWith("image/")) return alert("⛔ Only Image files (JPG/PNG) are accepted.");
+    if (!file && !window.pipCapturedImageBase64) return alert("⚠️ Please capture a photo or upload an image of the clearance letter.");
+    if (file && !file.type.startsWith("image/")) return alert("⛔ Only Image files (JPG/PNG) are accepted for Clearance Letters.");
 
     const btn = document.activeElement;
     btn.innerText = "⏳ UPLOADING...";
@@ -12815,7 +12756,7 @@ window.pipSubmitPermissionLetter = async () => {
     }
 };
 
-// --- UPDATED MEMBER WORKSPACE (SEPARATING PDF AND CAMERA LOGIC) ---
+// --- UPDATED MEMBER WORKSPACE (FORCES CAMERA FOR SHOW CAUSE) ---
 window.pipLoadMemberWorkspace = () => {
     onValue(ref(db, `pip_records/${currentUser.uid}`), snap => {
         const container = document.getElementById("pipMemberView");
@@ -12842,17 +12783,17 @@ window.pipLoadMemberWorkspace = () => {
         }
 
         const deadlineMs = new Date(pip.submissionDeadline).getTime();
-        const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour
+        const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour Grace Period
         const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
         
-        // 🚨 AUTO-LOCKER
+        // AUTO-LOCKER
         if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
             const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
             update(ref(db, `pip_records/${currentUser.uid}`), { reportStatus: newStatus });
             return; 
         }
 
-        // 🚨 AUTO-WIPE LATE FILES
+        // AUTO-WIPE LATE FILES
         if (pip.submittedAt && pip.submittedAt > (deadlineMs + GRACE_PERIOD_MS) && (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED")) {
             const newStatus = pip.reportStatus === "RESUBMITTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
             update(ref(db, `pip_records/${currentUser.uid}`), { reportPdf: null, reportStatus: newStatus, submittedAt: null });
@@ -12871,7 +12812,7 @@ window.pipLoadMemberWorkspace = () => {
             `;
         }
 
-        // Camera UI HTML Block (Exclusively for Clearance Letters)
+        // --- CAMERA UI HTML INJECTION ---
         const cameraUiHtml = `
             <div style="margin-bottom:15px; padding:15px; border:2px dashed #fecaca; text-align:center; background:#fff; border-radius:6px;">
                 <div id="pipVideoContainer" style="display:none; width:100%; max-width:300px; margin:0 auto 10px auto; border-radius:4px; overflow:hidden;">
@@ -12902,13 +12843,13 @@ window.pipLoadMemberWorkspace = () => {
 
         let submitSection = "";
         
-        // 🔴 SHOW CAUSE LOCKOUT (CAMERA ONLY FOR CLEARANCE LETTER)
+        // 🔴 STRICT SHOW CAUSE LOCKOUT -> FORCES CAMERA/IMAGE UPLOAD
         if (pip.reportStatus === "SUBMISSION_EXPIRED" || pip.reportStatus === "RESUBMISSION_EXPIRED" || pip.reportStatus === "SHOW_CAUSE_ISSUED") {
             submitSection = `
             <div class="panel" style="border:2px solid #b91c1c; background:#fff1f2;">
                 <h4 style="margin-top:0; color:#b91c1c;"><i class="fas fa-camera"></i> UPLOAD OFFICIAL CLEARANCE LETTER</h4>
                 <div style="font-size:12px; color:#7f1d1d; font-weight:bold; margin-bottom:15px; text-transform:uppercase;">
-                    YOUR PORTAL IS LOCKED DUE TO MISSED DEADLINES. YOU MUST UPLOAD A LIVE PHOTO OF YOUR SIGNED CLEARANCE/PERMISSION LETTER TO PROCEED.
+                    YOUR PDF UPLOAD PORTAL IS LOCKED DUE TO MISSED DEADLINES. YOU MUST UPLOAD A LIVE PHOTO OR IMAGE OF YOUR SIGNED CLEARANCE/PERMISSION LETTER TO PROCEED.
                 </div>
                 ${cameraUiHtml}
                 <button onclick="pipSubmitPermissionLetter()" class="danger" style="width:100%; padding:15px; font-weight:900;">
@@ -12961,19 +12902,6 @@ window.pipLoadMemberWorkspace = () => {
             </div>`;
         }
 
-        let marksHtml = "";
-        if (pip.assessmentResult && pip.assessmentResult.log) {
-            marksHtml = `<div class="panel" style="margin-top:20px; border-top: 4px solid var(--metro-gold); background:#fffbeb;">
-                <h4 style="margin:0 0 10px 0; color:#b45309;"><i class="fas fa-poll"></i> Assessment Marks Breakdown</h4>`;
-            pip.assessmentResult.log.forEach(q => {
-                marksHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #fde68a; padding:8px 0; font-size:13px; color:#92400e;">
-                    <span>Question ${q.qn}</span><b>${q.marks} / ${q.max}</b></div>`;
-            });
-            marksHtml += `<div style="display:flex; justify-content:space-between; margin-top:10px; font-size:14px; color:#b45309;">
-                <span><b>Total Score:</b></span><b>${pip.assessmentResult.totalScored} / ${pip.assessmentResult.totalMax} (${pip.assessmentResult.percentage}%)</b>
-            </div></div>`;
-        }
-
         container.innerHTML = `
             <div style="background:#fff1f2; border:2px solid #fecaca; padding:20px; border-radius:12px; margin-bottom:25px;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -13002,7 +12930,6 @@ window.pipLoadMemberWorkspace = () => {
             </div>
             ${submitSection}
             ${assessCard}
-            ${marksHtml}
         `;
     });
 };
