@@ -12563,7 +12563,72 @@ window.pipLoadMemberWorkspace = () => {
         `;
     });
 };
+// --- ADMIN: POST-FAILURE DECISION HANDLING ---
+window.pipOpenFailDecision = (uid) => {
+    document.getElementById("pipFailUid").value = uid;
+    document.getElementById("pipFailAction").value = "";
+    window.pipToggleFailAction();
+    document.getElementById("pipFailDecisionModal").classList.remove("hidden");
+};
 
+window.pipToggleFailAction = () => {
+    const action = document.getElementById("pipFailAction").value;
+    document.getElementById("pipDemotionInput").classList.add("hidden");
+    document.getElementById("pipTerminationInput").classList.add("hidden");
+    
+    if (action === "DEMOTION") document.getElementById("pipDemotionInput").classList.remove("hidden");
+    if (action === "TERMINATION") document.getElementById("pipTerminationInput").classList.remove("hidden");
+};
+
+window.pipSubmitFailDecision = async () => {
+    const uid = document.getElementById("pipFailUid").value;
+    const action = document.getElementById("pipFailAction").value;
+    
+    if (!action) return alert("Select an action.");
+    
+    const updates = {};
+    let printType = "";
+    
+    if (action === "REATTEMPT") {
+        if(!confirm("Grant an extra chance? This will allow you to schedule a new assessment.")) return;
+        updates.status = "APPROVED"; // Returns to scheduling phase
+        updates.assessmentResult = null; // Clear old result
+        updates.assessment = null; // Clear old schedule
+        printType = "REATTEMPT";
+    } 
+    else if (action === "DEMOTION") {
+        const newPost = document.getElementById("pipNewPost").value.trim();
+        if(!newPost) return alert("Provide the new designation.");
+        updates.status = "DEMOTED";
+        updates.demotionRole = newPost;
+        updates.completedAt = serverTimestamp(); // Mark as finished
+        printType = "DEMOTION";
+    } 
+    else if (action === "TERMINATION") {
+        const letter = document.getElementById("pipTermLetter").value.trim();
+        if(!letter) return alert("Provide termination remarks.");
+        updates.status = "TERMINATED";
+        updates.terminationRemarks = letter;
+        updates.completedAt = serverTimestamp(); // Mark as finished
+        printType = "TERMINATION";
+    }
+    
+    try {
+        await update(ref(db, `pip_records/${uid}`), updates);
+        document.getElementById("pipFailDecisionModal").classList.add("hidden");
+        
+        if (printType === "DEMOTION" || printType === "TERMINATION") {
+            window.pipGenerateFinalActionPDF(uid); // Generates the final native PDF
+        } else {
+            alert("✅ Reattempt granted. Please schedule the new assessment.");
+            window.pipOpenAssessmentModal(uid);
+        }
+        
+        window.pipLoadAdminRecords();
+    } catch(e) {
+        alert("Error updating decision: " + e.message);
+    }
+};
 // --- ADMIN RECORDS AUTO-LOCKER ---
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
