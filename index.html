@@ -13247,11 +13247,25 @@ window.pipConfirmAssessmentAndNotify = async () => {
         waWindow.close();
     }
 };
-
-// --- STATE PERSISTENCE: LIVE ASSESSMENT ---
+// --- STATE PERSISTENCE: LIVE ASSESSMENT (WITH EMBEDDED PHONE NOTIFICATION) ---
 window.pipStartAssessment = async (uid) => {
     document.getElementById("pipLiveUid").value = uid;
     
+    // 1. Dynamically Inject Native Phone Input for End Exam Dispatch
+    if (!document.getElementById("pipLivePhone")) {
+        // Find the End Assessment button to insert the input right above it
+        const endBtn = document.querySelector("button[onclick='pipEndAssessment()']");
+        if (endBtn) {
+            const phoneDiv = document.createElement("div");
+            phoneDiv.style.width = "100%";
+            phoneDiv.innerHTML = `
+                <label style="font-size:11px; font-weight:bold; margin-top:20px; display:block; color:var(--metro-blue); text-align:left; border-top:2px solid #e2e8f0; padding-top:15px;">STUDENT WHATSAPP NUMBER (REQUIRED FOR EXAM RESULT DISPATCH)</label>
+                <input id="pipLivePhone" placeholder="e.g. 919876543210" style="width:100%; padding:10px; border:2px solid var(--metro-blue); margin-bottom:15px; font-weight:bold; box-sizing:border-box; font-family:monospace; font-size:14px;">
+            `;
+            endBtn.parentNode.insertBefore(phoneDiv, endBtn);
+        }
+    }
+
     const snap = await get(ref(db, `pip_records/${uid}/liveExamState`));
     if (snap.exists()) {
         const state = snap.val();
@@ -13311,9 +13325,14 @@ window.pipCancelAssessment = () => {
 
 window.pipEndAssessment = async () => {
     const uid = document.getElementById("pipLiveUid").value;
+    const phone = document.getElementById("pipLivePhone")?.value.trim();
+
     if (pipAssessmentLog.length === 0) return alert("⚠️ You must score at least 1 question.");
+    if (!phone) return alert("⚠️ Please provide the Student's WhatsApp Number for dispatch.");
     if (!confirm("Are you sure you want to end and evaluate this assessment?")) return;
     
+    const waWindow = window.open('about:blank', '_blank');
+
     let totalScored = 0;
     let totalMax = pipAssessmentLog.length * 5;
     pipAssessmentLog.forEach(q => totalScored += q.marks);
@@ -13339,14 +13358,41 @@ window.pipEndAssessment = async () => {
         
         document.getElementById("pipLiveAssessmentModal").classList.add("hidden");
         window.pipGenerateResultPDF(uid, isPass, resultPayload); 
+
+        // 2. Auto-dispatch custom pass/fail messages
+        const msg = isPass 
+            ? `METRO RAILWAY PLATFORM SAFETY PROJECT NOTICE. OFFICIAL COMMUNICATION. CONGRATULATIONS. YOU HAVE SUCCESSFULLY PASSED YOUR PIP ASSESSMENT WITH A SCORE OF ${percentage.toFixed(1)}%. YOU ARE HEREBY CLEARED AND REINSTATED TO NORMAL DUTIES. A SYSTEM GENERATED PDF RECORD HAS BEEN LOGGED.`
+            : `METRO RAILWAY PLATFORM SAFETY PROJECT NOTICE. OFFICIAL COMMUNICATION. YOU HAVE FAILED YOUR PIP ASSESSMENT WITH A SCORE OF ${percentage.toFixed(1)}%. YOUR CASE HAS BEEN ESCALATED TO THE ADMINISTRATIVE BOARD FOR FINAL DECISION AND ADMINISTRATIVE ACTION. AWAIT FURTHER INSTRUCTIONS.`;
+
+        waWindow.location.href = window.getProfessionalWhatsappUrl(phone, msg);
         alert(isPass ? `✅ PASSED (${percentage.toFixed(1)}%). Case Closed.` : `❌ FAILED (${percentage.toFixed(1)}%). Awaiting further decision.`);
         
         window.pipLoadAdminRecords();
-    } catch (e) { alert("Error saving assessment: " + e.message); }
+    } catch (e) { 
+        waWindow.close();
+        alert("Error saving assessment: " + e.message); 
+    }
 };
 
+// --- FINAL BOARD DECISION (WITH AUTO-DISPATCH NOTIFICATIONS) ---
 window.pipOpenFailDecision = (uid) => {
     document.getElementById("pipFailUid").value = uid;
+
+    // 3. Dynamically Inject Native Phone Input for Final Decision Actions
+    if (!document.getElementById("pipFailPhone")) {
+        // Find the exact submit button
+        const btnContainer = document.querySelector("button[onclick='pipSubmitFailDecision()']").parentNode;
+        if (btnContainer) {
+            const phoneDiv = document.createElement("div");
+            phoneDiv.style.width = "100%";
+            phoneDiv.innerHTML = `
+                <label style="font-size:11px; font-weight:bold; margin-top:15px; display:block; color:#b91c1c; text-align:left;">STUDENT WHATSAPP NUMBER (REQUIRED FOR OFFICIAL ACTION DISPATCH)</label>
+                <input id="pipFailPhone" placeholder="e.g. 919876543210" style="width:100%; padding:10px; border:2px solid #fecaca; margin-bottom:15px; font-weight:bold; box-sizing:border-box; font-family:monospace; font-size:14px;">
+            `;
+            btnContainer.parentNode.insertBefore(phoneDiv, btnContainer);
+        }
+    }
+
     document.getElementById("pipFailAction").value = "";
     window.pipToggleFailAction();
     document.getElementById("pipFailDecisionModal").classList.remove("hidden");
@@ -13364,40 +13410,51 @@ window.pipToggleFailAction = () => {
 window.pipSubmitFailDecision = async () => {
     const uid = document.getElementById("pipFailUid").value;
     const action = document.getElementById("pipFailAction").value;
+    const phone = document.getElementById("pipFailPhone")?.value.trim();
     
-    if (!action) return alert("Select an action.");
+    if (!action) return alert("⚠️ Select an administrative action.");
+    if (!phone) return alert("⚠️ Please provide the Student's WhatsApp Number for dispatch.");
+    
+    const waWindow = window.open('about:blank', '_blank');
     
     const updates = {};
     let printType = "";
+    let dispatchMsg = "";
     
+    // 4. Construct distinct consequences and notification parameters
     if (action === "REATTEMPT") {
-        if(!confirm("Grant an extra chance? This will allow you to schedule a new assessment.")) return;
+        if(!confirm("Grant an extra chance? This will allow you to schedule a new assessment.")) { waWindow.close(); return; }
         updates.status = "APPROVED"; 
         updates.assessmentResult = null; 
         updates.assessment = null; 
         printType = "REATTEMPT";
+        dispatchMsg = "METRO RAILWAY PLATFORM SAFETY PROJECT NOTICE. OFFICIAL COMMUNICATION. THE BOARD HAS REVIEWED YOUR FAILED ASSESSMENT. A ONE-TIME EXTRA CHANCE (REATTEMPT) HAS BEEN GRANTED TO YOU. AWAIT NEW ASSESSMENT SCHEDULE INSTRUCTIONS CAREFULLY.";
     } 
     else if (action === "DEMOTION") {
         const newPost = document.getElementById("pipNewPost").value.trim();
-        if(!newPost) return alert("Provide the new designation.");
+        if(!newPost) { waWindow.close(); return alert("Provide the new designation."); }
         updates.status = "DEMOTED";
         updates.demotionRole = newPost;
         updates.completedAt = serverTimestamp(); 
         printType = "DEMOTION";
+        dispatchMsg = `METRO RAILWAY PLATFORM SAFETY PROJECT NOTICE. OFFICIAL COMMUNICATION. DUE TO YOUR FAILURE TO CLEAR THE PIP STANDARDS, THE BOARD HAS ORDERED AN IMMEDIATE DEMOTION. YOUR NEW DESIGNATION IS: ${newPost.toUpperCase()}. A FORMAL PRINTED RECORD HAS BEEN GENERATED BY THE BOARD.`;
     } 
     else if (action === "TERMINATION") {
         const letter = document.getElementById("pipTermLetter").value.trim();
-        if(!letter) return alert("Provide termination remarks.");
+        if(!letter) { waWindow.close(); return alert("Provide termination remarks."); }
         updates.status = "TERMINATED";
         updates.terminationRemarks = letter;
         updates.completedAt = serverTimestamp(); 
         printType = "TERMINATION";
+        dispatchMsg = `METRO RAILWAY PLATFORM SAFETY PROJECT NOTICE. OFFICIAL COMMUNICATION. DUE TO SEVERE FAILURE TO MEET PIP STANDARDS AND SAFETY COMPLIANCE, YOUR EMPLOYMENT/ASSOCIATION HAS BEEN TERMINATED IMMEDIATELY. A FORMAL PRINTED RECORD HAS BEEN ISSUED BY THE BOARD.`;
     }
     
     try {
         await update(ref(db, `pip_records/${uid}`), updates);
         document.getElementById("pipFailDecisionModal").classList.add("hidden");
         
+        waWindow.location.href = window.getProfessionalWhatsappUrl(phone, dispatchMsg);
+
         if (printType === "DEMOTION" || printType === "TERMINATION") {
             window.pipGenerateFinalActionPDF(uid); 
         } else {
@@ -13407,10 +13464,10 @@ window.pipSubmitFailDecision = async () => {
         
         window.pipLoadAdminRecords();
     } catch(e) {
+        waWindow.close();
         alert("Error updating decision: " + e.message);
     }
 };
-
 window.pipGenerateResultPDF = async (uid, isPass, result) => {
     const snap = await get(ref(db, `pip_records/${uid}`));
     const pip = snap.val();
