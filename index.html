@@ -12724,8 +12724,60 @@ window.stopPipCamera = () => {
     
     window.pipCapturedImageBase64 = null;
 };
+  // --- STRICT UPLOAD: STANDARD REPORT = PDF ONLY ---
+window.pipSubmitMemberReport = async () => {
+    const file = document.getElementById("pipPdfFile")?.files[0];
+    if (!file) return alert("⚠️ Please select your PIP PDF report file.");
+    if (file.type !== "application/pdf") return alert("⛔ Invalid format: Deliverable must be a valid PDF document.");
+    if (file.size > 10 * 1024 * 1024) return alert("⛔ File size exceeded: Maximum size is 10MB.");
 
+    const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour
+    const snap = await get(ref(db, `pip_records/${currentUser.uid}`));
+    let isResubmission = false;
 
+    if (snap.exists()) {
+        const pipData = snap.val();
+        const deadlineMs = new Date(pipData.submissionDeadline).getTime();
+        isResubmission = pipData.reportStatus === "RESUBMISSION_REQUESTED" || pipData.reportStatus === "RESUBMISSION_EXPIRED";
+        
+        if (Date.now() > (deadlineMs + GRACE_PERIOD_MS)) {
+            await update(ref(db, `pip_records/${currentUser.uid}`), {
+                reportPdf: null,
+                reportStatus: isResubmission ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED",
+                submittedAt: null
+            });
+            alert("⛔ DEADLINE EXCEEDED: The 1-hour grace period has passed. Your portal is now permanently locked.");
+            window.pipLoadMemberWorkspace(); 
+            return; 
+        }
+    }
+
+    const btn = document.activeElement;
+    const originalText = btn.innerText;
+    btn.innerText = "⏳ UPLOADING...";
+    btn.disabled = true;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const base64Pdf = e.target.result;
+        try {
+            await update(ref(db, `pip_records/${currentUser.uid}`), {
+                reportPdf: base64Pdf,
+                reportStatus: isResubmission ? "RESUBMITTED" : "SUBMITTED",
+                submittedAt: serverTimestamp()
+            });
+            alert("✅ Formal PIP PDF report submitted. The administrator has been notified.");
+            window.pipLoadMemberWorkspace();
+        } catch (err) {
+            alert("Upload Error: " + err.message);
+            btn.innerText = originalText;
+            btn.disabled = false;
+        }
+    };
+    reader.readAsDataURL(file);
+};
+
+// --- STRICT UPLOAD: CLEARANCE LETTER = IMAGE/CAMERA ONLY ---
 window.pipSubmitPermissionLetter = async () => {
     const fileInput = document.getElementById("pipImageFile");
     const file = fileInput ? fileInput.files[0] : null;
@@ -12762,76 +12814,8 @@ window.pipSubmitPermissionLetter = async () => {
         uploadToDb(window.pipCapturedImageBase64);
     }
 };
-// --- STRICT UPLOAD: IMAGES ONLY (NO PDF) & 1-HOUR GRACE PERIOD ---
-window.pipSubmitMemberReport = async () => {
-    const fileInput = document.getElementById("pipImageFile");
-    const file = fileInput ? fileInput.files[0] : null;
 
-    if (!file && !window.pipCapturedImageBase64) {
-        return alert("⚠️ Please capture a live photo or select an image file of your PIP report.");
-    }
-    if (file && !file.type.startsWith("image/")) {
-        return alert("⛔ Invalid format: Only Image files (JPG/PNG) are accepted. PDFs are blocked.");
-    }
-    if (file && file.size > 10 * 1024 * 1024) return alert("⛔ File size exceeded: Maximum size is 10MB.");
-
-    const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour in milliseconds
-    const snap = await get(ref(db, `pip_records/${currentUser.uid}`));
-    
-    let isResubmission = false;
-
-    if (snap.exists()) {
-        const pipData = snap.val();
-        const deadlineMs = new Date(pipData.submissionDeadline).getTime();
-        isResubmission = pipData.reportStatus === "RESUBMISSION_REQUESTED" || pipData.reportStatus === "RESUBMISSION_EXPIRED";
-        
-        // Lock out if current time exceeds deadline + 1 hour grace period
-        if (Date.now() > (deadlineMs + GRACE_PERIOD_MS)) {
-            await update(ref(db, `pip_records/${currentUser.uid}`), {
-                reportPdf: null,
-                reportStatus: isResubmission ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED",
-                submittedAt: null
-            });
-
-            alert("⛔ DEADLINE EXCEEDED: The 1-hour grace period has passed. Your portal is now permanently locked. Await a Show Cause notice from your mentor.");
-            window.pipLoadMemberWorkspace(); 
-            return; 
-        }
-    }
-
-    const btn = document.activeElement;
-    const originalText = btn.innerText;
-    btn.innerText = "⏳ UPLOADING...";
-    btn.disabled = true;
-
-    const uploadToDb = async (base64Data) => {
-        try {
-            await update(ref(db, `pip_records/${currentUser.uid}`), {
-                reportPdf: base64Data, // Key kept as reportPdf for DB compatibility, but holds Image data
-                reportStatus: isResubmission ? "RESUBMITTED" : "SUBMITTED",
-                submittedAt: serverTimestamp()
-            });
-            alert("✅ Formal PIP image report submitted. The administrator has been notified.");
-            if(typeof window.stopPipCamera === "function") window.stopPipCamera();
-            window.pipLoadMemberWorkspace();
-        } catch (err) {
-            alert("Upload Error: " + err.message);
-            btn.innerText = originalText;
-            btn.disabled = false;
-        }
-    };
-
-    if (file) {
-        const reader = new FileReader();
-        reader.onload = (e) => uploadToDb(e.target.result);
-        reader.readAsDataURL(file);
-    } else {
-        uploadToDb(window.pipCapturedImageBase64);
-    }
-};
-
-
-// --- UPDATED MEMBER WORKSPACE (STRICT CAMERA/IMAGE UI ONLY) ---
+// --- UPDATED MEMBER WORKSPACE (SEPARATING PDF AND CAMERA LOGIC) ---
 window.pipLoadMemberWorkspace = () => {
     onValue(ref(db, `pip_records/${currentUser.uid}`), snap => {
         const container = document.getElementById("pipMemberView");
@@ -12861,21 +12845,17 @@ window.pipLoadMemberWorkspace = () => {
         const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour
         const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
         
-        // 🚨 AUTO-LOCKER: If time expired and no file submitted, force DB update
+        // 🚨 AUTO-LOCKER
         if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
             const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
             update(ref(db, `pip_records/${currentUser.uid}`), { reportStatus: newStatus });
             return; 
         }
 
-        // 🚨 AUTO-WIPE LATE FILES: If they bypassed UI and uploaded late
+        // 🚨 AUTO-WIPE LATE FILES
         if (pip.submittedAt && pip.submittedAt > (deadlineMs + GRACE_PERIOD_MS) && (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED")) {
             const newStatus = pip.reportStatus === "RESUBMITTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
-            update(ref(db, `pip_records/${currentUser.uid}`), {
-                reportPdf: null,
-                reportStatus: newStatus,
-                submittedAt: null
-            });
+            update(ref(db, `pip_records/${currentUser.uid}`), { reportPdf: null, reportStatus: newStatus, submittedAt: null });
             return; 
         }
 
@@ -12891,16 +12871,16 @@ window.pipLoadMemberWorkspace = () => {
             `;
         }
 
-        // --- THE UNIFIED CAMERA & IMAGE HTML BLOCK ---
+        // Camera UI HTML Block (Exclusively for Clearance Letters)
         const cameraUiHtml = `
-            <div style="margin-bottom:15px; padding:15px; border:2px dashed #cbd5e1; text-align:center; background:#fff; border-radius:6px;">
+            <div style="margin-bottom:15px; padding:15px; border:2px dashed #fecaca; text-align:center; background:#fff; border-radius:6px;">
                 <div id="pipVideoContainer" style="display:none; width:100%; max-width:300px; margin:0 auto 10px auto; border-radius:4px; overflow:hidden;">
                     <video id="pipVideoFeed" autoplay playsinline style="width:100%; height:auto;"></video>
                 </div>
                 <img id="pipPhotoPreview" style="display:none; width:100%; max-width:300px; margin:0 auto 10px auto; border:2px solid #10b981; border-radius:4px;">
 
                 <div id="pipCamControls">
-                    <button onclick="window.startPipCamera()" class="info" style="width:100%; padding:12px; font-weight:bold; background:var(--metro-blue); border:none;"><i class="fas fa-camera"></i> START LIVE CAMERA</button>
+                    <button onclick="window.startPipCamera()" class="info" style="width:100%; padding:12px; font-weight:bold; background:#b91c1c; border:none;"><i class="fas fa-camera"></i> START LIVE CAMERA</button>
                 </div>
                 <div id="pipCaptureControls" class="hidden" style="display:flex; gap:5px; justify-content:center;">
                     <button onclick="window.capturePipPhoto()" class="warning" style="flex:1; padding:12px; font-weight:bold;"><i class="fas fa-camera"></i> SNAP PHOTO</button>
@@ -12911,33 +12891,35 @@ window.pipLoadMemberWorkspace = () => {
                 </div>
                 
                 <div style="display:flex; align-items:center; margin:15px 0;">
-                    <div style="flex:1; height:1px; background:#cbd5e1;"></div>
-                    <div style="padding:0 10px; font-size:11px; font-weight:bold; color:#64748b;">OR UPLOAD IMAGE FILE</div>
-                    <div style="flex:1; height:1px; background:#cbd5e1;"></div>
+                    <div style="flex:1; height:1px; background:#fecaca;"></div>
+                    <div style="padding:0 10px; font-size:11px; font-weight:bold; color:#b91c1c;">OR UPLOAD IMAGE FILE</div>
+                    <div style="flex:1; height:1px; background:#fecaca;"></div>
                 </div>
                 
-                <input type="file" id="pipImageFile" accept="image/*" style="width:100%; padding:10px; box-sizing:border-box; border:1px solid #e2e8f0; border-radius:4px; font-size:12px;">
+                <input type="file" id="pipImageFile" accept="image/*" style="width:100%; padding:10px; box-sizing:border-box; border:1px solid #fecaca; border-radius:4px; font-size:12px;">
             </div>
         `;
 
         let submitSection = "";
         
-        // 🔴 STRICT SHOW CAUSE LOCKOUT (Triggers on Initial OR Resubmission Deadline Expiry)
+        // 🔴 SHOW CAUSE LOCKOUT (CAMERA ONLY FOR CLEARANCE LETTER)
         if (pip.reportStatus === "SUBMISSION_EXPIRED" || pip.reportStatus === "RESUBMISSION_EXPIRED" || pip.reportStatus === "SHOW_CAUSE_ISSUED") {
             submitSection = `
             <div class="panel" style="border:2px solid #b91c1c; background:#fff1f2;">
-                <h4 style="margin-top:0; color:#b91c1c;"><i class="fas fa-lock"></i> SYSTEM LOCKED</h4>
-                <div style="font-size:12px; color:#7f1d1d; font-weight:bold; text-transform:uppercase; line-height:1.5;">
-                    YOU HAVE FAILED TO MEET THE FINAL DEADLINE AND GRACE PERIOD. YOUR UPLOAD PORTAL IS NOW PERMANENTLY LOCKED.<br><br>
-                    AWAIT AN OFFICIAL SHOW CAUSE NOTICE FROM YOUR MENTOR REGARDING ADMINISTRATIVE ACTION.
+                <h4 style="margin-top:0; color:#b91c1c;"><i class="fas fa-camera"></i> UPLOAD OFFICIAL CLEARANCE LETTER</h4>
+                <div style="font-size:12px; color:#7f1d1d; font-weight:bold; margin-bottom:15px; text-transform:uppercase;">
+                    YOUR PORTAL IS LOCKED DUE TO MISSED DEADLINES. YOU MUST UPLOAD A LIVE PHOTO OF YOUR SIGNED CLEARANCE/PERMISSION LETTER TO PROCEED.
                 </div>
+                ${cameraUiHtml}
+                <button onclick="pipSubmitPermissionLetter()" class="danger" style="width:100%; padding:15px; font-weight:900;">
+                    <i class="fas fa-upload"></i> SUBMIT CLEARANCE LETTER
+                </button>
             </div>`;
         } 
-        // 🟢 PERMISSION LETTER SUBMISSION STATES
         else if (pip.reportStatus === "PERMISSION_SUBMITTED") {
             submitSection = `<div class="panel" style="background:#f0f9ff; border:1px solid #bae6fd;"><div style="color:#0369a1; font-weight:bold;"><i class="fas fa-clock"></i> Clearance Letter submitted! Awaiting administrator to review and unlock portal.</div>${uploadTimeHtml}</div>`;
         }
-        // 🟡 NORMAL FLOWS (REPORT IMAGE UPLOAD)
+        // 🟡 NORMAL FLOWS (PDF UPLOAD ALLOWED)
         else if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
             submitSection = `<div class="panel" style="background:#f0f9ff; border:1px solid #bae6fd;"><div style="color:#0369a1; font-weight:bold;"><i class="fas fa-clock"></i> Report submitted! Awaiting administrator audit and evaluation.</div>${uploadTimeHtml}</div>`;
         } else if (pip.reportStatus === "APPROVED") {
@@ -12945,22 +12927,22 @@ window.pipLoadMemberWorkspace = () => {
         } else if (pip.reportStatus === "RESUBMISSION_REQUESTED") {
             submitSection = `
             <div class="panel" style="border:2px dashed #f59e0b; background:#fffbeb;">
-                <h4 style="margin-top:0; color:#b45309;"><i class="fas fa-undo"></i> Resubmission Required</h4>
-                <div style="font-size:12px; color:#92400e; font-weight:bold; margin-bottom:15px;">Your previous submission was rejected. Please capture or upload a revised image deliverable.</div>
-                ${cameraUiHtml}
+                <h4 style="margin-top:0; color:#b45309;"><i class="fas fa-undo"></i> Resubmission Required (PDF Mode)</h4>
+                <div style="font-size:12px; color:#92400e; font-weight:bold; margin-bottom:15px;">Your previous submission was rejected. Please upload the revised PDF deliverable before the new deadline.</div>
+                <input type="file" id="pipPdfFile" accept="application/pdf" style="margin-bottom:15px; border:2px solid #fcd34d; width:100%; padding:10px; box-sizing:border-box; background:white;">
                 <button onclick="pipSubmitMemberReport()" class="warning" style="width:100%; padding:15px; font-weight:900;">
-                    <i class="fas fa-paper-plane"></i> SUBMIT REVISED REPORT
+                    <i class="fas fa-paper-plane"></i> SUBMIT REVISED PDF REPORT
                 </button>
                 ${uploadTimeHtml}
             </div>`;
         } else {
             submitSection = `
             <div class="panel" style="border:2px dashed var(--metro-blue);">
-                <h4 style="margin-top:0; color:var(--metro-blue);"><i class="fas fa-camera"></i> Deliverable Submission (Image Only)</h4>
-                <div style="font-size:12px; color:#991b1b; font-weight:bold; margin-bottom:15px;">Document submission is OPEN. Only Images are accepted.</div>
-                ${cameraUiHtml}
+                <h4 style="margin-top:0; color:var(--metro-blue);"><i class="fas fa-file-pdf"></i> Deliverable Submission (PDF Mode Only)</h4>
+                <div style="font-size:12px; color:#991b1b; font-weight:bold; margin-bottom:15px;">Document submission is OPEN. Only PDF deliverables are accepted.</div>
+                <input type="file" id="pipPdfFile" accept="application/pdf" style="margin-bottom:15px; border:2px solid #cbd5e1; width:100%; padding:10px; box-sizing:border-box;">
                 <button onclick="pipSubmitMemberReport()" class="success" style="width:100%; padding:15px; font-weight:900;">
-                    <i class="fas fa-paper-plane"></i> SUBMIT FORMAL REPORT
+                    <i class="fas fa-paper-plane"></i> SUBMIT FORMAL PDF REPORT
                 </button>
                 ${uploadTimeHtml}
             </div>`;
@@ -13024,7 +13006,6 @@ window.pipLoadMemberWorkspace = () => {
         `;
     });
 };
-
 // --- UPDATED ADMIN RECORDS (HANDLES CLEARANCE REVIEWS) ---
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
