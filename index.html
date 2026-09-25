@@ -12541,7 +12541,7 @@ window.pipOpenPromoteModal = async (uid, encodedTargetName) => {
         }
     };
 };
-  // --- UPDATED ADMIN RECORDS (INCLUDES PROMOTION PATHWAY) ---
+  // --- UPDATED ADMIN RECORDS (MARKS CLOSED CASES AS DONE) ---
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
@@ -12559,88 +12559,95 @@ window.pipLoadAdminRecords = () => {
             const pip = c.val();
             const uid = c.key;
 
-            // 🟢 CLOSED CASE RENDERING (PASSED) - Now includes PROMOTE button
-            if (pip.status === "PIP_PASSED") {
-                tbody.innerHTML += `
-                    <tr style="background:#ecfdf5;">
-                        <td style="padding:15px;">
-                            <b style="font-size:14px;">${pip.targetName}</b><br>
-                            <small style="color:#065f46; font-weight:bold;">PIP_PASSED</small>
-                        </td>
-                        <td colspan="4" style="text-align:center; color:#065f46; font-weight:bold; font-size:13px;">
-                            <i class="fas fa-check-circle"></i> Case Satisfactorily Closed. All other data purged from view.
-                        </td>
-                        <td style="text-align:center; vertical-align:middle;">
-                            <button onclick="pipOpenPromoteModal('${uid}', '${encodeURIComponent(pip.targetName)}')" class="success" style="width:100%; font-weight:900; background:#10b981; margin-bottom:5px;"><i class="fas fa-arrow-up"></i> PROMOTE TO HIGHER GRADE</button>
-                            <button onclick="pipGenerateResultPDF('${uid}', true, ${JSON.stringify(pip.assessmentResult).replace(/"/g, '&quot;')})" class="info" style="width:100%; font-weight:900; background:#0f172a; margin-bottom:5px;"><i class="fas fa-file-pdf"></i> EXAM RESULT</button>
-                            <button onclick="pipGenerateFinalActionPDF('${uid}')" class="success" style="width:100%; font-weight:900; margin-bottom:5px;"><i class="fas fa-print"></i> FINAL RECORD</button>
-                            <input id="waPhone_${uid}" placeholder="WhatsApp (With Code)" style="width:100%; padding:6px; border:2px solid #0284c7; margin-bottom:5px; font-family:monospace; font-size:10px; font-weight:bold; text-align:center; box-sizing:border-box;">
-                            <button onclick="pipDispatchFullReportWhatsApp('${uid}')" class="info" style="width:100%; font-weight:900; background:#0284c7;"><i class="fab fa-whatsapp"></i> WA REPORT</button>
-                        </td>
-                    </tr>
-                `;
-                return; 
-            }
-
             const deadlineMs = new Date(pip.submissionDeadline).getTime();
             const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
+            
+            // Determine if the PIP is completely finished
+            const isClosed = ["PIP_PASSED", "PROMOTED", "DEMOTED", "TERMINATED"].includes(pip.status);
 
-            if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
-                const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
-                update(ref(db, `pip_records/${uid}`), { reportStatus: newStatus });
-                return; 
-            }
+            // Only apply Auto-Lockers and Wipers to active cases
+            if (!isClosed) {
+                if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
+                    const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
+                    update(ref(db, `pip_records/${uid}`), { reportStatus: newStatus });
+                    return; 
+                }
 
-            if (pip.submittedAt && pip.submittedAt > (deadlineMs + GRACE_PERIOD_MS) && (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED")) {
-                const newStatus = pip.reportStatus === "RESUBMITTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
-                update(ref(db, `pip_records/${uid}`), { reportPdf: null, reportStatus: newStatus, submittedAt: null });
-                return; 
+                if (pip.submittedAt && pip.submittedAt > (deadlineMs + GRACE_PERIOD_MS) && (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED")) {
+                    const newStatus = pip.reportStatus === "RESUBMITTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
+                    update(ref(db, `pip_records/${uid}`), { reportPdf: null, reportStatus: newStatus, submittedAt: null });
+                    return; 
+                }
             }
 
             let reportBadge = `<span style="background:#fef3c7; color:#d97706; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SUBMISSION PENDING</span>`;
             let actions = `<small style="color:#64748b;">Awaiting Report</small>`;
 
-            if (pip.reportStatus === "SHOW_CAUSE_ISSUED") {
-                reportBadge = `<span style="background:#000; color:#fff; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SHOW CAUSE ISSUED</span>`;
-                actions = `<div style="display:flex; flex-direction:column; gap:5px;"><small style="color:#b91c1c; font-weight:bold;">Awaiting Board Clearance</small><button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}', true)" class="secondary" style="padding:4px 8px; font-size:10px; font-weight:bold; background:#e2e8f0; color:#0f172a; border:none; cursor:pointer;"><i class="fab fa-whatsapp"></i> RESEND NOTICE</button></div>`;
-            }
-            else if (pip.reportStatus === "PERMISSION_SUBMITTED") {
-                reportBadge = `<span style="background:#fce7f3; color:#be185d; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">CLEARANCE UPLOADED</span>`;
-                actions = `<button onclick="pipOpenReviewModal('${uid}')" class="danger" style="padding:5px 10px; font-size:11px; font-weight:bold; background:#be185d; border:none;"><i class="fas fa-camera"></i> REVIEW CLEARANCE</button>`;
-            }
-            else if (pip.reportStatus === "SUBMISSION_EXPIRED" || pip.reportStatus === "RESUBMISSION_EXPIRED") {
-                reportBadge = `<span style="background:#fecaca; color:#7f1d1d; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">DEADLINE EXCEEDED</span>`;
-                actions = `<button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}', false)" class="danger" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-gavel"></i> ISSUE SHOW CAUSE</button>`;
-            }
-            else if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
-                const timeVal = typeof pip.submittedAt === 'number' ? pip.submittedAt : Date.now();
-                const isLate = timeVal > (deadlineMs + GRACE_PERIOD_MS);
-                const bg = isLate ? "#fee2e2" : "#dbeafe";
-                const color = isLate ? "#b91c1c" : "#1e40af";
-                const label = isLate ? "SUBMITTED LATE" : "REPORT READY";
-
-                reportBadge = `<span style="background:${bg}; color:${color}; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">${label}</span>`;
-                actions = `<button onclick="pipOpenReviewModal('${uid}')" class="info" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-eye"></i> REVIEW DOC</button>`;
+            // 🔴 CLOSED CASE OVERRIDE (Replaces "Pending" with "Case Closed")
+            if (isClosed) {
+                reportBadge = `<span style="background:#e2e8f0; color:#475569; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;"><i class="fas fa-archive"></i> CASE CLOSED</span>`;
+                actions = `<small style="color:#0f172a; font-weight:bold;"><i class="fas fa-check-double"></i> Finalized</small>`;
             } 
+            // 🟡 ACTIVE CASE REPORT STATUSES
+            else {
+                if (pip.reportStatus === "SHOW_CAUSE_ISSUED") {
+                    reportBadge = `<span style="background:#000; color:#fff; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">SHOW CAUSE ISSUED</span>`;
+                    actions = `<div style="display:flex; flex-direction:column; gap:5px;"><small style="color:#b91c1c; font-weight:bold;">Awaiting Board Clearance</small><button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}', true)" class="secondary" style="padding:4px 8px; font-size:10px; font-weight:bold; background:#e2e8f0; color:#0f172a; border:none; cursor:pointer;"><i class="fab fa-whatsapp"></i> RESEND NOTICE</button></div>`;
+                }
+                else if (pip.reportStatus === "PERMISSION_SUBMITTED") {
+                    reportBadge = `<span style="background:#fce7f3; color:#be185d; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">CLEARANCE UPLOADED</span>`;
+                    actions = `<button onclick="pipOpenReviewModal('${uid}')" class="danger" style="padding:5px 10px; font-size:11px; font-weight:bold; background:#be185d; border:none;"><i class="fas fa-camera"></i> REVIEW CLEARANCE</button>`;
+                }
+                else if (pip.reportStatus === "SUBMISSION_EXPIRED" || pip.reportStatus === "RESUBMISSION_EXPIRED") {
+                    reportBadge = `<span style="background:#fecaca; color:#7f1d1d; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">DEADLINE EXCEEDED</span>`;
+                    actions = `<button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}', false)" class="danger" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-gavel"></i> ISSUE SHOW CAUSE</button>`;
+                }
+                else if (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED") {
+                    const timeVal = typeof pip.submittedAt === 'number' ? pip.submittedAt : Date.now();
+                    const isLate = timeVal > (deadlineMs + GRACE_PERIOD_MS);
+                    const bg = isLate ? "#fee2e2" : "#dbeafe";
+                    const color = isLate ? "#b91c1c" : "#1e40af";
+                    const label = isLate ? "SUBMITTED LATE" : "REPORT READY";
+
+                    reportBadge = `<span style="background:${bg}; color:${color}; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">${label}</span>`;
+                    actions = `<button onclick="pipOpenReviewModal('${uid}')" class="info" style="padding:5px 10px; font-size:11px; font-weight:bold;"><i class="fas fa-eye"></i> REVIEW DOC</button>`;
+                }
+                else if (pip.reportStatus === "APPROVED") {
+                    reportBadge = `<span style="background:#ecfdf5; color:#065f46; padding:4px 8px; border-radius:4px; font-weight:bold; font-size:10px;">REPORT APPROVED</span>`;
+                    actions = `<small style="color:#065f46; font-weight:bold;"><i class="fas fa-check"></i> Verified</small>`;
+                }
+            }
 
             let assessActions = "";
             let statusDisplay = pip.status.replace(/_/g, ' ');
 
-            if (pip.status === "ASSESSMENT_SCHEDULED" || pip.status === "REATTEMPT_SCHEDULED") {
-                assessActions = `<button onclick="pipStartAssessment('${uid}')" class="warning" style="width:100%; font-weight:900;"><i class="fas fa-play"></i> START EXAM</button>`;
-            } else if (pip.status === "PIP_FAILED_AWAITING_DECISION") {
-                assessActions = `<button onclick="pipOpenFailDecision('${uid}')" class="danger" style="width:100%; font-weight:900;"><i class="fas fa-gavel"></i> DECISION REQ</button>`;
-                statusDisplay = `<span style="color:#b91c1c; font-weight:bold;">FAILED / AWAITING DECISION</span>`;
-            } 
-            // 🔴 CLOSED CASE RENDERING (PROMOTED / DEMOTED / TERMINATED)
-            else if (["DEMOTED", "TERMINATED", "PROMOTED"].includes(pip.status)) {
-                const statusColor = pip.status === "PROMOTED" ? "#10b981" : "red";
-                statusDisplay = `<span style="color:${statusColor}; font-weight:bold;">${pip.status}</span>`;
+            // 🔴 RIGHT COLUMN ACTIONS: CLOSED CASES (WA Report, PDFs, Promote)
+            if (isClosed) {
+                const isPositive = ["PIP_PASSED", "PROMOTED"].includes(pip.status);
+                const statusColor = isPositive ? "#10b981" : "red";
+                statusDisplay = `<span style="color:${statusColor}; font-weight:bold;">${pip.status.replace(/_/g, ' ')}</span>`;
+                
+                let promoteBtn = "";
+                if (pip.status === "PIP_PASSED") {
+                    promoteBtn = `<button onclick="pipOpenPromoteModal('${uid}', '${encodeURIComponent(pip.targetName)}')" class="success" style="width:100%; font-weight:900; background:#10b981; margin-bottom:5px;"><i class="fas fa-arrow-up"></i> PROMOTE TO HIGHER GRADE</button>`;
+                }
+
                 assessActions = `
-                    <button onclick="pipGenerateFinalActionPDF('${uid}')" class="info" style="width:100%; font-weight:900; background:#0f172a; margin-bottom:5px;"><i class="fas fa-print"></i> PRINT RECORD</button>
+                    ${promoteBtn}
+                    <button onclick="pipGenerateResultPDF('${uid}', ${isPositive}, ${JSON.stringify(pip.assessmentResult || {}).replace(/"/g, '&quot;')})" class="info" style="width:100%; font-weight:900; background:#0f172a; margin-bottom:5px;"><i class="fas fa-file-pdf"></i> EXAM RESULT</button>
+                    <button onclick="pipGenerateFinalActionPDF('${uid}')" class="success" style="width:100%; font-weight:900; margin-bottom:5px;"><i class="fas fa-print"></i> FINAL RECORD</button>
                     <input id="waPhone_${uid}" placeholder="WhatsApp (With Code)" style="width:100%; padding:6px; border:2px solid #0284c7; margin-bottom:5px; font-family:monospace; font-size:10px; font-weight:bold; text-align:center; box-sizing:border-box;">
                     <button onclick="pipDispatchFullReportWhatsApp('${uid}')" class="info" style="width:100%; font-weight:900; background:#0284c7;"><i class="fab fa-whatsapp"></i> WA REPORT</button>
                 `;
+            }
+            // 🟡 RIGHT COLUMN ACTIONS: ACTIVE CASES (Exams & Fail Decisions)
+            else {
+                if (pip.status === "ASSESSMENT_SCHEDULED" || pip.status === "REATTEMPT_SCHEDULED") {
+                    assessActions = `<button onclick="pipStartAssessment('${uid}')" class="warning" style="width:100%; font-weight:900;"><i class="fas fa-play"></i> START EXAM</button>`;
+                } else if (pip.status === "PIP_FAILED_AWAITING_DECISION") {
+                    assessActions = `<button onclick="pipOpenFailDecision('${uid}')" class="danger" style="width:100%; font-weight:900;"><i class="fas fa-gavel"></i> DECISION REQ</button>`;
+                    statusDisplay = `<span style="color:#b91c1c; font-weight:bold;">FAILED / AWAITING DECISION</span>`;
+                }
             }
 
             let assessmentText = `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`;
@@ -12649,7 +12656,7 @@ window.pipLoadAdminRecords = () => {
             }
 
             tbody.innerHTML += `
-                <tr>
+                <tr ${isClosed ? 'style="background:#f8fafc;"' : ''}>
                     <td><b>${pip.targetName}</b><br><small style="color:#64748b;">Status: ${statusDisplay}</small></td>
                     <td style="font-size:11px;"><span style="color:var(--metro-red);"><b>Deadline:</b> ${new Date(pip.submissionDeadline).toLocaleString('en-IN')}</span></td>
                     <td style="font-size:12px;"><b>${pip.reason}</b><br><i style="color:#475569;">${pip.tasks.substring(0, 40)}...</i></td>
