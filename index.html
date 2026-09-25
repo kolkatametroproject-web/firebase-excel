@@ -12400,7 +12400,77 @@ window.pipSubmitPermissionLetter = async () => {
         uploadToDb(window.pipCapturedImageBase64);
     }
 };
-// --- UPDATED ADMIN RECORDS (RESTORED PRINT BUTTONS FOR CLOSED CASES) ---
+// --- NEW: FULL PIP AUDIT REPORT WHATSAPP DISPATCHER ---
+window.pipDispatchFullReportWhatsApp = async (uid) => {
+    const snap = await get(ref(db, `pip_records/${uid}`));
+    if (!snap.exists()) return alert("⚠️ Record not found.");
+    const pip = snap.val();
+
+    let phone = prompt("ENTER WHATSAPP NUMBER (WITH COUNTRY CODE) TO DISPATCH FULL AUDIT REPORT:");
+    if (!phone) return alert("Dispatch Cancelled.");
+
+    // Helper to format timestamps safely
+    const safeDate = (timestamp) => timestamp ? new Date(timestamp).toLocaleString('en-IN') : "NOT RECORDED";
+    const deadlineDate = new Date(pip.submissionDeadline).toLocaleString('en-IN');
+    const submitDate = pip.submittedAt ? new Date(pip.submittedAt).toLocaleString('en-IN') : "NOT SUBMITTED / MISSED";
+
+    // Build the properly spaced, multi-line message
+    let msg = `🚇 *METRO RAILWAY PLATFORM SAFETY PROJECT*\n*OFFICIAL PERFORMANCE IMPROVEMENT PLAN (PIP) AUDIT REPORT*\n\n`;
+    
+    msg += `*PERSONNEL:* ${pip.targetName.toUpperCase()}\n`;
+    msg += `*CURRENT STATUS:* ${pip.status.replace(/_/g, ' ')}\n\n`;
+
+    msg += `--- [ 1. DIRECTIVES & ASSIGNMENT ] ---\n`;
+    msg += `*ISSUED ON:* ${pip.startDate}\n`;
+    msg += `*ISSUED BY:* ${(pip.issuedBy || "SYSTEM").toUpperCase()}\n`;
+    msg += `*REASON:* ${pip.reason.toUpperCase()}\n`;
+    msg += `*ASSIGNED TASKS:* ${pip.tasks.toUpperCase()}\n\n`;
+
+    msg += `--- [ 2. SUBMISSION LOG ] ---\n`;
+    msg += `*DEADLINE:* ${deadlineDate}\n`;
+    msg += `*SUBMITTED AT:* ${submitDate}\n`;
+    msg += `*DOCUMENT STATUS:* ${pip.reportStatus.replace(/_/g, ' ')}\n\n`;
+
+    if (pip.assessmentResult) {
+        msg += `--- [ 3. OFFLINE ASSESSMENT ] ---\n`;
+        msg += `*EVALUATED AT:* ${safeDate(pip.assessmentResult.evaluatedAt)}\n`;
+        msg += `*EXAMINER:* ${(pip.assessmentResult.evaluatedBy || "ADMIN").toUpperCase()}\n`;
+        msg += `*TOTAL SCORE:* ${pip.assessmentResult.totalScored} / ${pip.assessmentResult.totalMax} (${pip.assessmentResult.percentage}%)\n`;
+        msg += `*BREAKDOWN:*\n`;
+        pip.assessmentResult.log.forEach(q => {
+            msg += `> Question ${q.qn}: ${q.marks} / ${q.max}\n`;
+        });
+        msg += `\n`;
+    }
+
+    msg += `--- [ 4. FINAL ADMINISTRATIVE ACTION ] ---\n`;
+    if (pip.status === "PIP_PASSED") {
+        msg += `*ACTION TAKEN:* REINSTATEMENT TO NORMAL DUTIES\n`;
+        msg += `*COMPLETED AT:* ${safeDate(pip.completedAt)}\n`;
+    } else if (pip.status === "DEMOTED") {
+        msg += `*ACTION TAKEN:* OFFICIAL DEMOTION\n`;
+        msg += `*NEW DESIGNATION:* ${pip.demotionRole.toUpperCase()}\n`;
+        msg += `*COMPLETED AT:* ${safeDate(pip.completedAt)}\n`;
+    } else if (pip.status === "TERMINATED") {
+        msg += `*ACTION TAKEN:* TERMINATION OF DUTIES\n`;
+        msg += `*AUTHORITY REMARKS:* ${(pip.terminationRemarks || "NONE").toUpperCase()}\n`;
+        msg += `*COMPLETED AT:* ${safeDate(pip.completedAt)}\n`;
+    } else {
+        msg += `*ACTION TAKEN:* PENDING FINAL BOARD DECISION\n`;
+        msg += `*LATEST REMARKS:* ${(pip.adminRemarks || "NONE").toUpperCase()}\n`;
+    }
+
+    msg += `\n_[ THIS IS A SYSTEM GENERATED AUDIT LOG. NO SIGNATURE REQUIRED. ]_`;
+
+    // We bypass the generic `getProfessionalWhatsappUrl` here because we WANT to keep 
+    // the formatting (newlines \n, bolding *, and blockquotes >) for this specific report.
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
+    const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`;
+    window.open(whatsappUrl, '_blank');
+};
+
+
+// --- UPDATED ADMIN RECORDS (INCLUDES THE NEW 'WA REPORT' BUTTON) ---
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
@@ -12418,8 +12488,7 @@ window.pipLoadAdminRecords = () => {
             const pip = c.val();
             const uid = c.key;
 
-            // --- RESTORED: CLOSED CASE RENDERING (PASSED) ---
-            // This ensures the Admin can still see the print buttons for passed students
+            // 🟢 CLOSED CASE RENDERING (PASSED) - Now includes WA Report Button
             if (pip.status === "PIP_PASSED") {
                 tbody.innerHTML += `
                     <tr style="background:#ecfdf5;">
@@ -12432,7 +12501,8 @@ window.pipLoadAdminRecords = () => {
                         </td>
                         <td style="text-align:center; vertical-align:middle;">
                             <button onclick="pipGenerateResultPDF('${uid}', true, ${JSON.stringify(pip.assessmentResult).replace(/"/g, '&quot;')})" class="info" style="width:100%; font-weight:900; background:#0f172a; margin-bottom:5px;"><i class="fas fa-file-pdf"></i> EXAM RESULT</button>
-                            <button onclick="pipGenerateFinalActionPDF('${uid}')" class="success" style="width:100%; font-weight:900;"><i class="fas fa-print"></i> FINAL RECORD</button>
+                            <button onclick="pipGenerateFinalActionPDF('${uid}')" class="success" style="width:100%; font-weight:900; margin-bottom:5px;"><i class="fas fa-print"></i> FINAL RECORD</button>
+                            <button onclick="pipDispatchFullReportWhatsApp('${uid}')" class="info" style="width:100%; font-weight:900; background:#0284c7;"><i class="fab fa-whatsapp"></i> WA REPORT</button>
                         </td>
                     </tr>
                 `;
@@ -12442,6 +12512,7 @@ window.pipLoadAdminRecords = () => {
             const deadlineMs = new Date(pip.submissionDeadline).getTime();
             const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
 
+            // 🚨 Auto-Locker Logic
             if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
                 const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
                 update(ref(db, `pip_records/${uid}`), { reportStatus: newStatus });
@@ -12462,7 +12533,7 @@ window.pipLoadAdminRecords = () => {
                 actions = `
                     <div style="display:flex; flex-direction:column; gap:5px;">
                         <small style="color:#b91c1c; font-weight:bold;">Awaiting Board Clearance</small>
-                        <button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}', true)" class="secondary" style="padding:4px 8px; font-size:10px; font-weight:bold; background:#e2e8f0; border:none;"><i class="fab fa-whatsapp"></i> RESEND NOTICE</button>
+                        <button onclick="pipIssueShowCause('${uid}', '${encodeURIComponent(pip.targetName)}', true)" class="secondary" style="padding:4px 8px; font-size:10px; font-weight:bold; background:#e2e8f0; color:#0f172a; border:none; cursor:pointer;"><i class="fab fa-whatsapp"></i> RESEND NOTICE</button>
                     </div>`;
             }
             else if (pip.reportStatus === "PERMISSION_SUBMITTED") {
@@ -12493,10 +12564,13 @@ window.pipLoadAdminRecords = () => {
                 assessActions = `<button onclick="pipOpenFailDecision('${uid}')" class="danger" style="width:100%; font-weight:900;"><i class="fas fa-gavel"></i> DECISION REQ</button>`;
                 statusDisplay = `<span style="color:#b91c1c; font-weight:bold;">FAILED / AWAITING DECISION</span>`;
             } 
-            // --- RESTORED: CLOSED CASE RENDERING (DEMOTED / TERMINATED) ---
+            // 🔴 CLOSED CASE RENDERING (DEMOTED / TERMINATED) - Now includes WA Report Button
             else if (["DEMOTED", "TERMINATED"].includes(pip.status)) {
                 statusDisplay = `<span style="color:red; font-weight:bold;">${pip.status}</span>`;
-                assessActions = `<button onclick="pipGenerateFinalActionPDF('${uid}')" class="info" style="width:100%; font-weight:900; background:#0f172a;"><i class="fas fa-print"></i> PRINT RECORD</button>`;
+                assessActions = `
+                    <button onclick="pipGenerateFinalActionPDF('${uid}')" class="info" style="width:100%; font-weight:900; background:#0f172a; margin-bottom:5px;"><i class="fas fa-print"></i> PRINT RECORD</button>
+                    <button onclick="pipDispatchFullReportWhatsApp('${uid}')" class="info" style="width:100%; font-weight:900; background:#0284c7;"><i class="fab fa-whatsapp"></i> WA REPORT</button>
+                `;
             }
 
             let assessmentText = `<span style="color:#94a3b8; font-size:11px;">Not Scheduled</span>`;
