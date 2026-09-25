@@ -12400,14 +12400,17 @@ window.pipSubmitPermissionLetter = async () => {
         uploadToDb(window.pipCapturedImageBase64);
     }
 };
-// --- NEW: FULL PIP AUDIT REPORT WHATSAPP DISPATCHER ---
+// --- FULL PIP AUDIT REPORT WHATSAPP DISPATCHER (NO POPUPS) ---
 window.pipDispatchFullReportWhatsApp = async (uid) => {
     const snap = await get(ref(db, `pip_records/${uid}`));
     if (!snap.exists()) return alert("⚠️ Record not found.");
     const pip = snap.val();
 
-    let phone = prompt("ENTER WHATSAPP NUMBER (WITH COUNTRY CODE) TO DISPATCH FULL AUDIT REPORT:");
-    if (!phone) return alert("Dispatch Cancelled.");
+    // Read phone number directly from the embedded native input field in the table
+    const phoneInput = document.getElementById(`waPhone_${uid}`);
+    const phone = phoneInput ? phoneInput.value.trim() : "";
+
+    if (!phone) return alert("⚠️ Please type the WhatsApp number in the box above the WA Report button.");
 
     // Helper to format timestamps safely
     const safeDate = (timestamp) => timestamp ? new Date(timestamp).toLocaleString('en-IN') : "NOT RECORDED";
@@ -12462,15 +12465,13 @@ window.pipDispatchFullReportWhatsApp = async (uid) => {
 
     msg += `\n_[ THIS IS A SYSTEM GENERATED AUDIT LOG. NO SIGNATURE REQUIRED. ]_`;
 
-    // We bypass the generic `getProfessionalWhatsappUrl` here because we WANT to keep 
-    // the formatting (newlines \n, bolding *, and blockquotes >) for this specific report.
     const cleanPhone = phone.replace(/[^0-9]/g, '');
     const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`;
     window.open(whatsappUrl, '_blank');
 };
 
 
-// --- UPDATED ADMIN RECORDS (INCLUDES THE NEW 'WA REPORT' BUTTON) ---
+// --- UPDATED ADMIN RECORDS (INJECTS NATIVE PHONE BOX FOR WA REPORT) ---
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
@@ -12488,7 +12489,7 @@ window.pipLoadAdminRecords = () => {
             const pip = c.val();
             const uid = c.key;
 
-            // 🟢 CLOSED CASE RENDERING (PASSED) - Now includes WA Report Button
+            // 🟢 CLOSED CASE RENDERING (PASSED) - Injects Native Input Box
             if (pip.status === "PIP_PASSED") {
                 tbody.innerHTML += `
                     <tr style="background:#ecfdf5;">
@@ -12502,6 +12503,7 @@ window.pipLoadAdminRecords = () => {
                         <td style="text-align:center; vertical-align:middle;">
                             <button onclick="pipGenerateResultPDF('${uid}', true, ${JSON.stringify(pip.assessmentResult).replace(/"/g, '&quot;')})" class="info" style="width:100%; font-weight:900; background:#0f172a; margin-bottom:5px;"><i class="fas fa-file-pdf"></i> EXAM RESULT</button>
                             <button onclick="pipGenerateFinalActionPDF('${uid}')" class="success" style="width:100%; font-weight:900; margin-bottom:5px;"><i class="fas fa-print"></i> FINAL RECORD</button>
+                            <input id="waPhone_${uid}" placeholder="WhatsApp (With Code)" style="width:100%; padding:6px; border:2px solid #0284c7; margin-bottom:5px; font-family:monospace; font-size:10px; font-weight:bold; text-align:center; box-sizing:border-box;">
                             <button onclick="pipDispatchFullReportWhatsApp('${uid}')" class="info" style="width:100%; font-weight:900; background:#0284c7;"><i class="fab fa-whatsapp"></i> WA REPORT</button>
                         </td>
                     </tr>
@@ -12564,11 +12566,12 @@ window.pipLoadAdminRecords = () => {
                 assessActions = `<button onclick="pipOpenFailDecision('${uid}')" class="danger" style="width:100%; font-weight:900;"><i class="fas fa-gavel"></i> DECISION REQ</button>`;
                 statusDisplay = `<span style="color:#b91c1c; font-weight:bold;">FAILED / AWAITING DECISION</span>`;
             } 
-            // 🔴 CLOSED CASE RENDERING (DEMOTED / TERMINATED) - Now includes WA Report Button
+            // 🔴 CLOSED CASE RENDERING (DEMOTED / TERMINATED) - Injects Native Input Box
             else if (["DEMOTED", "TERMINATED"].includes(pip.status)) {
                 statusDisplay = `<span style="color:red; font-weight:bold;">${pip.status}</span>`;
                 assessActions = `
                     <button onclick="pipGenerateFinalActionPDF('${uid}')" class="info" style="width:100%; font-weight:900; background:#0f172a; margin-bottom:5px;"><i class="fas fa-print"></i> PRINT RECORD</button>
+                    <input id="waPhone_${uid}" placeholder="WhatsApp (With Code)" style="width:100%; padding:6px; border:2px solid #0284c7; margin-bottom:5px; font-family:monospace; font-size:10px; font-weight:bold; text-align:center; box-sizing:border-box;">
                     <button onclick="pipDispatchFullReportWhatsApp('${uid}')" class="info" style="width:100%; font-weight:900; background:#0284c7;"><i class="fab fa-whatsapp"></i> WA REPORT</button>
                 `;
             }
@@ -12591,7 +12594,6 @@ window.pipLoadAdminRecords = () => {
         });
     });
 };
-
 // --- DYNAMIC SHOW CAUSE ISSUER ---
 window.toggleScOtherInput = (selectId) => {
     const selectEl = document.getElementById(selectId);
