@@ -14193,7 +14193,6 @@ window.loadWorkflows = async () => {
             let statusMarkup = "";
             let actionMarkup = "";
 
-            // 1. INLINE FAILURE / PUNISHMENT HANDLING (NO POPUPS)
             if (isExpired && (wf.status === "ASSIGNED" || wf.status.includes("REDO"))) {
                 statusMarkup = `<span style="background:#fee2e2; color:#b91c1c; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">LOCKED: FAILED DEADLINE</span>`;
                 
@@ -14218,7 +14217,6 @@ window.loadWorkflows = async () => {
                     actionMarkup = `<span style="color:#b91c1c; font-weight:bold; font-size:11px;">Pending Admin Decision</span>`;
                 }
             } else {
-                // 2. NORMAL ACTIVE TASK LOGIC
                 let badgeColor = "#3b82f6";
                 if(wf.status === "COMPLETED") badgeColor = "#10b981";
                 else if(wf.status.includes("REDO")) badgeColor = "#d97706";
@@ -14227,20 +14225,21 @@ window.loadWorkflows = async () => {
 
                 statusMarkup = `<span style="background:${badgeColor}20; color:${badgeColor}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${wf.status.replace(/_/g, ' ')}</span>`;
                 
+                // --- STRICT BUTTON RENDERING LOGIC ---
                 if (isMine && (wf.status === "ASSIGNED" || wf.status.includes("REDO"))) {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'STUDENT')" class="info" style="font-size:10px; padding:6px; margin-right:4px;">SUBMIT WORK</button>`;
                 } 
-                if ((isPH || isAdmin) && wf.status === "PENDING_PH") {
+                if (isPH && wf.status === "PENDING_PH") {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="warning" style="font-size:10px; padding:6px; margin-right:4px;">PH REVIEW</button>`;
                 } 
-                if ((isHOD || isAdmin) && wf.status === "PENDING_HOD") {
+                if (isHOD && wf.status === "PENDING_HOD") {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="success" style="font-size:10px; padding:6px; background:#065f46; margin-right:4px;">HOD REVIEW</button>`;
                 }
             }
 
-            // 3. ALLOW ADMIN, PH, AND HOD TO DELETE THE TASK FROM THE DB ENTIRELY
-            if (isAdmin || isPH || isHOD) {
-                actionMarkup += `<div style="margin-top:5px;"><button onclick="cancelWorkflow('${c.key}')" class="danger" style="font-size:10px; padding:8px; width:100%; background:#991b1b; color:white; font-weight:bold; border-radius:4px;"><i class="fas fa-trash"></i> PERMANENTLY DELETE TASK</button></div>`;
+            // Always allow Admins/PH to delete the task entirely
+            if (isAdmin || isPH) {
+                actionMarkup += `<div style="margin-top:5px;"><button onclick="cancelWorkflow('${c.key}')" class="secondary" style="font-size:10px; padding:6px; width:100%; background:#64748b; color:white;"><i class="fas fa-trash"></i> REMOVE TASK</button></div>`;
             }
 
             tbody.innerHTML += `
@@ -14472,44 +14471,68 @@ window.wfReviewTask = async (isApproved) => {
     const key = document.getElementById("wfActiveKey").value;
     const remarks = document.getElementById("wfAdminRemarks").value.trim();
     
-    if (!isApproved && !remarks) return alert("Remarks are mandatory for rejection.");
+    if (!isApproved && !remarks) return alert("Remarks are mandatory for rejection (REDO).");
 
-    const snap = await get(ref(db, `workflows/${key}`));
-    if (!snap.exists()) return;
-    const wf = snap.val();
-    
-    // Safety Role Check
-    const myEmail = (currentUser?.email || "").toLowerCase();
-    const isPH = window.PH_EMAILS && window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
-    const isHOD = window.HOD_EMAILS && window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
-    
-    let nextStatus = "";
-    let updatePayload = { adminRemarks: remarks || null };
-
-    if (wf.status === "PENDING_PH") {
-        if (!isPH && !isAdmin) return alert("⛔ Unauthorized: Only Project Heads can review at this stage.");
-        nextStatus = isApproved ? "PENDING_HOD" : "REDO_PH";
-        
-    } else if (wf.status === "PENDING_HOD") {
-        if (!isHOD) return alert("⛔ Unauthorized: Only the Head of Department (HOD) can approve or reject tasks at this stage.");
-        nextStatus = isApproved ? "COMPLETED" : "REDO_HOD";
-        
-        // AUTOMATIC CLEANUP: Purge the heavy PDF/PPT file from the DB after final HOD approval
-        if (isApproved) {
-            updatePayload.studentFile = null;
-            updatePayload.studentFileName = null;
-        }
-    }
-
-    if (!nextStatus) return alert("Invalid workflow state.");
-
-    updatePayload.status = nextStatus;
+    const btn = document.activeElement;
+    const originalText = btn.innerText;
+    btn.innerText = "⏳ PROCESSING...";
+    btn.disabled = true;
 
     try {
+        const snap = await get(ref(db, `workflows/${key}`));
+        if (!snap.exists()) throw new Error("Task not found.");
+        const wf = snap.val();
+        
+        // STRICT ROLE CHECK (HOD explicitly separated from PH)
+        const myEmail = (currentUser?.email || "").toLowerCase();
+        const isPH = window.PH_EMAILS && window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
+        const isHOD = window.HOD_EMAILS && window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
+        
+        let nextStatus = "";
+        let updatePayload = { adminRemarks: remarks || null };
+
+        if (wf.status === "PENDING_PH") {
+            if (!isPH) throw new Error("⛔ Unauthorized: Only Project Heads can review at this stage.");
+            nextStatus = isApproved ? "PENDING_HOD" : "REDO_PH";
+            
+        } else if (wf.status === "PENDING_HOD") {
+            if (!isHOD) throw new Error("⛔ Unauthorized: Only the Head of Department (HOD) can approve or reject tasks at this stage.");
+            nextStatus = isApproved ? "COMPLETED" : "REDO_HOD";
+            
+            // AUTOMATIC CLEANUP: Purge the heavy PDF/PPT file from the DB after final HOD approval
+            if (isApproved) {
+                updatePayload.studentFile = null;
+                updatePayload.studentFileName = null;
+            }
+        }
+
+        if (!nextStatus) throw new Error("Invalid workflow state.");
+
+        updatePayload.status = nextStatus;
+
+        // 1. Update Database
         await update(ref(db, `workflows/${key}`), updatePayload);
+        
+        // 2. Fetch User's Email for Notification
+        const uSnap = await get(ref(db, `users/${wf.targetUid}`));
+        const uData = uSnap.exists() ? uSnap.val() : {};
+        const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+
+        // 3. Send Notification Email
+        if (targetEmail) {
+            let statusText = isApproved ? "APPROVED / FORWARDED" : "REJECTED (REDO REQUIRED)";
+            if (nextStatus === "COMPLETED") statusText = "FINAL APPROVAL (COMPLETED)";
+            await window.sendStatusEmailNotification(targetEmail, wf.targetName, wf.desc, statusText, remarks);
+        }
+
+        alert(`✅ Task successfully reviewed.\nAutomated Email sent to: ${targetEmail || 'None'}`);
         document.getElementById("wfActionModal").classList.add("hidden");
+
     } catch (e) {
-        alert("Action failed: " + e.message);
+        alert(e.message);
+    } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
     }
 };
   window.openAdminUserEmails = async (uid) => {
@@ -14633,6 +14656,45 @@ Metro Railway Platform Safety Project (MRPSP)`;
     } catch (error) {
         console.error("❌ Email Dispatch Failed:", error);
         return false;
+    }
+};
+  // --- EMAIL DISPATCHER HELPER FOR STATUS UPDATES (REDO/APPROVE) ---
+window.sendStatusEmailNotification = async (emailTo, studentName, taskDesc, statusText, remarks) => {
+    const subject = `Task Update: ${statusText} [MRPSP]`;
+
+    const emailBody = `Dear ${studentName},
+
+An update has been made to your assigned task on the Metro Railway Platform Safety Project (MRPSP) Portal.
+
+=== TASK UPDATE ===
+Task Description: ${taskDesc}
+New Status: ${statusText}
+Authority Remarks: ${remarks || "No additional remarks provided."}
+
+REQUIRED ACTION:
+Please log in to the secure MRPSP portal to review this update. If your task requires a REDO, please ensure you submit the revised deliverables promptly.
+
+--------------------------------------------------
+This is a system-generated automated dispatch. Please do not reply to this email.
+
+Sincerely,
+System Administrator
+Metro Railway Platform Safety Project (MRPSP)`;
+
+    const scriptUrl = "https://script.google.com/macros/s/AKfycbzNYJmAEExIf5zQQu0ardSr5-zHAstNzxqxleFT80olrKVJGwPr31ewMIAYTGi__Q5jnw/exec";
+    const formData = new URLSearchParams();
+    formData.append("to", emailTo);
+    formData.append("subject", subject);
+    formData.append("body", emailBody);
+
+    try {
+        fetch(scriptUrl, {
+            method: 'POST',
+            body: formData,
+            mode: 'no-cors' 
+        }).then(() => console.log("✅ Update Email push requested."));
+    } catch (error) {
+        console.error("❌ Update Email Dispatch Failed:", error);
     }
 };
 </script>
