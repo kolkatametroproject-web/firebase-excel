@@ -3023,38 +3023,49 @@ tr:hover { background: #fcfcfd; }
 </div>
 
 <!-- SECURE PDF VIEWER MODAL -->
+<!-- SECURE PDF VIEWER MODAL -->
 <div id="secureDocModal" class="modal-overlay hidden" style="z-index: 4000;">
     <div class="panel" style="width:90%; max-width:1000px; height:85vh; display:flex; flex-direction:column; padding:0; overflow:hidden;" oncontextmenu="return false;">
         <div style="background:#0f172a; color:white; padding:15px; display:flex; justify-content:space-between; align-items:center;">
             <h3 style="margin:0; color:white;"><i class="fas fa-shield-alt"></i> Secure Viewer</h3>
             <button onclick="document.getElementById('secureDocModal').classList.add('hidden')" class="danger">CLOSE</button>
         </div>
-        <!-- Overlapping div to block right clicks and interaction with the iframe context menu -->
-        <div style="position:relative; flex-grow:1;">
-            <div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5; background:transparent;"></div>
-            <iframe id="securePdfIframe" style="width:100%; height:100%; border:none; z-index:1;" src=""></iframe>
+        <!-- Fixed: Removed transparent blocking div so users can scroll the document -->
+        <div style="position:relative; flex-grow:1; background:#334155;">
+            <iframe id="securePdfIframe" style="width:100%; height:100%; border:none;" src=""></iframe>
         </div>
     </div>
 </div>
 
 <!-- WORKFLOW ACTION MODAL -->
+<!-- WORKFLOW ACTION MODAL -->
 <div id="wfActionModal" class="modal-overlay hidden" style="z-index: 4000;">
     <div class="panel" style="width:500px; max-width:95%; border-top:5px solid var(--metro-blue);">
         <h3 id="wfModalTitle" style="margin-top:0;">Task Action</h3>
         <input type="hidden" id="wfActiveKey">
+        
         <div id="wfStudentSection" class="hidden">
             <label style="font-size:11px; font-weight:bold;">Submit Your Work / Links / Remarks</label>
-            <textarea id="wfStudentRemarks" rows="4" placeholder="Type your submission here..."></textarea>
-            <button onclick="wfSubmitWork()" class="success" style="width:100%; margin-top:10px;">SUBMIT TO PROJECT HEAD</button>
+            <textarea id="wfStudentRemarks" rows="3" placeholder="Type your submission here..."></textarea>
+            
+            <label style="font-size:11px; font-weight:bold; margin-top:15px; display:block; color:var(--metro-blue);">Attach Document (PDF, PPT, PPTX) - Optional</label>
+            <input type="file" id="wfStudentFile" accept=".pdf, .ppt, .pptx, application/pdf, application/vnd.ms-powerpoint, application/vnd.openxmlformats-officedocument.presentationml.presentation" style="margin-bottom:10px; width:100%; border:2px dashed #cbd5e1; padding:10px; background:#f8fafc;">
+            
+            <button onclick="wfSubmitWork()" class="success" style="width:100%; margin-top:10px; font-weight:900;">SUBMIT TO PROJECT HEAD</button>
         </div>
+        
         <div id="wfAdminSection" class="hidden">
+            <div id="wfStudentSubmissionDisplay" style="background:#f8fafc; padding:15px; border:1px solid #cbd5e1; border-radius:6px; margin-bottom:15px; font-size:13px; line-height:1.5;">
+                <!-- Filled via JS -->
+            </div>
             <label style="font-size:11px; font-weight:bold; color:var(--metro-red);">Authority Remarks (Required for Denial)</label>
             <textarea id="wfAdminRemarks" rows="3" placeholder="Provide feedback or reason for rejection..."></textarea>
             <div style="display:flex; gap:10px; margin-top:10px;">
-                <button onclick="wfReviewTask(true)" class="success" style="flex:1;">✅ APPROVE (PASS)</button>
-                <button onclick="wfReviewTask(false)" class="danger" style="flex:1;">❌ DENY (REDO)</button>
+                <button onclick="wfReviewTask(true)" class="success" style="flex:1; font-weight:900;">✅ APPROVE</button>
+                <button onclick="wfReviewTask(false)" class="danger" style="flex:1; font-weight:900;">❌ DENY (REDO)</button>
             </div>
         </div>
+        
         <button class="secondary" onclick="document.getElementById('wfActionModal').classList.add('hidden')" style="width:100%; margin-top:15px;">CANCEL</button>
     </div>
 </div>
@@ -13989,11 +14000,30 @@ window.viewSecureDoc = async (key) => {
     const snap = await get(ref(db, `secure_docs/${key}`));
     if (!snap.exists()) return;
     const data = snap.val();
-    // Use #toolbar=0&navpanes=0 to hide print/download buttons native to browser PDF viewers
-    document.getElementById("securePdfIframe").src = data.fileData + "#toolbar=0&navpanes=0&scrollbar=0";
+    
+    const base64Data = data.fileData;
+    const iframe = document.getElementById("securePdfIframe");
+
+    // Fix: Convert Base64 to Blob URL to prevent Blank Screens and URI limits
+    if (base64Data && base64Data.startsWith("data:application/pdf")) {
+        const arr = base64Data.split(',');
+        const bstr = atob(arr[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while(n--) {
+            u8arr[n] = bstr.charCodeAt(n);
+        }
+        const blob = new Blob([u8arr], {type: 'application/pdf'});
+        const blobUrl = URL.createObjectURL(blob);
+        
+        // It is safe to add #toolbar=0 to a Blob URL
+        iframe.src = blobUrl + "#toolbar=0&navpanes=0";
+    } else {
+        iframe.src = base64Data; // Fallback for images or external links
+    }
+
     document.getElementById("secureDocModal").classList.remove("hidden");
 };
-
 window.deleteSecureDoc = async (key) => {
     if (confirm("Permanently delete this secure document?")) {
         await remove(ref(db, `secure_docs/${key}`));
@@ -14027,7 +14057,6 @@ window.wfAssignTask = async () => {
         document.getElementById("wfDeadline").value = "";
     } catch (e) { alert("Error: " + e.message); }
 };
-
 window.loadWorkflows = async () => {
     if (isAdmin) {
         document.getElementById("adminWorkflowPanel").style.display = "block";
@@ -14063,7 +14092,9 @@ window.loadWorkflows = async () => {
             let statusMarkup = "";
             let actionMarkup = "";
 
+            // 1. STATUS & STUDENT/REVIEW ACTIONS
             if (isExpired && (wf.status === "ASSIGNED" || wf.status.includes("REDO"))) {
+                // If deadline passed, lock the student out.
                 statusMarkup = `<span style="background:#fee2e2; color:#b91c1c; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">LOCKED: DISCIPLINARY ACTION PENDING</span>`;
             } else {
                 let badgeColor = "#3b82f6";
@@ -14073,16 +14104,22 @@ window.loadWorkflows = async () => {
 
                 statusMarkup = `<span style="background:${badgeColor}20; color:${badgeColor}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${wf.status}</span>`;
                 
-                // Determine Actions
+                // Determine normal actions if NOT expired
                 if (isMine && (wf.status === "ASSIGNED" || wf.status.includes("REDO"))) {
-                    actionMarkup = `<button onclick="openWfAction('${c.key}', 'STUDENT')" class="info" style="font-size:10px; padding:6px;">SUBMIT WORK</button>`;
-                } else if ((isPH || isAdmin) && wf.status === "PENDING_PH") {
-                    actionMarkup = `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="warning" style="font-size:10px; padding:6px;">PH REVIEW</button>`;
-                } else if ((isHOD || isAdmin) && wf.status === "PENDING_HOD") {
-                    actionMarkup = `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="success" style="font-size:10px; padding:6px; background:#065f46;">HOD REVIEW</button>`;
-                } else if (isAdmin) {
-                    actionMarkup = `<button onclick="deleteWorkflow('${c.key}')" class="danger" style="font-size:10px; padding:6px;">DELETE</button>`;
+                    actionMarkup += `<button onclick="openWfAction('${c.key}', 'STUDENT')" class="info" style="font-size:10px; padding:6px; margin-right:4px;">SUBMIT WORK</button>`;
+                } 
+                if ((isPH || isAdmin) && wf.status === "PENDING_PH") {
+                    actionMarkup += `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="warning" style="font-size:10px; padding:6px; margin-right:4px;">PH REVIEW</button>`;
+                } 
+                if ((isHOD || isAdmin) && wf.status === "PENDING_HOD") {
+                    actionMarkup += `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="success" style="font-size:10px; padding:6px; background:#065f46; margin-right:4px;">HOD REVIEW</button>`;
                 }
+            }
+
+            // 2. ADMIN & PH OVERRIDE: ALWAYS ABLE TO CANCEL/DELETE TASK
+            // This is placed outside the "isExpired" check so it always appears for authorities
+            if (isAdmin || isPH) {
+                actionMarkup += `<button onclick="cancelWorkflow('${c.key}')" class="danger" style="font-size:10px; padding:6px; background:#991b1b;"><i class="fas fa-trash"></i> DELETE TASK</button>`;
             }
 
             tbody.innerHTML += `
@@ -14091,42 +14128,106 @@ window.loadWorkflows = async () => {
                     <td style="font-weight:bold;">${wf.targetName}</td>
                     <td style="font-size:11px; color:var(--metro-red);"><b>${new Date(wf.deadline).toLocaleString('en-IN')}</b></td>
                     <td>${statusMarkup}<br>${wf.adminRemarks ? `<small style="color:red; font-style:italic;">Notes: ${wf.adminRemarks}</small>` : ''}</td>
-                    <td style="text-align:center;">${actionMarkup}</td>
+                    <td style="text-align:center; white-space:nowrap;">${actionMarkup}</td>
                 </tr>
             `;
         });
     });
 };
 
-window.openWfAction = (key, mode) => {
+window.openWfAction = async (key, mode) => {
     document.getElementById("wfActiveKey").value = key;
     document.getElementById("wfStudentSection").classList.add("hidden");
     document.getElementById("wfAdminSection").classList.add("hidden");
     document.getElementById("wfStudentRemarks").value = "";
+    document.getElementById("wfStudentFile").value = ""; 
     document.getElementById("wfAdminRemarks").value = "";
 
     if (mode === "STUDENT") {
         document.getElementById("wfModalTitle").innerText = "Submit Assignment";
         document.getElementById("wfStudentSection").classList.remove("hidden");
+        document.getElementById("wfActionModal").classList.remove("hidden");
     } else {
-        document.getElementById("wfModalTitle").innerText = "Review Submission";
+        document.getElementById("wfModalTitle").innerText = "Review Student Submission";
+        document.getElementById("wfStudentSubmissionDisplay").innerHTML = "<i class='fas fa-sync fa-spin'></i> Loading submission data...";
         document.getElementById("wfAdminSection").classList.remove("hidden");
+        document.getElementById("wfActionModal").classList.remove("hidden");
+
+        const snap = await get(ref(db, `workflows/${key}`));
+        if (snap.exists()) {
+            const wf = snap.val();
+            let fileLink = "";
+            if (wf.studentFile) {
+                fileLink = `<div style="margin-top:15px; padding:10px; background:#e0f2fe; border:1px solid #bae6fd; border-radius:6px; text-align:center;">
+                    <a href="${wf.studentFile}" download="${wf.studentFileName || 'student_document'}" style="color:#0369a1; font-weight:900; text-decoration:none; font-size:14px;">
+                        <i class="fas fa-file-download" style="font-size:18px;"></i> Download Attached Document
+                    </a><br><small style="color:#0284c7;">${wf.studentFileName || 'Attached File'}</small>
+                </div>`;
+            }
+            
+            document.getElementById("wfStudentSubmissionDisplay").innerHTML = `
+                <div style="color:var(--metro-slate); font-weight:bold; margin-bottom:5px;">STUDENT REMARKS:</div>
+                <div style="color:#0f172a; white-space:pre-wrap; font-size:14px;">${wf.studentWork || '<i>No text remarks provided.</i>'}</div>
+                ${fileLink}
+            `;
+        }
     }
-    document.getElementById("wfActionModal").classList.remove("hidden");
 };
 
 window.wfSubmitWork = async () => {
     const key = document.getElementById("wfActiveKey").value;
     const work = document.getElementById("wfStudentRemarks").value.trim();
-    if (!work) return alert("Provide submission details.");
-    
-    await update(ref(db, `workflows/${key}`), { 
-        studentWork: work, 
-        status: "PENDING_PH", 
-        submittedAt: serverTimestamp() 
-    });
-    document.getElementById("wfActionModal").classList.add("hidden");
+    const fileInput = document.getElementById("wfStudentFile");
+    const file = fileInput.files[0];
+
+    if (!work && !file) return alert("Please provide text remarks or upload a document.");
+
+    const btn = document.activeElement;
+    const originalText = btn.innerText;
+    btn.innerText = "⏳ UPLOADING...";
+    btn.disabled = true;
+
+    const uploadToDb = async (base64Data, fileName) => {
+        try {
+            await update(ref(db, `workflows/${key}`), { 
+                studentWork: work, 
+                studentFile: base64Data || null,
+                studentFileName: fileName || null,
+                status: "PENDING_PH", 
+                submittedAt: serverTimestamp() 
+            });
+            alert("✅ Work Submitted Successfully!");
+            document.getElementById("wfActionModal").classList.add("hidden");
+        } catch (err) {
+            alert("Error: " + err.message);
+        } finally {
+            btn.innerText = originalText;
+            btn.disabled = false;
+        }
+    };
+
+    if (file) {
+        if (file.size > 10 * 1024 * 1024) {
+            btn.innerText = originalText;
+            btn.disabled = false;
+            return alert("File is too large. Max allowed size is 10MB.");
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => uploadToDb(e.target.result, file.name);
+        reader.readAsDataURL(file);
+    } else {
+        uploadToDb(null, null);
+    }
 };
+
+// Replaces the old deleteWorkflow function
+window.cancelWorkflow = async (key) => {
+    if(confirm("⚠ CANCEL TASK?\n\nAre you sure you want to cancel and delete this task? This action cannot be undone.")) {
+        await remove(ref(db, `workflows/${key}`));
+        alert("✅ Task Cancelled and Removed.");
+    }
+};
+
 
 window.wfReviewTask = async (isApproved) => {
     const key = document.getElementById("wfActiveKey").value;
@@ -14150,10 +14251,6 @@ window.wfReviewTask = async (isApproved) => {
     });
     
     document.getElementById("wfActionModal").classList.add("hidden");
-};
-
-window.deleteWorkflow = async (key) => {
-    if(confirm("Delete this workflow entirely?")) await remove(ref(db, `workflows/${key}`));
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
