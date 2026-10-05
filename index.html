@@ -5238,34 +5238,39 @@ setTimeout(() => {
     initSwipeButton('RETURN');
 }, 1000);
 window.saveOfficialName = async () => {
-    const nameInput = document.getElementById("officialNameInput");
-    // Remove special chars from name to be safe
-    const rawName = nameInput.value || ""; 
-const name = rawName.replace(/[.#$\[\]]/g, "").trim();  
-  const uName = (u && u.name) ? u.name.replace(/[.#$\[\]]/g, "").trim() : "Unknown User";
+    const rawName = document.getElementById("officialNameInput").value || "";
+    const name = rawName.replace(/[.#$\[\]]/g, "").trim();
+    if (name.length < 3) return alert("Please enter a valid name (3+ chars).");
 
-    if(name.length < 3) return alert("Please enter a valid name (3+ chars).");
-
-    const btn = nameInput.nextElementSibling;
-    btn.innerText = "Creating Profile...";
+    const btn = document.querySelector("#nameModal button");
+    btn.innerText = "Saving Profile...";
     btn.disabled = true;
 
     try {
-        await set(ref(db, `users/${currentUser.uid}`), {
+        const userSnap = await get(ref(db, `users/${currentUser.uid}`));
+        const currentData = userSnap.exists() ? userSnap.val() : {};
+
+        const payload = {
             name: name,
             email: currentUser.email,
-            banned: false,
-            faceData: null,
-            createdAt: serverTimestamp(),
             last_login: serverTimestamp()
-        });
+        };
+
+        // Allow updates only if admin granted permission
+        if (currentData.canEditPersonalEmails === true) {
+            payload.personalEmail1 = document.getElementById("personalEmail1").value.trim() || null;
+            payload.personalEmail2 = document.getElementById("personalEmail2").value.trim() || null;
+        }
+
+        await update(ref(db, `users/${currentUser.uid}`), payload);
         document.getElementById("nameModal").classList.add("hidden");
-    } catch(e) {
-        alert("Error: " + e.message);
+    } catch (e) {
+        alert("Error saving profile: " + e.message);
+    } finally {
         btn.innerText = "Save & Continue";
         btn.disabled = false;
     }
-}
+};
 function showLogin() {
     document.getElementById("loginSection").classList.remove("hidden");
     document.getElementById("appScreen").classList.add("hidden");
@@ -14344,6 +14349,36 @@ window.adminSaveUserEmails = async () => {
         alert("Failed to save: " + e.message);
     }
 };
+  function openUserProfileModal(userData) {
+    const inp1 = document.getElementById("personalEmail1");
+    const inp2 = document.getElementById("personalEmail2");
+    const lockNote = document.getElementById("userEmailLockNote");
+
+    inp1.value = userData.personalEmail1 || "";
+    inp2.value = userData.personalEmail2 || "";
+
+    if (userData.canEditPersonalEmails === true) {
+        inp1.disabled = false;
+        inp2.disabled = false;
+        inp1.style.background = "#fff";
+        inp2.style.background = "#fff";
+        inp1.style.cursor = "text";
+        inp2.style.cursor = "text";
+        lockNote.innerText = "You have permission to update your contact emails.";
+        lockNote.style.color = "#15803d";
+    } else {
+        inp1.disabled = true;
+        inp2.disabled = true;
+        inp1.style.background = "#f1f5f9";
+        inp2.style.background = "#f1f5f9";
+        inp1.style.cursor = "not-allowed";
+        inp2.style.cursor = "not-allowed";
+        lockNote.innerText = "Personal emails are locked by Admin. Contact administrator to modify.";
+        lockNote.style.color = "#b91c1c";
+    }
+
+    document.getElementById("nameModal").classList.remove("hidden");
+}
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
