@@ -14144,26 +14144,47 @@ window.loadWorkflows = async () => {
             const wf = c.val();
             const isMine = (wf.targetUid === currentUser.uid);
             
-            // Visibility Check
             if (!isAdmin && !isPH && !isHOD && !isMine) return;
 
             const isExpired = Date.now() > wf.deadline;
             let statusMarkup = "";
             let actionMarkup = "";
 
-            // 1. STATUS & STUDENT/REVIEW ACTIONS
+            // 1. INLINE FAILURE / PUNISHMENT HANDLING (NO POPUPS)
             if (isExpired && (wf.status === "ASSIGNED" || wf.status.includes("REDO"))) {
-                // If deadline passed, lock the student out.
-                statusMarkup = `<span style="background:#fee2e2; color:#b91c1c; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">LOCKED: DISCIPLINARY ACTION PENDING</span>`;
+                statusMarkup = `<span style="background:#fee2e2; color:#b91c1c; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">LOCKED: FAILED DEADLINE</span>`;
+                
+                if (isAdmin || isPH) {
+                    // Inject Inline Dropdown right into the table cell
+                    actionMarkup = `
+                        <div style="background:#fff1f2; border:1px solid #fecaca; padding:8px; border-radius:6px; min-width:220px; text-align:left;">
+                            <label style="font-size:9px; font-weight:bold; color:#b91c1c;">DISCIPLINARY ACTION:</label>
+                            <select id="wfFail_${c.key}" onchange="toggleWfFailInputs('${c.key}')" style="width:100%; font-size:10px; padding:6px; margin-bottom:5px; border:2px solid #f87171; background:white; font-weight:bold;">
+                                <option value="">-- Select Action --</option>
+                                <option value="EXTEND">Grant Extra Time</option>
+                                <option value="PIP">Issue PIP (Punishment)</option>
+                            </select>
+                            
+                            <div id="wfFailBox_${c.key}" class="hidden" style="display:flex; flex-direction:column; gap:5px;">
+                                <input type="datetime-local" id="wfFailTime_${c.key}" class="hidden" style="font-size:10px; padding:6px; width:100%; box-sizing:border-box; border:1px solid #cbd5e1;">
+                                <input id="wfFailReason_${c.key}" placeholder="Type Official Reason..." style="font-size:10px; padding:6px; width:100%; box-sizing:border-box; border:1px solid #cbd5e1;">
+                                <button onclick="executeWfFailAction('${c.key}', '${wf.targetUid}', '${encodeURIComponent(wf.targetName)}')" class="danger" style="font-size:10px; padding:8px; width:100%; font-weight:900;">EXECUTE DECISION</button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    actionMarkup = `<span style="color:#b91c1c; font-weight:bold; font-size:11px;">Pending Admin Decision</span>`;
+                }
             } else {
+                // 2. NORMAL ACTIVE TASK LOGIC
                 let badgeColor = "#3b82f6";
                 if(wf.status === "COMPLETED") badgeColor = "#10b981";
                 else if(wf.status.includes("REDO")) badgeColor = "#d97706";
                 else if(wf.status.includes("PENDING")) badgeColor = "#8b5cf6";
+                else if(wf.status === "FAILED_PIP_ISSUED") badgeColor = "#991b1b";
 
-                statusMarkup = `<span style="background:${badgeColor}20; color:${badgeColor}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${wf.status}</span>`;
+                statusMarkup = `<span style="background:${badgeColor}20; color:${badgeColor}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${wf.status.replace(/_/g, ' ')}</span>`;
                 
-                // Determine normal actions if NOT expired
                 if (isMine && (wf.status === "ASSIGNED" || wf.status.includes("REDO"))) {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'STUDENT')" class="info" style="font-size:10px; padding:6px; margin-right:4px;">SUBMIT WORK</button>`;
                 } 
@@ -14175,25 +14196,105 @@ window.loadWorkflows = async () => {
                 }
             }
 
-            // 2. ADMIN & PH OVERRIDE: ALWAYS ABLE TO CANCEL/DELETE TASK
-            // This is placed outside the "isExpired" check so it always appears for authorities
+            // Always allow Admins/PH to delete the task entirely
             if (isAdmin || isPH) {
-                actionMarkup += `<button onclick="cancelWorkflow('${c.key}')" class="danger" style="font-size:10px; padding:6px; background:#991b1b;"><i class="fas fa-trash"></i> DELETE TASK</button>`;
+                actionMarkup += `<div style="margin-top:5px;"><button onclick="cancelWorkflow('${c.key}')" class="secondary" style="font-size:10px; padding:6px; width:100%; background:#64748b; color:white;"><i class="fas fa-trash"></i> REMOVE TASK</button></div>`;
             }
 
             tbody.innerHTML += `
-                <tr style="border-bottom: 1px solid #e2e8f0;">
+                <tr style="border-bottom: 1px solid #e2e8f0; ${wf.status === 'FAILED_PIP_ISSUED' ? 'opacity:0.6;' : ''}">
                     <td><b>${wf.desc}</b><br><small style="color:#64748b;">Issued by: ${wf.issuedBy}</small></td>
                     <td style="font-weight:bold;">${wf.targetName}</td>
                     <td style="font-size:11px; color:var(--metro-red);"><b>${new Date(wf.deadline).toLocaleString('en-IN')}</b></td>
                     <td>${statusMarkup}<br>${wf.adminRemarks ? `<small style="color:red; font-style:italic;">Notes: ${wf.adminRemarks}</small>` : ''}</td>
-                    <td style="text-align:center; white-space:nowrap;">${actionMarkup}</td>
+                    <td style="text-align:center; vertical-align:middle;">${actionMarkup}</td>
                 </tr>
             `;
         });
     });
 };
+  // Opens/Closes the inputs inside the table cell based on selection
+window.toggleWfFailInputs = (key) => {
+    const action = document.getElementById(`wfFail_${key}`).value;
+    const box = document.getElementById(`wfFailBox_${key}`);
+    const timeInput = document.getElementById(`wfFailTime_${key}`);
+    
+    if (!action) {
+        box.classList.add("hidden");
+        return;
+    }
+    
+    box.classList.remove("hidden");
+    // Only show the DateTime picker if granting an extension
+    if (action === "EXTEND") {
+        timeInput.classList.remove("hidden");
+    } else {
+        timeInput.classList.add("hidden");
+    }
+};
 
+// Executes the punishment/extension directly to Firebase
+window.executeWfFailAction = async (key, targetUid, encodedTargetName) => {
+    const action = document.getElementById(`wfFail_${key}`).value;
+    const reason = document.getElementById(`wfFailReason_${key}`).value.trim();
+    const timeVal = document.getElementById(`wfFailTime_${key}`).value;
+    const targetName = decodeURIComponent(encodedTargetName);
+    
+    if (!reason) return alert("⚠️ Official Reason / Remarks are mandatory.");
+    
+    const btn = document.activeElement;
+    btn.innerText = "⏳...";
+    btn.disabled = true;
+
+    try {
+        if (action === "EXTEND") {
+            if (!timeVal) return alert("⚠️ Please select the new deadline.");
+            
+            await update(ref(db, `workflows/${key}`), {
+                deadline: new Date(timeVal).getTime(),
+                status: "ASSIGNED", // Unlocks it so student can submit
+                adminRemarks: `EXTENSION GRANTED: ${reason}`,
+                extendedBy: currentUser.name || currentUser.email
+            });
+            alert("✅ Extra time granted. Task is unlocked for the student.");
+            
+        } else if (action === "PIP") {
+            if (!confirm(`Are you sure you want to fail this task and issue a PIP to ${targetName}?`)) {
+                btn.innerText = "EXECUTE DECISION";
+                btn.disabled = false;
+                return;
+            }
+
+            // 1. Fail the workflow task permanently
+            await update(ref(db, `workflows/${key}`), {
+                status: "FAILED_PIP_ISSUED",
+                adminRemarks: `TASK FAILED | PIP ISSUED: ${reason}`
+            });
+            
+            // 2. Automatically generate the PIP record
+            const deadlineMs = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 Days to clear it
+            await set(ref(db, `pip_records/${targetUid}`), {
+                targetUid: targetUid,
+                targetName: targetName,
+                startDate: new Date().toISOString().split('T')[0],
+                endDate: new Date(deadlineMs).toISOString().split('T')[0],
+                submissionDeadline: new Date(deadlineMs).toISOString(),
+                reason: `Task Failure Penalty: ${reason}`,
+                tasks: "You have been penalized for failing a workflow task. Complete the originally assigned task and submit a formal explanation report here.",
+                status: "ACTIVE",
+                reportStatus: "PENDING_SUBMISSION",
+                issuedBy: currentUser.name || currentUser.email,
+                issuedAt: serverTimestamp()
+            });
+            
+            alert("✅ Task Failed. A Performance Improvement Plan has been actively issued to the student.");
+        }
+    } catch (e) {
+        alert("System Error: " + e.message);
+        btn.innerText = "EXECUTE DECISION";
+        btn.disabled = false;
+    }
+};
 window.openWfAction = async (key, mode) => {
     document.getElementById("wfActiveKey").value = key;
     document.getElementById("wfStudentSection").classList.add("hidden");
