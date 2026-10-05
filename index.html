@@ -3082,7 +3082,8 @@ tr:hover { background: #fcfcfd; }
             
             <div>
                 <label style="font-size:11px; font-weight:bold; color:#0f172a; display:block; margin-bottom:5px;">Task Description</label>
-                <input id="wfTaskDesc" placeholder="Describe the task required..." style="margin:0; width:100%; border:2px solid var(--metro-red); border-radius:6px; height:42px; font-weight:500;">
+                <!-- CHANGED TO TEXTAREA: Allows multi-line, paragraphs, and bullet points -->
+                <textarea id="wfTaskDesc" rows="4" placeholder="Describe the task required (you can press Enter for new lines or bullet points)..." style="margin:0; width:100%; border:2px solid var(--metro-red); border-radius:6px; font-weight:500; padding:10px; box-sizing:border-box; resize:vertical; font-family:inherit;"></textarea>
             </div>
             
             <!-- Row 2 -->
@@ -14186,35 +14187,50 @@ window.wfAssignTask = async () => {
     }
 };
 window.loadWorkflows = async () => {
-    if (isAdmin) {
-        document.getElementById("adminWorkflowPanel").style.display = "block";
+    // 1. Crash-Proof Identity Check
+    const myEmail = (currentUser?.email || "").toLowerCase();
+    const isSuperAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === myEmail);
+    const isPH = window.PH_EMAILS && window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
+    const isHOD = window.HOD_EMAILS && window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
+
+    // 2. Force Panel Visibility for Admins
+    const adminPanel = document.getElementById("adminWorkflowPanel");
+    if (isSuperAdmin && adminPanel) {
+        adminPanel.style.display = "block"; // Forces the panel to appear
+        
         const sel = document.getElementById("wfAssignUser");
-        sel.innerHTML = "<option value=''>-- Select Student --</option>";
-        const uSnap = await get(ref(db, "users"));
-        uSnap.forEach(c => {
-            if (!ADMIN_EMAILS.includes(c.val().email.toLowerCase())) {
-                sel.innerHTML += `<option value="${c.key}">${c.val().name || c.val().email}</option>`;
+        if (sel) {
+            sel.innerHTML = "<option value=''>-- Select Student --</option>";
+            try {
+                const uSnap = await get(ref(db, "users"));
+                uSnap.forEach(c => {
+                    const uData = c.val();
+                    // Safety check prevents crash if a user has no email in DB
+                    if (uData && uData.email) {
+                        if (!ADMIN_EMAILS.includes(uData.email.toLowerCase())) {
+                            sel.innerHTML += `<option value="${c.key}">${uData.name || uData.email}</option>`;
+                        }
+                    }
+                });
+            } catch (e) {
+                console.error("Dropdown load failed:", e);
             }
-        });
+        }
     }
 
+    // 3. Render Table
     const tbody = document.getElementById("wfTableBody");
-    
+    if (!tbody) return;
+
     onValue(ref(db, "workflows"), snap => {
         tbody.innerHTML = "";
         if (!snap.exists()) return tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No active workflows.</td></tr>";
-
-        const myEmail = (currentUser?.email || "").toLowerCase();
-        let isPH = false, isHOD = false;
-        if (window.PH_EMAILS) isPH = window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
-        if (window.HOD_EMAILS) isHOD = window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
 
         snap.forEach(c => {
             const wf = c.val();
             const isMine = (wf.targetUid === currentUser.uid);
             
-            // Visibility Check
-            if (!isAdmin && !isPH && !isHOD && !isMine) return;
+            if (!isSuperAdmin && !isPH && !isHOD && !isMine) return;
 
             const isExpired = Date.now() > wf.deadline;
             let statusMarkup = "";
@@ -14223,7 +14239,7 @@ window.loadWorkflows = async () => {
             if (isExpired && (wf.status === "ASSIGNED" || wf.status.includes("REDO"))) {
                 statusMarkup = `<span style="background:#fee2e2; color:#b91c1c; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">LOCKED: FAILED DEADLINE</span>`;
                 
-                if (isAdmin || isPH) {
+                if (isSuperAdmin || isPH) {
                     actionMarkup = `
                         <div style="background:#fff1f2; border:1px solid #fecaca; padding:8px; border-radius:6px; min-width:220px; text-align:left;">
                             <label style="font-size:9px; font-weight:bold; color:#b91c1c;">DISCIPLINARY ACTION:</label>
@@ -14252,11 +14268,10 @@ window.loadWorkflows = async () => {
 
                 statusMarkup = `<span style="background:${badgeColor}20; color:${badgeColor}; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">${wf.status.replace(/_/g, ' ')}</span>`;
                 
-                // --- STRICT BUTTON RENDERING LOGIC ---
                 if (isMine && (wf.status === "ASSIGNED" || wf.status.includes("REDO"))) {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'STUDENT')" class="info" style="font-size:10px; padding:6px; margin-right:4px;">SUBMIT WORK</button>`;
                 } 
-                if (isPH && wf.status === "PENDING_PH") {
+                if ((isPH || isSuperAdmin) && wf.status === "PENDING_PH") {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="warning" style="font-size:10px; padding:6px; margin-right:4px;">PH REVIEW</button>`;
                 } 
                 if (isHOD && wf.status === "PENDING_HOD") {
@@ -14264,12 +14279,11 @@ window.loadWorkflows = async () => {
                 }
             }
 
-            // Always allow Admins/PH to delete the task entirely
-            if (isAdmin || isPH) {
-                actionMarkup += `<div style="margin-top:5px;"><button onclick="cancelWorkflow('${c.key}')" class="secondary" style="font-size:10px; padding:6px; width:100%; background:#64748b; color:white;"><i class="fas fa-trash"></i> REMOVE TASK</button></div>`;
+            if (isSuperAdmin || isPH || isHOD) {
+                actionMarkup += `<div style="margin-top:5px;"><button onclick="cancelWorkflow('${c.key}')" class="danger" style="font-size:10px; padding:8px; width:100%; background:#991b1b; color:white; font-weight:bold; border-radius:4px;"><i class="fas fa-trash"></i> PERMANENTLY DELETE TASK</button></div>`;
             }
 
-            // Inside window.loadWorkflows, update the table row rendering to this:
+            // white-space:pre-wrap preserves your bullet points and line breaks!
             tbody.innerHTML += `
                 <tr style="border-bottom: 1px solid #e2e8f0; ${wf.status === 'FAILED_PIP_ISSUED' ? 'opacity:0.6;' : ''}">
                     <td>
