@@ -14186,6 +14186,7 @@ window.loadWorkflows = async () => {
             const wf = c.val();
             const isMine = (wf.targetUid === currentUser.uid);
             
+            // Visibility Check
             if (!isAdmin && !isPH && !isHOD && !isMine) return;
 
             const isExpired = Date.now() > wf.deadline;
@@ -14233,7 +14234,8 @@ window.loadWorkflows = async () => {
                 if ((isPH || isAdmin) && wf.status === "PENDING_PH") {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="warning" style="font-size:10px; padding:6px; margin-right:4px;">PH REVIEW</button>`;
                 } 
-                if ((isHOD || isAdmin) && wf.status === "PENDING_HOD") {
+                // STRICT LOCK: Only actual HODs can see the HOD review button now (PH/Admin bypass removed)
+                if (isHOD && wf.status === "PENDING_HOD") {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="success" style="font-size:10px; padding:6px; background:#065f46; margin-right:4px;">HOD REVIEW</button>`;
                 }
             }
@@ -14375,7 +14377,6 @@ window.openWfAction = async (key, mode) => {
         }
     }
 };
-
 window.wfSubmitWork = async () => {
     const key = document.getElementById("wfActiveKey").value;
     const work = document.getElementById("wfStudentRemarks").value.trim();
@@ -14389,39 +14390,49 @@ window.wfSubmitWork = async () => {
     btn.innerText = "⏳ UPLOADING...";
     btn.disabled = true;
 
-    const uploadToDb = async (base64Data, fileName) => {
-        try {
-            await update(ref(db, `workflows/${key}`), { 
-                studentWork: work, 
-                studentFile: base64Data || null,
-                studentFileName: fileName || null,
-                status: "PENDING_PH", 
-                submittedAt: serverTimestamp() 
-            });
-            alert("✅ Work Submitted Successfully!");
-            document.getElementById("wfActionModal").classList.add("hidden");
-        } catch (err) {
-            alert("Error: " + err.message);
-        } finally {
-            btn.innerText = originalText;
-            btn.disabled = false;
-        }
-    };
+    try {
+        // SMART ROUTING: Check if this is an HOD resubmission. If yes, bypass the PH.
+        const snap = await get(ref(db, `workflows/${key}`));
+        const currentStatus = snap.exists() ? snap.val().status : "";
+        const nextStatus = (currentStatus === "REDO_HOD") ? "PENDING_HOD" : "PENDING_PH";
 
-    if (file) {
-        if (file.size > 10 * 1024 * 1024) {
-            btn.innerText = originalText;
-            btn.disabled = false;
-            return alert("File is too large. Max allowed size is 10MB.");
+        const uploadToDb = async (base64Data, fileName) => {
+            try {
+                await update(ref(db, `workflows/${key}`), { 
+                    studentWork: work, 
+                    studentFile: base64Data || null,
+                    studentFileName: fileName || null,
+                    status: nextStatus, 
+                    submittedAt: serverTimestamp() 
+                });
+                alert("✅ Work Submitted Successfully!");
+                document.getElementById("wfActionModal").classList.add("hidden");
+            } catch (err) {
+                alert("Error: " + err.message);
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        };
+
+        if (file) {
+            if (file.size > 10 * 1024 * 1024) {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                return alert("File is too large. Max allowed size is 10MB.");
+            }
+            const reader = new FileReader();
+            reader.onload = (e) => uploadToDb(e.target.result, file.name);
+            reader.readAsDataURL(file);
+        } else {
+            uploadToDb(null, null);
         }
-        const reader = new FileReader();
-        reader.onload = (e) => uploadToDb(e.target.result, file.name);
-        reader.readAsDataURL(file);
-    } else {
-        uploadToDb(null, null);
+    } catch (globalErr) {
+        alert("System Error: " + globalErr.message);
+        btn.innerText = originalText;
+        btn.disabled = false;
     }
 };
-
 // Replaces the old deleteWorkflow function
 window.cancelWorkflow = async (key) => {
     if(confirm("⚠ CANCEL TASK?\n\nAre you sure you want to cancel and delete this task? This action cannot be undone.")) {
@@ -14429,8 +14440,6 @@ window.cancelWorkflow = async (key) => {
         alert("✅ Task Cancelled and Removed.");
     }
 };
-
-
 window.wfReviewTask = async (isApproved) => {
     const key = document.getElementById("wfActiveKey").value;
     const remarks = document.getElementById("wfAdminRemarks").value.trim();
@@ -14438,21 +14447,42 @@ window.wfReviewTask = async (isApproved) => {
     if (!isApproved && !remarks) return alert("Remarks are mandatory for rejection.");
 
     const snap = await get(ref(db, `workflows/${key}`));
+    if (!snap.exists()) return;
     const wf = snap.val();
     
+    // Safety Role Check
+    const myEmail = (currentUser?.email || "").toLowerCase();
+    const isPH = window.PH_EMAILS && window.PH_EMAILS.some(e => e.toLowerCase() === myEmail);
+    const isHOD = window.HOD_EMAILS && window.HOD_EMAILS.some(e => e.toLowerCase() === myEmail);
+    
     let nextStatus = "";
+    let updatePayload = { adminRemarks: remarks || null };
+
     if (wf.status === "PENDING_PH") {
+        if (!isPH && !isAdmin) return alert("⛔ Unauthorized: Only Project Heads can review at this stage.");
         nextStatus = isApproved ? "PENDING_HOD" : "REDO_PH";
+        
     } else if (wf.status === "PENDING_HOD") {
+        if (!isHOD) return alert("⛔ Unauthorized: Only the Head of Department (HOD) can approve or reject tasks at this stage.");
         nextStatus = isApproved ? "COMPLETED" : "REDO_HOD";
+        
+        // AUTOMATIC CLEANUP: Purge the heavy PDF/PPT file from the DB after final HOD approval
+        if (isApproved) {
+            updatePayload.studentFile = null;
+            updatePayload.studentFileName = null;
+        }
     }
 
-    await update(ref(db, `workflows/${key}`), { 
-        status: nextStatus, 
-        adminRemarks: remarks || null
-    });
-    
-    document.getElementById("wfActionModal").classList.add("hidden");
+    if (!nextStatus) return alert("Invalid workflow state.");
+
+    updatePayload.status = nextStatus;
+
+    try {
+        await update(ref(db, `workflows/${key}`), updatePayload);
+        document.getElementById("wfActionModal").classList.add("hidden");
+    } catch (e) {
+        alert("Action failed: " + e.message);
+    }
 };
   window.openAdminUserEmails = async (uid) => {
     const snap = await get(ref(db, `users/${uid}`));
@@ -14522,52 +14552,48 @@ window.adminSaveUserEmails = async () => {
 
     document.getElementById("nameModal").classList.remove("hidden");
 }
-// --- EMAIL DISPATCHER HELPER (GOOGLE APPS SCRIPT AUTOMATION) ---
+// --- EMAIL DISPATCHER HELPER (PROFESSIONAL TEMPLATE) ---
 window.sendEmailNotification = async (emailTo, studentName, taskDesc, deadline) => {
     console.log(`[EMAIL ENGINE] Routing to: ${emailTo}`);
 
     const formattedDeadline = new Date(deadline).toLocaleString('en-IN');
-    const subject = "Official Task Assignment [Metro Railway PSP]";
+    const subject = "Action Required: Official Task Assignment [MRPSP]";
 
-    // Prepare Email Body using your exact template
+    // Professional Corporate Email Template
     const emailBody = `Dear ${studentName},
 
-This is an automated notification from the Metro Railway Platform Safety Project Portal.
+Please be advised that a new operational task has been assigned to you via the Metro Railway Platform Safety Project (MRPSP) Portal.
 
-A new task has been assigned to you. Please find the task details below:
-Task: ${taskDesc}
-Submission Deadline: ${formattedDeadline}
+=== TASK DETAILS ===
+Task Description: ${taskDesc}
+Statutory Deadline: ${formattedDeadline}
 
-Please log in to the official portal to review the complete task requirements, instructions, and submission guidelines.
-You are requested to complete and submit the assigned task before the specified deadline.
+REQUIRED ACTION:
+You are required to log in to the secure MRPSP portal at your earliest convenience to review the comprehensive instructions, deliverable requirements, and submission guidelines. Please ensure your deliverables are uploaded and submitted prior to the deadline.
 
-Important: Please ensure that your submission is completed within the prescribed deadline. Late submissions may be subject to the applicable project guidelines.
+COMPLIANCE NOTICE:
+Strict adherence to the aforementioned deadline is mandatory. Late submissions or failure to comply may result in disciplinary action in accordance with project protocols.
 
 --------------------------------------------------
-This is a system-generated email. Please do not reply to this email.
-For any queries or assistance, please use the appropriate communication channel provided on the portal.
+This is a system-generated automated dispatch. Please do not reply to this email.
+For technical assistance or clarifications, utilize the designated communication channels within the portal.
 
-Regards,
-Metro Railway Platform Safety Project Portal
-Automated Notification System`;
+Sincerely,
+System Administrator
+Metro Railway Platform Safety Project (MRPSP)`;
 
-    // Your Google Apps Script Web App URL
     const scriptUrl = "https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec";
 
-    // FIX: Use URLSearchParams to format the payload as standard Form Data.
-    // This prevents the browser from dropping the payload during Google's 302 redirect.
     const formData = new URLSearchParams();
     formData.append("to", emailTo);
     formData.append("subject", subject);
     formData.append("body", emailBody);
 
     try {
-        // We use fetch without await because 'no-cors' mode produces an opaque response.
-        // Waiting for it can sometimes trigger false-positive console errors.
         fetch(scriptUrl, {
             method: 'POST',
             body: formData,
-            mode: 'no-cors' // CRITICAL: Bypasses strict browser CORS blocks
+            mode: 'no-cors' 
         }).then(() => {
             console.log("✅ Email push requested to Google Servers.");
         }).catch((e) => {
