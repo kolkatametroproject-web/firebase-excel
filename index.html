@@ -14198,7 +14198,6 @@ window.loadWorkflows = async () => {
                 statusMarkup = `<span style="background:#fee2e2; color:#b91c1c; padding:4px 8px; border-radius:4px; font-size:10px; font-weight:bold;">LOCKED: FAILED DEADLINE</span>`;
                 
                 if (isAdmin || isPH) {
-                    // Inject Inline Dropdown right into the table cell
                     actionMarkup = `
                         <div style="background:#fff1f2; border:1px solid #fecaca; padding:8px; border-radius:6px; min-width:220px; text-align:left;">
                             <label style="font-size:9px; font-weight:bold; color:#b91c1c;">DISCIPLINARY ACTION:</label>
@@ -14234,15 +14233,14 @@ window.loadWorkflows = async () => {
                 if ((isPH || isAdmin) && wf.status === "PENDING_PH") {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="warning" style="font-size:10px; padding:6px; margin-right:4px;">PH REVIEW</button>`;
                 } 
-                // STRICT LOCK: Only actual HODs can see the HOD review button now (PH/Admin bypass removed)
-                if (isHOD && wf.status === "PENDING_HOD") {
+                if ((isHOD || isAdmin) && wf.status === "PENDING_HOD") {
                     actionMarkup += `<button onclick="openWfAction('${c.key}', 'ADMIN')" class="success" style="font-size:10px; padding:6px; background:#065f46; margin-right:4px;">HOD REVIEW</button>`;
                 }
             }
 
-            // Always allow Admins/PH to delete the task entirely
-            if (isAdmin || isPH) {
-                actionMarkup += `<div style="margin-top:5px;"><button onclick="cancelWorkflow('${c.key}')" class="secondary" style="font-size:10px; padding:6px; width:100%; background:#64748b; color:white;"><i class="fas fa-trash"></i> REMOVE TASK</button></div>`;
+            // 3. ALLOW ADMIN, PH, AND HOD TO DELETE THE TASK FROM THE DB ENTIRELY
+            if (isAdmin || isPH || isHOD) {
+                actionMarkup += `<div style="margin-top:5px;"><button onclick="cancelWorkflow('${c.key}')" class="danger" style="font-size:10px; padding:8px; width:100%; background:#991b1b; color:white; font-weight:bold; border-radius:4px;"><i class="fas fa-trash"></i> PERMANENTLY DELETE TASK</button></div>`;
             }
 
             tbody.innerHTML += `
@@ -14276,8 +14274,7 @@ window.toggleWfFailInputs = (key) => {
         timeInput.classList.add("hidden");
     }
 };
-
-// Executes the punishment/extension directly to Firebase
+// Executes the punishment/extension directly to Firebase AND sends an email if extended
 window.executeWfFailAction = async (key, targetUid, encodedTargetName) => {
     const action = document.getElementById(`wfFail_${key}`).value;
     const reason = document.getElementById(`wfFailReason_${key}`).value.trim();
@@ -14287,24 +14284,49 @@ window.executeWfFailAction = async (key, targetUid, encodedTargetName) => {
     if (!reason) return alert("⚠️ Official Reason / Remarks are mandatory.");
     
     const btn = document.activeElement;
-    btn.innerText = "⏳...";
+    const originalText = btn.innerText;
+    btn.innerText = "⏳ PROCESSING...";
     btn.disabled = true;
 
     try {
         if (action === "EXTEND") {
-            if (!timeVal) return alert("⚠️ Please select the new deadline.");
+            if (!timeVal) {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                return alert("⚠️️ Please select the new deadline.");
+            }
             
+            // 1. Fetch Task Description and User Emails
+            const wfSnap = await get(ref(db, `workflows/${key}`));
+            const taskDesc = wfSnap.exists() ? wfSnap.val().desc : "Extended Workflow Task";
+
+            const uSnap = await get(ref(db, `users/${targetUid}`));
+            const uData = uSnap.exists() ? uSnap.val() : {};
+            const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+
+            // 2. Update Task Status in Database
             await update(ref(db, `workflows/${key}`), {
                 deadline: new Date(timeVal).getTime(),
                 status: "ASSIGNED", // Unlocks it so student can submit
                 adminRemarks: `EXTENSION GRANTED: ${reason}`,
                 extendedBy: currentUser.name || currentUser.email
             });
-            alert("✅ Extra time granted. Task is unlocked for the student.");
+
+            // 3. Send Email Notification
+            if (targetEmail) {
+                await window.sendEmailNotification(
+                    targetEmail, 
+                    targetName, 
+                    `${taskDesc} [DEADLINE EXTENDED - Reason: ${reason}]`, 
+                    timeVal
+                );
+            }
+
+            alert(`✅ Extra time granted. Task is unlocked for the student.\n📧 Automated Email sent to: ${targetEmail || 'None'}`);
             
         } else if (action === "PIP") {
             if (!confirm(`Are you sure you want to fail this task and issue a PIP to ${targetName}?`)) {
-                btn.innerText = "EXECUTE DECISION";
+                btn.innerText = originalText;
                 btn.disabled = false;
                 return;
             }
@@ -14335,7 +14357,9 @@ window.executeWfFailAction = async (key, targetUid, encodedTargetName) => {
         }
     } catch (e) {
         alert("System Error: " + e.message);
-        btn.innerText = "EXECUTE DECISION";
+    } finally {
+        // Restore button state
+        btn.innerText = originalText;
         btn.disabled = false;
     }
 };
@@ -14433,11 +14457,15 @@ window.wfSubmitWork = async () => {
         btn.disabled = false;
     }
 };
-// Replaces the old deleteWorkflow function
+// Permanently deletes the task from the DB, instantly removing it from all screens
 window.cancelWorkflow = async (key) => {
-    if(confirm("⚠ CANCEL TASK?\n\nAre you sure you want to cancel and delete this task? This action cannot be undone.")) {
-        await remove(ref(db, `workflows/${key}`));
-        alert("✅ Task Cancelled and Removed.");
+    if(confirm("⚠ PERMANENTLY CANCEL & DELETE TASK?\n\nAre you sure? This action will completely erase the task from the database. It will instantly disappear from the Student, Project Head, and HOD dashboards.")) {
+        try {
+            await remove(ref(db, `workflows/${key}`));
+            alert("✅ Task has been completely deleted from the database.");
+        } catch (error) {
+            alert("Error deleting task: " + error.message);
+        }
     }
 };
 window.wfReviewTask = async (isApproved) => {
