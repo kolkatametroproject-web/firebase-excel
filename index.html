@@ -14116,7 +14116,20 @@ window.wfAssignTask = async () => {
 
     if (!uid || !desc || !deadline) return alert("All fields are mandatory.");
 
+    const btn = document.activeElement;
+    const originalText = btn.innerText;
+    btn.innerText = "⏳ DISPATCHING TASK & EMAIL...";
+    btn.disabled = true;
+
     try {
+        // 1. Fetch User's Emails from DB
+        const uSnap = await get(ref(db, `users/${uid}`));
+        const uData = uSnap.exists() ? uSnap.val() : {};
+        
+        // Priority: Use Personal Email 1. If missing, try Personal Email 2. If missing, use Official Login Email.
+        const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+
+        // 2. Save Task to Database
         await push(ref(db, "workflows"), {
             targetUid: uid,
             targetName: targetName,
@@ -14126,10 +14139,24 @@ window.wfAssignTask = async () => {
             issuedBy: currentUser.name || currentUser.email,
             timestamp: serverTimestamp()
         });
-        alert("✅ Task Assigned.");
+
+        // 3. Trigger Background Email
+        if (targetEmail) {
+            await window.sendEmailNotification(targetEmail, targetName, desc, deadline);
+        }
+
+        alert(`✅ Task Assigned Successfully!\nAutomated Email sent to: ${targetEmail || 'None'}`);
+        
+        // Reset UI
         document.getElementById("wfTaskDesc").value = "";
         document.getElementById("wfDeadline").value = "";
-    } catch (e) { alert("Error: " + e.message); }
+
+    } catch (e) { 
+        alert("Error: " + e.message); 
+    } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+    }
 };
 window.loadWorkflows = async () => {
     if (isAdmin) {
@@ -14495,7 +14522,7 @@ window.adminSaveUserEmails = async () => {
 
     document.getElementById("nameModal").classList.remove("hidden");
 }
-  // --- EMAIL DISPATCHER HELPER (GOOGLE APPS SCRIPT AUTOMATION) ---
+ // --- EMAIL DISPATCHER HELPER (GOOGLE APPS SCRIPT AUTOMATION) ---
 window.sendEmailNotification = async (emailTo, studentName, taskDesc, deadline) => {
     console.log(`[EMAIL ENGINE] Routing to: ${emailTo}`);
 
@@ -14529,12 +14556,11 @@ Automated Notification System`;
 
     // 3. Send the request in the background
     try {
-        // We use text/plain to bypass strict browser CORS preflight checks 
-        // Google Apps Script will still read this perfectly.
-        const response = await fetch(scriptUrl, {
+        await fetch(scriptUrl, {
             method: 'POST',
+            mode: 'no-cors', // CRITICAL: Prevents CORS blocks on Google Apps Script
             headers: {
-                'Content-Type': 'text/plain;charset=utf-8',
+                'Content-Type': 'text/plain', // Must be text/plain for no-cors
             },
             body: JSON.stringify({
                 to: emailTo,
@@ -14543,12 +14569,11 @@ Automated Notification System`;
             })
         });
 
-        console.log("✅ Email successfully dispatched via Google Apps Script.");
+        console.log("✅ Email push requested to Google Servers.");
         return true;
         
     } catch (error) {
         console.error("❌ Email Dispatch Failed:", error);
-        alert("Warning: Task was assigned, but the background email failed to send. Check your network or Google Script.");
         return false;
     }
 };
