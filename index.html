@@ -4699,54 +4699,94 @@ async function processUpload(dataBase64, fileType, fileName) {
     // This checks if DB connection is active
     await push(ref(db, "history"), uploadData);
 }
+// ==========================================
+// UNIFIED USER SESSION MANAGER (FIXED FOR NEW USERS)
+// ==========================================
 onAuthStateChanged(auth, (user) => {
-    if (!user) { 
-        showLoginScreen(); 
-        return; 
+    if (!user) {
+        if (typeof showLoginScreen === "function") showLoginScreen();
+        return;
     }
-    
+
     currentUser = user;
-    startPresenceSystem(user);  
+    if (typeof startPresenceSystem === "function") startPresenceSystem(user);
 
     const userRef = ref(db, `users/${user.uid}`);
-    
-    // Use 'get' for a single reliable read, or keep onValue if you need live updates
-    get(userRef).then((snap) => {
-        const u = snap.val(); // 'u' is now correctly scoped here
-        
-        // 1. SAFE CHECK: If user record is missing, redirect to profile setup
+
+    // Listen to user data in Realtime DB
+    onValue(userRef, (snap) => {
+        const u = snap.val();
+
+        // 1. BRAND NEW USER (No DB entry yet) OR MISSING NAME
+        // Fix: Show Profile Setup modal instead of kicking them out
         if (!u || !u.name) {
             document.getElementById("loginSection")?.classList.add("hidden");
             document.getElementById("appScreen")?.classList.add("hidden");
+            document.getElementById("bannedScreen")?.classList.add("hidden");
+            document.getElementById("faceModal")?.classList.add("hidden");
+            
             document.getElementById("nameModal")?.classList.remove("hidden");
-            return; 
+            return; // Stop here until they save their profile
         }
 
-        // 2. SAFE NAME PARSING
-        const safeName = (u?.name || "Unknown").toString().replace(/[.#$\[\]]/g, "").trim();
+        // 2. TERMINATED USER
+        if (u.terminated) {
+            alert("ACCOUNT TERMINATED.");
+            signOut(auth);
+            return;
+        }
+
+        // 3. BANNED USER
+        if (u.banned) {
+            document.querySelector("header").style.display = "none";
+            document.getElementById("loginSection")?.classList.add("hidden");
+            document.getElementById("appScreen")?.classList.add("hidden");
+            document.getElementById("faceModal")?.classList.add("hidden");
+            
+            const banScreen = document.getElementById("bannedScreen");
+            if (banScreen) {
+                banScreen.classList.remove("hidden");
+                document.getElementById("displayBanReason").innerText = u.banReason || "Security Violation";
+                document.getElementById("displayBanAction").innerText = u.banAction || "Contact System Administrator Immediately.";
+                document.getElementById("displayBanRemarks").innerText = u.banRemarks || "No additional notes.";
+                
+                const deadline = u.banExpires || 0;
+                if (deadline > 0) {
+                    document.getElementById("bannedTimeDisplay").innerText = "Expiring: " + new Date(deadline).toLocaleString('en-IN');
+                } else {
+                    document.getElementById("bannedTimeDisplay").innerText = "⛔ PERMANENT SUSPENSION";
+                }
+            }
+            return;
+        }
+
+        // 4. ACTIVE USER -> SHOW APP
+        document.getElementById("bannedScreen")?.classList.add("hidden");
+        document.querySelector("header").style.display = "flex";
         
+        currentUser.name = u.name;
+        const safeName = (u.name || "Unknown").toString().replace(/[.#$\[\]]/g, "").trim();
         const userInfoDisplay = document.getElementById("userInfo");
         if (userInfoDisplay) userInfoDisplay.innerText = safeName;
 
-        if (u.terminated) { signOut(auth); return; }
-        
-        if (u.banned) {
-            document.querySelector("header").style.display = "none";
-            document.getElementById("bannedScreen")?.classList.remove("hidden");
-            return; 
-        }
+        document.getElementById("authContainer").classList.remove("hidden");
+        document.getElementById("loginSection").classList.add("hidden");
 
+        // Set Admin Privileges
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
         if (isAdmin) {
             document.getElementById("adminBadge")?.classList.remove("hidden");
             document.getElementById("btnAdmin")?.classList.remove("hidden");
+            if (typeof loadAdminPanel === "function") setTimeout(loadAdminPanel, 2000);
+        } else {
+            document.getElementById("adminBadge")?.classList.add("hidden");
+            document.getElementById("btnAdmin")?.classList.add("hidden");
         }
 
-        // --- 3. PIP ACCESS VERIFICATION LOGIC ---
+        // Check PIP Access
         get(ref(db, `pip_records/${user.uid}`)).then(pipSnap => {
             const btnPip = document.getElementById("btnPip");
             if (btnPip) {
-                // Show if user is Admin OR if they have an active PIP record
                 if (isAdmin || (pipSnap.exists() && pipSnap.val().status !== "REVOKED")) {
                     btnPip.classList.remove("hidden");
                 } else {
@@ -4755,136 +4795,25 @@ onAuthStateChanged(auth, (user) => {
             }
         }).catch(err => console.error("PIP check failed:", err));
 
-    }).catch((error) => {
-        console.error("Database sync failed:", error);
-    });
-});
-   // ==========================================
-// 3. USER SESSION MANAGER
-// ==========================================
-// This function handles what happens when a user logs in or out.
-const manageUserSession = (user) => {
-    
-    // A. NO USER -> SHOW LOGIN SCREEN
-    if (!user) { 
-        showLoginScreen(); 
-        return; 
-    }
-
-    currentUser = user;
-    
-    // Start Presence
-    startPresenceSystem(user);  
-
-    // B. USER FOUND -> LOAD DATA
-    const userRef = ref(db, `users/${user.uid}`);
-    
-    onValue(userRef, (snap) => {
-        const u = snap.val();
-
-        // 1. DATA MISSING?
-        if (!u) {
-            alert("Account data not found. Contact admin.");
-            signOut(auth);
-            return;
-        }
-
-        // 2. TERMINATED?
-        if (u.terminated) { 
-            alert("ACCOUNT TERMINATED."); 
-            signOut(auth); 
-            return; 
-        }
-
-        // 3. BANNED? -> SHOW RED SCREEN WITH DETAILS
-        if (u.banned) {
-            // Hide App Interface
-            document.querySelector("header").style.display = "none";
-            document.getElementById("loginSection").classList.add("hidden");
-            document.getElementById("appScreen").classList.add("hidden");
-            document.getElementById("faceModal").classList.add("hidden");
-            
-            // Show Ban Overlay
-            const banScreen = document.getElementById("bannedScreen");
-            if(banScreen) {
-                banScreen.classList.remove("hidden");
-                
-                // POPULATE DETAILS
-                document.getElementById("displayBanReason").innerText = u.banReason || "Security Violation";
-                document.getElementById("displayBanAction").innerText = u.banAction || "Contact System Administrator Immediately.";
-                document.getElementById("displayBanRemarks").innerText = u.banRemarks || "No additional notes.";
-
-                // Populate Time
-                const deadline = u.banExpires || 0;
-                if(deadline > 0) {
-                      const dateStr = new Date(deadline).toLocaleString('en-IN', {
-                          day: '2-digit', month: 'short', year: 'numeric',
-                          hour: '2-digit', minute: '2-digit', hour12: true
-                      });
-                      document.getElementById("bannedTimeDisplay").innerText = "Expiring: " + dateStr;
-                } else {
-                      document.getElementById("bannedTimeDisplay").innerText = "⛔ PERMANENT SUSPENSION";
-                }
-            } else {
-                document.body.innerHTML = "<h1 style='color:red; text-align:center;'>⛔ ACCOUNT SUSPENDED</h1><br><button onclick='logout()'>Log Out</button>";
-            }
-            return; // STOP HERE
-        }
-
-        // 4. ACTIVE USER -> SHOW APP
-        document.getElementById("bannedScreen")?.classList.add("hidden");
-        document.querySelector("header").style.display = "flex";
-        
-        currentUser.name = u.name;
-        isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
-
-        // Name Setup Check
-        if (!u.name) {
-            document.getElementById("nameModal").classList.remove("hidden");
-            document.getElementById("loginSection").classList.add("hidden");
-            return;
-        }
-        
-        // Update Header Info
-        document.getElementById("userInfo").innerText = `${u.name}`;
-        document.getElementById("authContainer").classList.remove("hidden");
-        document.getElementById("loginSection").classList.add("hidden");
-
-        // Load Admin Tools
-        if (isAdmin) {
-            const badge = document.getElementById("adminBadge");
-            const btn = document.getElementById("btnAdmin");
-            if(badge) badge.classList.remove("hidden");
-            if(btn) btn.classList.remove("hidden");
-            setTimeout(loadAdminPanel, 2000);
-        }
-
-        // Biometric Check
-        if(!isTransactionAuth) {
+        // 5. BIOMETRIC VERIFICATION (Face Scan)
+        if (typeof isTransactionAuth !== 'undefined' && !isTransactionAuth) {
             const faceModal = document.getElementById("faceModal");
-            faceModal.classList.remove("hidden");
+            if (faceModal) faceModal.classList.remove("hidden");
             
-            if(!u.faceData) {
-                document.getElementById("modalTitle").innerText = "⚠️ Face ID Setup";
-                document.getElementById("regProgress").classList.remove("hidden");
-                document.getElementById("btnCapture").onclick = registerNewFace;
-                initCamera(false);
+            if (!u.faceData) {
+                document.getElementById("modalTitle").innerText = "⚠ Face ID Setup";
+                document.getElementById("regProgress")?.classList.remove("hidden");
+                if (typeof registerNewFace === "function") document.getElementById("btnCapture").onclick = registerNewFace;
+                if (typeof initCamera === "function") initCamera(false);
             } else {
                 document.getElementById("modalTitle").innerText = "Biometric Verification";
-                document.getElementById("regProgress").classList.add("hidden");
-                document.getElementById("btnCapture").onclick = handleFaceScan;
-                initCamera(true);
+                document.getElementById("regProgress")?.classList.add("hidden");
+                if (typeof handleFaceScan === "function") document.getElementById("btnCapture").onclick = handleFaceScan;
+                if (typeof initCamera === "function") initCamera(true);
             }
         }
-    }, (error) => {
-        console.error(error);
-        alert("Connection Error. Logging out...");
-        signOut(auth);
     });
-};
-
-// CRITICAL: ACTIVATE THE LISTENER
-onAuthStateChanged(auth, manageUserSession);
+});
 // Helper to reliably show login
 function showLoginScreen() {
     document.querySelector("header").style.display = "flex";
