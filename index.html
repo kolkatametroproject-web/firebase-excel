@@ -13911,12 +13911,14 @@ window.loadSecureDocuments = () => {
     if (isAdmin) document.getElementById("adminDocUploadPanel").style.display = "block";
     
     const tbody = document.getElementById("secDocTableBody");
-    tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Docs...</td></tr>";
 
-    // Clear duplicate listeners to prevent race conditions
-    if (window.secureDocListener) {
-        off(ref(db, "secure_docs"), window.secureDocListener);
+    // CRITICAL FIX: The correct way to detach a listener in Firebase v9
+    // This prevents the table from crashing/freezing when an item is deleted
+    if (typeof window.secureDocListener === "function") {
+        window.secureDocListener(); 
     }
+
+    tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Docs...</td></tr>";
 
     window.secureDocListener = onValue(ref(db, "secure_docs"), snap => {
         if (!snap.exists()) {
@@ -13925,21 +13927,23 @@ window.loadSecureDocuments = () => {
         }
 
         const docs = [];
-        snap.forEach(c => docs.push({ key: c.key, ...c.val() }));
+        snap.forEach(c => {
+            docs.push({ key: c.key, ...c.val() });
+        });
+        
+        // Sort newest first
         docs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-        let html = ""; // Build HTML off-screen for massive performance boost
-
+        let html = "";
         docs.forEach(d => {
             const dateStr = d.timestamp ? new Date(d.timestamp).toLocaleDateString('en-IN') : "N/A";
             
             let actionBtns = `<button onclick="viewSecureDoc('${d.key}')" class="info" style="font-size:10px; padding:6px 12px;"><i class="fas fa-eye"></i> VIEW</button>`;
             
             if (isAdmin) {
-                // FIX: Removed the massive Base64 string from the HTML DOM to prevent crashes.
                 actionBtns += `
                     <button onclick="downloadSecureDoc('${d.key}', '${d.title}')" class="success" style="font-size:10px; padding:6px 12px; margin-left:5px;"><i class="fas fa-download"></i> DL</button>
-                    <button onclick="deleteSecureDoc('${d.key}')" class="danger" style="font-size:10px; padding:6px 12px; margin-left:5px;"><i class="fas fa-trash"></i></button>
+                    <button onclick="deleteSecureDoc('${d.key}', this)" class="danger" style="font-size:10px; padding:6px 12px; margin-left:5px;"><i class="fas fa-trash"></i></button>
                 `;
             }
 
@@ -13953,7 +13957,9 @@ window.loadSecureDocuments = () => {
             `;
         });
         
-        tbody.innerHTML = html; // Inject fast, clean HTML
+        tbody.innerHTML = html;
+    }, (error) => {
+        tbody.innerHTML = `<tr><td colspan='4' style='text-align:center; color:red;'>Error loading documents: ${error.message}</td></tr>`;
     });
 };
 window.viewSecureDoc = async (key) => {
@@ -13984,9 +13990,21 @@ window.viewSecureDoc = async (key) => {
 
     document.getElementById("secureDocModal").classList.remove("hidden");
 };
-window.deleteSecureDoc = async (key) => {
-    if (confirm("Permanently delete this secure document?")) {
+window.deleteSecureDoc = async (key, btnElement) => {
+    if (!confirm("Permanently delete this secure document?")) return;
+    
+    // Show a loading spinner on the button you clicked
+    const originalHtml = btnElement.innerHTML;
+    btnElement.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
+    btnElement.disabled = true;
+
+    try {
         await remove(ref(db, `secure_docs/${key}`));
+        // We don't need an alert here. The table will instantly auto-refresh!
+    } catch(e) {
+        alert("Error deleting document: " + e.message);
+        btnElement.innerHTML = originalHtml;
+        btnElement.disabled = false;
     }
 };
 window.downloadSecureDoc = async (key, title) => {
