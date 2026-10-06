@@ -13897,7 +13897,7 @@ window.uploadSecureDocument = async () => {
             alert("✅ Secure Document Uploaded.");
             document.getElementById("secDocTitle").value = "";
             fileInput.value = "";
-            window.loadSecureDocuments(); // FIX: Added window.
+            // The table will now auto-update via the background listener!
         } catch (err) {
             alert("Upload failed: " + err.message);
         } finally {
@@ -13913,8 +13913,12 @@ window.loadSecureDocuments = () => {
     const tbody = document.getElementById("secDocTableBody");
     tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Docs...</td></tr>";
 
-    onValue(ref(db, "secure_docs"), snap => {
-        tbody.innerHTML = "";
+    // Clear duplicate listeners to prevent race conditions
+    if (window.secureDocListener) {
+        off(ref(db, "secure_docs"), window.secureDocListener);
+    }
+
+    window.secureDocListener = onValue(ref(db, "secure_docs"), snap => {
         if (!snap.exists()) {
             tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:#64748b;'>No secure documents available.</td></tr>";
             return;
@@ -13924,20 +13928,22 @@ window.loadSecureDocuments = () => {
         snap.forEach(c => docs.push({ key: c.key, ...c.val() }));
         docs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
+        let html = ""; // Build HTML off-screen for massive performance boost
+
         docs.forEach(d => {
             const dateStr = d.timestamp ? new Date(d.timestamp).toLocaleDateString('en-IN') : "N/A";
             
-            // View opens securely. Admins get direct download & delete.
             let actionBtns = `<button onclick="viewSecureDoc('${d.key}')" class="info" style="font-size:10px; padding:6px 12px;"><i class="fas fa-eye"></i> VIEW</button>`;
             
             if (isAdmin) {
+                // FIX: Removed the massive Base64 string from the HTML DOM to prevent crashes.
                 actionBtns += `
-                    <a href="${d.fileData}" download="${d.title}.pdf" class="success" style="font-size:10px; padding:6px 12px; text-decoration:none; margin-left:5px;"><i class="fas fa-download"></i> DL</a>
+                    <button onclick="downloadSecureDoc('${d.key}', '${d.title}')" class="success" style="font-size:10px; padding:6px 12px; margin-left:5px;"><i class="fas fa-download"></i> DL</button>
                     <button onclick="deleteSecureDoc('${d.key}')" class="danger" style="font-size:10px; padding:6px 12px; margin-left:5px;"><i class="fas fa-trash"></i></button>
                 `;
             }
 
-            tbody.innerHTML += `
+            html += `
                 <tr style="border-bottom: 1px solid #e2e8f0;">
                     <td style="font-size:12px;">${dateStr}</td>
                     <td style="font-weight:bold; color:var(--metro-blue);">${d.title}</td>
@@ -13946,9 +13952,10 @@ window.loadSecureDocuments = () => {
                 </tr>
             `;
         });
+        
+        tbody.innerHTML = html; // Inject fast, clean HTML
     });
 };
-
 window.viewSecureDoc = async (key) => {
     const snap = await get(ref(db, `secure_docs/${key}`));
     if (!snap.exists()) return;
@@ -13982,7 +13989,30 @@ window.deleteSecureDoc = async (key) => {
         await remove(ref(db, `secure_docs/${key}`));
     }
 };
-
+window.downloadSecureDoc = async (key, title) => {
+    const btn = document.activeElement;
+    const originalText = btn.innerHTML;
+    btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
+    
+    try {
+        const snap = await get(ref(db, `secure_docs/${key}`));
+        if (!snap.exists()) return alert("Document not found.");
+        
+        const data = snap.val();
+        
+        // Dynamically create a link and trigger download safely
+        const link = document.createElement('a');
+        link.href = data.fileData;
+        link.download = `${title}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    } catch (e) {
+        alert("Download failed: " + e.message);
+    } finally {
+        btn.innerHTML = originalText;
+    }
+};
 // ==========================================
 // WORKFLOWS LOGIC
 // ==========================================
