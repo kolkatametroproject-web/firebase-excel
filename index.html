@@ -15161,20 +15161,62 @@ function startYellowLineWorkspace() {
     setupIdleTimer();
 }
 
-// CCRAS entry point.
-// Add the actual CCRAS-specific functions here when implemented.
-function startCCRASWorkspace() {
-    const container =
-        document.getElementById("ccrasWorkspaceContent");
 
-    if (container) {
-        container.innerHTML = `
-            <p><strong>CCRAS is selected.</strong></p>
-            <p>Its forms, reports and database operations
-               must use the CCRAS project namespace.</p>
-        `;
+window.startCCRASWorkspace = async function () {
+    const container = document.getElementById("ccrasWorkspaceContent");
+    if (!container) {
+        console.error("Missing #ccrasWorkspaceContent");
+        return;
     }
-}
+
+    container.innerHTML = `
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin:20px 0;">
+            <button onclick="window.showCCRASTab('dashboard')">Dashboard</button>
+            <button onclick="window.showCCRASTab('records')">Records</button>
+            <button onclick="window.showCCRASTab('reports')">Reports</button>
+            <button onclick="window.showCCRASTab('settings')">Project Settings</button>
+        </div>
+
+        <div id="ccrasTab-dashboard">
+            <h3>CCRAS Dashboard</h3>
+            <p>Welcome to the CCRAS workspace.</p>
+            <div id="ccrasRecordCount">Loading records...</div>
+        </div>
+
+        <div id="ccrasTab-records" class="hidden">
+            <h3>CCRAS Records</h3>
+            <input id="ccrasRecordTitle" placeholder="Record title"
+                   style="padding:10px;width:min(400px,100%);">
+            <button onclick="window.saveCCRASRecord()">Save Record</button>
+            <div id="ccrasRecordsList" style="margin-top:20px;"></div>
+        </div>
+
+        <div id="ccrasTab-reports" class="hidden">
+            <h3>CCRAS Reports</h3>
+            <p>Reports will be generated from CCRAS records.</p>
+            <div id="ccrasReportsList"></div>
+        </div>
+
+        <div id="ccrasTab-settings" class="hidden">
+            <h3>Project Settings</h3>
+            <p>Active project: CCRAS</p>
+            <p>Database namespace: projects/CCRAS</p>
+        </div>
+    `;
+
+    window.showCCRASTab("dashboard");
+    await window.loadCCRASRecords();
+};
+
+window.showCCRASTab = function (tab) {
+    ["dashboard", "records", "reports", "settings"].forEach(name => {
+        document.getElementById(`ccrasTab-${name}`)
+            ?.classList.toggle("hidden", name !== tab);
+    });
+
+    if (tab === "records") window.loadCCRASRecords();
+};
+
   // =====================================================
 // ADMIN: GRANT OR REVOKE PROJECT ACCESS
 // =====================================================
@@ -15300,6 +15342,82 @@ window.loadProjectAccessUsers = async function () {
         alert("Could not load users: " + error.message);
     }
 };
+  
+window.saveCCRASRecord = async function () {
+    if (activeProject !== "CCRAS" || !hasProjectAccess("CCRAS")) {
+        return alert("CCRAS access required.");
+    }
+
+    const input = document.getElementById("ccrasRecordTitle");
+    const title = input?.value.trim();
+
+    if (!title) return alert("Enter a record title.");
+
+    try {
+        await push(ccrasRef("records"), {
+            title,
+            createdBy: currentUser.uid,
+            createdByEmail: currentUser.email || "",
+            createdAt: Date.now()
+        });
+
+        input.value = "";
+        await window.loadCCRASRecords();
+        alert("CCRAS record saved.");
+    } catch (error) {
+        console.error(error);
+        alert("Could not save CCRAS record: " + error.message);
+    }
+};
+
+window.loadCCRASRecords = async function () {
+    if (activeProject !== "CCRAS" || !hasProjectAccess("CCRAS")) {
+        return;
+    }
+
+    try {
+        const snapshot = await get(ccrasRef("records"));
+        const records = snapshot.exists() ? snapshot.val() : {};
+        const entries = Object.entries(records);
+
+        const count = document.getElementById("ccrasRecordCount");
+        if (count) count.textContent = `Total records: ${entries.length}`;
+
+        const list = document.getElementById("ccrasRecordsList");
+        if (list) {
+            list.replaceChildren();
+
+            if (!entries.length) {
+                list.textContent = "No CCRAS records found.";
+            } else {
+                entries.forEach(([key, record]) => {
+                    const item = document.createElement("div");
+                    item.style.cssText =
+                        "padding:12px;border:1px solid #ddd;margin:8px 0;border-radius:6px;";
+
+                    const heading = document.createElement("strong");
+                    heading.textContent = record.title || "Untitled record";
+
+                    const detail = document.createElement("p");
+                    detail.textContent =
+                        `Created by: ${record.createdByEmail || record.createdBy || "Unknown"}`;
+
+                    item.append(heading, detail);
+                    list.appendChild(item);
+                });
+            }
+        }
+
+        const reports = document.getElementById("ccrasReportsList");
+        if (reports) {
+            reports.textContent = `Current CCRAS record count: ${entries.length}`;
+        }
+    } catch (error) {
+        console.error(error);
+        alert("Could not load CCRAS records: " + error.message);
+    }
+};
+
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
