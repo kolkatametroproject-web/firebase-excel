@@ -1259,7 +1259,7 @@ tr:hover { background: #fcfcfd; }
         <div style="display:flex; gap:10px; margin-top:20px;">
             <button class="secondary" style="flex:1;" onclick="document.getElementById('tagPrintModal').classList.add('hidden')">DISMISS</button>
             <button class="success" style="flex:2; font-weight:900;" onclick="executeTagPrint()">
-                <i class="fas fa-envelope"></i> EMAIL PDF TO OPERATOR
+                <i class="fas fa-download"></i> DOWNLOAD PDF TO PRINT
             </button>
         </div>
     </div>
@@ -3379,6 +3379,7 @@ tr:hover { background: #fcfcfd; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+
 <script type="module">
 // --- FIREBASE IMPORTS (Standard Stable Version) ---
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
@@ -8478,71 +8479,45 @@ window.showTagPreview = (id) => {
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
 window.executeTagPrint = async function () {
-    const button = document.querySelector('#tagPrintModal button[onclick="executeTagPrint()"]');
+    const button = document.querySelector(
+        '#tagPrintModal button[onclick="executeTagPrint()"]'
+    );
     let qrContainer = null;
 
     try {
-        const tag = (typeof pendingTagData !== "undefined" && pendingTagData) || {};
-        const tagId = String(tag.barcode || document.getElementById("invBarcode")?.value || "").trim();
-        if (!tagId || tagId === "00000000") throw new Error("Tag ID is missing. Generate the tag first.");
-        // Load libraries on demand with multiple CDN fallbacks. Some deployments block
-        // one CDN or cache a page before its script tags have finished loading.
-        const loadExternalScript = (urls, ready) => new Promise((resolve, reject) => {
-            if (ready()) return resolve();
-            let index = 0;
-            const tryNext = () => {
-                if (ready()) return resolve();
-                if (index >= urls.length) return reject(new Error("Could not load a required library from the available CDNs. Check network/CSP settings and allow cdnjs, jsdelivr, or unpkg."));
-                const script = document.createElement("script");
-                script.src = urls[index++];
-                script.async = true;
-                script.onload = () => ready() ? resolve() : tryNext();
-                script.onerror = tryNext;
-                document.head.appendChild(script);
-            };
-            tryNext();
-        });
+        const tagId = String(
+            (typeof pendingTagData !== "undefined" && pendingTagData && pendingTagData.barcode) ||
+            document.getElementById("invBarcode")?.value ||
+            ""
+        ).trim();
 
-        await loadExternalScript([
-            "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js",
-            "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
-            "https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"
-        ], () => !!window.jspdf?.jsPDF);
-        await loadExternalScript([
-            "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js",
-            "https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js",
-            "https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"
-        ], () => !!window.QRCode);
-        await loadExternalScript([
-            "https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js",
-            "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js",
-            "https://unpkg.com/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"
-        ], () => !!window.JsBarcode);
-        if (!currentUser?.email) {
-            throw new Error("Could not identify the signed-in operator's registered email. Please sign in again.");
+        if (!tagId || tagId === "00000000") {
+            throw new Error("Tag ID is missing. Generate the tag first.");
+        }
+        if (!window.jspdf || !window.jspdf.jsPDF || !window.QRCode || !window.JsBarcode) {
+            throw new Error("PDF/QR/barcode libraries have not loaded. Refresh the page and try again.");
         }
 
-        const operatorEmail = String(currentUser.email).trim();
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(operatorEmail)) {
-            throw new Error("The signed-in operator's registered email address is invalid.");
-        }
         if (button) {
             button.disabled = true;
-            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> GENERATING & EMAILING PDF...';
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> GENERATING PDF...';
         }
 
+        // Generate QR locally so the PDF does not depend on external image CORS.
         qrContainer = document.createElement("div");
         qrContainer.style.cssText = "position:fixed;left:-10000px;top:0;width:500px;height:500px;";
         document.body.appendChild(qrContainer);
         new QRCode(qrContainer, {
-            text: tagId, width: 500, height: 500,
+            text: tagId,
+            width: 500,
+            height: 500,
             correctLevel: QRCode.CorrectLevel.H
         });
 
         const qrCanvas = await new Promise((resolve, reject) => {
             let tries = 0;
             const check = () => {
-                const canvas = qrContainer?.querySelector("canvas");
+                const canvas = qrContainer && qrContainer.querySelector("canvas");
                 if (canvas) return resolve(canvas);
                 if (++tries >= 40) return reject(new Error("QR code generation timed out."));
                 setTimeout(check, 100);
@@ -8550,51 +8525,42 @@ window.executeTagPrint = async function () {
             check();
         });
 
-        const { jsPDF } = window.jspdf;
+        const qrData = qrCanvas.toDataURL("image/png");
         const barcodeCanvas = document.createElement("canvas");
         JsBarcode(barcodeCanvas, tagId, {
-            format: "CODE128", displayValue: true, width: 3,
-            height: 100, margin: 10, fontSize: 22
+            format: "CODE128",
+            displayValue: true,
+            width: 3,
+            height: 100,
+            margin: 10,
+            fontSize: 22
         });
+        const barcodeData = barcodeCanvas.toDataURL("image/png");
 
+        const { jsPDF } = window.jspdf;
         const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(18);
         pdf.text("ASSET IDENTIFICATION TAG", 105, 18, { align: "center" });
-        pdf.addImage(qrCanvas.toDataURL("image/png"), "PNG", 40, 28, 130, 130);
-        pdf.addImage(barcodeCanvas.toDataURL("image/png"), "PNG", 10, 168, 190, 48);
+        pdf.addImage(qrData, "PNG", 40, 28, 130, 130);
+        pdf.addImage(barcodeData, "PNG", 10, 168, 190, 48);
         pdf.setFontSize(14);
         pdf.text("Asset ID: " + tagId, 105, 230, { align: "center" });
         pdf.setFontSize(11);
         pdf.text("PLEASE DO NOT DAMAGE THIS TAG", 105, 245, { align: "center" });
 
-        const pdfBase64 = pdf.output("datauristring").split(",")[1];
-        if (!pdfBase64) throw new Error("Could not encode the generated PDF.");
+        // Download locally. No email request and no print dialog.
+        pdf.save("Asset_Tag_" + tagId.replace(/[^a-zA-Z0-9_-]/g, "_") + ".pdf");
+        alert("PDF downloaded. Transfer the PDF file to the required computer/device, then open it and print.");
 
-        const formData = new URLSearchParams();
-        formData.append("action", "assetTagPdf");
-        formData.append("to", operatorEmail);
-        formData.append("filename", "Asset_Tag_" + tagId.replace(/[^a-zA-Z0-9_-]/g, "_") + ".pdf");
-        formData.append("pdfBase64", pdfBase64);
-        formData.append("assetId", tagId);
-        formData.append("assetName", String(tag.item || document.getElementById("invName")?.value || "Asset"));
-        formData.append("project", typeof getActiveProjectName === "function" ? getActiveProjectName() : "MRPSP");
-
-        const scriptUrl = "https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec";
-        // Apps Script must be updated and redeployed with the assetTagPdf handler.
-        await fetch(scriptUrl, { method: "POST", body: formData, mode: "no-cors" });
-
-        alert("The asset-tag PDF email request was submitted to the signed-in operator's registered email:\n" +
-              operatorEmail +
-              "\n\nThe website cannot confirm delivery in no-cors mode. Check Inbox/Spam. If no email arrives, update and redeploy the Apps Script code supplied with this HTML.");
     } catch (error) {
-        console.error("Asset tag PDF email error:", error);
-        alert("Could not send the asset-tag PDF: " + error.message);
+        console.error("Asset tag PDF download error:", error);
+        alert("Could not download the asset tag PDF: " + error.message);
     } finally {
         if (qrContainer) qrContainer.remove();
         if (button) {
             button.disabled = false;
-            button.innerHTML = '<i class="fas fa-envelope"></i> EMAIL PDF TO OPERATOR';
+            button.innerHTML = '<i class="fas fa-download"></i> DOWNLOAD PDF TO PRINT';
         }
     }
 };
