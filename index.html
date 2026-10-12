@@ -8478,6 +8478,67 @@ window.showTagPreview = (id) => {
 
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
+// Load PDF/QR/barcode libraries on demand with multiple CDN fallbacks.
+// This keeps manual PDF download independent of whether the initial CDN tags loaded.
+window.ensureTagLibrariesLoaded = async function () {
+    const loadOne = async (globalCheck, urls, label) => {
+        if (globalCheck()) return;
+        let lastError = null;
+        for (const url of urls) {
+            try {
+                await new Promise((resolve, reject) => {
+                    const script = document.createElement("script");
+                    script.src = url;
+                    script.async = true;
+                    script.onload = () => globalCheck()
+                        ? resolve()
+                        : reject(new Error(label + " loaded but its global was not found"));
+                    script.onerror = () => reject(new Error("Could not load " + url));
+                    document.head.appendChild(script);
+                });
+                if (globalCheck()) return;
+            } catch (err) {
+                lastError = err;
+                console.warn("MRPSP library fallback failed:", label, url, err);
+            }
+        }
+        throw new Error("Unable to load " + label + ". Check your internet connection or CDN access." +
+            (lastError ? " Last error: " + lastError.message : ""));
+    };
+
+    await loadOne(
+        () => !!(window.jspdf && window.jspdf.jsPDF),
+        [
+            "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js",
+            "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
+            "https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"
+        ],
+        "jsPDF"
+    );
+
+    await loadOne(
+        () => typeof window.QRCode === "function",
+        [
+            "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js",
+            "https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js",
+            "https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"
+        ],
+        "QR code library"
+    );
+
+    await loadOne(
+        () => typeof window.JsBarcode === "function",
+        [
+            "https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js",
+            "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js",
+            "https://unpkg.com/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"
+        ],
+        "JsBarcode"
+    );
+
+    return true;
+};
+
 window.executeTagPrint = async function () {
     const button = document.querySelector(
         '#tagPrintModal button[onclick="executeTagPrint()"]'
@@ -8494,8 +8555,9 @@ window.executeTagPrint = async function () {
         if (!tagId || tagId === "00000000") {
             throw new Error("Tag ID is missing. Generate the tag first.");
         }
+        await window.ensureTagLibrariesLoaded();
         if (!window.jspdf || !window.jspdf.jsPDF || !window.QRCode || !window.JsBarcode) {
-            throw new Error("PDF/QR/barcode libraries have not loaded. Refresh the page and try again.");
+            throw new Error("PDF/QR/barcode libraries are still unavailable after trying backup CDNs.");
         }
 
         if (button) {
