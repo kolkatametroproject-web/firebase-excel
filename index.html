@@ -1259,7 +1259,7 @@ tr:hover { background: #fcfcfd; }
         <div style="display:flex; gap:10px; margin-top:20px;">
             <button class="secondary" style="flex:1;" onclick="document.getElementById('tagPrintModal').classList.add('hidden')">DISMISS</button>
             <button class="success" style="flex:2; font-weight:900;" onclick="executeTagPrint()">
-                <i class="fas fa-print"></i> PRINT HIGH-RES A4 TAG
+                <i class="fas fa-envelope"></i> EMAIL PDF TO OPERATOR
             </button>
         </div>
     </div>
@@ -8485,9 +8485,39 @@ window.executeTagPrint = async function () {
         const tag = (typeof pendingTagData !== "undefined" && pendingTagData) || {};
         const tagId = String(tag.barcode || document.getElementById("invBarcode")?.value || "").trim();
         if (!tagId || tagId === "00000000") throw new Error("Tag ID is missing. Generate the tag first.");
-        if (!window.jspdf?.jsPDF || !window.QRCode || !window.JsBarcode) {
-            throw new Error("PDF/QR/barcode libraries have not loaded. Refresh the page and try again.");
-        }
+        // Load libraries on demand with multiple CDN fallbacks. Some deployments block
+        // one CDN or cache a page before its script tags have finished loading.
+        const loadExternalScript = (urls, ready) => new Promise((resolve, reject) => {
+            if (ready()) return resolve();
+            let index = 0;
+            const tryNext = () => {
+                if (ready()) return resolve();
+                if (index >= urls.length) return reject(new Error("Could not load a required library from the available CDNs. Check network/CSP settings and allow cdnjs, jsdelivr, or unpkg."));
+                const script = document.createElement("script");
+                script.src = urls[index++];
+                script.async = true;
+                script.onload = () => ready() ? resolve() : tryNext();
+                script.onerror = tryNext;
+                document.head.appendChild(script);
+            };
+            tryNext();
+        });
+
+        await loadExternalScript([
+            "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js",
+            "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
+            "https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"
+        ], () => !!window.jspdf?.jsPDF);
+        await loadExternalScript([
+            "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js",
+            "https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js",
+            "https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"
+        ], () => !!window.QRCode);
+        await loadExternalScript([
+            "https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js",
+            "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js",
+            "https://unpkg.com/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"
+        ], () => !!window.JsBarcode);
         if (!currentUser?.email) {
             throw new Error("Could not identify the signed-in operator's registered email. Please sign in again.");
         }
