@@ -3376,6 +3376,9 @@ tr:hover { background: #fcfcfd; }
     </div>
 </div>
 </section>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 <script type="module">
 // --- FIREBASE IMPORTS (Standard Stable Version) ---
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
@@ -8474,70 +8477,96 @@ window.showTagPreview = (id) => {
 
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
-window.executeTagPrint = () => {
-    const qrSrc = document.getElementById("tagQrDisplay").src;
-    const barSrc = document.getElementById("tagBarDisplay").src;
-    const tagId = pendingTagData ? pendingTagData.barcode : "00000000";
+window.executeTagPrint = async function () {
+    const button = document.querySelector('#tagPrintModal button[onclick="executeTagPrint()"]');
+    let qrContainer = null;
 
-    const win = window.open('', '', 'height=900,width=800');
-    
-    win.document.write(`
-        <html>
-            <head>
-                <title>Print_Tag_${tagId}</title>
-                <style>
-                    @media print {
-                        @page { size: A4; margin: 0; }
-                        body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; }
-                    }
-                    body { 
-                        display: flex; 
-                        flex-direction: column;
-                        justify-content: center; 
-                        align-items: center; 
-                        height: 100vh; 
-                        width: 100vw;
-                        background: white;
-                        overflow: hidden;
-                    }
-                    .qr-code {
-                        width: 130mm; 
-                        height: 130mm;
-                        object-fit: contain;
-                        border: 3px solid #000;
-                    }
-                    /* 4-line vertical gap spacer */
-                    .spacer {
-                        height: 100px; 
-                        width: 100%;
-                    }
-                    .barcode {
-                        width: 200mm; /* Absolute Full Width of A4 */
-                        height: 80mm; 
-                        object-fit: contain;
-                    }
-                </style>
-            </head>
-            <body>
-                <img src="${qrSrc}" class="qr-code">
-                
-                <div class="spacer"></div>
-                
-                <img src="${barSrc}" class="barcode">
+    try {
+        const tag = (typeof pendingTagData !== "undefined" && pendingTagData) || {};
+        const tagId = String(tag.barcode || document.getElementById("invBarcode")?.value || "").trim();
+        if (!tagId || tagId === "00000000") throw new Error("Tag ID is missing. Generate the tag first.");
+        if (!window.jspdf?.jsPDF || !window.QRCode || !window.JsBarcode) {
+            throw new Error("PDF/QR/barcode libraries have not loaded. Refresh the page and try again.");
+        }
+        if (!currentUser?.email) {
+            throw new Error("Could not identify the signed-in operator's registered email. Please sign in again.");
+        }
 
-                <script>
-                    window.onload = function() {
-                        setTimeout(function() {
-                            window.print();
-                            window.close();
-                        }, 1000);
-                    };
-                <\/script>
-            </body>
-        </html>
-    `);
+        const operatorEmail = String(currentUser.email).trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(operatorEmail)) {
+            throw new Error("The signed-in operator's registered email address is invalid.");
+        }
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> GENERATING & EMAILING PDF...';
+        }
 
-    win.document.close();
+        qrContainer = document.createElement("div");
+        qrContainer.style.cssText = "position:fixed;left:-10000px;top:0;width:500px;height:500px;";
+        document.body.appendChild(qrContainer);
+        new QRCode(qrContainer, {
+            text: tagId, width: 500, height: 500,
+            correctLevel: QRCode.CorrectLevel.H
+        });
+
+        const qrCanvas = await new Promise((resolve, reject) => {
+            let tries = 0;
+            const check = () => {
+                const canvas = qrContainer?.querySelector("canvas");
+                if (canvas) return resolve(canvas);
+                if (++tries >= 40) return reject(new Error("QR code generation timed out."));
+                setTimeout(check, 100);
+            };
+            check();
+        });
+
+        const { jsPDF } = window.jspdf;
+        const barcodeCanvas = document.createElement("canvas");
+        JsBarcode(barcodeCanvas, tagId, {
+            format: "CODE128", displayValue: true, width: 3,
+            height: 100, margin: 10, fontSize: 22
+        });
+
+        const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(18);
+        pdf.text("ASSET IDENTIFICATION TAG", 105, 18, { align: "center" });
+        pdf.addImage(qrCanvas.toDataURL("image/png"), "PNG", 40, 28, 130, 130);
+        pdf.addImage(barcodeCanvas.toDataURL("image/png"), "PNG", 10, 168, 190, 48);
+        pdf.setFontSize(14);
+        pdf.text("Asset ID: " + tagId, 105, 230, { align: "center" });
+        pdf.setFontSize(11);
+        pdf.text("PLEASE DO NOT DAMAGE THIS TAG", 105, 245, { align: "center" });
+
+        const pdfBase64 = pdf.output("datauristring").split(",")[1];
+        if (!pdfBase64) throw new Error("Could not encode the generated PDF.");
+
+        const formData = new URLSearchParams();
+        formData.append("action", "assetTagPdf");
+        formData.append("to", operatorEmail);
+        formData.append("filename", "Asset_Tag_" + tagId.replace(/[^a-zA-Z0-9_-]/g, "_") + ".pdf");
+        formData.append("pdfBase64", pdfBase64);
+        formData.append("assetId", tagId);
+        formData.append("assetName", String(tag.item || document.getElementById("invName")?.value || "Asset"));
+        formData.append("project", typeof getActiveProjectName === "function" ? getActiveProjectName() : "MRPSP");
+
+        const scriptUrl = "https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec";
+        // Apps Script must be updated and redeployed with the assetTagPdf handler.
+        await fetch(scriptUrl, { method: "POST", body: formData, mode: "no-cors" });
+
+        alert("The asset-tag PDF email request was submitted to the signed-in operator's registered email:\n" +
+              operatorEmail +
+              "\n\nThe website cannot confirm delivery in no-cors mode. Check Inbox/Spam. If no email arrives, update and redeploy the Apps Script code supplied with this HTML.");
+    } catch (error) {
+        console.error("Asset tag PDF email error:", error);
+        alert("Could not send the asset-tag PDF: " + error.message);
+    } finally {
+        if (qrContainer) qrContainer.remove();
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = '<i class="fas fa-envelope"></i> EMAIL PDF TO OPERATOR';
+        }
+    }
 };
 
 // --- 4. SCANNER VERIFICATION (MATH-MATCH LOCK) ---
