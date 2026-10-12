@@ -15003,11 +15003,21 @@ const PROJECT_DEFINITIONS = {
 // Admins can access both projects.
 // Students receive only the projects assigned in Firebase.
 function hasProjectAccess(projectId) {
-    if (!currentUser) return false;
+    if (!currentUser || !PROJECT_DEFINITIONS[projectId]) return false;
 
-    if (isAdmin) return true;
+    // Resolve administrator access directly from the authenticated email too.
+    // This avoids hiding Yellow Line when the profile's isAdmin flag has not
+    // finished initializing after authentication/project switching.
+    const email = String(currentUser.email || "").trim().toLowerCase();
+    const isRecognizedAdmin =
+        isAdmin === true ||
+        (Array.isArray(ADMIN_EMAILS) && ADMIN_EMAILS.some(
+            adminEmail => String(adminEmail).trim().toLowerCase() === email
+        ));
 
-    return currentProjectPermissions[projectId] === true;
+    if (isRecognizedAdmin) return true;
+
+    return currentProjectPermissions?.[projectId] === true;
 }
 
 // Read the logged-in user's project permissions.
@@ -15071,9 +15081,13 @@ window.showProjectPicker = async function () {
 
         const adminPanel =
             document.getElementById("projectAccessAdminPanel");
+        const email = String(currentUser.email || "").trim().toLowerCase();
+        const recognizedAdmin = isAdmin === true || ADMIN_EMAILS.some(
+            adminEmail => String(adminEmail).trim().toLowerCase() === email
+        );
 
         if (adminPanel) {
-            adminPanel.classList.toggle("hidden", !isAdmin);
+            adminPanel.classList.toggle("hidden", !recognizedAdmin);
         }
 
     } catch (error) {
@@ -15092,20 +15106,55 @@ window.selectProject = async function (projectId) {
         await loadMyProjectPermissions();
 
         if (!hasProjectAccess(projectId)) {
-            return alert("Access denied for this project.");
+            return alert("You do not have access to this project.");
         }
 
         activeProject = projectId;
 
         const picker = document.getElementById("projectPicker");
-        const yellowScreen = document.getElementById("appScreen");
-        const ccrasScreen = document.getElementById("ccrasScreen");
+        const yellow = document.getElementById("appScreen");
+        const ccras = document.getElementById("ccrasScreen");
 
-        if (picker) picker.classList.add("hidden");
+        picker?.classList.add("hidden");
+        yellow?.classList.add("hidden");
+        ccras?.classList.add("hidden");
 
-        // Hide both workspaces before opening the selected one
-        if (yellowScreen) yellowScreen.classList.add("hidden");
-        if (ccrasScreen) ccrasScreen.classList.add("hidden");
+        if (projectId === "YELLOW_LINE_BREACH") {
+            if (!yellow) {
+                throw new Error("Original Yellow Line workspace #appScreen is missing.");
+            }
+
+            // Restore the original hardware/inspection application.
+            yellow.classList.remove("hidden");
+
+            // Reuse the original workspace startup routine so all legacy
+            // inspection, inventory, gallery, task and hardware tabs remain.
+            if (typeof window.switchTab !== "function") {
+                throw new Error("Original switchTab function is missing.");
+            }
+
+            if (typeof startYellowLineWorkspace === "function") {
+                startYellowLineWorkspace();
+            } else {
+                window.switchTab("newData");
+                if (typeof window.loadDraft === "function") window.loadDraft();
+                if (typeof window.loadGallery === "function") window.loadGallery();
+                if (typeof window.loadInventory === "function") window.loadInventory();
+                if (typeof window.loadAssignments === "function") window.loadAssignments();
+                if (typeof window.setupIdleTimer === "function") window.setupIdleTimer();
+            }
+
+        } else if (projectId === "CCRAS") {
+            if (!ccras) {
+                throw new Error("CCRAS workspace #ccrasScreen is missing.");
+            }
+
+            ccras.classList.remove("hidden");
+
+            if (typeof window.startCCRASWorkspace === "function") {
+                await window.startCCRASWorkspace();
+            }
+        }
 
         const userInfo = document.getElementById("userInfo");
         if (userInfo) {
@@ -15114,40 +15163,11 @@ window.selectProject = async function (projectId) {
                 `${PROJECT_DEFINITIONS[projectId].label}`;
         }
 
-        if (projectId === "YELLOW_LINE_BREACH") {
-            if (!yellowScreen) {
-                throw new Error("Yellow Line workspace element #appScreen is missing.");
-            }
-
-            yellowScreen.classList.remove("hidden");
-
-            // Use the existing Yellow Line functions
-            switchTab("newData");
-            loadDraft();
-            loadGallery();
-            loadInventory();
-            loadAssignments();
-            setupIdleTimer();
-
-        } else if (projectId === "CCRAS") {
-            if (!ccrasScreen) {
-                throw new Error("CCRAS workspace element #ccrasScreen is missing.");
-            }
-
-            ccrasScreen.classList.remove("hidden");
-
-            // Keep CCRAS independent of Yellow Line tabs
-            if (typeof startCCRASWorkspace === "function") {
-                startCCRASWorkspace();
-            }
-        }
-
     } catch (error) {
         console.error("Project selection error:", error);
         alert("Unable to open project: " + error.message);
     }
 };
-
 
 // Start the existing Yellow Line application.
 function startYellowLineWorkspace() {
