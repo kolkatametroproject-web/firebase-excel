@@ -823,7 +823,11 @@ tr:hover { background: #fcfcfd; }
         <small style="color: #cbd5e1; font-weight: 600; text-transform: uppercase; font-size: 10px;">Official Audit & Inspection Portal</small>
     </div>
   </div>
-
+<button class="info"
+        onclick="showProjectPicker()"
+        style="padding:6px 12px;font-size:11px;">
+    <i class="fas fa-exchange-alt"></i> SWITCH PROJECT
+</button>
   <div id="authContainer" class="hidden">
     <span style="font-size:11px; margin-right:5px; opacity:0.7;">Logged in as:</span>
     <span id="userInfo" style="margin-right:20px; font-weight:bold; color:var(--metro-gold);"></span>
@@ -951,7 +955,56 @@ tr:hover { background: #fcfcfd; }
         <button onclick="closeSigModal()" class="secondary">Close Viewer</button>
     </div>
 </div>
+<!-- PROJECT SELECTION SCREEN -->
+<section id="projectPicker" class="hidden" style="padding:30px;max-width:1100px;margin:auto;">
+    <div class="panel">
+        <h2 style="color:var(--metro-blue);">Select Your Project</h2>
+        <p>Choose a project assigned to your account.</p>
 
+        <div id="projectCards"
+             style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;">
+
+            <button id="projectBtnCCRAS"
+                    onclick="selectProject('CCRAS')"
+                    style="display:none;min-height:150px;font-size:16px;">
+                <i class="fas fa-flask"></i>
+                <br>CCRAS
+                <br><small>Research Project Workspace</small>
+            </button>
+
+            <button id="projectBtnYellow"
+                    onclick="selectProject('YELLOW_LINE_BREACH')"
+                    style="display:none;min-height:150px;font-size:16px;">
+                <i class="fas fa-train"></i>
+                <br>Yellow Line Breach Project
+                <br><small>Platform Safety Workspace</small>
+            </button>
+        </div>
+
+        <p id="projectAccessMessage" style="margin-top:20px;color:#b91c1c;"></p>
+    </div>
+
+    <!-- ADMIN PROJECT ACCESS MANAGEMENT -->
+    <div id="projectAccessAdminPanel" class="panel hidden">
+        <h3><i class="fas fa-user-shield"></i> Project Access Management</h3>
+        <p>Select the projects each student is allowed to access.</p>
+
+        <button class="info" onclick="loadProjectAccessUsers()">
+            <i class="fas fa-sync"></i> Load Users
+        </button>
+
+        <div id="projectAccessUserList" style="margin-top:20px;"></div>
+    </div>
+</section>
+
+<!-- CCRAS WORKSPACE -->
+<section id="ccrasScreen" class="hidden" style="padding:20px;">
+    <div class="panel">
+        <h2><i class="fas fa-flask"></i> CCRAS Project</h2>
+        <p>CCRAS workspace. Its forms, tabs and reports can be added here.</p>
+        <div id="ccrasWorkspaceContent"></div>
+    </div>
+</section>
 <section id="appScreen" class="hidden">
   <div class="nav-bar">
     <button class="nav-btn active" onclick="switchTab('newData')" id="btnNew">
@@ -6293,18 +6346,51 @@ window.verifyOTP = () => {
 
 function enterApp() {
     stopCamera();
-    document.getElementById("faceModal").classList.add("hidden");
-    document.getElementById("appScreen").classList.remove("hidden");
-    
-    // Load Tabs
-    switchTab('newData');
-    loadDraft(); 
-    loadGallery(); 
-    loadInventory(); 
-    loadAssignments();
 
-    // --- FIX: START THE TIMER NOW ---
-    setupIdleTimer(); 
+    document.getElementById("faceModal")
+        .classList.add("hidden");
+
+    document.getElementById("appScreen")
+        .classList.add("hidden");
+
+    document.getElementById("ccrasScreen")
+        .classList.add("hidden");
+
+    document.getElementById("authContainer")
+        .classList.remove("hidden");
+
+    // Login succeeds, then display permitted projects.
+    showProjectPicker();
+}
+  // =====================================================
+// PROJECT-SCOPED DATABASE REFERENCES
+// =====================================================
+
+// Existing root-level records remain assigned to the
+// Yellow Line application for backward compatibility.
+function yellowLineRef(path) {
+    if (activeProject !== "YELLOW_LINE_BREACH") {
+        throw new Error("Yellow Line project is not active.");
+    }
+
+    if (!hasProjectAccess("YELLOW_LINE_BREACH")) {
+        throw new Error("Yellow Line access denied.");
+    }
+
+    return ref(db, path);
+}
+
+// All new CCRAS records must use this helper.
+function ccrasRef(path) {
+    if (activeProject !== "CCRAS") {
+        throw new Error("CCRAS project is not active.");
+    }
+
+    if (!hasProjectAccess("CCRAS")) {
+        throw new Error("CCRAS access denied.");
+    }
+
+    return ref(db, `projects/CCRAS/${path}`);
 }
 // --- FIXED TOGGLE FUNCTION (Crash-Free for Checkout & Return) ---
 window.toggleInvMode = (mode) => {
@@ -7318,86 +7404,182 @@ window.unbanUser = async (uid, name) => {
         sel.innerHTML = opts;
     }
 };
-window.switchTab = (t) => {
-    const attBody = document.getElementById("attTableBody");
-    if(attBody) attBody.innerHTML = ""; 
 
-    const reportContainer = document.getElementById("printableReportContainer");
+window.switchTab = (t) => {
+    // PROJECT ACCESS LOCK
+    if (
+        typeof activeProject !== "undefined" &&
+        activeProject !== "YELLOW_LINE_BREACH"
+    ) {
+        alert("These tabs belong to the Yellow Line Breach Project.");
+        return;
+    }
+
+    if (
+        typeof hasProjectAccess === "function" &&
+        !hasProjectAccess("YELLOW_LINE_BREACH")
+    ) {
+        alert("You do not have access to the Yellow Line Breach Project.");
+        if (typeof window.showProjectPicker === "function") {
+            window.showProjectPicker();
+        }
+        return;
+    }
+
+    if (typeof t !== "string" || !t.trim()) {
+        console.warn("Invalid tab requested:", t);
+        return;
+    }
+
+    const attBody = document.getElementById("attTableBody");
+    if (attBody) attBody.innerHTML = "";
+
+    const reportContainer =
+        document.getElementById("printableReportContainer");
+
     if (reportContainer) {
         reportContainer.classList.add("hidden");
-        reportContainer.innerHTML = ""; 
+        reportContainer.innerHTML = "";
     }
 
     const allTabs = [
-    'newData', 'inventory', 'gallery', 'assigned', 'adminPanel', 
-    'dataView', 'printReport', 'funds', 'purchase', 'comments', 
-    'directives', 'billing', 'warranty', 'attendance', 'delivery', 
-    'scadaControl', 'fundWorkflow', 'pipConsole', 'document', 'workflow' 
-];
+        "newData", "inventory", "gallery", "assigned",
+        "adminPanel", "dataView", "printReport", "funds",
+        "purchase", "comments", "directives", "billing",
+        "warranty", "attendance", "delivery", "scadaControl",
+        "fundWorkflow", "pipConsole", "document", "workflow"
+    ];
 
     // Hide all tabs safely
-    allTabs.forEach(x => {
-        const el = document.getElementById(`tab-${x}`);
-        if(el) el.classList.add("hidden"); // Added safety check
+    allTabs.forEach((tabName) => {
+        const el = document.getElementById(`tab-${tabName}`);
+        if (el) el.classList.add("hidden");
     });
 
-    // Remove active styles from nav buttons safely
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    // Reset navigation styles
+    document.querySelectorAll(".nav-btn").forEach((btn) => {
+        btn.classList.remove("active");
+    });
 
-    // CRITICAL SAFETY LOCK: Prevent reading style properties of null
+    // Display requested tab
     const targetTab = document.getElementById(`tab-${t}`);
-    if(targetTab) {
-        targetTab.classList.remove("hidden");
-    } else {
-        console.warn(`DOM Target Error: Element id="tab-${t}" was not found in the viewport.`);
+
+    if (!targetTab) {
+        console.warn(`DOM Target Error: tab-${t} was not found.`);
+        return;
     }
 
-    const activeBtn = document.getElementById('btn' + t.charAt(0).toUpperCase() + t.slice(1));
-    if(activeBtn) activeBtn.classList.add("active");
+    targetTab.classList.remove("hidden");
 
-    // Scope management restrictions for non-admin contexts
+    const activeBtn = document.getElementById(
+        "btn" + t.charAt(0).toUpperCase() + t.slice(1)
+    );
+
+    if (activeBtn) activeBtn.classList.add("active");
+
+    // Existing non-admin restrictions
     if (!isAdmin) {
-        const restrictedTabs = ['attendance', 'funds', 'purchase', 'billing', 'directives'];
-        if (restrictedTabs.includes(t)) {
-            const container = document.getElementById(`tab-${t}`);
-            if (container) {
-                const elements = container.querySelectorAll('input, select, textarea, button:not(.nav-btn)');
-                elements.forEach(el => {
-                    const btnText = el.innerText.toUpperCase();
-                    const isDateInput = el.id === "attDate";
-                    const isLoader = btnText.includes("LOAD") || btnText.includes("SYNC") || btnText.includes("VIEW");
+        const restrictedTabs = [
+            "attendance", "funds", "purchase", "billing", "directives"
+        ];
 
-                    if (isDateInput || isLoader) {
-                        el.disabled = false;
-                        el.style.opacity = "1";
-                        el.style.cursor = "pointer";
-                    } else {
-                        el.disabled = true;
-                        el.style.opacity = "0.5";
-                        el.style.cursor = "not-allowed";
-                        if(btnText.includes("SUBMIT") || btnText.includes("CREATE") || btnText.includes("SAVE")) {
-                            el.style.display = "none";
-                        }
+        if (restrictedTabs.includes(t)) {
+            const elements = targetTab.querySelectorAll(
+                "input, select, textarea, button:not(.nav-btn)"
+            );
+
+            elements.forEach((el) => {
+                // input elements often have no innerText
+                const btnText = (
+                    el.innerText ||
+                    el.textContent ||
+                    el.value ||
+                    el.getAttribute("aria-label") ||
+                    ""
+                ).toUpperCase();
+
+                const isDateInput = el.id === "attDate";
+                const isLoader =
+                    btnText.includes("LOAD") ||
+                    btnText.includes("SYNC") ||
+                    btnText.includes("VIEW");
+
+                if (isDateInput || isLoader) {
+                    el.disabled = false;
+                    el.style.opacity = "1";
+                    el.style.cursor = "pointer";
+                } else {
+                    el.disabled = true;
+                    el.style.opacity = "0.5";
+                    el.style.cursor = "not-allowed";
+
+                    if (
+                        btnText.includes("SUBMIT") ||
+                        btnText.includes("CREATE") ||
+                        btnText.includes("SAVE")
+                    ) {
+                        el.style.display = "none";
                     }
-                });
-            }
+                }
+            });
         }
     }
 
-    // Trigger tab-specific downstream loading routines
-    if (t === 'attendance') window.loadAttendanceLog(false);
-    else if (t === 'funds') loadFinanceData();
-    else if (t === 'purchase') loadPurchaseData();
-    else if (t === 'directives') window.populateDirectiveUsers();
-    else if (t === 'comments') window.populateCommentUsers();
-    else if (t === 'delivery') window.populateShipStations();
-    else if (t === 'fundWorkflow') window.fmShowView('dashboard');
-    else if (t === 'pipConsole') window.pipInitTab();
-    else if (t === 'document') window.loadSecureDocuments(); // FIX: Added window.
-    else if (t === 'workflow') window.loadWorkflows();
+    // Preserve existing tab-specific loading routines
+    try {
+        if (t === "attendance" &&
+            typeof window.loadAttendanceLog === "function") {
+            window.loadAttendanceLog(false);
+        } else if (t === "funds" &&
+                   typeof loadFinanceData === "function") {
+            loadFinanceData();
+        } else if (t === "purchase" &&
+                   typeof loadPurchaseData === "function") {
+            loadPurchaseData();
+        } else if (t === "directives" &&
+                   typeof window.populateDirectiveUsers === "function") {
+            window.populateDirectiveUsers();
+        } else if (t === "comments" &&
+                   typeof window.populateCommentUsers === "function") {
+            window.populateCommentUsers();
+        } else if (t === "delivery" &&
+                   typeof window.populateShipStations === "function") {
+            window.populateShipStations();
+        } else if (t === "fundWorkflow" &&
+                   typeof window.fmShowView === "function") {
+            window.fmShowView("dashboard");
+        } else if (t === "pipConsole" &&
+                   typeof window.pipInitTab === "function") {
+            window.pipInitTab();
+        } else if (t === "document" &&
+                   typeof window.loadSecureDocuments === "function") {
+            window.loadSecureDocuments();
+        } else if (t === "workflow" &&
+                   typeof window.loadWorkflows === "function") {
+            window.loadWorkflows();
+        }
+
+        // Preserve SCADA-specific behavior from your later wrapper
+        if (t === "scadaControl") {
+            ["btnScadaAudit", "btnScadaDispatch", "btnGlobalScadaReset"]
+                .forEach((id) => {
+                    const btn = document.getElementById(id);
+                    if (btn) {
+                        btn.style.display = isAdmin ? "inline-flex" : "none";
+                    }
+                });
+
+            if (typeof window.switchScadaMode === "function") {
+                window.switchScadaMode("matrix");
+            }
+        }
+    } catch (error) {
+        console.error(`Error loading tab "${t}":`, error);
+    }
 
     window.scrollTo(0, 0);
 };
+
 // Paste these two new functions below the switchTab function:
 async function populateDirectiveUsers() {
     const list = document.getElementById("dirUserCheckboxList");
@@ -14610,6 +14792,39 @@ window.adminSaveUserEmails = async () => {
 
     document.getElementById("nameModal").classList.remove("hidden");
 }
+  
+function getActiveProjectName() {
+    if (typeof activeProject !== "undefined") {
+        if (activeProject === "CCRAS") {
+            return "CCRAS Project";
+        }
+
+        if (activeProject === "YELLOW_LINE_BREACH") {
+            return "Yellow Line Breach Project";
+        }
+    }
+
+    // Backward-compatible default for the existing MRPSP portal
+    return "Metro Railway Platform Safety Project (MRPSP)";
+}
+
+function addProjectNameToEmail(subject, body) {
+    const projectName = getActiveProjectName();
+
+    const cleanSubject = String(subject || "").trim();
+    const cleanBody = String(body || "");
+
+    return {
+        subject: cleanSubject.includes(`[${projectName}]`)
+            ? cleanSubject
+            : `${cleanSubject} [${projectName}]`,
+
+        body: cleanBody.includes(`PROJECT: ${projectName}`)
+            ? cleanBody
+            : `PROJECT: ${projectName}\n\n${cleanBody}`
+    };
+}
+
 // --- EMAIL DISPATCHER HELPER (PROFESSIONAL TEMPLATE) ---
 window.sendEmailNotification = async (emailTo, studentName, taskDesc, deadline) => {
     console.log(`[EMAIL ENGINE] Routing to: ${emailTo}`);
@@ -14643,9 +14858,11 @@ Metro Railway Platform Safety Project (MRPSP)`;
     const scriptUrl = "https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec";
 
     const formData = new URLSearchParams();
-    formData.append("to", emailTo);
-    formData.append("subject", subject);
-    formData.append("body", emailBody);
+    const mail = addProjectNameToEmail(subject, emailBody);
+
+formData.append("to", emailTo);
+formData.append("subject", mail.subject);
+formData.append("body", mail.body);
 
     try {
         fetch(scriptUrl, {
@@ -14690,10 +14907,11 @@ Metro Railway Platform Safety Project (MRPSP)`;
 
     const scriptUrl = "https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec";
     const formData = new URLSearchParams();
-    formData.append("to", emailTo);
-    formData.append("subject", subject);
-    formData.append("body", emailBody);
+    const mail = addProjectNameToEmail(subject, emailBody);
 
+formData.append("to", emailTo);
+formData.append("subject", mail.subject);
+formData.append("body", mail.body);
     try {
         fetch(scriptUrl, {
             method: 'POST',
@@ -14732,9 +14950,11 @@ Metro Railway Platform Safety Project (MRPSP)`;
 
         const scriptUrl = "https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec";
         const formData = new URLSearchParams();
-        formData.append("to", targetEmail);
-        formData.append("subject", subject);
-        formData.append("body", emailBody);
+        const mail = addProjectNameToEmail(subject, emailBody);
+
+formData.append("to", emailTo);
+formData.append("subject", mail.subject);
+formData.append("body", mail.body);
 
         fetch(scriptUrl, { method: 'POST', body: formData, mode: 'no-cors' });
     } catch (error) {
@@ -14763,6 +14983,306 @@ window.pipResendInitialReminder = async (uid, encodedTargetName) => {
     
     alert("✅ Reminder email dispatched successfully.");
     window.pipLoadAdminRecords();
+};
+  // =====================================================
+// TWO-PROJECT ACCESS CONTROLLER
+// =====================================================
+
+let activeProject = null;
+let currentProjectPermissions = {};
+
+const PROJECT_DEFINITIONS = {
+    CCRAS: {
+        label: "CCRAS"
+    },
+    YELLOW_LINE_BREACH: {
+        label: "Yellow Line Breach Project"
+    }
+};
+
+// Admins can access both projects.
+// Students receive only the projects assigned in Firebase.
+function hasProjectAccess(projectId) {
+    if (!currentUser) return false;
+
+    if (isAdmin) return true;
+
+    return currentProjectPermissions[projectId] === true;
+}
+
+// Read the logged-in user's project permissions.
+async function loadMyProjectPermissions() {
+    if (!currentUser) {
+        throw new Error("No authenticated user.");
+    }
+
+    const snap = await get(
+        ref(db, `users/${currentUser.uid}/projects`)
+    );
+
+    currentProjectPermissions = snap.exists()
+        ? snap.val()
+        : {};
+
+    return currentProjectPermissions;
+}
+
+// Show only projects assigned to the current user.
+window.showProjectPicker = async function () {
+    if (!currentUser) {
+        alert("Please log in first.");
+        return;
+    }
+
+    try {
+        await loadMyProjectPermissions();
+
+        activeProject = null;
+
+        document.getElementById("appScreen")
+            .classList.add("hidden");
+
+        document.getElementById("ccrasScreen")
+            .classList.add("hidden");
+
+        document.getElementById("projectPicker")
+            .classList.remove("hidden");
+
+        const ccrasButton =
+            document.getElementById("projectBtnCCRAS");
+
+        const yellowButton =
+            document.getElementById("projectBtnYellow");
+
+        ccrasButton.style.display =
+            hasProjectAccess("CCRAS") ? "block" : "none";
+
+        yellowButton.style.display =
+            hasProjectAccess("YELLOW_LINE_BREACH")
+                ? "block"
+                : "none";
+
+        document.getElementById("projectAccessMessage")
+            .textContent =
+                hasProjectAccess("CCRAS") ||
+                hasProjectAccess("YELLOW_LINE_BREACH")
+                    ? ""
+                    : "No project access has been assigned. Contact your administrator.";
+
+        const adminPanel =
+            document.getElementById("projectAccessAdminPanel");
+
+        if (adminPanel) {
+            adminPanel.classList.toggle("hidden", !isAdmin);
+        }
+
+    } catch (error) {
+        console.error("Project permission error:", error);
+        alert("Could not load project permissions: " + error.message);
+    }
+};
+
+// Select a permitted project.
+window.selectProject = async function (projectId) {
+    if (!PROJECT_DEFINITIONS[projectId]) {
+        return alert("Invalid project.");
+    }
+
+    try {
+        // Re-read permissions instead of trusting the old UI state.
+        await loadMyProjectPermissions();
+
+        if (!hasProjectAccess(projectId)) {
+            return alert("Access denied for this project.");
+        }
+
+        activeProject = projectId;
+
+        document.getElementById("projectPicker")
+            .classList.add("hidden");
+
+        document.getElementById("appScreen")
+            .classList.add("hidden");
+
+        document.getElementById("ccrasScreen")
+            .classList.add("hidden");
+
+        if (projectId === "YELLOW_LINE_BREACH") {
+            document.getElementById("appScreen")
+                .classList.remove("hidden");
+
+            startYellowLineWorkspace();
+
+        } else if (projectId === "CCRAS") {
+            document.getElementById("ccrasScreen")
+                .classList.remove("hidden");
+
+            startCCRASWorkspace();
+        }
+
+        const userInfo = document.getElementById("userInfo");
+        if (userInfo) {
+            userInfo.textContent =
+                `${currentUser.name || currentUser.email} | ` +
+                PROJECT_DEFINITIONS[projectId].label;
+        }
+
+    } catch (error) {
+        console.error(error);
+        alert("Unable to open project: " + error.message);
+    }
+};
+
+// Start the existing Yellow Line application.
+function startYellowLineWorkspace() {
+    switchTab("newData");
+
+    loadDraft();
+    loadGallery();
+    loadInventory();
+    loadAssignments();
+
+    setupIdleTimer();
+}
+
+// CCRAS entry point.
+// Add the actual CCRAS-specific functions here when implemented.
+function startCCRASWorkspace() {
+    const container =
+        document.getElementById("ccrasWorkspaceContent");
+
+    if (container) {
+        container.innerHTML = `
+            <p><strong>CCRAS is selected.</strong></p>
+            <p>Its forms, reports and database operations
+               must use the CCRAS project namespace.</p>
+        `;
+    }
+}
+  // =====================================================
+// ADMIN: GRANT OR REVOKE PROJECT ACCESS
+// =====================================================
+
+window.loadProjectAccessUsers = async function () {
+    if (!isAdmin) {
+        return alert("Only administrators can manage project access.");
+    }
+
+    const list =
+        document.getElementById("projectAccessUserList");
+
+    list.replaceChildren();
+    list.textContent = "Loading users...";
+
+    try {
+        const snap = await get(ref(db, "users"));
+
+        list.replaceChildren();
+
+        if (!snap.exists()) {
+            list.textContent = "No users found.";
+            return;
+        }
+
+        snap.forEach(child => {
+            const uid = child.key;
+            const user = child.val() || {};
+            const email = (user.email || "").toLowerCase();
+
+            if (ADMIN_EMAILS.includes(email)) return;
+            if (user.banned || user.terminated) return;
+
+            const row = document.createElement("div");
+            row.style.cssText =
+                "border:1px solid #e2e8f0;border-radius:8px;" +
+                "padding:15px;margin:12px 0;background:white;";
+
+            const heading = document.createElement("strong");
+            heading.textContent =
+                user.name || user.email || uid;
+
+            const emailLine = document.createElement("p");
+            emailLine.textContent = user.email || uid;
+
+            const ccrasLabel = document.createElement("label");
+            const ccrasCheck = document.createElement("input");
+
+            ccrasCheck.type = "checkbox";
+            ccrasCheck.checked =
+                user.projects?.CCRAS === true;
+
+            ccrasLabel.append(
+                ccrasCheck,
+                document.createTextNode(" CCRAS access")
+            );
+
+            const yellowLabel = document.createElement("label");
+            const yellowCheck = document.createElement("input");
+
+            yellowCheck.type = "checkbox";
+            yellowCheck.checked =
+                user.projects?.YELLOW_LINE_BREACH === true;
+
+            yellowLabel.append(
+                yellowCheck,
+                document.createTextNode(
+                    " Yellow Line Breach access"
+                )
+            );
+
+            ccrasLabel.style.display = "block";
+            yellowLabel.style.display = "block";
+
+            const saveButton = document.createElement("button");
+            saveButton.className = "success";
+            saveButton.textContent = "Save Access";
+
+            saveButton.addEventListener("click", async () => {
+                if (!isAdmin) {
+                    return alert("Administrator access required.");
+                }
+
+                saveButton.disabled = true;
+
+                try {
+                    await update(ref(db, `users/${uid}/projects`), {
+                        CCRAS: ccrasCheck.checked,
+                        YELLOW_LINE_BREACH: yellowCheck.checked
+                    });
+
+                    alert(
+                        "Project permissions saved for " +
+                        (user.name || user.email || uid)
+                    );
+
+                } catch (error) {
+                    console.error(error);
+                    alert("Permission update failed: " + error.message);
+                } finally {
+                    saveButton.disabled = false;
+                }
+            });
+
+            row.append(
+                heading,
+                emailLine,
+                ccrasLabel,
+                yellowLabel,
+                saveButton
+            );
+
+            list.appendChild(row);
+        });
+
+        if (!list.children.length) {
+            list.textContent = "No eligible student accounts found.";
+        }
+
+    } catch (error) {
+        console.error(error);
+        list.textContent = "Unable to load users.";
+        alert("Could not load users: " + error.message);
+    }
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
