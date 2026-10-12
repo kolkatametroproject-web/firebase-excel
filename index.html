@@ -1200,6 +1200,24 @@ tr:hover { background: #fcfcfd; }
         <input type="number" id="invRegPrice" placeholder="Purchase Price (₹)">
     </div>
 
+    <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:14px;margin-bottom:15px;">
+        <label style="display:flex;align-items:center;gap:10px;font-weight:900;color:#166534;">
+            <input type="checkbox" id="invIsStationery" style="width:18px;height:18px;margin:0;">
+            Stationery / consumable stock (one QR code for the whole stock item)
+        </label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+            <div>
+                <label style="font-size:11px;font-weight:bold;color:#166534;">PACK / UNIT DESCRIPTION</label>
+                <input id="invPackLabel" placeholder="e.g. Pack of 10 pens / Ream of 500 sheets" style="margin:5px 0 0;">
+            </div>
+            <div>
+                <label style="font-size:11px;font-weight:bold;color:#166534;">INITIAL PACK / UNIT QUANTITY</label>
+                <input id="invOpeningQty" type="number" min="1" step="1" value="1" placeholder="e.g. 20" style="margin:5px 0 0;">
+            </div>
+        </div>
+        <small style="display:block;color:#166534;margin-top:8px;">When enabled, one QR tag identifies this stationery item. Checkout asks how many packs/units are taken and updates the remaining stock. Regular assets keep the existing checkout/return workflow.</small>
+    </div>
+
     <div style="display:grid; grid-template-columns: 1.5fr 1fr 1fr; gap:15px; margin-bottom:15px;">
         <select id="addLocSelect">
             <option value="D2 Building - Heerok Sir Lab">D2 Building - Heerok Sir Lab</option>
@@ -1243,8 +1261,9 @@ tr:hover { background: #fcfcfd; }
             <div id="printableTagArea" style="background:white; width: 210mm; height: 297mm; padding: 20mm; margin: 0 auto; box-sizing: border-box; color: black; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid #ddd;">
                 
                 <img id="tagQrDisplay" src="" style="width: 130mm; height: 130mm; border: 2pt solid #000; padding: 10pt;">
+                <div id="tagPackMetaDisplay" style="font-family:Arial,sans-serif;font-size:18pt;font-weight:800;text-align:center;margin-top:12pt;max-width:100%;"></div>
                 
-                <div style="height: 5em;"></div> 
+                <div style="height: 3em;"></div> 
 
                 <div style="width: 100%; text-align: center;">
                     <img id="tagBarDisplay" src="" style="width: 160mm; height: 65mm; object-fit: contain;">
@@ -4378,6 +4397,7 @@ window.loadInventory = () => {
                 <td style="font-family:monospace; font-weight:bold;">${v.barcode || '--'}</td>
                 <td style="font-weight:bold;">
                     ${v.item}
+                    ${v.isStationery ? `<div style="font-size:10px;color:#166534;font-weight:800;margin-top:3px;">📦 STATIONERY · ${Number(v.availableQty ?? v.initialQty ?? 0)} available ${v.packLabel ? `· ${v.packLabel}` : 'units'}</div>` : ""}
                     ${invoiceLabel}
                 </td>
                 <td style="text-align:center;">${v.usageCount || 0}</td>
@@ -5119,6 +5139,7 @@ window.renderInvBatchUI = (type) => {
                 <td>
                     <div style="font-weight:900; color:var(--metro-blue);">${it.item}</div>
                     <div style="font-family:monospace; font-size:12px; color:#64748b;">${it.barcode}</div>
+                    ${it.isStationery ? `<div style="font-size:12px;color:#166534;font-weight:800;">TAKE: ${Number(it.checkoutQty || 0)} · REMAINING AFTER CHECKOUT: ${Math.max(0, Number(it.availableQty || 0) - Number(it.checkoutQty || 0))} ${it.packLabel || 'units'}</div>` : ""}
                 </td>
                 <td style="text-align:center;">
                     <button class="danger" onclick="window.removeBatchItem('${type}', ${i})" style="padding:6px 12px; border-radius:4px;"><i class="fas fa-trash"></i></button>
@@ -5180,9 +5201,19 @@ window.executeBatchTransaction = async (type) => {
             const status = String(current.status || "In Stock").trim();
 
             if (type === "CHECKOUT") {
-                if (status === "Checked Out") throw new Error(`${current.item} (${current.barcode}) is already Checked Out.`);
-                if (status === "Sold Out") throw new Error(`${current.item} (${current.barcode}) is Sold Out and cannot be checked out.`);
-                if (status !== "In Stock") throw new Error(`${current.item} has an unsupported status: ${status}.`);
+                if (current.isStationery) {
+                    const available = Number(current.availableQty ?? current.initialQty ?? 0);
+                    const requested = Math.floor(Number(cartItem.checkoutQty || 0));
+                    if (status === "Sold Out" || available <= 0) throw new Error(`${current.item} is out of stock.`);
+                    if (!Number.isInteger(requested) || requested < 1) throw new Error(`Enter a valid quantity for ${current.item}.`);
+                    if (requested > available) throw new Error(`Only ${available} ${current.packLabel || 'units'} of ${current.item} are available; requested ${requested}.`);
+                    current.checkoutQty = requested;
+                } else {
+                    if (status === "Checked Out") throw new Error(`${current.item} (${current.barcode}) is already Checked Out.`);
+                    if (status === "Sold Out") throw new Error(`${current.item} (${current.barcode}) is Sold Out and cannot be checked out.`);
+                    if (status !== "In Stock") throw new Error(`${current.item} has an unsupported status: ${status}.`);
+                    current.checkoutQty = 1;
+                }
             } else {
                 if (status === "In Stock") throw new Error(`${current.item} (${current.barcode}) is already In Stock; no return was written.`);
                 if (status === "Sold Out") throw new Error(`${current.item} (${current.barcode}) is Sold Out. Use Asset Recovery.`);
@@ -5197,21 +5228,42 @@ window.executeBatchTransaction = async (type) => {
             const itemRef = projectAwareRef(`inventory/${item.key}`);
             const currentSnap = await get(itemRef);
             const current = currentSnap.val();
-            const itemUpdate = type === "CHECKOUT" ? {
-                status: "Checked Out",
-                holder: userName,
-                location: purposeOrLoc,
-                usageCount: Number(current.usageCount || 0) + 1,
-                lastCheckoutAt: timestamp,
-                lastCheckoutBy: userName,
-                lastCheckoutPurpose: purposeOrLoc
-            } : {
-                status: "In Stock",
-                holder: "Store",
-                location: purposeOrLoc,
-                lastReturnedAt: timestamp,
-                lastReturnedBy: userName
-            };
+            let itemUpdate;
+            if (type === "CHECKOUT" && item.isStationery) {
+                const availableNow = Number(current.availableQty ?? current.initialQty ?? 0);
+                const takenQty = Math.floor(Number(item.checkoutQty || 0));
+                const remainingQty = availableNow - takenQty;
+                if (takenQty < 1 || takenQty > availableNow) throw new Error(`Stock changed while processing ${item.item}. Please scan again.`);
+                itemUpdate = {
+                    status: remainingQty > 0 ? "In Stock" : "Sold Out",
+                    holder: "Store",
+                    availableQty: remainingQty,
+                    usageCount: Number(current.usageCount || 0) + 1,
+                    lastCheckoutAt: timestamp,
+                    lastCheckoutBy: userName,
+                    lastCheckoutPurpose: purposeOrLoc,
+                    lastQtyTaken: takenQty,
+                    updatedAt: timestamp
+                };
+            } else if (type === "CHECKOUT") {
+                itemUpdate = {
+                    status: "Checked Out",
+                    holder: userName,
+                    location: purposeOrLoc,
+                    usageCount: Number(current.usageCount || 0) + 1,
+                    lastCheckoutAt: timestamp,
+                    lastCheckoutBy: userName,
+                    lastCheckoutPurpose: purposeOrLoc
+                };
+            } else {
+                itemUpdate = {
+                    status: "In Stock",
+                    holder: "Store",
+                    location: purposeOrLoc,
+                    lastReturnedAt: timestamp,
+                    lastReturnedBy: userName
+                };
+            }
             await update(itemRef, itemUpdate);
 
             await push(projectAwareRef("logs"), {
@@ -5220,7 +5272,9 @@ window.executeBatchTransaction = async (type) => {
                 barcode: item.barcode || "",
                 reason: type === "CHECKOUT" ? purposeOrLoc : "Returned to Stock",
                 location: type === "RETURN" ? purposeOrLoc : "Field Operations",
-                qty: 1,
+                qty: type === "CHECKOUT" && item.isStationery ? Number(item.checkoutQty || 0) : 1,
+                packLabel: item.isStationery ? (item.packLabel || "") : "",
+                remainingQty: type === "CHECKOUT" && item.isStationery ? Math.max(0, Number(current.availableQty ?? current.initialQty ?? 0) - Number(item.checkoutQty || 0)) : null,
                 time: timestamp,
                 takenBy: userName,
                 by: userName,
@@ -5229,7 +5283,10 @@ window.executeBatchTransaction = async (type) => {
             });
         }
 
-        alert(`✅ SUCCESS: ${freshItems.length} asset(s) ${type === "CHECKOUT" ? "checked out" : "returned"}.`);
+        const stationerySummary = type === "CHECKOUT"
+            ? freshItems.filter(x => x.isStationery).map(x => `${x.item}: ${x.checkoutQty} ${x.packLabel || 'units'}`).join("\n")
+            : "";
+        alert(`✅ SUCCESS: ${freshItems.length} item(s) ${type === "CHECKOUT" ? "checked out" : "returned"}.${stationerySummary ? "\n\nStationery quantities:\n" + stationerySummary : ""}`);
         window.invBatchCarts[type] = [];
         window.renderInvBatchUI(type);
         if (type === "CHECKOUT") {
@@ -8106,7 +8163,9 @@ function loadInventory() {
             // Only count active items towards the "Total Assets" and "Available" labels
             if(!isSold) {
                 total++;
-                if(v.status !== "Checked Out") available++;
+                if (v.isStationery) {
+                    if (Number(v.availableQty ?? v.initialQty ?? 0) > 0) available++;
+                } else if(v.status !== "Checked Out") available++;
             }
 
             // STATUS UI STYLING
@@ -8387,6 +8446,9 @@ window.resetInvForm = () => {
     document.getElementById("invName").value = "";
     document.getElementById("invRegPrice").value = "";
     document.getElementById("addLocSpot").value = "";
+    if (document.getElementById("invIsStationery")) document.getElementById("invIsStationery").checked = false;
+    if (document.getElementById("invPackLabel")) document.getElementById("invPackLabel").value = "";
+    if (document.getElementById("invOpeningQty")) document.getElementById("invOpeningQty").value = "1";
     document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-plus-circle'></i> Register New Asset";
     document.getElementById("btnAddStock").innerText = "SAVE ASSET RECORD";
     document.getElementById("btnCancelEdit").classList.add("hidden");
@@ -8434,12 +8496,18 @@ window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
     const price = document.getElementById("invRegPrice").value || 0;
+    const isStationery = !!document.getElementById("invIsStationery")?.checked;
+    const packLabel = (document.getElementById("invPackLabel")?.value || "").trim();
+    const openingQty = Math.floor(Number(document.getElementById("invOpeningQty")?.value || 1));
     const locSelect = document.getElementById("addLocSelect").value;
     const locSpot = document.getElementById("addLocSpot").value;
 
     if(!name) return alert("⚠️ Name is required.");
+    if (isStationery && (!Number.isFinite(openingQty) || openingQty < 1)) return alert("Enter an initial stationery quantity of at least 1.");
+    if (isStationery && !packLabel) return alert("Enter the pack/unit description, e.g. Pack of 10 pens.");
 
-    // Generate 8-digit ID (Strict Sync)
+    // Generate one unique QR/tag for this stationery stock item, not for each pack.
+
     const numericId8 = Math.floor(10000000 + Math.random() * 90000000).toString();
 
     pendingTagData = {
@@ -8451,6 +8519,10 @@ window.saveAndGenerateTag = async () => {
         status: "In Stock",
         holder: "Store",
         usageCount: 0,
+        isStationery: isStationery,
+        packLabel: isStationery ? packLabel : "",
+        initialQty: isStationery ? openingQty : 1,
+        availableQty: isStationery ? openingQty : 1,
         updatedAt: serverTimestamp(),
         protectionActivated: true
     };
@@ -8471,6 +8543,12 @@ window.showTagPreview = (id) => {
 
     qrImg.src = qrUrl;
     barImg.src = barUrl;
+    const meta = document.getElementById("tagPackMetaDisplay");
+    if (meta && typeof pendingTagData !== "undefined" && pendingTagData) {
+        meta.textContent = pendingTagData.isStationery
+            ? `${pendingTagData.item} · ${pendingTagData.packLabel} · Initial quantity: ${pendingTagData.initialQty}`
+            : pendingTagData.item;
+    }
     
     qrImg.onload = () => {
         document.getElementById("invBarcode").value = id;
@@ -8631,9 +8709,19 @@ window.executeTagPrint = async function () {
         pdf.addImage(qrData, "PNG", 40, 28, 130, 130);
         pdf.addImage(barcodeData, "PNG", 10, 168, 190, 48);
         pdf.setFontSize(14);
-        pdf.text("Asset ID: " + tagId, 105, 230, { align: "center" });
-        pdf.setFontSize(11);
-        pdf.text("PLEASE DO NOT DAMAGE THIS TAG", 105, 245, { align: "center" });
+        pdf.text("Asset ID: " + tagId, 105, 225, { align: "center" });
+        const tagItem = (pendingTagData && pendingTagData.item) || document.getElementById("invName")?.value || "";
+        if (tagItem) {
+            pdf.setFontSize(12);
+            pdf.text(String(tagItem).slice(0, 70), 105, 233, { align: "center", maxWidth: 185 });
+        }
+        if (pendingTagData && pendingTagData.isStationery) {
+            pdf.setFontSize(11);
+            pdf.text("STATIONERY / CONSUMABLE", 105, 240, { align: "center" });
+            pdf.text(String(pendingTagData.packLabel || "Pack/Unit") + " | Initial quantity: " + String(pendingTagData.initialQty), 105, 246, { align: "center", maxWidth: 185 });
+        }
+        pdf.setFontSize(10);
+        pdf.text("PLEASE DO NOT DAMAGE THIS TAG", 105, 257, { align: "center" });
 
         // Download locally. No email request and no print dialog.
         pdf.save("Asset_Tag_" + tagId.replace(/[^a-zA-Z0-9_-]/g, "_") + ".pdf");
@@ -10347,8 +10435,20 @@ window.onScanSuccess = async function(decodedText) {
 
             // 3. Logic Status Gates
             if (type === 'CHECKOUT') {
-                if (item.status === "Checked Out") return alert(`⛔ ${item.item} is already in the field.`);
-                if (item.status === "Sold Out") return alert(`⛔ ${item.item} is Sold Out.`);
+                if (item.isStationery) {
+                    const available = Number(item.availableQty ?? item.initialQty ?? 0);
+                    if (item.status === "Sold Out" || available <= 0) return alert(`⛔ ${item.item} is out of stock.`);
+                    const rawQty = prompt(`STATIONERY CHECKOUT\nItem: ${item.item}\nPack/unit: ${item.packLabel || 'units'}\nAvailable: ${available}\n\nHow many packs/units are being taken?`, "1");
+                    if (rawQty === null) return;
+                    const requestedQty = Number(rawQty);
+                    if (!Number.isInteger(requestedQty) || requestedQty < 1) return alert("Enter a whole number greater than zero.");
+                    if (requestedQty > available) return alert(`Only ${available} ${item.packLabel || 'units'} are available.`);
+                    item.checkoutQty = requestedQty;
+                } else {
+                    if (item.status === "Checked Out") return alert(`⛔ ${item.item} is already in the field.`);
+                    if (item.status === "Sold Out") return alert(`⛔ ${item.item} is Sold Out.`);
+                    item.checkoutQty = 1;
+                }
             } else {
                 if (item.status === "In Stock") return alert(`⚠️ ${item.item} is already In Stock.`);
                 if (item.status === "Sold Out") return alert(`⛔ ${item.item} was Sold Out. Use Asset Recovery.`);
@@ -10362,7 +10462,7 @@ window.onScanSuccess = async function(decodedText) {
             const overlay = document.getElementById("scanSuccessOverlay");
             const itemText = document.getElementById("scanSuccessItem");
             if (overlay && itemText) {
-                itemText.innerText = `ADDED: ${item.item}`;
+                itemText.innerText = `ADDED: ${item.item}${type === 'CHECKOUT' && item.isStationery ? ` · QTY ${item.checkoutQty}` : ""}`;
                 overlay.classList.remove("hidden");
                 setTimeout(() => overlay.classList.add("hidden"), 800);
             }
