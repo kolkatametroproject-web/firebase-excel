@@ -8518,13 +8518,20 @@ window.executeTagPrint = async function () {
             "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js",
             "https://unpkg.com/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"
         ], () => !!window.JsBarcode);
-        if (!currentUser?.email) {
-            throw new Error("Could not identify the signed-in operator's registered email. Please sign in again.");
+        if (!currentUser?.uid) {
+            throw new Error("Could not identify the signed-in operator. Please sign in again.");
         }
 
-        const operatorEmail = String(currentUser.email).trim();
+        // Dispatch destination is the profile's PRIMARY PERSONAL EMAIL (DISPATCH DEFAULT),
+        // not the Firebase/login email.
+        const operatorProfileSnap = await get(projectAwareRef(`users/${currentUser.uid}`));
+        const operatorProfile = operatorProfileSnap.exists() ? operatorProfileSnap.val() : {};
+        const operatorEmail = String(operatorProfile.personalEmail1 || "").trim();
+        if (!operatorEmail) {
+            throw new Error("Your profile has no Primary Personal Email (Dispatch Default). Ask an administrator to add it before sending email.");
+        }
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(operatorEmail)) {
-            throw new Error("The signed-in operator's registered email address is invalid.");
+            throw new Error("Your Primary Personal Email (Dispatch Default) is invalid. Ask an administrator to correct it.");
         }
         if (button) {
             button.disabled = true;
@@ -8584,7 +8591,7 @@ window.executeTagPrint = async function () {
         // Apps Script must be updated and redeployed with the assetTagPdf handler.
         await fetch(scriptUrl, { method: "POST", body: formData, mode: "no-cors" });
 
-        alert("The asset-tag PDF email request was submitted to the signed-in operator's registered email:\n" +
+        alert("The asset-tag PDF email request was submitted to your Primary Personal Email (Dispatch Default):\n" +
               operatorEmail +
               "\n\nThe website cannot confirm delivery in no-cors mode. Check Inbox/Spam. If no email arrives, update and redeploy the Apps Script code supplied with this HTML.");
     } catch (error) {
@@ -14489,7 +14496,7 @@ window.wfAssignTask = async () => {
         const uData = uSnap.exists() ? uSnap.val() : {};
         
         // Priority: Use Personal Email 1. If missing, try Personal Email 2. If missing, use Official Login Email.
-        const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+        const targetEmail = String(uData.personalEmail1 || "").trim();
 
         // 2. Save Task to Database
         await push(projectAwareRef( "workflows"), {
@@ -14679,7 +14686,7 @@ window.executeWfFailAction = async (key, targetUid, encodedTargetName) => {
 
             const uSnap = await get(projectAwareRef( `users/${targetUid}`));
             const uData = uSnap.exists() ? uSnap.val() : {};
-            const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+            const targetEmail = String(uData.personalEmail1 || "").trim();
 
             // 2. Update Task Status in Database
             await update(projectAwareRef( `workflows/${key}`), {
@@ -14894,7 +14901,7 @@ window.wfReviewTask = async (isApproved) => {
         // 2. Fetch User's Email for Notification
         const uSnap = await get(projectAwareRef( `users/${wf.targetUid}`));
         const uData = uSnap.exists() ? uSnap.val() : {};
-        const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+        const targetEmail = String(uData.personalEmail1 || "").trim();
 
         // 3. Send Notification Email
         if (targetEmail) {
@@ -15116,7 +15123,7 @@ window.dispatchPipEmail = async (uid, subject, professionalMessage) => {
     try {
         const uSnap = await get(projectAwareRef( `users/${uid}`));
         const uData = uSnap.exists() ? uSnap.val() : {};
-        const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+        const targetEmail = String(uData.personalEmail1 || "").trim();
         const studentName = uData.name || "Personnel";
 
         if (!targetEmail) return console.warn("No email found for PIP dispatch.");
@@ -15141,7 +15148,7 @@ Metro Railway Platform Safety Project (MRPSP)`;
         const formData = new URLSearchParams();
         const mail = addProjectNameToEmail(subject, emailBody);
 
-formData.append("to", emailTo);
+formData.append("to", targetEmail);
 formData.append("subject", mail.subject);
 formData.append("body", mail.body);
 
