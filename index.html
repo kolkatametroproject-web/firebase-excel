@@ -4349,6 +4349,13 @@ window.loadInventory = () => {
                 displayStatus = "Checked Out";
             }
 
+            // Count each inventory record exactly once. Sold items are excluded
+            // from active stock totals; checked-out items are not available.
+            if (!isSold) {
+                total++;
+                if (!isCheckedOut) available++;
+            }
+
             // Action Buttons Logic
             let actionBtns = "";
             if (isSold) {
@@ -8488,12 +8495,29 @@ window.ensureTagLibrariesLoaded = async function () {
             try {
                 await new Promise((resolve, reject) => {
                     const script = document.createElement("script");
+                    let settled = false;
+                    const finish = (error) => {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeout(timeoutId);
+                        script.onload = null;
+                        script.onerror = null;
+                        if (error) {
+                            script.remove();
+                            reject(error);
+                        } else {
+                            resolve();
+                        }
+                    };
+                    const timeoutId = setTimeout(() => {
+                        finish(new Error("Timed out loading " + url));
+                    }, 8000);
                     script.src = url;
                     script.async = true;
                     script.onload = () => globalCheck()
-                        ? resolve()
-                        : reject(new Error(label + " loaded but its global was not found"));
-                    script.onerror = () => reject(new Error("Could not load " + url));
+                        ? finish()
+                        : finish(new Error(label + " loaded but its global was not found"));
+                    script.onerror = () => finish(new Error("Could not load " + url));
                     document.head.appendChild(script);
                 });
                 if (globalCheck()) return;
