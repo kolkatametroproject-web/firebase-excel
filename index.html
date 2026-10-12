@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js"></script>
 <style>
 /* --- PREMIUM ENTERPRISE METRO THEME --- */
 :root {
@@ -8423,71 +8424,153 @@ window.showTagPreview = (id) => {
 
     document.getElementById("tagPrintModal").classList.remove("hidden");
 };
-window.executeTagPrint = () => {
-    const qrSrc = document.getElementById("tagQrDisplay").src;
-    const barSrc = document.getElementById("tagBarDisplay").src;
-    const tagId = pendingTagData ? pendingTagData.barcode : "00000000";
 
-    const win = window.open('', '', 'height=900,width=800');
-    
-    win.document.write(`
-        <html>
-            <head>
-                <title>Print_Tag_${tagId}</title>
-                <style>
-                    @media print {
-                        @page { size: A4; margin: 0; }
-                        body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; }
-                    }
-                    body { 
-                        display: flex; 
-                        flex-direction: column;
-                        justify-content: center; 
-                        align-items: center; 
-                        height: 100vh; 
-                        width: 100vw;
-                        background: white;
-                        overflow: hidden;
-                    }
-                    .qr-code {
-                        width: 130mm; 
-                        height: 130mm;
-                        object-fit: contain;
-                        border: 3px solid #000;
-                    }
-                    /* 4-line vertical gap spacer */
-                    .spacer {
-                        height: 100px; 
-                        width: 100%;
-                    }
-                    .barcode {
-                        width: 200mm; /* Absolute Full Width of A4 */
-                        height: 80mm; 
-                        object-fit: contain;
-                    }
-                </style>
-            </head>
-            <body>
-                <img src="${qrSrc}" class="qr-code">
-                
-                <div class="spacer"></div>
-                
-                <img src="${barSrc}" class="barcode">
+window.executeTagPrint = async function () {
+    const btn = document.querySelector(
+        '#tagPrintModal button[onclick="executeTagPrint()"]'
+    );
 
-                <script>
-                    window.onload = function() {
-                        setTimeout(function() {
-                            window.print();
-                            window.close();
-                        }, 1000);
-                    };
-                <\/script>
-            </body>
-        </html>
-    `);
+    if (!currentUser || !currentUser.email) {
+        alert("Please log in before printing the asset tag.");
+        return;
+    }
 
-    win.document.close();
+    const qrImg = document.getElementById("tagQrDisplay");
+    const barImg = document.getElementById("tagBarDisplay");
+    const tagId = pendingTagData?.barcode;
+
+    if (!tagId || !qrImg?.src || !barImg?.src) {
+        alert("Asset tag, QR code, or barcode is missing.");
+        return;
+    }
+
+    const originalText = btn?.innerHTML;
+
+    try {
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = "GENERATING PDF & EMAILING...";
+        }
+
+        // Convert an image URL to a data URL for embedding in the PDF.
+        async function imageToDataURL(url) {
+            const response = await fetch(url, { mode: "cors" });
+
+            if (!response.ok) {
+                throw new Error("Could not load tag image.");
+            }
+
+            const blob = await response.blob();
+
+            return await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () =>
+                    reject(new Error("Could not read tag image."));
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        const [qrData, barcodeData] = await Promise.all([
+            imageToDataURL(qrImg.src),
+            imageToDataURL(barImg.src)
+        ]);
+
+        // Build the A4 PDF.
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF({
+            orientation: "portrait",
+            unit: "mm",
+            format: "a4"
+        });
+
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(15);
+        pdf.text("ASSET TAG", 105, 18, { align: "center" });
+
+        pdf.addImage(qrData, "PNG", 40, 28, 130, 130);
+        pdf.addImage(barcodeData, "PNG", 15, 170, 180, 55);
+
+        pdf.setFontSize(16);
+        pdf.text(String(tagId), 105, 238, { align: "center" });
+
+        pdf.setFontSize(11);
+        pdf.text(
+            "PLEASE DO NOT DAMAGE THIS TAG",
+            105,
+            252,
+            { align: "center" }
+        );
+
+        const pdfBlob = pdf.output("blob");
+        const pdfBase64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () =>
+                resolve(String(reader.result).split(",")[1]);
+            reader.onerror = () =>
+                reject(new Error("Could not prepare the PDF."));
+            reader.readAsDataURL(pdfBlob);
+        });
+
+        // Send the PDF to the authenticated operator's login email.
+        const scriptUrl =
+            "https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec";
+
+        const formData = new URLSearchParams();
+        formData.append("action", "emailAssetPdf");
+        formData.append("to", currentUser.email);
+        formData.append("tagId", String(tagId));
+        formData.append("project", String(activeProject || "Hardware"));
+        formData.append("filename", `Asset_Tag_${tagId}.pdf`);
+        formData.append("pdfBase64", pdfBase64);
+
+        // no-cors does not expose server errors, so use a normal request.
+        const response = await fetch(scriptUrl, {
+            method: "POST",
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (!response.ok || result.success !== true) {
+            throw new Error(result.message || "Email delivery failed.");
+        }
+
+        // Print only after the server confirms the email was sent.
+        const printUrl = URL.createObjectURL(pdfBlob);
+        const printWindow = window.open(printUrl, "_blank");
+
+        if (!printWindow) {
+            URL.revokeObjectURL(printUrl);
+            alert(
+                `PDF emailed to ${currentUser.email}. ` +
+                "Allow pop-ups to print the PDF."
+            );
+        } else {
+            printWindow.onload = () => {
+                printWindow.focus();
+                printWindow.print();
+                setTimeout(() => URL.revokeObjectURL(printUrl), 60000);
+            };
+        }
+
+        alert(`PDF emailed successfully to ${currentUser.email}.`);
+
+    } catch (error) {
+        console.error("Asset PDF email/print failed:", error);
+        alert(
+            "PDF email/print failed: " + error.message +
+            "\nCheck the email service configuration and try again."
+        );
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText ||
+                '<i class="fas fa-print"></i> PRINT HIGH-RES A4 TAG';
+        }
+    }
 };
+
 
 // --- 4. SCANNER VERIFICATION (MATH-MATCH LOCK) ---
 const baseOnScanSuccess = window.onScanSuccess; 
