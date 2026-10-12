@@ -4097,6 +4097,7 @@ window.closeSigModal = () => document.getElementById("sigModal").classList.add("
 // --- NEW BARCODE LOGIC ---
 window.openBarcodeScanner = (mode) => {
     scanMode = mode;
+    window.scanMode = mode;
     document.getElementById("barcodeModal").classList.remove("hidden");
     
     // START SCANNER
@@ -10284,7 +10285,7 @@ window.onScanSuccess = async function(decodedText) {
         }
 
         // --- 🟢 MODE: ASSET REGISTRATION VERIFICATION ---
-        else if (scanMode === 'REGISTRATION_VERIFY') {
+        else if (activeScanMode === 'REGISTRATION_VERIFY') {
             const barcodeInput = document.getElementById("invBarcode");
             barcodeInput.value = scannedInput;
 
@@ -10323,8 +10324,78 @@ window.onScanSuccess = async function(decodedText) {
             }
         }
 
+        // --- TECHNICIAN MODE: LOAD JOB TICKET (separate from inventory checkout/return) ---
+        else if (activeScanMode === 'TECH_TICKET_SCAN') {
+            const entered = scannedInput.replace(/^#/, '').trim().toUpperCase();
+            const claimsSnap = await get(projectAwareRef("warranty_claims"));
+            let matchedClaim = null;
+            let matchedKey = null;
+
+            if (claimsSnap.exists()) {
+                claimsSnap.forEach(c => {
+                    const key = String(c.key || '').toUpperCase();
+                    const data = c.val() || {};
+                    const explicitId = String(data.ticketId || data.ticket || '').replace(/^#/, '').toUpperCase();
+                    const shortKey = key.substring(1, 10);
+                    if (!matchedClaim && (key === entered || shortKey === entered || key.includes(entered) || explicitId === entered)) {
+                        matchedClaim = data;
+                        matchedKey = c.key;
+                    }
+                });
+            }
+
+            if (!matchedClaim) {
+                document.getElementById("techMismatchArea")?.classList.remove("hidden");
+                return alert("❌ Job ticket not found. Check the ticket ID and make sure you are in the correct project.");
+            }
+
+            techVerifiedTicket = matchedClaim;
+            techVerifiedTicketKey = matchedKey;
+            document.getElementById("manualTicketInp").value = scannedInput;
+            document.getElementById("ticketVerifiedLabel")?.classList.remove("hidden");
+            document.getElementById("btnScanProduct").disabled = false;
+            document.getElementById("manualProductInp").disabled = false;
+            document.getElementById("btnManualProduct").disabled = false;
+            document.getElementById("techStepTitle").innerText = "TICKET VERIFIED — NOW SCAN THE PHYSICAL ASSET TAG";
+            document.getElementById("techStepTitle").style.color = "#15803d";
+            return;
+        }
+
+        // --- TECHNICIAN MODE: VERIFY PHYSICAL ASSET AGAINST TICKET ---
+        else if (activeScanMode === 'TECH_PRODUCT_VERIFY') {
+            if (!techVerifiedTicket || !techVerifiedTicketKey) {
+                return alert("⚠️ Verify the job ticket first. This scan is not a checkout/return operation.");
+            }
+
+            const assetQuery = query(projectAwareRef("inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const assetSnap = await get(assetQuery);
+            if (!assetSnap.exists()) {
+                document.getElementById("techMismatchArea")?.classList.remove("hidden");
+                return alert("❌ Asset tag not found in this project's inventory. If this is a newly registered tag, confirm registration completed successfully and that the correct project is active.");
+            }
+
+            let asset = null;
+            let assetKey = null;
+            assetSnap.forEach(c => { asset = c.val(); assetKey = c.key; });
+            const ticketInvoice = String(techVerifiedTicket.invoiceNo || '').trim();
+            const assetInvoice = String(asset.invoiceNo || '').trim();
+            const matches = ticketInvoice && assetInvoice && ticketInvoice === assetInvoice;
+
+            if (!matches) {
+                document.getElementById("techMismatchArea")?.classList.remove("hidden");
+                document.getElementById("productVerifiedLabel")?.classList.add("hidden");
+                return alert("❌ ASSET MISMATCH: The scanned asset's invoice does not match the verified job ticket.");
+            }
+
+            document.getElementById("manualProductInp").value = scannedInput;
+            document.getElementById("productVerifiedLabel")?.classList.remove("hidden");
+            document.getElementById("techMismatchArea")?.classList.add("hidden");
+            await renderTechArea(techVerifiedTicketKey, techVerifiedTicket);
+            return;
+        }
+
         // --- 🟢 MODE: WARRANTY CLAIM ---
-        else if (scanMode === 'WARRANTY_CLAIM') {
+        else if (activeScanMode === 'WARRANTY_CLAIM') {
             const qWar = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(scannedInput));
             const snap = await get(qWar);
             if (!snap.exists()) return alert("❌ Tag Not Registered");
@@ -10348,19 +10419,19 @@ window.onScanSuccess = async function(decodedText) {
         }
 
         // --- 🟢 SINGLE PASS-THROUGH MODES ---
-        else if (scanMode === 'AUDIT_SEARCH') { 
+        else if (activeScanMode === 'AUDIT_SEARCH') { 
             document.getElementById("auditSearchInput").value = scannedInput; 
             fetchAuditHistory(scannedInput); 
         }
-        else if (scanMode === 'BILLING_SCAN') { 
+        else if (activeScanMode === 'BILLING_SCAN') { 
             document.getElementById("billBarcodeInp").value = scannedInput; 
             addScannedItemToBill(); 
         }
-        else if (scanMode === 'SEARCH_STOCK') { 
+        else if (activeScanMode === 'SEARCH_STOCK') { 
             document.getElementById("mainStockSearch").value = scannedInput; 
             filterStockTable(); 
         }
-        else if (scanMode === 'ASSET_RECOVERY') {
+        else if (activeScanMode === 'ASSET_RECOVERY') {
             window.addToRecoveryCart(scannedInput);
             const statusDiv = document.getElementById("recoveryStatus");
             if(statusDiv) {
@@ -10383,7 +10454,8 @@ window.startVerificationScan = () => {
     }
     
     // Set the global mode so the onScanSuccess function knows how to handle the result
-    scanMode = 'REGISTRATION_VERIFY'; 
+    scanMode = 'REGISTRATION_VERIFY';
+    window.scanMode = 'REGISTRATION_VERIFY';
     
     // Show the scanner modal
     const barcodeModal = document.getElementById("barcodeModal");
