@@ -3441,11 +3441,11 @@ window.submitFund = async () => {
     try {
         if(editKey) {
             // --- UPDATE EXISTING ---
-            await update(ref(db, `finance/${editKey}`), fundData);
+            await update(projectAwareRef( `finance/${editKey}`), fundData);
             alert("Fund Entry Updated!");
         } else {
             // --- CREATE NEW ---
-            await push(ref(db, "finance"), fundData);
+            await push(projectAwareRef( "finance"), fundData);
             alert("Fund Added Successfully!"); 
         }
         cancelFundEdit(); // Reset Form
@@ -3483,10 +3483,10 @@ window.submitExpense = async () => {
 
     try {
         if(key) {
-            await update(ref(db, `finance/${key}`), data);
+            await update(projectAwareRef( `finance/${key}`), data);
             alert("Expense Updated!");
         } else {
-            await push(ref(db, "finance"), data);
+            await push(projectAwareRef( "finance"), data);
             alert(isAdmin ? "Expense Added & Deducted." : "Expense Request Sent.");
         }
         cancelExpEdit();
@@ -3494,7 +3494,7 @@ window.submitExpense = async () => {
 };
 
 window.editExpense = async (key) => {
-    const snap = await get(ref(db, `finance/${key}`));
+    const snap = await get(projectAwareRef( `finance/${key}`));
     const d = snap.val();
     
     document.getElementById("expDesc").value = d.desc;
@@ -3527,7 +3527,7 @@ window.cancelExpEdit = () => {
 };
 // --- NEW: EDIT & DELETE FUNCTIONS FOR FUNDS ---
 window.editFund = async (key) => {
-    const snap = await get(ref(db, `finance/${key}`));
+    const snap = await get(projectAwareRef( `finance/${key}`));
     const val = snap.val();
     
     document.getElementById("fundAmount").value = val.amount;
@@ -3555,7 +3555,7 @@ window.editFund = async (key) => {
 
 window.deleteFund = async (key) => {
     if(confirm("⚠ PERMANENTLY DELETE this fund entry?\n\nThis will affect the Balance Sheet calculation.")) {
-        await remove(ref(db, `finance/${key}`));
+        await remove(projectAwareRef( `finance/${key}`));
     }
 };
 
@@ -3608,17 +3608,17 @@ window.submitPurchase = async () => {
     
     try {
         if(key) { 
-            await update(ref(db, `finance/${key}`), data); 
+            await update(projectAwareRef( `finance/${key}`), data); 
             alert("Purchase Entry Updated!"); 
         } else { 
-            await push(ref(db, "finance"), data); 
+            await push(projectAwareRef( "finance"), data); 
             alert(isAdmin ? "Purchase Saved." : "Purchase Request Sent.");
         }
         clearPurForm();
     } catch(e) { alert(e.message); }
 };
 window.editPurchase = async (key) => {
-    const snap = await get(ref(db, `finance/${key}`));
+    const snap = await get(projectAwareRef( `finance/${key}`));
     const d = snap.val();
     document.getElementById("purItem").value = d.productName;
     document.getElementById("purPlatform").value = d.platform;
@@ -3663,10 +3663,10 @@ window.loadFinanceData = () => {
     }
 
     // 3. Clear Old Listener
-    if(window.financeListener) { try{ off(ref(db, "finance")); }catch(e){} }
+    if(window.financeListener) { try{ off(projectAwareRef( "finance")); }catch(e){} }
 
     // 4. Start New Listener
-    window.financeListener = onValue(ref(db, "finance"), (snap) => {
+    window.financeListener = onValue(projectAwareRef( "finance"), (snap) => {
         try {
             tbody.innerHTML = ""; 
             
@@ -3824,6 +3824,21 @@ window.auth = getAuth(app); // Optional, but helpful for user sessions
 console.log("✅ Firebase Bridge Established: window.db is now active.");
 const auth = getAuth(app);
 const db = getDatabase(app);
+let activeProject = null;
+let currentProjectPermissions = {};
+
+// Project-aware database references. Existing Yellow Line data stays at its
+// legacy root paths; CCRAS operational data is isolated below projects/CCRAS.
+// Authentication, user profiles, admin records and permission metadata remain shared.
+function projectAwareRef(path) {
+    if (typeof path !== "string") return ref(db, path);
+    const normalized = path.replace(/^\/+/, "");
+    const sharedPath = /^(users|admins|status|system_settings)(\/|$)/.test(normalized);
+    if (activeProject === "CCRAS" && !sharedPath) {
+        return ref(db, `projects/CCRAS/${normalized}`);
+    }
+    return ref(db, path);
+}
 let currentUser;
 let isAdmin = false;
 let isSwitching = false;
@@ -3981,7 +3996,7 @@ window.handleGalleryStationChange = () => {
     // 1. CLEANUP OLD LISTENER (Stops Duplicates)
     if (galleryListener) {
         if(typeof galleryListener === "function") galleryListener();
-        else try { off(ref(db, "history"), galleryListener); } catch(e) {}
+        else try { off(projectAwareRef( "history"), galleryListener); } catch(e) {}
         galleryListener = null;
     }
 
@@ -4000,7 +4015,7 @@ window.handleGalleryStationChange = () => {
 
     // 3. LIVE DATABASE QUERY
     const targetName = `${stn} (${line})`;
-    const q = query(ref(db, "history"), orderByChild("stationName"), equalTo(targetName));
+    const q = query(projectAwareRef( "history"), orderByChild("stationName"), equalTo(targetName));
     
     galleryListener = onValue(q, (snap) => {
         galleryDiv.innerHTML = "";
@@ -4111,7 +4126,7 @@ window.saveFieldRealTime = (id) => {
     const val = document.getElementById(id).value;
 
     // Update Master Log Directly
-    update(ref(db, `station_logs/${rtStationKey}`), {
+    update(projectAwareRef( `station_logs/${rtStationKey}`), {
         [dbField]: val,
         last_modified: serverTimestamp() // Audit trail
     });
@@ -4125,7 +4140,7 @@ function loadRealTimeRows() {
     const tbody = document.getElementById("distanceBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing...</td></tr>";
 
-    const rowsRef = ref(db, `rake_logs/${rtRakeKey}`);
+    const rowsRef = projectAwareRef( `rake_logs/${rtRakeKey}`);
     
     // Real-time listener on the MASTER LOG rake node
     rowListener = onValue(rowsRef, (snap) => {
@@ -4177,13 +4192,13 @@ window.upRow = (k, f, v) => {
         console.warn("Blocked ghost write during switch.");
         return;
     }
-    update(ref(db, `drafts/${currentUser.uid}/rows/${k}`), { [f]: v });
+    update(projectAwareRef( `drafts/${currentUser.uid}/rows/${k}`), { [f]: v });
 };
 
 // Updated Add Row Function
 window.addDistanceRow = () => {
     if (isSwitching) return; // 🛑 Block add during switch
-    push(ref(db, `drafts/${currentUser.uid}/rows`), { 
+    push(projectAwareRef( `drafts/${currentUser.uid}/rows`), { 
         rake: "", 
         type: "", 
         f: "", 
@@ -4195,15 +4210,15 @@ window.addDistanceRow = () => {
 // Updated Delete Row Function
 window.delRow = (k) => {
     if (isSwitching) return; // 🛑 Block delete during switch
-    remove(ref(db, `drafts/${currentUser.uid}/rows/${k}`));
+    remove(projectAwareRef( `drafts/${currentUser.uid}/rows/${k}`));
 };
 window.upRowRealTime = (rowKey, field, val) => {
-    update(ref(db, `rake_logs/${rtRakeKey}/${rowKey}`), { [field]: val });
+    update(projectAwareRef( `rake_logs/${rtRakeKey}/${rowKey}`), { [field]: val });
 };
 
 window.delRowRealTime = (rowKey) => {
     if(confirm("Delete this row permanently?")) {
-        remove(ref(db, `rake_logs/${rtRakeKey}/${rowKey}`));
+        remove(projectAwareRef( `rake_logs/${rtRakeKey}/${rowKey}`));
     }
 };
 window.closeBarcodeScanner = () => {
@@ -4227,7 +4242,7 @@ window.fetchAuditHistory = async (barcode) => {
     if(container) container.innerHTML = `<div style="text-align:center; padding:20px;"><i class="fas fa-sync fa-spin"></i> Retrieving Secure Records...</div>`;
 
     try {
-        const snap = await get(ref(db, "logs"));
+        const snap = await get(projectAwareRef( "logs"));
         if (!snap.exists()) {
             container.innerHTML = `<div style="text-align:center;color:#777;">No history found in database</div>`;
             return;
@@ -4291,7 +4306,7 @@ window.loadInventory = () => {
     if (!b) return;
 
     // Attach real-time listener to the inventory node
-    onValue(ref(db, "inventory"), (snap) => {
+    onValue(projectAwareRef( "inventory"), (snap) => {
         b.innerHTML = "";
         let total = 0;
         let available = 0;
@@ -4439,7 +4454,7 @@ window.checkBarcodeUnique = async (code) => {
     document.getElementById("btnAddStock").innerText = "Save Item to Stock";
 
     // Query DB to see if barcode exists
-    const invRef = ref(db, "inventory");
+    const invRef = projectAwareRef( "inventory");
     const q = query(invRef, orderByChild("barcode"), equalTo(code));
     const snap = await get(q);
 
@@ -4516,7 +4531,7 @@ window.login = () => {
     signInWithEmailAndPassword(auth, emailField.value, passField.value)
     .then(async (userCredential) => {
         const user = userCredential.user;
-        const userSnap = await get(ref(db, `users/${user.uid}`));
+        const userSnap = await get(projectAwareRef( `users/${user.uid}`));
         const u = userSnap.val();
 
         if (u && u.banned) {
@@ -4750,7 +4765,7 @@ async function processUpload(dataBase64, fileType, fileName) {
     };
 
     // This checks if DB connection is active
-    await push(ref(db, "history"), uploadData);
+    await push(projectAwareRef( "history"), uploadData);
 }
 // ==========================================
 // UNIFIED USER SESSION MANAGER (FIXED FOR NEW USERS)
@@ -4764,7 +4779,7 @@ onAuthStateChanged(auth, (user) => {
     currentUser = user;
     if (typeof startPresenceSystem === "function") startPresenceSystem(user);
 
-    const userRef = ref(db, `users/${user.uid}`);
+    const userRef = projectAwareRef( `users/${user.uid}`);
 
     // Listen to user data in Realtime DB
     onValue(userRef, (snap) => {
@@ -4837,7 +4852,7 @@ onAuthStateChanged(auth, (user) => {
         }
 
         // Check PIP Access
-        get(ref(db, `pip_records/${user.uid}`)).then(pipSnap => {
+        get(projectAwareRef( `pip_records/${user.uid}`)).then(pipSnap => {
             const btnPip = document.getElementById("btnPip");
             if (btnPip) {
                 if (isAdmin || (pipSnap.exists() && pipSnap.val().status !== "REVOKED")) {
@@ -4937,8 +4952,8 @@ let presenceInterval = null;
 function startPresenceSystem(user) {
     if (!user || !user.uid) return;
 
-    const userStatusRef = ref(db, `status/${user.uid}`);
-    const connectedRef = ref(db, ".info/connected");
+    const userStatusRef = projectAwareRef( `status/${user.uid}`);
+    const connectedRef = projectAwareRef( ".info/connected");
 
     // Use safe wrapper for connection status
     window.safeOnValue(connectedRef, (isConnected) => {
@@ -5007,7 +5022,7 @@ function resetTimer() {
 
             // 1. FORCE DATABASE STATUS TO OFFLINE
             try {
-                await update(ref(db, `status/${currentUser.uid}`), {
+                await update(projectAwareRef( `status/${currentUser.uid}`), {
                     state: 'offline',
                     last_changed: serverTimestamp(),
                     email: currentUser.email
@@ -5018,7 +5033,7 @@ function resetTimer() {
 
             // 2. LOG THE EVENT
             try {
-                await push(ref(db, "logs"), { 
+                await push(projectAwareRef( "logs"), { 
                     user: currentUser.email, 
                     type: "LOGOUT", 
                     method: "Auto-Timeout (Inactivity)", 
@@ -5140,7 +5155,7 @@ window.executeBatchTransaction = async (type) => {
         }
 
         // Push Audit Log per item
-        const newLogKey = push(ref(db, "logs")).key;
+        const newLogKey = push(projectAwareRef( "logs")).key;
         updates[`logs/${newLogKey}`] = {
             type: type,
             item: it.item,
@@ -5253,7 +5268,7 @@ window.saveOfficialName = async () => {
     btn.disabled = true;
 
     try {
-        const userSnap = await get(ref(db, `users/${currentUser.uid}`));
+        const userSnap = await get(projectAwareRef( `users/${currentUser.uid}`));
         const currentData = userSnap.exists() ? userSnap.val() : {};
 
         const payload = {
@@ -5268,7 +5283,7 @@ window.saveOfficialName = async () => {
             payload.personalEmail2 = document.getElementById("personalEmail2").value.trim() || null;
         }
 
-        await update(ref(db, `users/${currentUser.uid}`), payload);
+        await update(projectAwareRef( `users/${currentUser.uid}`), payload);
         document.getElementById("nameModal").classList.add("hidden");
     } catch (e) {
         alert("Error saving profile: " + e.message);
@@ -5301,7 +5316,7 @@ window.logout = async () => {
         document.getElementById("loginSection").classList.remove("hidden");
 
         // 3. UPDATE DATABASE STATUS
-        await update(ref(db, `status/${currentUser.uid}`), {
+        await update(projectAwareRef( `status/${currentUser.uid}`), {
             state: 'offline',
             last_changed: serverTimestamp()
         });
@@ -5319,7 +5334,7 @@ window.logout = async () => {
 async function recordLogin(method) {
     if(currentUser) {
         const logData = { user: currentUser.email, type: "LOGIN", method: method, time: serverTimestamp() };
-        await push(ref(db, "logs"), logData);
+        await push(projectAwareRef( "logs"), logData);
     }
 }
 
@@ -5439,7 +5454,7 @@ window.handleStationChange = async () => {
 
     // === STEP 4: CHECK IF DATA ALREADY EXISTS ===
     // We check the database: "Do we have data for THIS specific station?"
-    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
+    const q = query(projectAwareRef( "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
@@ -5462,9 +5477,9 @@ window.handleStationChange = async () => {
 
         // Load rows
         currentRakeKey = data.linkedRakeKey || currentStationKey;
-        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
+        const rakeSnap = await get(projectAwareRef( `rake_logs/${currentRakeKey}`));
         if(rakeSnap.exists()) {
-            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
+            await set(projectAwareRef( `drafts/${currentUser.uid}/rows`), rakeSnap.val());
         }
 
     } else {
@@ -5514,15 +5529,15 @@ window.deleteStationLog = async (key) => {
 
     try {
         // 1. GET DATA TO FIND LINKS
-        const snap = await get(ref(db, `station_logs/${key}`));
+        const snap = await get(projectAwareRef( `station_logs/${key}`));
         let rakeKey = key; 
         if(snap.exists()) {
              rakeKey = snap.val().linkedRakeKey || key;
         }
 
         // 2. DELETE BOTH (Atomic removal)
-        await remove(ref(db, `station_logs/${key}`));
-        await remove(ref(db, `rake_logs/${rakeKey}`));
+        await remove(projectAwareRef( `station_logs/${key}`));
+        await remove(projectAwareRef( `rake_logs/${rakeKey}`));
 
         // 3. REFRESH THE VIEW INSTANTLY
         // This proves to you immediately that the specific row is gone
@@ -5555,7 +5570,7 @@ window.fetchLogsForPrint = async () => {
 
     // 2. FETCH NEW
     const searchName = `${stn} (${line})`;
-    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(searchName));
+    const q = query(projectAwareRef( "station_logs"), orderByChild("name"), equalTo(searchName));
     
     try {
         const snap = await get(q);
@@ -5590,7 +5605,7 @@ window.openPrintSetup = (key) => {
     currentPrintKey = key;
     
     // 1. Fetch Date for display
-    get(ref(db, `station_logs/${key}/date`)).then(snap => {
+    get(projectAwareRef( `station_logs/${key}/date`)).then(snap => {
         document.getElementById("modalPrintDate").innerText = snap.val();
     });
 
@@ -5659,7 +5674,7 @@ window.handleFaceScan = async () => {
     try {
         // --- MODE 1: RECEIVER VERIFICATION ---
         if(scanMode === 'RECEIVER') {
-            const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+            const snap = await get(projectAwareRef( `users/${currentUser.uid}/faceData`));
             const storedData = snap.val();
             
             let match = false;
@@ -5712,7 +5727,7 @@ window.handleFaceScan = async () => {
     }
 
     // Step 2: match only against his own face
-    const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+    const snap = await get(projectAwareRef( `users/${currentUser.uid}/faceData`));
     const storedData = snap.val();
 
     let match = false;
@@ -5735,7 +5750,7 @@ window.handleFaceScan = async () => {
 }
         // --- MODE 3: LOGIN ---
         else {
-            const snap = await get(ref(db, `users/${currentUser.uid}/faceData`));
+            const snap = await get(projectAwareRef( `users/${currentUser.uid}/faceData`));
             const storedData = snap.val();
             let match = false;
             if(storedData) {
@@ -5771,7 +5786,7 @@ window.registerNewFace = async () => {
         document.getElementById("btnCapture").innerText = `📸 Capture Sample ${count + 1} of 3`;
     } else {
         updateStatus("💾 Saving...", "yellow");
-        await update(ref(db, `users/${currentUser.uid}`), { faceData: regSamples });
+        await update(projectAwareRef( `users/${currentUser.uid}`), { faceData: regSamples });
         alert("Registration Complete!"); location.reload();
     }
 };
@@ -5797,7 +5812,7 @@ window.loadStationData = () => {
     tbody.innerHTML = "<tr><td colspan='8' style='text-align:center;'>⏳ Loading Station Logs...</td></tr>";
 
     // 4. FETCH DATA
-    const q = query(ref(db, "station_logs"), limitToLast(50));
+    const q = query(projectAwareRef( "station_logs"), limitToLast(50));
 
     onValue(q, (snap) => {
         if (!snap.exists()) {
@@ -5902,7 +5917,7 @@ async function nuclearReset() {
     // 7. DATABASE PURGE (Clear the user's draft node completely)
     if(currentUser) {
         try {
-            await set(ref(db, `drafts/${currentUser.uid}`), null);
+            await set(projectAwareRef( `drafts/${currentUser.uid}`), null);
         } catch(e) { console.error("Draft wipe failed", e); }
     }
 }
@@ -5930,7 +5945,7 @@ window.handleStationChange = async () => {
 
     // === STEP 3: CHECK DATABASE ===
     // Use once() via get() to prevent lingering connections
-    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(fullStationName));
+    const q = query(projectAwareRef( "station_logs"), orderByChild("name"), equalTo(fullStationName));
     const snap = await get(q);
 
     if (snap.exists()) {
@@ -5952,9 +5967,9 @@ window.handleStationChange = async () => {
         currentRakeKey = data.linkedRakeKey || currentStationKey;
         
         // Copy Rake Data to Drafts for editing
-        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
+        const rakeSnap = await get(projectAwareRef( `rake_logs/${currentRakeKey}`));
         if(rakeSnap.exists()) {
-            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
+            await set(projectAwareRef( `drafts/${currentUser.uid}/rows`), rakeSnap.val());
         }
 
     } else {
@@ -5972,7 +5987,7 @@ window.handleStationChange = async () => {
 };
 // --- 3. DRAFT TABLE LOADER (Corrected Name) ---
 window.loadDraft = () => {
-    draftRef = ref(db, `drafts/${currentUser.uid}/rows`);
+    draftRef = projectAwareRef( `drafts/${currentUser.uid}/rows`);
     draftListener = onValue(draftRef, (snap) => {
         const tbody = document.getElementById("distanceBody");
         if (!tbody) return; 
@@ -6057,7 +6072,7 @@ window.submitStationData = async () => {
             timestamp: serverTimestamp()
         };
 
-        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+        const rowsSnap = await get(projectAwareRef( `drafts/${currentUser.uid}/rows`));
         const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
         const updates = {};
@@ -6067,7 +6082,7 @@ window.submitStationData = async () => {
         if (targetKey) {
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         } else {
-            targetKey = push(ref(db, "station_logs")).key;
+            targetKey = push(projectAwareRef( "station_logs")).key;
             targetRakeKey = targetKey; 
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         }
@@ -6075,7 +6090,7 @@ window.submitStationData = async () => {
         updates[`rake_logs/${targetRakeKey}`] = rowsData || null;
 
         await update(ref(db), updates);
-        await remove(ref(db, `drafts/${currentUser.uid}`));
+        await remove(projectAwareRef( `drafts/${currentUser.uid}`));
         
         alert(`✅ Saved: ${stnSel.value}`);
         
@@ -6112,7 +6127,7 @@ window.loadAdminPanel = () => {
 
     // --- NEW: CENTRALIZED PIN SYNC ---
     // Fetches the active system PIN so the Admin can see it
-    get(ref(db, "system_settings/master_pin")).then(snap => {
+    get(projectAwareRef( "system_settings/master_pin")).then(snap => {
         const pinDisplay = document.getElementById("displayCurrentPin");
         if (pinDisplay) {
             pinDisplay.value = snap.exists() ? snap.val() : "1234";
@@ -6250,12 +6265,12 @@ let actionBtns = `
     };
 
     // 2. START LISTENERS
-    adminUsersListener = onValue(ref(db, "users"), (snap) => {
+    adminUsersListener = onValue(projectAwareRef( "users"), (snap) => {
         if (snap.exists()) localUsers = snap.val();
         renderTable();
     });
 
-    adminStatusListener = onValue(ref(db, "status"), (snap) => {
+    adminStatusListener = onValue(projectAwareRef( "status"), (snap) => {
         if (snap.exists()) localStatus = snap.val();
         renderTable();
     });
@@ -6333,7 +6348,7 @@ function handleFail() {
 
 window.verifyOTP = () => {
     const input = document.getElementById("otpInput").value;
-    get(ref(db, `users/${currentUser.uid}/pin`)).then(async snap => {
+    get(projectAwareRef( `users/${currentUser.uid}/pin`)).then(async snap => {
         const actualPin = snap.val() || "1234";
         if(input === actualPin) {
             await recordLogin("PIN Entry");
@@ -6377,7 +6392,7 @@ function yellowLineRef(path) {
         throw new Error("Yellow Line access denied.");
     }
 
-    return ref(db, path);
+    return projectAwareRef( path);
 }
 
 // All new CCRAS records must use this helper.
@@ -6390,7 +6405,7 @@ function ccrasRef(path) {
         throw new Error("CCRAS access denied.");
     }
 
-    return ref(db, `projects/CCRAS/${path}`);
+    return projectAwareRef( `projects/CCRAS/${path}`);
 }
 // --- FIXED TOGGLE FUNCTION (Crash-Free for Checkout & Return) ---
 window.toggleInvMode = (mode) => {
@@ -6422,7 +6437,7 @@ window.toggleInvMode = (mode) => {
 function populateCheckoutSelect() {
     const sel = document.getElementById("checkoutSelect");
     sel.innerHTML = "<option value=''>Loading...</option>";
-    onValue(ref(db, "inventory"), snap => {
+    onValue(projectAwareRef( "inventory"), snap => {
         sel.innerHTML = "<option value=''>Select Item...</option>";
         snap.forEach(c => {
             const v = c.val();
@@ -6445,7 +6460,7 @@ async function populateReturnSelect() {
 
     try {
         // A. Get current Inventory (for keys)
-        const invSnap = await get(ref(db, "inventory"));
+        const invSnap = await get(projectAwareRef( "inventory"));
         const inventoryMap = {}; // Maps ItemName -> { key, exists, barcode }
         invSnap.forEach(c => {
             const val = c.val();
@@ -6453,7 +6468,7 @@ async function populateReturnSelect() {
         });
 
         // B. Get User Logs
-        const logsSnap = await get(query(ref(db, "logs")));
+        const logsSnap = await get(query(projectAwareRef( "logs")));
         const myHoldings = {}; // ItemName -> NetQuantity
 
         logsSnap.forEach(c => {
@@ -6508,7 +6523,7 @@ window.updateMasterPin = async () => {
 
     try {
         // Save to a central "settings" node instead of a specific user
-        await set(ref(db, "system_settings/master_pin"), newPin);
+        await set(projectAwareRef( "system_settings/master_pin"), newPin);
         
         alert("✅ GLOBAL PIN UPDATED: " + newPin);
         document.getElementById("displayCurrentPin").value = newPin;
@@ -6555,7 +6570,7 @@ window.loadInventoryHistory = () => {
     tbody.innerHTML = "<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Retrieving Secure Records...</td></tr>";
 
     // Fetch last 300 logs
-    const q = query(ref(db, "logs"), limitToLast(300));
+    const q = query(projectAwareRef( "logs"), limitToLast(300));
     
     onValue(q, (snap) => {
         const logs = [];
@@ -6662,7 +6677,7 @@ async function processTransaction(adminName, customReturnLocation = null) {
     const isCheckout = (currentTransactionType === 'CHECKOUT');
 
     try {
-        const invRef = ref(db, `inventory/${itemKey}`);
+        const invRef = projectAwareRef( `inventory/${itemKey}`);
         const invSnap = await get(invRef);
         const currentData = invSnap.val();
 
@@ -6698,7 +6713,7 @@ async function processTransaction(adminName, customReturnLocation = null) {
 }
   window.loadWarSales = async () => {
     const tbody = document.getElementById("warSalesTableBody");
-    const snap = await get(ref(db, "inventory"));
+    const snap = await get(projectAwareRef( "inventory"));
     const salesGroup = {}; 
     
     snap.forEach(c => {
@@ -6736,7 +6751,7 @@ async function processTransaction(adminName, customReturnLocation = null) {
     if (!confirm(`⚠ CRITICAL: Wiping Invoice ${invoiceNo} will restock all associated items and delete this sale record permanently. Proceed?`)) return;
 
     try {
-        const snap = await get(ref(db, "inventory"));
+        const snap = await get(projectAwareRef( "inventory"));
         const updates = {};
 
         snap.forEach(c => {
@@ -6769,7 +6784,7 @@ window.populateUserDropdown = async () => {
 
     // 2. Fetch all users from DB
     try {
-        const snap = await get(ref(db, "users"));
+        const snap = await get(projectAwareRef( "users"));
         if (snap.exists()) {
             snap.forEach(c => {
                 const u = c.val();
@@ -6790,7 +6805,7 @@ window.populateUserDropdown = async () => {
 window.saveStationDetails = () => {
     const name = document.getElementById("inpStationName").value.trim();
     if(!name) return alert("Station Name Required");
-    update(ref(db, `drafts/${currentUser.uid}/details`), {
+    update(projectAwareRef( `drafts/${currentUser.uid}/details`), {
         name: name,
         len: document.getElementById("inpStationLength").value,
         yl: document.getElementById("inpYellowDist").value,
@@ -6844,7 +6859,7 @@ window.loadSpecificStationData = async () => {
     const searchName = `${stnSel.value} (${lineSel.value})`; 
 
     // 4. PRECISE DATABASE QUERY
-    const q = query(ref(db, "station_logs"), orderByChild("name"), equalTo(searchName));
+    const q = query(projectAwareRef( "station_logs"), orderByChild("name"), equalTo(searchName));
     
     try {
         const snap = await get(q);
@@ -6904,7 +6919,7 @@ window.openRakeModal = async (key) => {
 
     try {
         // 1. Get the station log to find the linkedRakeKey
-        const sSnap = await get(ref(db, `station_logs/${key}`));
+        const sSnap = await get(projectAwareRef( `station_logs/${key}`));
         if(!sSnap.exists()) {
             tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; color:red; font-size:21px;'>Log not found.</td></tr>";
             return;
@@ -6914,7 +6929,7 @@ window.openRakeModal = async (key) => {
         const rakeKey = sData.linkedRakeKey || key;
 
         // 2. Fetch the Rake Data
-        const rSnap = await get(ref(db, `rake_logs/${rakeKey}`));
+        const rSnap = await get(projectAwareRef( `rake_logs/${rakeKey}`));
         
         if(!rSnap.exists()) {
             tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px; color:#666; font-size:21px;'>No Rake Clearance Data recorded.</td></tr>";
@@ -6980,7 +6995,7 @@ window.submitStationData = async () => {
         };
 
         // 3. Fetch Your Draft Rows (The Rake Table)
-        const rowsSnap = await get(ref(db, `drafts/${currentUser.uid}/rows`));
+        const rowsSnap = await get(projectAwareRef( `drafts/${currentUser.uid}/rows`));
         const rowsData = rowsSnap.exists() ? rowsSnap.val() : null;
 
         const updates = {};
@@ -6993,7 +7008,7 @@ window.submitStationData = async () => {
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         } else {
             // --- CREATING NEW MASTER RECORD ---
-            targetKey = push(ref(db, "station_logs")).key;
+            targetKey = push(projectAwareRef( "station_logs")).key;
             targetRakeKey = targetKey; // Link them
             updates[`station_logs/${targetKey}`] = { ...formData, linkedRakeKey: targetRakeKey };
         }
@@ -7009,7 +7024,7 @@ window.submitStationData = async () => {
         // 7. CLEANUP: Delete your private draft
         // This ensures your personal data doesn't persist. 
         // The data is now fully "Station-Wise" in the shared DB.
-        await remove(ref(db, `drafts/${currentUser.uid}`));
+        await remove(projectAwareRef( `drafts/${currentUser.uid}`));
         
         alert(`✅ SUCCESS: Data for ${stnSel.value} saved to Master Database.`);
         
@@ -7040,7 +7055,7 @@ window.editStationLog = async (key) => {
 
     try {
         // 1. Fetch Station Data
-        const stationSnap = await get(ref(db, `station_logs/${key}`));
+        const stationSnap = await get(projectAwareRef( `station_logs/${key}`));
         if (!stationSnap.exists()) return alert("Record not found.");
         const sData = stationSnap.val();
 
@@ -7050,7 +7065,7 @@ window.editStationLog = async (key) => {
 
         // 3. CLEAN UP DRAFTS (Fixes the "Double Rows" bug)
         // We wipe the draft folder clean before loading data
-        await remove(ref(db, `drafts/${currentUser.uid}`));
+        await remove(projectAwareRef( `drafts/${currentUser.uid}`));
         document.getElementById("distanceBody").innerHTML = "";
 
         // 4. Switch to Form Tab
@@ -7091,10 +7106,10 @@ window.editStationLog = async (key) => {
         submitBtn.style.cursor = "pointer";
 
         // 7. Load Rake Data (Exactly as it is in DB)
-        const rakeSnap = await get(ref(db, `rake_logs/${currentRakeKey}`));
+        const rakeSnap = await get(projectAwareRef( `rake_logs/${currentRakeKey}`));
         if (rakeSnap.exists()) {
             // Copy exact DB rows to Drafts
-            await set(ref(db, `drafts/${currentUser.uid}/rows`), rakeSnap.val());
+            await set(projectAwareRef( `drafts/${currentUser.uid}/rows`), rakeSnap.val());
         }
 
         // 8. Render Table
@@ -7122,7 +7137,7 @@ async function hardResetForm() {
     // C. CRITICAL: Wipe the 'Draft' node in Firebase for this user
     // This ensures data from the previous station doesn't persist
     if(currentUser) {
-        await remove(ref(db, `drafts/${currentUser.uid}`));
+        await remove(projectAwareRef( `drafts/${currentUser.uid}`));
     }
 }
 window.closeTaskModal = () => {
@@ -7130,7 +7145,7 @@ window.closeTaskModal = () => {
 };
 window.deleteUserTask = (uid, taskKey) => {
     if(confirm("Are you sure you want to remove this task?")) {
-        remove(ref(db, `assignments/${uid}/${taskKey}`))
+        remove(projectAwareRef( `assignments/${uid}/${taskKey}`))
             .then(() => {
                 // View updates automatically via listener
             })
@@ -7142,7 +7157,7 @@ window.removeFile = async (key) => {
     if(!confirm("⚠️ PERMANENTLY DELETE this document? This leaves no mark in the database.")) return;
     try {
         // Atomic removal of the entire node
-        await remove(ref(db, `history/${key}`));
+        await remove(projectAwareRef( `history/${key}`));
         alert("✅ Removed Completely.");
     } catch(e) { alert("Error: " + e.message); }
 };
@@ -7162,7 +7177,7 @@ window.assignTaskMulti = async () => {
 
     checkboxes.forEach(cb => {
         const uid = cb.value;
-        const newKey = push(ref(db, `assignments/${uid}`)).key;
+        const newKey = push(projectAwareRef( `assignments/${uid}`)).key;
         
         updates[`assignments/${uid}/${newKey}`] = {
             desc: desc,
@@ -7194,7 +7209,7 @@ window.viewUserTasks = (uid, name) => {
     tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'>Fetching Tasks...</td></tr>";
 
     // Listen to tasks
-    onValue(ref(db, `assignments/${uid}`), (snap) => {
+    onValue(projectAwareRef( `assignments/${uid}`), (snap) => {
         tbody.innerHTML = "";
         
         if(!snap.exists()) {
@@ -7225,7 +7240,7 @@ window.viewUserTasks = (uid, name) => {
 // --- 4. DELETE SINGLE TASK ---
 window.deleteUserTask = async (uid, taskKey) => {
     if(confirm("Remove this task?")) {
-        await remove(ref(db, `assignments/${uid}/${taskKey}`));
+        await remove(projectAwareRef( `assignments/${uid}/${taskKey}`));
     }
 };
 
@@ -7233,7 +7248,7 @@ window.deleteUserTask = async (uid, taskKey) => {
 window.resetUserName = async (uid) => {
     if(confirm("⚠️ Reset Name?\n\nThe user will be forced to set their 'Official Name' again on next login.")) {
         try {
-            await update(ref(db, `users/${uid}`), { name: null });
+            await update(projectAwareRef( `users/${uid}`), { name: null });
             alert("✅ Name Reset. User must re-enter it.");
         } catch(e) {
             alert("Error: " + e.message);
@@ -7245,7 +7260,7 @@ window.resetUserName = async (uid) => {
 window.resetUserFace = async (uid) => {
     if(confirm("⚠️ Reset Face ID?\n\nThis deletes their biometric data. They must re-register their face to access the system.")) {
         try {
-            await update(ref(db, `users/${uid}`), { faceData: null });
+            await update(projectAwareRef( `users/${uid}`), { faceData: null });
             alert("✅ Face ID Wiped. User must re-register.");
         } catch(e) {
             alert("Error: " + e.message);
@@ -7338,7 +7353,7 @@ window.submitBan = async () => {
     if(confirm(`⚠ CONFIRM BAN?\n\nUser: ${document.getElementById("banTargetName").innerText}\nReason: ${reason}\nDeadline: ${deadlineDateString}\n\nIf the user does not resolve this by the deadline, they will be permanently locked out.`)) {
         try {
             // Update User Profile
-            await update(ref(db, `users/${currentBanTargetUid}`), {
+            await update(projectAwareRef( `users/${currentBanTargetUid}`), {
                 banned: true,
                 banReason: reason,
                 banAction: actionInst,
@@ -7349,7 +7364,7 @@ window.submitBan = async () => {
             });
             
             // Log to System
-            await push(ref(db, "logs"), {
+            await push(projectAwareRef( "logs"), {
                 type: "USER_BAN",
                 user: "System",
                 details: `Banned UID: ${currentBanTargetUid}`,
@@ -7374,7 +7389,7 @@ window.unbanUser = async (uid, name) => {
     if(confirm(`🟢 Restore access for ${name}?`)) {
         try {
             // We set fields to null to DELETE them from the database
-            await update(ref(db, `users/${uid}`), {
+            await update(projectAwareRef( `users/${uid}`), {
                 banned: null,
                 banReason: null,
                 banExpires: null
@@ -7406,23 +7421,14 @@ window.unbanUser = async (uid, name) => {
 };
 
 window.switchTab = (t) => {
-    // PROJECT ACCESS LOCK
-    if (
-        typeof activeProject !== "undefined" &&
-        activeProject !== "YELLOW_LINE_BREACH"
-    ) {
-        alert("These tabs belong to the Yellow Line Breach Project.");
+    // The same complete feature set is available in either selected project.
+    if (typeof activeProject === "undefined" || !activeProject) {
+        alert("Select a project before opening its workspace.");
         return;
     }
-
-    if (
-        typeof hasProjectAccess === "function" &&
-        !hasProjectAccess("YELLOW_LINE_BREACH")
-    ) {
-        alert("You do not have access to the Yellow Line Breach Project.");
-        if (typeof window.showProjectPicker === "function") {
-            window.showProjectPicker();
-        }
+    if (typeof hasProjectAccess === "function" && !hasProjectAccess(activeProject)) {
+        alert("You do not have access to the selected project.");
+        if (typeof window.showProjectPicker === "function") window.showProjectPicker();
         return;
     }
 
@@ -7585,7 +7591,7 @@ async function populateDirectiveUsers() {
     const list = document.getElementById("dirUserCheckboxList");
     if(!list) return;
     try {
-        const snap = await get(ref(db, "users"));
+        const snap = await get(projectAwareRef( "users"));
         list.innerHTML = "";
         if (snap.exists()) {
             snap.forEach(c => {
@@ -7637,7 +7643,7 @@ window.generateFinalReport = async () => {
     if (!authName) return alert("Please select an Approving Authority.");
 
     try {
-        const sSnap = await get(ref(db, `station_logs/${currentPrintKey}`));
+        const sSnap = await get(projectAwareRef( `station_logs/${currentPrintKey}`));
         const sData = sSnap.val() || {};
         
         // Force strings to Upper Case to perfectly replicate the raw document design
@@ -7648,7 +7654,7 @@ window.generateFinalReport = async () => {
 
         let rakeTableHtml = "";
         if (includeRakes) {
-            const rSnap = await get(ref(db, `rake_logs/${sData.linkedRakeKey || currentPrintKey}`));
+            const rSnap = await get(projectAwareRef( `rake_logs/${sData.linkedRakeKey || currentPrintKey}`));
             let rows = "";
             
             if (rSnap.exists()) {
@@ -7873,7 +7879,7 @@ window.handleCommentLineChange = () => {
     }
 };
 
-window.addDistanceRow = () => push(ref(db, `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
+window.addDistanceRow = () => push(projectAwareRef( `drafts/${currentUser.uid}/rows`), { rake: "", type: "", f: "", r: "" });
 
 // --- 1. HELPER TO OPEN BIG IMAGE ---
 window.openBigPhoto = (url) => {
@@ -7893,7 +7899,7 @@ function loadGallery() {
     div.innerHTML = "<p style='text-align:center; width:100%;'>Loading images...</p>";
 
     // Clean up old listener
-    if (galleryListener) { try { off(ref(db, "history")); } catch(e){} galleryListener = null; }
+    if (galleryListener) { try { off(projectAwareRef( "history")); } catch(e){} galleryListener = null; }
 
     const line = document.getElementById("galleryLineSelect").value;
     const stn = document.getElementById("galleryStationSelect").value;
@@ -7901,7 +7907,7 @@ function loadGallery() {
     if(!line || !stn) { div.innerHTML = ""; return; }
     
     const targetName = `${stn} (${line})`;
-    const q = query(ref(db, "history"), orderByChild("stationName"), equalTo(targetName));
+    const q = query(projectAwareRef( "history"), orderByChild("stationName"), equalTo(targetName));
 
     galleryListener = onValue(q, snap => {
         div.innerHTML = "";
@@ -7950,7 +7956,7 @@ function loadGallery() {
 }
 window.removeFile = (k) => {
     if(confirm("Remove attached file?")) {
-        update(ref(db, `history/${k}`), { fileData: null, fileType: null, fileRemoved: true });
+        update(projectAwareRef( `history/${k}`), { fileData: null, fileType: null, fileRemoved: true });
     }
 }
 
@@ -7974,7 +7980,7 @@ async function clearPreviousSession() {
 
     // E. Wipe Draft Node in Database (Prevents data crossover)
     if(currentUser) {
-        await set(ref(db, `drafts/${currentUser.uid}`), null);
+        await set(projectAwareRef( `drafts/${currentUser.uid}`), null);
     }
 }
 function renderRow(k, v, i) {
@@ -8020,7 +8026,7 @@ function loadInventory() {
     const summaryEl = document.getElementById("stockSummaryText");
     if(!b) return;
 
-    onValue(ref(db, "inventory"), snap => {
+    onValue(projectAwareRef( "inventory"), snap => {
         b.innerHTML = "";
         let total = 0, available = 0;
 
@@ -8090,7 +8096,7 @@ function loadInventory() {
 }
   // --- RE-STOCK FUNCTION: BRING BACK SOLD ITEMS WITHIN 7 DAYS ---
 window.revertSale = async (key, itemName) => {
-    const snap = await get(ref(db, `inventory/${key}`));
+    const snap = await get(projectAwareRef( `inventory/${key}`));
     const v = snap.val();
     const oldInvoice = v.invoiceNo || "N/A";
     const oldStation = v.assignedStation || "Unknown Site";
@@ -8102,7 +8108,7 @@ window.revertSale = async (key, itemName) => {
     if(!confirm(`RESTORE TO INVENTORY?\nReason: ${returnReason}\n\nProceed to wipe Invoice data and generate Return Note?`)) return;
 
     try {
-        await update(ref(db, `inventory/${key}`), {
+        await update(projectAwareRef( `inventory/${key}`), {
             status: "In Stock",
             holder: "Store",
             location: "D2 Building - Heerok Sir Lab [Returned]",
@@ -8111,7 +8117,7 @@ window.revertSale = async (key, itemName) => {
             assignedStation: null  
         });
 
-        await push(ref(db, "logs"), {
+        await push(projectAwareRef( "logs"), {
             type: "ITEM_RESTOCKED",
             item: itemName,
             originalInvoice: oldInvoice,
@@ -8144,7 +8150,7 @@ window.revertSale = async (key, itemName) => {
 
     try {
         // 2. Database Query
-        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
+        const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(tag));
         const snap = await get(q);
 
         if (!snap.exists()) {
@@ -8162,7 +8168,7 @@ window.revertSale = async (key, itemName) => {
         }
 
         // 4. Update Inventory Node
-        await update(ref(db, `inventory/${key}`), {
+        await update(projectAwareRef( `inventory/${key}`), {
             status: "In Stock",
             holder: "Store",
             location: "Recovered: " + reason,
@@ -8173,7 +8179,7 @@ window.revertSale = async (key, itemName) => {
         });
 
         // 5. Log for Audit Trail
-        await push(ref(db, "logs"), {
+        await push(projectAwareRef( "logs"), {
             type: "ITEM_RECOVERED",
             item: item.item,
             barcode: tag,
@@ -8236,10 +8242,10 @@ window.generateAndSaveTag = async () => {
         if(key) {
             // --- EDIT MODE: OVERWRITE ---
             // The old tag will stop working because we are changing the 'barcode' field in the DB
-            await update(ref(db, `inventory/${key}`), itemData);
+            await update(projectAwareRef( `inventory/${key}`), itemData);
             
             // Log the overwrite
-            await push(ref(db, "logs"), {
+            await push(projectAwareRef( "logs"), {
                 type: "TAG_OVERWRITE",
                 item: name,
                 oldTag: "REPLACED",
@@ -8252,7 +8258,7 @@ window.generateAndSaveTag = async () => {
             itemData.status = "In Stock";
             itemData.holder = "Store";
             itemData.usageCount = 0;
-            const newRef = await push(ref(db, "inventory"), itemData);
+            const newRef = await push(projectAwareRef( "inventory"), itemData);
             finalKey = newRef.key;
         }
 
@@ -8280,7 +8286,7 @@ window.generateAndSaveTag = async () => {
 };
 
 window.editExistingItem = async (key) => {
-    const snap = await get(ref(db, `inventory/${key}`));
+    const snap = await get(projectAwareRef( `inventory/${key}`));
     const d = snap.val();
 
     toggleInvMode('add');
@@ -8494,7 +8500,7 @@ window.executeDirectUpdate = async () => {
     const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
 
     try {
-        await update(ref(db, `inventory/${key}`), {
+        await update(projectAwareRef( `inventory/${key}`), {
             item: name,
             purchasePrice: parseFloat(price),
             location: location,
@@ -8515,9 +8521,9 @@ window.executeManualSave = async () => {
         delete finalData.dbKey;
 
         if(existingKey) {
-            await update(ref(db, `inventory/${existingKey}`), finalData);
+            await update(projectAwareRef( `inventory/${existingKey}`), finalData);
         } else {
-            await push(ref(db, "inventory"), finalData);
+            await push(projectAwareRef( "inventory"), finalData);
         }
 
         alert("✅ ASSET SAVED SUCCESSFULLY.");
@@ -8617,7 +8623,7 @@ async function populateCommentUsers() {
     sel.innerHTML = `<option value="${currentName}">Self (${currentName})</option>`;
 
     try {
-        const snap = await get(ref(db, "users"));
+        const snap = await get(projectAwareRef( "users"));
         if (snap.exists()) {
             snap.forEach(c => {
                 const u = c.val();
@@ -8649,9 +8655,9 @@ window.loadPurchaseData = () => {
         theadRow.innerHTML = headerHTML;
     }
 
-    if(window.purchaseListener) { try{ off(ref(db, "finance")); }catch(e){} }
+    if(window.purchaseListener) { try{ off(projectAwareRef( "finance")); }catch(e){} }
 
-    window.purchaseListener = onValue(ref(db, "finance"), (snap) => {
+    window.purchaseListener = onValue(projectAwareRef( "finance"), (snap) => {
         try {
             tbody.innerHTML = "";
             let sl = 1;
@@ -8740,7 +8746,7 @@ window.loadPurchaseData = () => {
 window.approvePurchase = async (key) => {
     if(!confirm("✅ Approve this purchase?\n\nThis will deduct funds from the Balance Sheet.")) return;
     try {
-        await update(ref(db, `finance/${key}`), { status: "Approved" });
+        await update(projectAwareRef( `finance/${key}`), { status: "Approved" });
         alert("Purchase Approved.");
     } catch(e) { alert("Error: " + e.message); }
 };
@@ -8749,26 +8755,26 @@ window.approvePurchase = async (key) => {
 window.denyPurchase = async (key) => {
     if(!confirm("🚫 Deny/Reject this request?\n\nIt will remain in history but NOT affect the budget.")) return;
     try {
-        await update(ref(db, `finance/${key}`), { status: "Rejected" });
+        await update(projectAwareRef( `finance/${key}`), { status: "Rejected" });
     } catch(e) { alert("Error: " + e.message); }
 };
 
 // --- DELETE: Removes Completely ---
 window.deletePurchase = async (key) => {
     if(confirm("🗑 PERMANENTLY DELETE this record?\n\nThis cannot be undone.")) {
-        await remove(ref(db, `finance/${key}`));
+        await remove(projectAwareRef( `finance/${key}`));
     }
 };
 // --- NEW: DELETE PURCHASE ---
 window.deletePurchase = async (key) => {
     if(confirm("⚠ Delete this purchase entry?\n\nThe amount will be credited back to the available balance.")) {
-        await remove(ref(db, `finance/${key}`));
+        await remove(projectAwareRef( `finance/${key}`));
     }
 };
-window.delInv = (k) => remove(ref(db, `inventory/${k}`));
+window.delInv = (k) => remove(projectAwareRef( `inventory/${k}`));
 
 function loadAssignments() {
-    onValue(ref(db, `assignments/${currentUser.uid}`), snap => {
+    onValue(projectAwareRef( `assignments/${currentUser.uid}`), snap => {
         const list = document.getElementById("taskList"); list.innerHTML = "";
         if(!snap.exists()) { list.innerHTML = "<p>No tasks.</p>"; return; }
         snap.forEach(c => {
@@ -8780,14 +8786,14 @@ function loadAssignments() {
         });
     });
 }
-window.completeTask = (k) => update(ref(db, `assignments/${currentUser.uid}/${k}`), { status: "Done" });
+window.completeTask = (k) => update(projectAwareRef( `assignments/${currentUser.uid}/${k}`), { status: "Done" });
 window.debugConnection = async () => {
     console.log("📡 Testing Network Connection...");
 
     try {
         // We try to read 1 log. 
         // If logged out, this WILL fail with "Permission denied".
-        const testRef = query(ref(db, "station_logs"), limitToLast(1));
+        const testRef = query(projectAwareRef( "station_logs"), limitToLast(1));
         await get(testRef);
         
         // If we get here, it means we are logged in and connected
@@ -8835,7 +8841,7 @@ window.verifyOTP = async () => {
     
     try {
         // Fetch the one true PIN from the system settings node
-        const snap = await get(ref(db, "system_settings/master_pin"));
+        const snap = await get(projectAwareRef( "system_settings/master_pin"));
         const systemPin = snap.exists() ? snap.val() : "1234"; // Default only if DB is empty
         
         if (input === systemPin) {
@@ -8913,7 +8919,7 @@ function populateAllMetroStations() {
 // Fix for ReferenceError: Defining globally
 window.populateBillingAssets = async () => {
     try {
-        const snap = await get(ref(db, "inventory"));
+        const snap = await get(projectAwareRef( "inventory"));
         const sel = document.getElementById("billAssetSelect");
         if(sel) {
             sel.innerHTML = "<option value=''>-- Select Item --</option>";
@@ -8953,7 +8959,7 @@ window.addScannedItemToBill = async () => {
     if(isAlreadyInCart) return alert("Item already in cart.");
 
     try {
-        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(barcode));
+        const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(barcode));
         const snap = await get(q);
         if (!snap.exists()) return alert("Tag ID Not Found.");
 
@@ -8998,7 +9004,7 @@ window.finalizeDispatchRecords = async (targetStation) => {
         await update(ref(db), updates);
         
         // Log as a material movement
-        await push(ref(db, "logs"), {
+        await push(projectAwareRef( "logs"), {
             type: "MATERIAL_DISPATCH",
             dispatchNo: dispatchNo,
             destination: targetStation,
@@ -9134,7 +9140,7 @@ window.saveWarrantyConfig = async () => {
     if(!tag) return alert("Please enter Asset Tag ID.");
 
     try {
-        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
+        const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(tag));
         const snap = await get(q);
         if(!snap.exists()) return alert("❌ Error: Tag ID not found.");
         
@@ -9143,7 +9149,7 @@ window.saveWarrantyConfig = async () => {
         const finalMonths = (type === "WARRANTY" && unit === "Years") ? duration * 12 : duration;
 
         // Save to Database
-        await update(ref(db, `inventory/${key}`), {
+        await update(projectAwareRef( `inventory/${key}`), {
             warrantyMonths: finalMonths,
             manualWarDate: startDateVal || null,
             noWarranty: (type === "NON-WARRANTY"),
@@ -9163,7 +9169,7 @@ window.saveWarrantyConfig = async () => {
 
 // 4. Official Warranty Print Layout (REMOVED SIGNATURE)
 window.printCustomerCopy = async (invoiceNo) => {
-    const snap = await get(ref(db, "inventory"));
+    const snap = await get(projectAwareRef( "inventory"));
     const items = [];
     let site = "", saleDate = "";
 
@@ -9269,10 +9275,10 @@ window.submitWarrantyClaim = async () => {
         };
 
         // 3. Save to Firebase
-        await push(ref(db, "warranty_claims"), claimData);
+        await push(projectAwareRef( "warranty_claims"), claimData);
 
         // 4. Log the action for Audit Trail
-        await push(ref(db, "logs"), {
+        await push(projectAwareRef( "logs"), {
             type: "WARRANTY_CLAIM_FILED",
             item: itemName,
             details: issue,
@@ -9298,7 +9304,7 @@ window.submitWarrantyClaim = async () => {
 // 6. Support Loaders (Dashboard, Setup, Active List, Sales)
 async function refreshWarDash() {
     try {
-        const snap = await get(ref(db, "inventory"));
+        const snap = await get(projectAwareRef( "inventory"));
         let total = 0;
         let protectedCount = 0;
 
@@ -9331,7 +9337,7 @@ async function loadWarSetup() {
     if (!tbody) return;
 
     try {
-        const snap = await get(ref(db, "inventory")); 
+        const snap = await get(projectAwareRef( "inventory")); 
         tbody.innerHTML = "";
 
         if (!snap.exists()) {
@@ -9363,7 +9369,7 @@ async function loadWarSetup() {
 }
 async function loadWarSales() {
     const tbody = document.getElementById("warSalesTableBody");
-    const snap = await get(ref(db, "inventory"));
+    const snap = await get(projectAwareRef( "inventory"));
     const salesGroup = {}; 
     
     snap.forEach(c => {
@@ -9409,7 +9415,7 @@ window.reissueInvoice = async (invoiceNo, saleDateTs) => {
     if (!confirm("Confirm Reissue of Official Tax Invoice?")) return;
 
     try {
-        const snap = await get(ref(db, "inventory"));
+        const snap = await get(projectAwareRef( "inventory"));
         const items = [];
         let site = "";
 
@@ -9505,7 +9511,7 @@ window.reissueInvoice = async (invoiceNo, saleDateTs) => {
 };
 async function loadActiveWarranty() {
     const tbody = document.getElementById("warActiveTableBody");
-    const snap = await get(ref(db, "inventory"));
+    const snap = await get(projectAwareRef( "inventory"));
     tbody.innerHTML = "";
     snap.forEach(c => {
         const v = c.val();
@@ -9549,7 +9555,7 @@ window.addToRecoveryCart = async (tagId) => {
     }
 
     try {
-        const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(tag));
+        const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(tag));
         const snap = await get(q);
 
         if (!snap.exists()) return alert("Tag not found in database.");
@@ -9647,7 +9653,7 @@ window.finalizeRecoveryCart = async () => {
 
     tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'><i class='fas fa-sync fa-spin'></i> Syncing Claims...</td></tr>";
 
-    onValue(ref(db, "warranty_claims"), (snap) => {
+    onValue(projectAwareRef( "warranty_claims"), (snap) => {
         tbody.innerHTML = "";
         if (!snap.exists()) {
             tbody.innerHTML = "<tr><td colspan='7' style='text-align:center; padding:20px;'>No active claims found.</td></tr>";
@@ -9736,7 +9742,7 @@ window.finalizeRecoveryCart = async () => {
 window.updateClaimStatus = async (key, newStatus) => {
     if(!confirm(`Are you sure you want to mark this ticket as ${newStatus}?`)) return;
     try {
-        await update(ref(db, `warranty_claims/${key}`), { 
+        await update(projectAwareRef( `warranty_claims/${key}`), { 
             status: newStatus,
             resolutionDate: serverTimestamp() 
         });
@@ -9754,7 +9760,7 @@ window.handleManualClaimSearch = () => {
     onScanSuccess(tag); 
 };
 window.generateClaimTicketPrint = async (ticketKey) => {
-    const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
+    const snap = await get(projectAwareRef( `warranty_claims/${ticketKey}`));
     const data = snap.val();
     const shortTicketId = ticketKey.substring(1, 10).toUpperCase();
     
@@ -9811,7 +9817,7 @@ window.generateClaimTicketPrint = async (ticketKey) => {
     document.getElementById("printableReportContainer").classList.remove("hidden");
 };
   window.generateReplacementBill = async (ticketKey) => {
-    const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
+    const snap = await get(projectAwareRef( `warranty_claims/${ticketKey}`));
     if (!snap.exists()) return alert("Error: Ticket data not found.");
     
     const data = snap.val();
@@ -9819,7 +9825,7 @@ window.generateClaimTicketPrint = async (ticketKey) => {
     const reportContainer = document.getElementById("printableReportContainer");
 
     // 1. Update Ticket to Resolved in Database immediately
-    await update(ref(db, `warranty_claims/${ticketKey}`), { 
+    await update(projectAwareRef( `warranty_claims/${ticketKey}`), { 
         status: "Resolved",
         resolutionDate: serverTimestamp() 
     });
@@ -9924,11 +9930,11 @@ window.submitTechResolution = async () => {
     if(!confirm(`I, ${techName}, certify that this diagnosis is accurate and ready for Admin Audit?`)) return;
 
     // Retrieve full key
-    const snap = await get(ref(db, "warranty_claims"));
+    const snap = await get(projectAwareRef( "warranty_claims"));
     let realKey = "";
     snap.forEach(c => { if(c.key.toUpperCase().includes(ticketId)) realKey = c.key; });
 
-    await update(ref(db, `warranty_claims/${realKey}`), {
+    await update(projectAwareRef( `warranty_claims/${realKey}`), {
         status: "Verification Pending",
         techName: techName, // SAVED NAME
         techNotes: notes,
@@ -9959,7 +9965,7 @@ async function renderTechArea(ticketKey, claim) {
     const priceLabel = document.getElementById("techPurchasePrice");
 
     try {
-        const invSnap = await get(ref(db, "inventory"));
+        const invSnap = await get(projectAwareRef( "inventory"));
         let matched = false;
         invSnap.forEach(c => {
             const item = c.val();
@@ -9975,12 +9981,12 @@ async function renderTechArea(ticketKey, claim) {
         }
     } catch(e) { console.error(e); }
 
-    await update(ref(db, `warranty_claims/${ticketKey}`), { status: "In Progress" });
+    await update(projectAwareRef( `warranty_claims/${ticketKey}`), { status: "In Progress" });
     document.getElementById("techNameInput").focus();
 }
 // --- UPDATED ADMIN CLAIM ACTIONS ---
 window.adminVerifyClaim = async (ticketKey, decision) => {
-    const snap = await get(ref(db, `warranty_claims/${ticketKey}`));
+    const snap = await get(projectAwareRef( `warranty_claims/${ticketKey}`));
     if (!snap.exists()) return;
     const data = snap.val();
 
@@ -10017,8 +10023,8 @@ window.adminVerifyClaim = async (ticketKey, decision) => {
             adminNote = "Claim denied: Asset shows signs of unauthorized tampering or physical impact.";
             
             // Mark the actual asset as void in the master inventory
-            const assetSnap = await get(query(ref(db, "inventory"), orderByChild("barcode"), equalTo(data.barcode || "")));
-            assetSnap.forEach(c => update(ref(db, `inventory/${c.key}`), { noWarranty: true, protectionActivated: false }));
+            const assetSnap = await get(query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(data.barcode || "")));
+            assetSnap.forEach(c => update(projectAwareRef( `inventory/${c.key}`), { noWarranty: true, protectionActivated: false }));
             break;
 
         case 'REJECT':
@@ -10038,10 +10044,10 @@ window.adminVerifyClaim = async (ticketKey, decision) => {
         updatePayload.status = newStatus;
         updatePayload.adminRemarks = adminNote;
         
-        await update(ref(db, `warranty_claims/${ticketKey}`), updatePayload);
+        await update(projectAwareRef( `warranty_claims/${ticketKey}`), updatePayload);
         
         // Log decision to master audit trail
-        await push(ref(db, "logs"), {
+        await push(projectAwareRef( "logs"), {
             type: "ADMIN_TICKET_DECISION",
             ticket: ticketKey,
             decision: newStatus,
@@ -10125,10 +10131,10 @@ window.resetTechVerification = () => {
     if(!confirm("CRITICAL: Wipe Invoice data for this item? The item will be restocked and the sale log deleted.")) return;
 
     try {
-        const snap = await get(ref(db, `inventory/${itemKey}`));
+        const snap = await get(projectAwareRef( `inventory/${itemKey}`));
         const v = snap.val();
         
-        await update(ref(db, `inventory/${itemKey}`), {
+        await update(projectAwareRef( `inventory/${itemKey}`), {
             status: "In Stock",
             holder: "Store",
             invoiceNo: null, // Wipe Invoice
@@ -10168,7 +10174,7 @@ window.onScanSuccess = async function(decodedText) {
             }
 
             // 2. Fetch Item from DB
-            const q = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(scannedInput));
             const snap = await get(q);
             
             if (!snap.exists()) return alert(`❌ Tag ${scannedInput} Not Registered.`);
@@ -10239,8 +10245,8 @@ window.onScanSuccess = async function(decodedText) {
                     const existingKey = finalData.dbKey;
                     delete finalData.dbKey; 
 
-                    if(existingKey) await update(ref(db, `inventory/${existingKey}`), finalData);
-                    else await push(ref(db, "inventory"), finalData);
+                    if(existingKey) await update(projectAwareRef( `inventory/${existingKey}`), finalData);
+                    else await push(projectAwareRef( "inventory"), finalData);
 
                     alert("✅ VERIFICATION SUCCESSFUL\nAsset has been officially registered.");
                     
@@ -10267,7 +10273,7 @@ window.onScanSuccess = async function(decodedText) {
 
         // --- 🟢 MODE: WARRANTY CLAIM ---
         else if (scanMode === 'WARRANTY_CLAIM') {
-            const qWar = query(ref(db, "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const qWar = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(scannedInput));
             const snap = await get(qWar);
             if (!snap.exists()) return alert("❌ Tag Not Registered");
             
@@ -10381,7 +10387,7 @@ This action cannot be undone.`);
         await update(ref(db), updates);
 
         // Log the deletion for Audit Trail
-        await push(ref(db, "logs"), {
+        await push(projectAwareRef( "logs"), {
             type: "USER_DELETED",
             details: `User ${userName} (UID: ${uid}) was removed from the system.`,
             by: currentUser.name || currentUser.email,
@@ -10400,9 +10406,9 @@ This action cannot be undone.`);
 };
   window.calcProfitEngine = async () => {
     try {
-        const attSnap = await get(ref(db, "attendance"));
-        const userSnap = await get(ref(db, "users"));
-        const finSnap = await get(ref(db, "finance"));
+        const attSnap = await get(projectAwareRef( "attendance"));
+        const userSnap = await get(projectAwareRef( "users"));
+        const finSnap = await get(projectAwareRef( "finance"));
         
         // 1. DATE FILTERING FOR EXPENSES
         const startDateVal = document.getElementById("expStartDate")?.value; 
@@ -10538,7 +10544,7 @@ const initAttendanceSystem = () => {
         const date = document.getElementById("attDate")?.value;
         if (!date) return alert("⚠️ Select Date First.");
 
-        const userSnap = await get(ref(db, "users"));
+        const userSnap = await get(projectAwareRef( "users"));
         interviewQueue = [];
         userSnap.forEach(c => {
             if(!ADMIN_EMAILS.includes(c.val().email.toLowerCase())) {
@@ -10571,7 +10577,7 @@ const initAttendanceSystem = () => {
     };
 
     window.recordStep = async (uid, status) => {
-        await set(ref(db, `attendance/${interviewDate}/${uid}`), { 
+        await set(projectAwareRef( `attendance/${interviewDate}/${uid}`), { 
             status, 
             userName: interviewQueue[currentInterviewIndex].name, 
             timestamp: serverTimestamp(),
@@ -10587,7 +10593,7 @@ const initAttendanceSystem = () => {
     const tbody = document.getElementById("attTableBody");
     if (!date || !tbody) return;
 
-    const snap = await get(ref(db, `attendance/${date}`));
+    const snap = await get(projectAwareRef( `attendance/${date}`));
     tbody.innerHTML = "";
     
     if (!snap.exists()) {
@@ -10667,7 +10673,7 @@ const initAttendanceSystem = () => {
     if (newStatus.toLowerCase().includes("spec")) dbStatus = "Special Case";
 
     try {
-        await update(ref(db, `attendance/${date}/${uid}`), {
+        await update(projectAwareRef( `attendance/${date}/${uid}`), {
             status: dbStatus,
             adminDecision: "Manual Override",
             decisionTime: serverTimestamp()
@@ -10684,7 +10690,7 @@ const initAttendanceSystem = () => {
         const inp = document.getElementById(`reason_inp_${date}`);
         const reason = inp.value.trim();
         if (!reason) return alert("Please state your reason.");
-        await update(ref(db, `attendance/${date}/${currentUser.uid}`), { 
+        await update(projectAwareRef( `attendance/${date}/${currentUser.uid}`), { 
             userReason: reason,
             adminDecision: "Pending Review" 
         });
@@ -10711,7 +10717,7 @@ const initAttendanceSystem = () => {
     if (!confirm(confirmMsg)) return;
 
     try {
-        await update(ref(db, `attendance/${date}/${uid}`), {
+        await update(projectAwareRef( `attendance/${date}/${uid}`), {
             status: finalStatusString,
             adminDecision: newStatus,
             decisionBy: currentUser.name,
@@ -10726,7 +10732,7 @@ const initAttendanceSystem = () => {
 };
     window.deleteSingleAtt = async (d, u) => { 
         if (isAdmin && confirm("Permanently delete this specific record?")) { 
-            await remove(ref(db, `attendance/${d}/${u}`)); 
+            await remove(projectAwareRef( `attendance/${d}/${u}`)); 
             window.loadAttendanceList(); 
         } 
     };
@@ -10781,7 +10787,7 @@ window.generateDirectivePrint = async function() {
 
     // --- LOGIC: BALANCE SHEET ---
     if (type === "BALANCE SHEET") {
-        const finSnap = await get(ref(db, "finance"));
+        const finSnap = await get(projectAwareRef( "finance"));
         const startDateVal = document.getElementById("expStartDate")?.value;
         const endDateVal = document.getElementById("expEndDate")?.value;
         const startTs = startDateVal ? new Date(startDateVal + "T00:00:00").getTime() : 0;
@@ -11040,7 +11046,7 @@ window.switchScadaMode = (mode) => {
 async function renderScadaDispatch() {
     if (!isAdmin) return;
     const tbody = document.getElementById("scadaDispatchBody");
-    const userSnap = await get(ref(db, "users"));
+    const userSnap = await get(projectAwareRef( "users"));
     let userOptions = `<option value="">-- Choose Field Personnel --</option>`;
     
     userSnap.forEach(u => {
@@ -11049,7 +11055,7 @@ async function renderScadaDispatch() {
         }
     });
 
-    const networkSnap = await get(ref(db, "scada_network"));
+    const networkSnap = await get(projectAwareRef( "scada_network"));
     const activeAssignments = networkSnap.exists() ? networkSnap.val() : {};
 
     tbody.innerHTML = "";
@@ -11086,7 +11092,7 @@ window.dispatchScadaTask = async (code) => {
     if(!sel) return alert("Please specify target field technician context.");
     const [uid, name] = sel.split('|');
 
-    await update(ref(db, `scada_network/${code}`), {
+    await update(projectAwareRef( `scada_network/${code}`), {
         title: window.SCADA_PROTOCOLS[code].title,
         assignedUid: uid,
         assignedName: name,
@@ -11101,7 +11107,7 @@ function renderScadaWorkbench() {
     const container = document.getElementById("scadaMyTasks");
     container.innerHTML = `<div style="text-align:center; padding:20px;"><i class="fas fa-sync fa-spin"></i> Synchronization in progress...</div>`;
 
-    onValue(ref(db, "scada_network"), snap => {
+    onValue(projectAwareRef( "scada_network"), snap => {
         container.innerHTML = "";
         let hasTasks = false;
 
@@ -11200,7 +11206,7 @@ window.submitScadaProof = async () => {
 
     try {
         // Update the operational phase registry node status
-        await update(ref(db, `scada_network/${code}`), {
+        await update(projectAwareRef( `scada_network/${code}`), {
             status: "REVIEW",
             submittedAt: serverTimestamp()
         });
@@ -11223,7 +11229,7 @@ function renderScadaAudit() {
     const container = document.getElementById("scadaAuditList");
     container.innerHTML = `<div style="text-align:center; padding:20px;">Scanning review array registers...</div>`;
 
-    onValue(ref(db, "scada_network"), snap => {
+    onValue(projectAwareRef( "scada_network"), snap => {
         container.innerHTML = "";
         let hasReviews = false;
 
@@ -11250,7 +11256,7 @@ function renderScadaAudit() {
                     </div>`;
 
                     // On-demand validation pulling prevents thread locks
-                    get(ref(db, `scada_proofs/${taskCode}/image`)).then(imgSnap => {
+                    get(projectAwareRef( `scada_proofs/${taskCode}/image`)).then(imgSnap => {
                         const targetBox = document.getElementById(`scada_lazy_img_${taskCode}`);
                         if(targetBox && imgSnap.exists()) {
                             targetBox.innerHTML = `<img src="${imgSnap.val()}" onclick="openBigPhoto('${imgSnap.val()}')" style="width:100%; height:100%; object-fit:cover; border-radius:4px; cursor:zoom-in;">`;
@@ -11268,8 +11274,8 @@ window.auditScadaTask = async (code, decision) => {
     
     const payload = { status: decision, auditedBy: currentUser.name, auditedAt: serverTimestamp() };
     try {
-        await update(ref(db, `scada_network/${code}`), payload);
-        await set(ref(db, `scada_proofs/${code}`), null); // Wipes proof from cache to prevent storage expansion leaks
+        await update(projectAwareRef( `scada_network/${code}`), payload);
+        await set(projectAwareRef( `scada_proofs/${code}`), null); // Wipes proof from cache to prevent storage expansion leaks
         renderScadaAudit();
     } catch(e) { console.error(e); }
 };
@@ -11284,7 +11290,7 @@ function renderScadaMatrix() {
     }
     
     // Secure real-time downstream data sync loop pipeline
-    onValue(ref(db, "scada_network"), snap => {
+    onValue(projectAwareRef( "scada_network"), snap => {
         grid.innerHTML = "";
         const dbData = snap.exists() ? snap.val() : {};
         window.scadaLocalCache = dbData; 
@@ -11548,7 +11554,7 @@ window.fmVerifyPurchaseBill = async (caseId, isApproved) => {
             updatePayload.billType = null;
         }
 
-        await update(ref(db, `fund_workflows/${caseId}`), updatePayload);
+        await update(projectAwareRef( `fund_workflows/${caseId}`), updatePayload);
         await window.fmLogAudit(caseId, actionLogText, comment);
         
         alert(isApproved ? "✅ Bill approved & downloaded! Case moved to Inventory Verification." : "⚠️ Bill rejected. Student notified to re-upload.");
@@ -11641,7 +11647,7 @@ window.fmSubmitRequest = async () => {
                 timestamp: Date.now() // FIX: Forces a clean integer to prevent sorting crash
             };
 
-            await update(ref(db, `fund_workflows/${caseId}`), payload);
+            await update(projectAwareRef( `fund_workflows/${caseId}`), payload);
             await window.fmLogAudit(caseId, "Request Submitted", `Total ₹${totalAmt} requested.`);
             
             alert(`✅ Request Submitted!\nCase Number: ${caseId}`);
@@ -11659,7 +11665,7 @@ window.fmLoadDashboard = () => {
     if (!tbody) return;
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Syncing Queue...</td></tr>";
 
-    onValue(ref(db, "fund_workflows"), snap => {
+    onValue(projectAwareRef( "fund_workflows"), snap => {
         tbody.innerHTML = "";
         let counts = { phReview: 0, hodReview: 0, payPending: 0, closed: 0 };
         
@@ -11741,7 +11747,7 @@ window.fmLoadDashboard = () => {
 };
 // Central Audit Logger
 window.fmLogAudit = async (caseId, action, comment) => {
-    await push(ref(db, `fund_workflows/${caseId}/audit`), {
+    await push(projectAwareRef( `fund_workflows/${caseId}/audit`), {
         action: action,
         comment: comment,
         by: currentUser.name || currentUser.email,
@@ -11749,7 +11755,7 @@ window.fmLogAudit = async (caseId, action, comment) => {
     });
 };
 window.fmOpenCase = async (caseId) => {
-    const snap = await get(ref(db, `fund_workflows/${caseId}`));
+    const snap = await get(projectAwareRef( `fund_workflows/${caseId}`));
     if(!snap.exists()) return;
     window.fmCurrentCase = snap.val();
     const c = window.fmCurrentCase;
@@ -12011,14 +12017,14 @@ window.fmOpenCase = async (caseId) => {
 window.fmPHItemJudge = async (caseId, itemIndex, judgeStatus) => {
     const c = window.fmCurrentCase;
     c.items[itemIndex].phStatus = judgeStatus;
-    await update(ref(db, `fund_workflows/${caseId}/items/${itemIndex}`), { phStatus: judgeStatus });
+    await update(projectAwareRef( `fund_workflows/${caseId}/items/${itemIndex}`), { phStatus: judgeStatus });
     window.fmOpenCase(caseId); 
 };
 window.fmDeleteCase = async (caseId) => {
     if (!confirm(`⚠️ CRITICAL: PERMANENTLY DELETE CASE ${caseId}?\n\nThis action cannot be undone and will erase the entire audit trail.`)) return;
     
     try {
-        await remove(ref(db, `fund_workflows/${caseId}`));
+        await remove(projectAwareRef( `fund_workflows/${caseId}`));
         alert("✅ Case deleted successfully.");
         window.fmShowView('dashboard');
     } catch(e) {
@@ -12029,7 +12035,7 @@ window.fmAdvanceCase = async (caseId, newStatus) => {
     const comment = document.getElementById("fmActionComment")?.value || "";
     if (newStatus.includes("REJECTED") && !comment) return alert("Rejection reason is mandatory.");
     
-    await update(ref(db, `fund_workflows/${caseId}`), { status: newStatus });
+    await update(projectAwareRef( `fund_workflows/${caseId}`), { status: newStatus });
     await window.fmLogAudit(caseId, `Status changed to: ${newStatus}`, comment);
     
     alert(`Case moved to: ${newStatus}`);
@@ -12050,7 +12056,7 @@ window.fmRecordPayment = async (caseId) => {
         const updaterName = (currentUser && (currentUser.name || currentUser.email)) ? currentUser.name || currentUser.email : "Authorized Officer";
         
         // 1. Advance Case and securely clear the QR Code from database
-        await update(ref(db, `fund_workflows/${caseId}`), { 
+        await update(projectAwareRef( `fund_workflows/${caseId}`), { 
             status: "PURCHASE DOCUMENT PENDING", 
             txnRef: txn,
             qrCode: null 
@@ -12061,7 +12067,7 @@ window.fmRecordPayment = async (caseId) => {
 
         // 3. Attempt ledger update with graceful error handling
         try {
-            await push(ref(db, "finance"), {
+            await push(projectAwareRef( "finance"), {
                 type: "DEBIT",
                 amount: parseFloat(window.fmCurrentCase?.totalAmount || 0),
                 desc: `Project Fund: ${window.fmCurrentCase?.project || 'Metro Safety'} [${caseId}]`,
@@ -12101,7 +12107,7 @@ window.fmSubmitProof = async (caseId) => {
 
     const uploadToDb = async (base64Data, fileType) => {
         try {
-            await update(ref(db, `fund_workflows/${caseId}`), { 
+            await update(projectAwareRef( `fund_workflows/${caseId}`), { 
                 status: "PENDING BILL VERIFICATION", 
                 billProof: base64Data,
                 billType: fileType // Saves file type to distinguish PDFs
@@ -12194,7 +12200,7 @@ window.stopFmCamera = () => {
 window.fmAttemptClosure = async (caseId) => {
     if(!confirm("Are all purchased items scanned and verified via Inventory?")) return;
     
-    await update(ref(db, `fund_workflows/${caseId}`), { status: "CASE CLOSED" });
+    await update(projectAwareRef( `fund_workflows/${caseId}`), { status: "CASE CLOSED" });
     await window.fmLogAudit(caseId, "Inventory Verified", "All assets confirmed in DB. Case closed.");
     
     alert("✅ Verification Complete. Case Closed.");
@@ -12324,7 +12330,7 @@ window.fmProcessScannedBatch = async () => {
     window.fmScannedAssetsData = [];
     
     try {
-        const invSnap = await get(ref(db, "inventory"));
+        const invSnap = await get(projectAwareRef( "inventory"));
         let html = "";
         
         invSnap.forEach(c => {
@@ -12434,7 +12440,7 @@ window.fmAttemptClosure = async (caseId) => {
     btn.innerText = "⏳ CLOSING CASE...";
 
     try {
-        await update(ref(db, `fund_workflows/${caseId}`), { status: "CASE CLOSED" });
+        await update(projectAwareRef( `fund_workflows/${caseId}`), { status: "CASE CLOSED" });
         await window.fmLogAudit(caseId, "Inventory Verified", `${checkboxes.length} assets batch-verified in DB. Case closed.`);
         
         alert("✅ System Verification Complete. Case Closed.");
@@ -12573,7 +12579,7 @@ window.pipSubmitMemberReport = async () => {
     if (file.size > 10 * 1024 * 1024) return alert("⛔ File size exceeded: Maximum size is 10MB.");
 
     const GRACE_PERIOD_MS = 60 * 60 * 1000; // 1 Hour
-    const snap = await get(ref(db, `pip_records/${currentUser.uid}`));
+    const snap = await get(projectAwareRef( `pip_records/${currentUser.uid}`));
     let isResubmission = false;
 
     if (snap.exists()) {
@@ -12582,7 +12588,7 @@ window.pipSubmitMemberReport = async () => {
         isResubmission = pipData.reportStatus === "RESUBMISSION_REQUESTED" || pipData.reportStatus === "RESUBMISSION_EXPIRED";
         
         if (Date.now() > (deadlineMs + GRACE_PERIOD_MS)) {
-            await update(ref(db, `pip_records/${currentUser.uid}`), {
+            await update(projectAwareRef( `pip_records/${currentUser.uid}`), {
                 reportPdf: null,
                 reportStatus: isResubmission ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED",
                 submittedAt: null
@@ -12602,7 +12608,7 @@ window.pipSubmitMemberReport = async () => {
     reader.onload = async (e) => {
         const base64Pdf = e.target.result;
         try {
-            await update(ref(db, `pip_records/${currentUser.uid}`), {
+            await update(projectAwareRef( `pip_records/${currentUser.uid}`), {
                 reportPdf: base64Pdf,
                 reportStatus: isResubmission ? "RESUBMITTED" : "SUBMITTED",
                 submittedAt: serverTimestamp()
@@ -12632,7 +12638,7 @@ window.pipSubmitPermissionLetter = async () => {
 
     const uploadToDb = async (base64Data) => {
         try {
-            await update(ref(db, `pip_records/${currentUser.uid}`), {
+            await update(projectAwareRef( `pip_records/${currentUser.uid}`), {
                 permissionLetter: base64Data,
                 reportStatus: "PERMISSION_SUBMITTED",
                 submittedAt: serverTimestamp()
@@ -12657,7 +12663,7 @@ window.pipSubmitPermissionLetter = async () => {
 };
 // --- FULL PIP AUDIT REPORT WHATSAPP DISPATCHER (NO POPUPS) ---
 window.pipDispatchFullReportWhatsApp = async (uid) => {
-    const snap = await get(ref(db, `pip_records/${uid}`));
+    const snap = await get(projectAwareRef( `pip_records/${uid}`));
     if (!snap.exists()) return alert("⚠️ Record not found.");
     const pip = snap.val();
 
@@ -12774,7 +12780,7 @@ window.pipOpenPromoteModal = async (uid, encodedTargetName) => {
         btn.disabled = true;
 
         try {
-            await update(ref(db, `pip_records/${uid}`), {
+            await update(projectAwareRef( `pip_records/${uid}`), {
                 status: "PROMOTED",
                 promotionRole: newRole,
                 completedAt: serverTimestamp()
@@ -12801,7 +12807,7 @@ window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
 
-    onValue(ref(db, "pip_records"), snap => {
+    onValue(projectAwareRef( "pip_records"), snap => {
         tbody.innerHTML = "";
         if (!snap.exists()) {
             tbody.innerHTML = "<tr><td colspan='6' style='text-align:center; color:#64748b;'>No active PIP records on system.</td></tr>";
@@ -12824,13 +12830,13 @@ window.pipLoadAdminRecords = () => {
             if (!isClosed) {
                 if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
                     const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
-                    update(ref(db, `pip_records/${uid}`), { reportStatus: newStatus });
+                    update(projectAwareRef( `pip_records/${uid}`), { reportStatus: newStatus });
                     return; 
                 }
 
                 if (pip.submittedAt && pip.submittedAt > (deadlineMs + GRACE_PERIOD_MS) && (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED")) {
                     const newStatus = pip.reportStatus === "RESUBMITTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
-                    update(ref(db, `pip_records/${uid}`), { reportPdf: null, reportStatus: newStatus, submittedAt: null });
+                    update(projectAwareRef( `pip_records/${uid}`), { reportPdf: null, reportStatus: newStatus, submittedAt: null });
                     return; 
                 }
             }
@@ -13058,7 +13064,7 @@ window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
             const reportString = reportingOptions.map(opt => opt.toUpperCase()).join(" OR ");
 
             // Fetch current resend count
-            const pipSnap = await get(ref(db, `pip_records/${uid}`));
+            const pipSnap = await get(projectAwareRef( `pip_records/${uid}`));
             const currentCount = pipSnap.exists() ? (pipSnap.val().resendCount || 0) : 0;
 
             // Changed limit to 3
@@ -13068,14 +13074,14 @@ window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
             }
 
             if (!isResend) {
-                await update(ref(db, `pip_records/${uid}`), {
+                await update(projectAwareRef( `pip_records/${uid}`), {
                     reportStatus: "SHOW_CAUSE_ISSUED",
                     status: "PIP_FAILED_AWAITING_DECISION",
                     adminRemarks: `LOCKED DUE TO DEADLINE. REPORT TO: ${reportString}.`,
                     resendCount: currentCount + 1 // Increment counter
                 });
             } else {
-                await update(ref(db, `pip_records/${uid}`), { resendCount: currentCount + 1 }); // Increment on resend
+                await update(projectAwareRef( `pip_records/${uid}`), { resendCount: currentCount + 1 }); // Increment on resend
             }
 
             const msg = `METRO RAILWAY PLATFORM SAFETY PROJECT NOTICE. OFFICIAL COMMUNICATION. SHOW CAUSE NOTICE. YOU HAVE FAILED TO SUBMIT YOUR PERFORMANCE IMPROVEMENT PLAN DELIVERABLE WITHIN THE STIPULATED DEADLINE AND GRACE PERIOD. YOUR ACCESS IS NOW LOCKED. YOU ARE HEREBY DIRECTED TO SHOW CAUSE AS TO WHY ADMINISTRATIVE ACTION SHOULD NOT BE TAKEN AGAINST YOU. YOU MUST REPORT TO ${reportString} IMMEDIATELY FOR CLEARANCE TO RESUME OPERATIONS.`;
@@ -13103,7 +13109,7 @@ window.pipIssueShowCause = async (uid, encodedTargetName, isResend = false) => {
 };
   // --- UPDATED MEMBER WORKSPACE (NO MORE POPUPS, EMBEDDED PHONE INPUT) ---
 window.pipLoadMemberWorkspace = () => {
-    onValue(ref(db, `pip_records/${currentUser.uid}`), snap => {
+    onValue(projectAwareRef( `pip_records/${currentUser.uid}`), snap => {
         const container = document.getElementById("pipMemberView");
         
         if (!snap.exists()) {
@@ -13133,13 +13139,13 @@ window.pipLoadMemberWorkspace = () => {
         
         if (isExpired && (pip.reportStatus === "PENDING_SUBMISSION" || pip.reportStatus === "RESUBMISSION_REQUESTED")) {
             const newStatus = pip.reportStatus === "RESUBMISSION_REQUESTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
-            update(ref(db, `pip_records/${currentUser.uid}`), { reportStatus: newStatus });
+            update(projectAwareRef( `pip_records/${currentUser.uid}`), { reportStatus: newStatus });
             return; 
         }
 
         if (pip.submittedAt && pip.submittedAt > (deadlineMs + GRACE_PERIOD_MS) && (pip.reportStatus === "SUBMITTED" || pip.reportStatus === "RESUBMITTED")) {
             const newStatus = pip.reportStatus === "RESUBMITTED" ? "RESUBMISSION_EXPIRED" : "SUBMISSION_EXPIRED";
-            update(ref(db, `pip_records/${currentUser.uid}`), { reportPdf: null, reportStatus: newStatus, submittedAt: null });
+            update(projectAwareRef( `pip_records/${currentUser.uid}`), { reportPdf: null, reportStatus: newStatus, submittedAt: null });
             return; 
         }
 
@@ -13326,7 +13332,7 @@ window.pipSubmitExtensionRequest = () => {
     const reader = new FileReader();
     reader.onload = async (e) => {
         try {
-            await update(ref(db, `pip_records/${currentUser.uid}`), {
+            await update(projectAwareRef( `pip_records/${currentUser.uid}`), {
                 extensionPdf: e.target.result,
                 reportStatus: "EXTENSION_REQUESTED",
                 extensionAdmin: adminEmail
@@ -13364,7 +13370,7 @@ window.pipOpenIssueModal = async () => {
     const userSel = document.getElementById("pipTargetUser");
     userSel.innerHTML = "<option value=''>Loading personnel...</option>";
     
-    const snap = await get(ref(db, "users"));
+    const snap = await get(projectAwareRef( "users"));
     userSel.innerHTML = "<option value=''>-- Select Member --</option>";
     snap.forEach(c => {
         const u = c.val();
@@ -13405,8 +13411,8 @@ window.pipSaveNewPlan = async () => {
     };
 
     try {
-        await set(ref(db, `pip_records/${targetUid}`), pipData);
-        await push(ref(db, "logs"), {
+        await set(projectAwareRef( `pip_records/${targetUid}`), pipData);
+        await push(projectAwareRef( "logs"), {
             type: "PIP_ISSUED", target: targetName,
             by: currentUser.name || currentUser.email, time: serverTimestamp()
         });
@@ -13427,7 +13433,7 @@ window.pipSaveNewPlan = async () => {
 // --- UPDATED REVIEW MODAL (INJECTS NATIVE PHONE & DEADLINE INPUTS) ---
 window.pipOpenReviewModal = async (uid) => {
     activePipReviewUid = uid;
-    const snap = await get(ref(db, `pip_records/${uid}`));
+    const snap = await get(projectAwareRef( `pip_records/${uid}`));
     if (!snap.exists()) return;
     const pip = snap.val();
 
@@ -13563,7 +13569,7 @@ window.pipProcessExtension = async (decision) => {
     try {
         if (decision === 'GRANT') {
             const newDeadlineMs = Date.now() + (12 * 60 * 60 * 1000);
-            await update(ref(db, `pip_records/${activePipReviewUid}`), {
+            await update(projectAwareRef( `pip_records/${activePipReviewUid}`), {
                 reportStatus: "PENDING_SUBMISSION",
                 submissionDeadline: new Date(newDeadlineMs).toISOString(),
                 adminRemarks: remarks || "12-HOUR EXTENSION APPROVED VIA WRITTEN ORDER."
@@ -13574,7 +13580,7 @@ window.pipProcessExtension = async (decision) => {
           alert("✅ 12-Hour Extension Granted.");
             
         } else if (decision === 'REJECT') {
-            await update(ref(db, `pip_records/${activePipReviewUid}`), {
+            await update(projectAwareRef( `pip_records/${activePipReviewUid}`), {
                 status: "PIP_FAILED_AWAITING_DECISION",
                 reportStatus: "EXTENSION_REJECTED",
                 adminRemarks: remarks || "Extension request denied. PIP deadline missed."
@@ -13606,7 +13612,7 @@ window.pipProcessAudit = async (decision) => {
         
         const waWindow = window.open('about:blank', '_blank');
         try {
-            await update(ref(db, `pip_records/${activePipReviewUid}`), {
+            await update(projectAwareRef( `pip_records/${activePipReviewUid}`), {
                 reportStatus: "PENDING_SUBMISSION",
                 submissionDeadline: newDeadline,
                 status: "ACTIVE",
@@ -13624,7 +13630,7 @@ window.pipProcessAudit = async (decision) => {
         
         const waWindow = window.open('about:blank', '_blank');
         try {
-            await update(ref(db, `pip_records/${activePipReviewUid}`), {
+            await update(projectAwareRef( `pip_records/${activePipReviewUid}`), {
                 reportStatus: "SHOW_CAUSE_ISSUED",
                 adminRemarks: remarks || "CLEARANCE DENIED. INCORRECT DOCUMENT UPLOADED.",
                 permissionLetter: null
@@ -13640,7 +13646,7 @@ window.pipProcessAudit = async (decision) => {
         
         const waWindow = window.open('about:blank', '_blank');
         try {
-            await update(ref(db, `pip_records/${activePipReviewUid}`), {
+            await update(projectAwareRef( `pip_records/${activePipReviewUid}`), {
                 reportStatus: "APPROVED",
                 adminRemarks: remarks || "Approved without alterations."
             });
@@ -13659,7 +13665,7 @@ window.pipProcessAudit = async (decision) => {
         
         const waWindow = window.open('about:blank', '_blank');
         try {
-            await update(ref(db, `pip_records/${activePipReviewUid}`), {
+            await update(projectAwareRef( `pip_records/${activePipReviewUid}`), {
                 reportStatus: "RESUBMISSION_REQUESTED",
                 submissionDeadline: resubmitDeadline,
                 adminRemarks: remarks
@@ -13690,7 +13696,7 @@ window.pipStartAssessment = async (uid) => {
         }
     }
 
-    const snap = await get(ref(db, `pip_records/${uid}/liveExamState`));
+    const snap = await get(projectAwareRef( `pip_records/${uid}/liveExamState`));
     if (snap.exists()) {
         const state = snap.val();
         pipCurrentQn = state.currentQn || 1;
@@ -13735,7 +13741,7 @@ window.pipNextQuestion = async () => {
     marksInp.value = "";
     marksInp.focus();
 
-    await update(ref(db, `pip_records/${uid}/liveExamState`), {
+    await update(projectAwareRef( `pip_records/${uid}/liveExamState`), {
         currentQn: pipCurrentQn,
         log: pipAssessmentLog
     });
@@ -13773,7 +13779,7 @@ window.pipEndAssessment = async () => {
     let newStatus = isPass ? "PIP_PASSED" : "PIP_FAILED_AWAITING_DECISION";
     
     try {
-        await update(ref(db, `pip_records/${uid}`), {
+        await update(projectAwareRef( `pip_records/${uid}`), {
             assessmentResult: resultPayload,
             status: newStatus,
             completedAt: isPass ? serverTimestamp() : null,
@@ -13878,7 +13884,7 @@ window.pipSubmitFailDecision = async () => {
     }
     
     try {
-        await update(ref(db, `pip_records/${uid}`), updates);
+        await update(projectAwareRef( `pip_records/${uid}`), updates);
         document.getElementById("pipFailDecisionModal").classList.add("hidden");
         
         waWindow.location.href = window.getProfessionalWhatsappUrl(phone, dispatchMsg);
@@ -13948,7 +13954,7 @@ window.pipConfirmAssessmentAndNotify = async () => {
     btn.disabled = true;
 
     try {
-        await update(ref(db, `pip_records/${uid}`), {
+        await update(projectAwareRef( `pip_records/${uid}`), {
             assessment: { dateTime, location, phone, scheduledAt: serverTimestamp() },
             status: "ASSESSMENT_SCHEDULED"
         });
@@ -13972,7 +13978,7 @@ window.pipConfirmAssessmentAndNotify = async () => {
 
 // --- PRINT: PIP EXAM RESULT PDF ---
 window.pipGenerateResultPDF = async (uid, isPass, result) => {
-    const snap = await get(ref(db, `pip_records/${uid}`));
+    const snap = await get(projectAwareRef( `pip_records/${uid}`));
     if(!snap.exists()) return;
     const pip = snap.val();
     
@@ -14043,7 +14049,7 @@ window.pipGenerateResultPDF = async (uid, isPass, result) => {
 };
 // --- PRINT: FINAL ACTION DECISION PDF (INCLUDES PROMOTIONS) ---
 window.pipGenerateFinalActionPDF = async (uid) => {
-    const snap = await get(ref(db, `pip_records/${uid}`));
+    const snap = await get(projectAwareRef( `pip_records/${uid}`));
     if(!snap.exists()) return;
     const pip = snap.val();
     
@@ -14134,7 +14140,7 @@ window.uploadSecureDocument = async () => {
     const reader = new FileReader();
     reader.onload = async (e) => {
         try {
-            await push(ref(db, "secure_docs"), {
+            await push(projectAwareRef( "secure_docs"), {
                 title: title,
                 fileData: e.target.result,
                 uploadedBy: currentUser.name || currentUser.email,
@@ -14166,7 +14172,7 @@ window.loadSecureDocuments = () => {
 
     tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;'><i class='fas fa-sync fa-spin'></i> Loading Docs...</td></tr>";
 
-    window.secureDocListener = onValue(ref(db, "secure_docs"), snap => {
+    window.secureDocListener = onValue(projectAwareRef( "secure_docs"), snap => {
         if (!snap.exists()) {
             tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:#64748b;'>No secure documents available.</td></tr>";
             return;
@@ -14209,7 +14215,7 @@ window.loadSecureDocuments = () => {
     });
 };
 window.viewSecureDoc = async (key) => {
-    const snap = await get(ref(db, `secure_docs/${key}`));
+    const snap = await get(projectAwareRef( `secure_docs/${key}`));
     if (!snap.exists()) return;
     const data = snap.val();
     
@@ -14245,7 +14251,7 @@ window.deleteSecureDoc = async (key, btnElement) => {
     btnElement.disabled = true;
 
     try {
-        await remove(ref(db, `secure_docs/${key}`));
+        await remove(projectAwareRef( `secure_docs/${key}`));
         // We don't need an alert here. The table will instantly auto-refresh!
     } catch(e) {
         alert("Error deleting document: " + e.message);
@@ -14259,7 +14265,7 @@ window.downloadSecureDoc = async (key, title) => {
     btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
     
     try {
-        const snap = await get(ref(db, `secure_docs/${key}`));
+        const snap = await get(projectAwareRef( `secure_docs/${key}`));
         if (!snap.exists()) return alert("Document not found.");
         
         const data = snap.val();
@@ -14296,14 +14302,14 @@ window.wfAssignTask = async () => {
 
     try {
         // 1. Fetch User's Emails from DB
-        const uSnap = await get(ref(db, `users/${uid}`));
+        const uSnap = await get(projectAwareRef( `users/${uid}`));
         const uData = uSnap.exists() ? uSnap.val() : {};
         
         // Priority: Use Personal Email 1. If missing, try Personal Email 2. If missing, use Official Login Email.
         const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
 
         // 2. Save Task to Database
-        await push(ref(db, "workflows"), {
+        await push(projectAwareRef( "workflows"), {
             targetUid: uid,
             targetName: targetName,
             desc: desc,
@@ -14347,7 +14353,7 @@ window.loadWorkflows = async () => {
             if (sel) {
                 sel.innerHTML = "<option value=''>-- Select Student --</option>";
                 try {
-                    const uSnap = await get(ref(db, "users"));
+                    const uSnap = await get(projectAwareRef( "users"));
                     uSnap.forEach(c => {
                         const uData = c.val();
                         if (uData && uData.email && !ADMIN_EMAILS.includes(uData.email.toLowerCase())) {
@@ -14367,7 +14373,7 @@ window.loadWorkflows = async () => {
     const tbody = document.getElementById("wfTableBody");
     if (!tbody) return;
 
-    onValue(ref(db, "workflows"), snap => {
+    onValue(projectAwareRef( "workflows"), snap => {
         tbody.innerHTML = "";
         if (!snap.exists()) return tbody.innerHTML = "<tr><td colspan='5' style='text-align:center;'>No active workflows.</td></tr>";
 
@@ -14485,15 +14491,15 @@ window.executeWfFailAction = async (key, targetUid, encodedTargetName) => {
             }
             
             // 1. Fetch Task Description and User Emails
-            const wfSnap = await get(ref(db, `workflows/${key}`));
+            const wfSnap = await get(projectAwareRef( `workflows/${key}`));
             const taskDesc = wfSnap.exists() ? wfSnap.val().desc : "Extended Workflow Task";
 
-            const uSnap = await get(ref(db, `users/${targetUid}`));
+            const uSnap = await get(projectAwareRef( `users/${targetUid}`));
             const uData = uSnap.exists() ? uSnap.val() : {};
             const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
 
             // 2. Update Task Status in Database
-            await update(ref(db, `workflows/${key}`), {
+            await update(projectAwareRef( `workflows/${key}`), {
                 deadline: new Date(timeVal).getTime(),
                 status: "ASSIGNED", // Unlocks it so student can submit
                 adminRemarks: `EXTENSION GRANTED: ${reason}`,
@@ -14520,14 +14526,14 @@ window.executeWfFailAction = async (key, targetUid, encodedTargetName) => {
             }
 
             // 1. Fail the workflow task permanently
-            await update(ref(db, `workflows/${key}`), {
+            await update(projectAwareRef( `workflows/${key}`), {
                 status: "FAILED_PIP_ISSUED",
                 adminRemarks: `TASK FAILED | PIP ISSUED: ${reason}`
             });
             
             // 2. Automatically generate the PIP record
             const deadlineMs = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 Days to clear it
-            await set(ref(db, `pip_records/${targetUid}`), {
+            await set(projectAwareRef( `pip_records/${targetUid}`), {
                 targetUid: targetUid,
                 targetName: targetName,
                 startDate: new Date().toISOString().split('T')[0],
@@ -14569,7 +14575,7 @@ window.openWfAction = async (key, mode) => {
         document.getElementById("wfAdminSection").classList.remove("hidden");
         document.getElementById("wfActionModal").classList.remove("hidden");
 
-        const snap = await get(ref(db, `workflows/${key}`));
+        const snap = await get(projectAwareRef( `workflows/${key}`));
         if (snap.exists()) {
             const wf = snap.val();
             let fileLink = "";
@@ -14604,13 +14610,13 @@ window.wfSubmitWork = async () => {
 
     try {
         // SMART ROUTING: Check if this is an HOD resubmission. If yes, bypass the PH.
-        const snap = await get(ref(db, `workflows/${key}`));
+        const snap = await get(projectAwareRef( `workflows/${key}`));
         const currentStatus = snap.exists() ? snap.val().status : "";
         const nextStatus = (currentStatus === "REDO_HOD") ? "PENDING_HOD" : "PENDING_PH";
 
         const uploadToDb = async (base64Data, fileName) => {
             try {
-                await update(ref(db, `workflows/${key}`), { 
+                await update(projectAwareRef( `workflows/${key}`), { 
                     studentWork: work, 
                     studentFile: base64Data || null,
                     studentFileName: fileName || null,
@@ -14649,7 +14655,7 @@ window.wfSubmitWork = async () => {
 window.cancelWorkflow = async (key) => {
     if(confirm("⚠ PERMANENTLY CANCEL & DELETE TASK?\n\nAre you sure? This action will completely erase the task from the database. It will instantly disappear from the Student, Project Head, and HOD dashboards.")) {
         try {
-            await remove(ref(db, `workflows/${key}`));
+            await remove(projectAwareRef( `workflows/${key}`));
             alert("✅ Task has been completely deleted from the database.");
         } catch (error) {
             alert("Error deleting task: " + error.message);
@@ -14668,7 +14674,7 @@ window.wfReviewTask = async (isApproved) => {
     btn.disabled = true;
 
     try {
-        const snap = await get(ref(db, `workflows/${key}`));
+        const snap = await get(projectAwareRef( `workflows/${key}`));
         if (!snap.exists()) throw new Error("Task not found.");
         const wf = snap.val();
         
@@ -14700,10 +14706,10 @@ window.wfReviewTask = async (isApproved) => {
         updatePayload.status = nextStatus;
 
         // 1. Update Database
-        await update(ref(db, `workflows/${key}`), updatePayload);
+        await update(projectAwareRef( `workflows/${key}`), updatePayload);
         
         // 2. Fetch User's Email for Notification
-        const uSnap = await get(ref(db, `users/${wf.targetUid}`));
+        const uSnap = await get(projectAwareRef( `users/${wf.targetUid}`));
         const uData = uSnap.exists() ? uSnap.val() : {};
         const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
 
@@ -14725,7 +14731,7 @@ window.wfReviewTask = async (isApproved) => {
     }
 };
   window.openAdminUserEmails = async (uid) => {
-    const snap = await get(ref(db, `users/${uid}`));
+    const snap = await get(projectAwareRef( `users/${uid}`));
     if (!snap.exists()) return alert("User record not found.");
     const u = snap.val();
 
@@ -14749,7 +14755,7 @@ window.adminSaveUserEmails = async () => {
     if (!uid) return;
 
     try {
-        await update(ref(db, `users/${uid}`), {
+        await update(projectAwareRef( `users/${uid}`), {
             personalEmail1: email1 || null,
             personalEmail2: email2 || null,
             canEditPersonalEmails: allowEdit
@@ -14925,7 +14931,7 @@ formData.append("body", mail.body);
   // --- DEDICATED PROFESSIONAL EMAIL DISPATCHER FOR PIP ---
 window.dispatchPipEmail = async (uid, subject, professionalMessage) => {
     try {
-        const uSnap = await get(ref(db, `users/${uid}`));
+        const uSnap = await get(projectAwareRef( `users/${uid}`));
         const uData = uSnap.exists() ? uSnap.val() : {};
         const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
         const studentName = uData.name || "Personnel";
@@ -14967,14 +14973,14 @@ window.pipResendInitialReminder = async (uid, encodedTargetName) => {
     const targetName = decodeURIComponent(encodedTargetName);
     if(!confirm(`Send an email reminder to ${targetName}?`)) return;
 
-    const snap = await get(ref(db, `pip_records/${uid}`));
+    const snap = await get(projectAwareRef( `pip_records/${uid}`));
     const pip = snap.exists() ? snap.val() : null;
     if(!pip) return;
 
     const currentCount = pip.resendCount || 0;
     if (currentCount >= 3) return alert("Resend limit reached."); // Increased to 3
 
-    await update(ref(db, `pip_records/${uid}`), { resendCount: currentCount + 1 });
+    await update(projectAwareRef( `pip_records/${uid}`), { resendCount: currentCount + 1 });
     
     // Updated Email Payload to include the PIP Reason
     const emailMessage = `This is an official reminder that you have an active Performance Improvement Plan.\n\nReason for PIP: ${pip.reason.toUpperCase()}\n\nYour submission deadline is approaching. Failure to submit your deliverable in time will result in immediate administrative action.`;
@@ -14987,9 +14993,6 @@ window.pipResendInitialReminder = async (uid, encodedTargetName) => {
   // =====================================================
 // TWO-PROJECT ACCESS CONTROLLER
 // =====================================================
-
-let activeProject = null;
-let currentProjectPermissions = {};
 
 const PROJECT_DEFINITIONS = {
     CCRAS: {
@@ -15027,7 +15030,7 @@ async function loadMyProjectPermissions() {
     }
 
     const snap = await get(
-        ref(db, `users/${currentUser.uid}/projects`)
+        projectAwareRef( `users/${currentUser.uid}/projects`)
     );
 
     currentProjectPermissions = snap.exists()
@@ -15098,71 +15101,31 @@ window.showProjectPicker = async function () {
 
 
 window.selectProject = async function (projectId) {
-    if (!PROJECT_DEFINITIONS[projectId]) {
-        return alert("Invalid project.");
-    }
-
+    if (!PROJECT_DEFINITIONS[projectId]) return alert("Invalid project.");
     try {
         await loadMyProjectPermissions();
-
-        if (!hasProjectAccess(projectId)) {
-            return alert("You do not have access to this project.");
-        }
+        if (!hasProjectAccess(projectId)) return alert("You do not have access to this project.");
 
         activeProject = projectId;
+        document.getElementById("projectPicker")?.classList.add("hidden");
+        document.getElementById("ccrasScreen")?.classList.add("hidden");
 
-        const picker = document.getElementById("projectPicker");
-        const yellow = document.getElementById("appScreen");
-        const ccras = document.getElementById("ccrasScreen");
-
-        picker?.classList.add("hidden");
-        yellow?.classList.add("hidden");
-        ccras?.classList.add("hidden");
-
-        if (projectId === "YELLOW_LINE_BREACH") {
-            if (!yellow) {
-                throw new Error("Original Yellow Line workspace #appScreen is missing.");
-            }
-
-            // Restore the original hardware/inspection application.
-            yellow.classList.remove("hidden");
-
-            // Reuse the original workspace startup routine so all legacy
-            // inspection, inventory, gallery, task and hardware tabs remain.
-            if (typeof window.switchTab !== "function") {
-                throw new Error("Original switchTab function is missing.");
-            }
-
-            if (typeof startYellowLineWorkspace === "function") {
-                startYellowLineWorkspace();
-            } else {
-                window.switchTab("newData");
-                if (typeof window.loadDraft === "function") window.loadDraft();
-                if (typeof window.loadGallery === "function") window.loadGallery();
-                if (typeof window.loadInventory === "function") window.loadInventory();
-                if (typeof window.loadAssignments === "function") window.loadAssignments();
-                if (typeof window.setupIdleTimer === "function") window.setupIdleTimer();
-            }
-
-        } else if (projectId === "CCRAS") {
-            if (!ccras) {
-                throw new Error("CCRAS workspace #ccrasScreen is missing.");
-            }
-
-            ccras.classList.remove("hidden");
-
-            if (typeof window.startCCRASWorkspace === "function") {
-                await window.startCCRASWorkspace();
-            }
-        }
+        const appScreen = document.getElementById("appScreen");
+        if (!appScreen) throw new Error("The original application workspace #appScreen is missing.");
+        appScreen.classList.remove("hidden");
 
         const userInfo = document.getElementById("userInfo");
-        if (userInfo) {
-            userInfo.textContent =
-                `${currentUser.name || currentUser.email} | ` +
-                `${PROJECT_DEFINITIONS[projectId].label}`;
-        }
+        if (userInfo) userInfo.textContent = `${currentUser.name || currentUser.email} | ${PROJECT_DEFINITIONS[projectId].label}`;
 
+        // Reuse the exact same original tabs and functions for both projects.
+        // projectAwareRef routes CCRAS operational reads/writes into projects/CCRAS.
+        if (typeof window.switchTab !== "function") throw new Error("Original switchTab function is missing.");
+        window.switchTab("newData");
+        if (typeof window.loadDraft === "function") window.loadDraft();
+        if (typeof window.loadGallery === "function") window.loadGallery();
+        if (typeof window.loadInventory === "function") window.loadInventory();
+        if (typeof window.loadAssignments === "function") window.loadAssignments();
+        if (typeof window.setupIdleTimer === "function") window.setupIdleTimer();
     } catch (error) {
         console.error("Project selection error:", error);
         alert("Unable to open project: " + error.message);
@@ -15183,61 +15146,15 @@ function startYellowLineWorkspace() {
 
 
 window.startCCRASWorkspace = async function () {
-    const container = document.getElementById("ccrasWorkspaceContent");
-    if (!container) {
-        console.error("Missing #ccrasWorkspaceContent");
-        return;
-    }
-
-    container.innerHTML = `
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin:20px 0;">
-            <button onclick="window.showCCRASTab('dashboard')">Dashboard</button>
-            <button onclick="window.showCCRASTab('records')">Records</button>
-            <button onclick="window.showCCRASTab('reports')">Reports</button>
-            <button onclick="window.showCCRASTab('settings')">Project Settings</button>
-        </div>
-
-        <div id="ccrasTab-dashboard">
-            <h3>CCRAS Dashboard</h3>
-            <p>Welcome to the CCRAS workspace.</p>
-            <div id="ccrasRecordCount">Loading records...</div>
-        </div>
-
-        <div id="ccrasTab-records" class="hidden">
-            <h3>CCRAS Records</h3>
-            <input id="ccrasRecordTitle" placeholder="Record title"
-                   style="padding:10px;width:min(400px,100%);">
-            <button onclick="window.saveCCRASRecord()">Save Record</button>
-            <div id="ccrasRecordsList" style="margin-top:20px;"></div>
-        </div>
-
-        <div id="ccrasTab-reports" class="hidden">
-            <h3>CCRAS Reports</h3>
-            <p>Reports will be generated from CCRAS records.</p>
-            <div id="ccrasReportsList"></div>
-        </div>
-
-        <div id="ccrasTab-settings" class="hidden">
-            <h3>Project Settings</h3>
-            <p>Active project: CCRAS</p>
-            <p>Database namespace: projects/CCRAS</p>
-        </div>
-    `;
-
-    window.showCCRASTab("dashboard");
-    await window.loadCCRASRecords();
+    // CCRAS intentionally uses the same complete application interface.
+    // Its operational data is isolated by projectAwareRef().
+    if (activeProject !== "CCRAS") throw new Error("CCRAS is not the active project.");
+    const appScreen = document.getElementById("appScreen");
+    if (appScreen) appScreen.classList.remove("hidden");
+    window.switchTab("newData");
 };
 
-window.showCCRASTab = function (tab) {
-    ["dashboard", "records", "reports", "settings"].forEach(name => {
-        document.getElementById(`ccrasTab-${name}`)
-            ?.classList.toggle("hidden", name !== tab);
-    });
-
-    if (tab === "records") window.loadCCRASRecords();
-};
-
-  // =====================================================
+// =====================================================
 // ADMIN: GRANT OR REVOKE PROJECT ACCESS
 // =====================================================
 
@@ -15253,7 +15170,7 @@ window.loadProjectAccessUsers = async function () {
     list.textContent = "Loading users...";
 
     try {
-        const snap = await get(ref(db, "users"));
+        const snap = await get(projectAwareRef( "users"));
 
         list.replaceChildren();
 
@@ -15323,7 +15240,7 @@ window.loadProjectAccessUsers = async function () {
                 saveButton.disabled = true;
 
                 try {
-                    await update(ref(db, `users/${uid}/projects`), {
+                    await update(projectAwareRef( `users/${uid}/projects`), {
                         CCRAS: ccrasCheck.checked,
                         YELLOW_LINE_BREACH: yellowCheck.checked
                     });
