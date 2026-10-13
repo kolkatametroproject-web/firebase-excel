@@ -1232,7 +1232,15 @@ tr:hover { background: #fcfcfd; }
         </select>
     </div>
 
-   <div style="display:flex; gap:10px;">
+    <div id="adminQrRegenerateWrap" class="hidden" style="background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:12px;margin-bottom:14px;">
+        <label style="display:flex;align-items:center;gap:10px;font-weight:800;color:#9a3412;">
+            <input type="checkbox" id="adminRegenerateQr" style="width:18px;height:18px;margin:0;">
+            Admin only: regenerate/replace this item's QR tag (requires printing and verification)
+        </label>
+        <small style="display:block;margin-top:6px;color:#9a3412;">Unchecked by default. Normal edits keep the existing QR code and stock quantities.</small>
+    </div>
+
+    <div style="display:flex; gap:10px;">
     <button id="btnAddStock" onclick="saveAndGenerateTag()" class="success" style="flex:2; font-weight:900;">
         <i class="fas fa-barcode"></i> 1. GENERATE PHYSICAL TAG
     </button>
@@ -8435,22 +8443,50 @@ window.generateAndSaveTag = async () => {
 };
 
 window.editExistingItem = async (key) => {
-    const snap = await get(projectAwareRef( `inventory/${key}`));
-    const d = snap.val();
+    try {
+        const snap = await get(projectAwareRef(`inventory/${key}`));
+        if (!snap.exists()) return alert("Asset record not found.");
+        const d = snap.val() || {};
+        toggleInvMode('add');
 
-    toggleInvMode('add');
-    
-    document.getElementById("editItemKey").value = key;
-    document.getElementById("invBarcode").value = "PENDING RE-VERIFICATION";
-    document.getElementById("invName").value = d.item || "";
-    document.getElementById("invRegPrice").value = d.purchasePrice || 0;
+        document.getElementById("editItemKey").value = key;
+        document.getElementById("invBarcode").value = d.barcode || "QR NOT ASSIGNED";
+        document.getElementById("invName").value = d.item || "";
+        document.getElementById("invRegPrice").value = d.purchasePrice ?? 0;
+        document.getElementById("invIsStationery").checked = !!d.isStationery;
+        document.getElementById("invPackLabel").value = d.packLabel || "";
+        document.getElementById("invOpeningQty").value = String(d.availableQty ?? d.initialQty ?? 1);
 
-    // Reset buttons for edit mode
-    document.getElementById("btnVerifyScan").classList.add("hidden");
-    document.getElementById("btnFinalizeSave").classList.add("hidden");
-    document.getElementById("btnAddStock").innerText = "GENERATE & VERIFY NEW TAG";
-    
-    window.scrollTo(0, 0);
+        // Recover location parts where possible without altering the stored location until saved.
+        const location = String(d.location || "");
+        const bracket = location.match(/^(.*?)\s*\[(.*?)\]$/);
+        if (bracket) {
+            const select = document.getElementById("addLocSelect");
+            const baseLocation = bracket[1].trim();
+            if ([...select.options].some(o => o.value === baseLocation)) select.value = baseLocation;
+            else select.value = "Other";
+            document.getElementById("addLocSpot").value = bracket[2];
+        } else {
+            document.getElementById("addLocSpot").value = location;
+        }
+
+        document.getElementById("invFormTitle").innerHTML = "<i class='fas fa-edit'></i> Edit Registered Asset";
+        document.getElementById("btnVerifyScan").classList.add("hidden");
+        document.getElementById("btnFinalizeSave").classList.add("hidden");
+        document.getElementById("btnAddStock").classList.remove("hidden");
+        document.getElementById("btnAddStock").innerHTML = "<i class='fas fa-save'></i> SAVE CHANGES (KEEP EXISTING QR)";
+        document.getElementById("btnDirectUpdate").classList.add("hidden");
+        document.getElementById("btnCancelEdit").classList.remove("hidden");
+
+        const regenWrap = document.getElementById("adminQrRegenerateWrap");
+        const regenCheck = document.getElementById("adminRegenerateQr");
+        if (regenCheck) regenCheck.checked = false;
+        if (regenWrap) regenWrap.classList.toggle("hidden", !isAdmin);
+        window.scrollTo(0, 0);
+    } catch (e) {
+        console.error(e);
+        alert("Could not load asset for editing: " + (e.message || e));
+    }
 };
 
 // --- TAG PRINT TRIGGER ---
@@ -8523,40 +8559,77 @@ let pendingTagData = null;
 window.saveAndGenerateTag = async () => {
     const key = document.getElementById("editItemKey").value;
     const name = document.getElementById("invName").value.trim();
-    const price = document.getElementById("invRegPrice").value || 0;
+    const price = Number(document.getElementById("invRegPrice").value || 0);
     const isStationery = !!document.getElementById("invIsStationery")?.checked;
     const packLabel = (document.getElementById("invPackLabel")?.value || "").trim();
     const openingQty = Math.floor(Number(document.getElementById("invOpeningQty")?.value || 1));
     const locSelect = document.getElementById("addLocSelect").value;
-    const locSpot = document.getElementById("addLocSpot").value;
+    const locSpot = document.getElementById("addLocSpot").value.trim();
+    const regenerateRequested = !!document.getElementById("adminRegenerateQr")?.checked;
 
-    if(!name) return alert("⚠️ Name is required.");
-    if (isStationery && (!Number.isFinite(openingQty) || openingQty < 1)) return alert("Enter an initial stationery quantity of at least 1.");
+    if (!name) return alert("⚠️ Name is required.");
+
+    // Existing record: preserve the current QR unless an authenticated admin explicitly opts in.
+    if (key && (!isAdmin || !regenerateRequested)) {
+        return window.executeDirectUpdate();
+    }
+    if (key && regenerateRequested && !isAdmin) {
+        return alert("Only an administrator can regenerate an existing asset QR tag.");
+    }
+    if (isStationery && (!Number.isInteger(openingQty) || openingQty < 1) && !key) {
+        return alert("Enter an initial stationery quantity of at least 1.");
+    }
     if (isStationery && !packLabel) return alert("Enter the pack/unit description, e.g. Pack of 10 pens.");
 
-    // Generate one unique QR/tag for this stationery stock item, not for each pack.
+    try {
+        let existing = {};
+        if (key) {
+            const snap = await get(projectAwareRef(`inventory/${key}`));
+            if (!snap.exists()) return alert("Asset record was not found. No changes were saved.");
+            existing = snap.val() || {};
+        }
 
-    const numericId8 = Math.floor(10000000 + Math.random() * 90000000).toString();
+        // New records get a new QR. Existing records only reach this branch if admin explicitly checked regenerate.
+        let numericId8;
+        do {
+            numericId8 = Math.floor(10000000 + Math.random() * 90000000).toString();
+        } while (key && numericId8 === String(existing.barcode || ""));
 
-    pendingTagData = {
-        dbKey: key,
-        barcode: numericId8, 
-        item: name,
-        purchasePrice: parseFloat(price),
-        location: `${locSelect} [${locSpot}]`,
-        status: "In Stock",
-        holder: "Store",
-        usageCount: 0,
-        isStationery: isStationery,
-        packLabel: isStationery ? packLabel : "",
-        initialQty: isStationery ? openingQty : 1,
-        availableQty: isStationery ? openingQty : 1,
-        updatedAt: serverTimestamp(),
-        protectionActivated: true
-    };
+        const finalLocation = `${locSelect} [${locSpot}]`;
+        pendingTagData = {
+            ...existing, // Preserve status, holder, history-related fields and quantities on QR replacement.
+            dbKey: key,
+            barcode: numericId8,
+            item: name,
+            purchasePrice: price,
+            location: finalLocation,
+            updatedAt: serverTimestamp()
+        };
 
-    document.getElementById("invBarcode").value = "GENERATING HD IMAGES...";
-    window.showTagPreview(numericId8);
+        if (!key) {
+            pendingTagData.status = "In Stock";
+            pendingTagData.holder = "Store";
+            pendingTagData.usageCount = 0;
+            pendingTagData.protectionActivated = true;
+            pendingTagData.isStationery = isStationery;
+            pendingTagData.packLabel = isStationery ? packLabel : "";
+            pendingTagData.initialQty = isStationery ? openingQty : 1;
+            pendingTagData.availableQty = isStationery ? openingQty : 1;
+        } else {
+            // Preserve current stationery classification and stock quantities while allowing label edits.
+            pendingTagData.isStationery = isStationery;
+            pendingTagData.packLabel = isStationery ? packLabel : "";
+            if (isStationery && !Number.isFinite(Number(pendingTagData.availableQty))) {
+                pendingTagData.availableQty = Number(pendingTagData.initialQty || 1);
+            }
+        }
+
+        document.getElementById("invBarcode").value = "GENERATING HD IMAGES...";
+        window.showTagPreview(numericId8);
+    } catch (e) {
+        console.error("Asset tag preparation failed:", e);
+        alert("Could not prepare asset tag: " + (e.message || e));
+    }
 };
 
 // --- FIX: TRIGGER SCANNER OPTION AFTER GENERATION ---
@@ -8773,21 +8846,44 @@ const baseOnScanSuccess = window.onScanSuccess;
 // --- 5. DIRECT UPDATE (FOR EDITS) ---
 window.executeDirectUpdate = async () => {
     const key = document.getElementById("editItemKey").value;
+    if (!key) return alert("No registered asset is selected for editing.");
     const name = document.getElementById("invName").value.trim();
-    const price = document.getElementById("invRegPrice").value;
-    const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value + "]";
+    const price = Number(document.getElementById("invRegPrice").value || 0);
+    const location = document.getElementById("addLocSelect").value + " [" + document.getElementById("addLocSpot").value.trim() + "]";
+    const isStationery = !!document.getElementById("invIsStationery")?.checked;
+    const packLabel = (document.getElementById("invPackLabel")?.value || "").trim();
+    if (!name) return alert("Asset name is required.");
+    if (isStationery && !packLabel) return alert("Enter the pack/unit description.");
 
     try {
-        await update(projectAwareRef( `inventory/${key}`), {
+        const snap = await get(projectAwareRef(`inventory/${key}`));
+        if (!snap.exists()) return alert("Asset record not found. No changes were saved.");
+        const existing = snap.val() || {};
+        const changes = {
             item: name,
-            purchasePrice: parseFloat(price),
-            location: location,
-            updatedAt: serverTimestamp()
+            purchasePrice: price,
+            location,
+            updatedAt: serverTimestamp(),
+            isStationery,
+            packLabel: isStationery ? packLabel : ""
+        };
+        // Keep existing barcode, availableQty, checked-out quantities, status and holder untouched.
+        if (isStationery && !Number.isFinite(Number(existing.availableQty))) {
+            changes.availableQty = Number(existing.initialQty || 1);
+        }
+        await update(projectAwareRef(`inventory/${key}`), changes);
+        await push(projectAwareRef("logs"), {
+            type: "ASSET_INFO_UPDATED",
+            item: name,
+            barcode: existing.barcode || "N/A",
+            qrPreserved: true,
+            by: currentUser?.email || "Unknown",
+            time: serverTimestamp()
         });
-        alert("✅ Info Updated.");
+        alert("✅ Asset details updated. Existing QR code and stock quantities were preserved.");
         window.resetInvForm();
         window.toggleInvMode('list');
-    } catch(e) { alert("Error: " + e.message); }
+    } catch(e) { alert("Error updating asset: " + e.message); }
 };
 
 // --- 6. FINAL SAVE ---
@@ -8827,6 +8923,8 @@ window.resetInvForm = () => {
     document.getElementById("btnVerifyScan").classList.add("hidden");
     document.getElementById("btnCancelEdit").classList.add("hidden");
     document.getElementById("registrationStatusMsg").classList.add("hidden");
+    if (document.getElementById("adminRegenerateQr")) document.getElementById("adminRegenerateQr").checked = false;
+    if (document.getElementById("adminQrRegenerateWrap")) document.getElementById("adminQrRegenerateWrap").classList.add("hidden");
 };
   // Dropdown Logic for Comment Tab
 window.handleCommentLineChange = () => {
