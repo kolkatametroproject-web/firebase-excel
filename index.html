@@ -4337,8 +4337,13 @@ window.loadInventory = () => {
     const summaryEl = document.getElementById("stockSummaryText");
     if (!b) return;
 
-    // Attach real-time listener to the inventory node
-    onValue(projectAwareRef( "inventory"), (snap) => {
+    // Keep exactly one real-time listener. Reopening/refreshing the asset view
+    // must not leave stale duplicate listeners attached to previous views.
+    if (typeof window.inventoryUnsubscribe === "function") {
+        window.inventoryUnsubscribe();
+        window.inventoryUnsubscribe = null;
+    }
+    window.inventoryUnsubscribe = onValue(projectAwareRef("inventory"), (snap) => {
         b.innerHTML = "";
         let total = 0;
         let available = 0;
@@ -8872,6 +8877,18 @@ window.executeDirectUpdate = async () => {
             changes.availableQty = Number(existing.initialQty || 1);
         }
         await update(projectAwareRef(`inventory/${key}`), changes);
+
+        // Read the saved record back before reporting success. This catches
+        // path/project mismatches and makes the asset view refresh deterministic.
+        const savedSnap = await get(projectAwareRef(`inventory/${key}`));
+        if (!savedSnap.exists()) {
+            throw new Error("Save completed but the asset could not be read back from the active project inventory.");
+        }
+        const saved = savedSnap.val() || {};
+        if (String(saved.item || "") !== name || Number(saved.purchasePrice || 0) !== price || String(saved.location || "") !== location) {
+            throw new Error("The saved asset data does not match the edited values. Check the active project and Firebase path.");
+        }
+
         await push(projectAwareRef("logs"), {
             type: "ASSET_INFO_UPDATED",
             item: name,
@@ -8880,9 +8897,12 @@ window.executeDirectUpdate = async () => {
             by: currentUser?.email || "Unknown",
             time: serverTimestamp()
         });
-        alert("✅ Asset details updated. Existing QR code and stock quantities were preserved.");
+
+        // Refresh the active project's inventory subscription and reopen stock list.
+        if (typeof window.loadInventory === "function") window.loadInventory();
         window.resetInvForm();
         window.toggleInvMode('list');
+        alert("✅ Asset details updated and verified in the active project. The existing QR code and stock quantities were preserved.");
     } catch(e) { alert("Error updating asset: " + e.message); }
 };
 
@@ -8900,6 +8920,7 @@ window.executeManualSave = async () => {
             await push(projectAwareRef( "inventory"), finalData);
         }
 
+        if (typeof window.loadInventory === "function") window.loadInventory();
         alert("✅ ASSET SAVED SUCCESSFULLY.");
         document.getElementById("tagPrintModal").classList.add("hidden");
         window.resetInvForm();
