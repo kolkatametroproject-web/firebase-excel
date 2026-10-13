@@ -1788,6 +1788,40 @@ tr:hover { background: #fcfcfd; }
     </div>
 </div>
 <div id="tab-funds" class="hidden">
+    <div class="panel" style="border-top:4px solid #15803d; margin-bottom:18px;">
+      <h3 style="margin-top:0;color:#166534;"><i class="fas fa-qrcode"></i> Project Payment</h3>
+      <p style="color:#475569;">Scan the permanent QR uploaded by an administrator and pay using your UPI app. Then submit the amount and the <b>last 4 digits of the UPI transaction/reference ID</b>. The payment stays pending until an administrator verifies it. Submission alone never credits the fund.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;align-items:start;">
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;text-align:center;min-height:180px;">
+          <div style="font-weight:800;color:#166534;margin-bottom:8px;">PERMANENT PAYMENT QR</div>
+          <img id="mrpspPermanentQrPreview" alt="Permanent payment QR" style="display:none;max-width:100%;width:240px;max-height:240px;object-fit:contain;background:white;padding:6px;border-radius:6px;">
+          <div id="mrpspPermanentQrEmpty" style="padding:35px 8px;color:#64748b;">Payment QR has not been uploaded by an administrator yet.</div>
+          <div id="mrpspQrCaption" style="font-size:12px;color:#475569;margin-top:6px;"></div>
+        </div>
+        <div>
+          <div style="display:grid;grid-template-columns:1fr;gap:10px;">
+            <div><label for="mrpspPayAmount">Amount paid (₹)</label><input id="mrpspPayAmount" type="number" min="1" step="0.01" placeholder="Enter amount"></div>
+            <div><label for="mrpspPayName">Payer name</label><input id="mrpspPayName" maxlength="100" placeholder="Your name"></div>
+            <div><label for="mrpspPayPurpose">Purpose / Invoice / Case ID</label><input id="mrpspPayPurpose" maxlength="120" placeholder="Payment purpose"></div>
+            <div><label for="mrpspPayLast4">Last 4 digits of UPI transaction/reference ID</label><input id="mrpspPayLast4" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="1234"></div>
+          </div>
+          <button type="button" class="success" style="margin-top:12px;" onclick="window.mrpspSubmitPaymentForVerification()"><i class="fas fa-paper-plane"></i> Submit Payment for Admin Verification</button>
+          <div id="mrpspPaymentPendingMessage" style="margin-top:10px;"></div>
+        </div>
+      </div>
+      <div id="mrpspAdminQrUploadPanel" class="hidden" style="margin-top:16px;padding:14px;border:1px dashed #64748b;border-radius:8px;background:#f8fafc;">
+        <h4 style="margin:0 0 8px;color:#1e3a8a;">Administrator: Permanent Payment QR</h4>
+        <label for="mrpspPermanentQrFile">Upload QR image (PNG/JPG/WebP)</label><input id="mrpspPermanentQrFile" type="file" accept="image/png,image/jpeg,image/webp">
+        <label for="mrpspQrLabel">QR label / receiving account note (optional)</label><input id="mrpspQrLabel" maxlength="120" placeholder="e.g. Project fund UPI QR">
+        <button type="button" class="success" onclick="window.mrpspSavePermanentPaymentQr()">SAVE PERMANENT QR</button>
+        <small style="display:block;color:#64748b;margin-top:6px;">The QR is stored in Firebase settings and shown to all signed-in project members. Use a small image (preferably under 300 KB).</small>
+      </div>
+    </div>
+    <div id="mrpspAdminPaymentReviewPanel" class="panel hidden" style="border-top:4px solid #b45309;margin-bottom:18px;">
+      <h3 style="margin-top:0;color:#92400e;"><i class="fas fa-clipboard-check"></i> Admin Payment Verification</h3>
+      <p style="color:#64748b;">Verify the actual transaction in the receiving account before approving. Approval creates one approved CREDIT entry in Project Funds. Never approve based only on the last four digits.</p>
+      <div id="mrpspAdminPaymentReviewList">Loading pending payments…</div>
+    </div>
     <div class="finance-dashboard">
         <div class="fin-card income">
             <h4>Total Grant</h4>
@@ -3439,6 +3473,138 @@ tr:hover { background: #fcfcfd; }
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getDatabase, ref, get, query, orderByChild, equalTo, update, push, remove, set, serverTimestamp, onValue, off, limitToLast, onDisconnect } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+// Permanent QR payment workflow: members submit only a pending request; admins verify and credit funds.
+const MRPSP_PAYMENT_QR_PATH = "system_settings/permanentPaymentQr";
+let mrpspPaymentRequestsListener = null;
+let mrpspPaymentQrListener = null;
+window.mrpspSubmitPaymentForVerification = async function () {
+  const amount = Number(document.getElementById("mrpspPayAmount")?.value);
+  const payerName = (document.getElementById("mrpspPayName")?.value || "").trim();
+  const purpose = (document.getElementById("mrpspPayPurpose")?.value || "").trim();
+  const last4 = (document.getElementById("mrpspPayLast4")?.value || "").trim();
+  if (!auth.currentUser) return alert("Please sign in before submitting a payment.");
+  if (!Number.isFinite(amount) || amount <= 0) return alert("Enter a valid amount greater than zero.");
+  if (!payerName || !purpose) return alert("Enter payer name and payment purpose.");
+  if (!/^\d{4}$/.test(last4)) return alert("Enter exactly the last 4 digits of the UPI transaction/reference ID.");
+  const qrSnap = await get(ref(db, MRPSP_PAYMENT_QR_PATH));
+  if (!qrSnap.exists() || !qrSnap.val()?.dataUrl) return alert("The administrator has not uploaded the permanent payment QR yet.");
+  const request = {
+    type: "PROJECT_PAYMENT_VERIFICATION", status: "PAYMENT PENDING", verified: false,
+    amount, currency: "INR", payerName, purpose, transactionLast4: last4,
+    createdAt: Date.now(), createdBy: auth.currentUser.uid,
+    createdByEmail: auth.currentUser.email || "", project: activeProject || "YELLOW_LINE",
+    note: "Pending until administrator verifies the actual transaction in the receiving account."
+  };
+  try {
+    const reqRef = await push(ref(db, "eoffice_requests"), request);
+    const msg = document.getElementById("mrpspPaymentPendingMessage");
+    if (msg) msg.innerHTML = `<div style="padding:10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;color:#92400e;"><b>Payment submitted — PENDING VERIFICATION.</b><br>Request ID: <code>${reqRef.key}</code><br>Fund credit will happen only after an administrator verifies the payment.</div>`;
+    document.getElementById("mrpspPayAmount").value = "";
+    document.getElementById("mrpspPayPurpose").value = "";
+    document.getElementById("mrpspPayLast4").value = "";
+  } catch (err) {
+    console.error("Could not submit payment for verification", err);
+    alert("Could not submit payment: " + (err?.message || err));
+  }
+};
+
+window.mrpspSavePermanentPaymentQr = async function () {
+  if (!isAdmin) return alert("Administrator access required.");
+  const file = document.getElementById("mrpspPermanentQrFile")?.files?.[0];
+  const label = (document.getElementById("mrpspQrLabel")?.value || "").trim();
+  if (!file) return alert("Choose a QR image first.");
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return alert("Use a PNG, JPG, or WebP image.");
+  if (file.size > 300 * 1024) return alert("Please upload an image under 300 KB to avoid oversized Realtime Database records.");
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file);
+    });
+    await set(ref(db, MRPSP_PAYMENT_QR_PATH), { dataUrl, label, updatedAt: Date.now(), updatedBy: auth.currentUser?.email || "" });
+    alert("Permanent payment QR saved and shared with signed-in members.");
+    document.getElementById("mrpspPermanentQrFile").value = "";
+  } catch (err) {
+    console.error("Could not save permanent payment QR", err);
+    alert("Could not save QR. Check Firebase rules for system_settings and image size: " + (err?.message || err));
+  }
+};
+
+window.mrpspRenderPermanentPaymentQr = function (value) {
+  const img = document.getElementById("mrpspPermanentQrPreview");
+  const empty = document.getElementById("mrpspPermanentQrEmpty");
+  const caption = document.getElementById("mrpspQrCaption");
+  if (!img || !empty) return;
+  if (value?.dataUrl) { img.src = value.dataUrl; img.style.display = "inline-block"; empty.style.display = "none"; if (caption) caption.textContent = value.label || "Scan to pay"; }
+  else { img.removeAttribute("src"); img.style.display = "none"; empty.style.display = "block"; if (caption) caption.textContent = ""; }
+};
+
+window.mrpspVerifyAndCreditPayment = async function (requestKey) {
+  if (!isAdmin || !auth.currentUser) return alert("Only an administrator can verify and credit a payment.");
+  try {
+    const reqRef = ref(db, `eoffice_requests/${requestKey}`);
+    const snap = await get(reqRef);
+    if (!snap.exists()) return alert("Payment request not found.");
+    const payment = snap.val();
+    if (payment.type !== "PROJECT_PAYMENT_VERIFICATION") return alert("This is not a project payment request.");
+    if (payment.status === "VERIFIED" || payment.verified === true || payment.creditEntryKey) return alert("This payment has already been verified/credited.");
+    if (payment.status !== "PAYMENT PENDING") return alert("Only pending payments can be verified.");
+    const note = prompt(`Verify the actual transaction in the receiving account before continuing.
+Payer: ${payment.payerName}
+Amount: ₹${payment.amount}
+Last 4 digits: ${payment.transactionLast4}
+Purpose: ${payment.purpose}
+
+Optional verification note (or Cancel):`, "Verified against bank/UPI statement");
+    if (note === null) return;
+    if (!note.trim()) return alert("Enter a verification note after checking the actual transaction.");
+    const financeRef = await push(projectAwareRef("finance"), {
+      type: "CREDIT", amount: Number(payment.amount), desc: `UPI payment — ${payment.payerName} — ${payment.purpose}`,
+      mode: "UPI", status: "Approved", by: auth.currentUser.email || "Admin", timestamp: Date.now(),
+      source: "VERIFIED_MEMBER_PAYMENT", paymentRequestKey: requestKey, transactionLast4: payment.transactionLast4,
+      verifiedBy: auth.currentUser.email || "", verifiedAt: Date.now(), verificationNote: note.trim()
+    });
+    try {
+      await update(reqRef, { status: "VERIFIED", verified: true, verifiedBy: auth.currentUser.email || "", verifiedAt: Date.now(), verificationNote: note.trim(), creditEntryKey: financeRef.key });
+    } catch (updateErr) {
+      // Roll back the just-created credit if the request cannot be marked verified, preventing duplicate credit on retry.
+      try { await remove(financeRef); } catch (rollbackErr) { console.error("CRITICAL: credit rollback failed", rollbackErr); }
+      throw updateErr;
+    }
+    alert("Payment verified and credited to Project Funds.");
+    window.mrpspLoadPaymentReviewQueue();
+  } catch (err) {
+    console.error("Payment verification failed", err);
+    alert("Could not verify/credit payment: " + (err?.message || err));
+  }
+};
+
+window.mrpspLoadPaymentReviewQueue = async function () {
+  const panel = document.getElementById("mrpspAdminPaymentReviewPanel");
+  const list = document.getElementById("mrpspAdminPaymentReviewList");
+  if (!panel || !list) return;
+  panel.classList.toggle("hidden", !isAdmin);
+  const qrPanel = document.getElementById("mrpspAdminQrUploadPanel");
+  if (qrPanel) qrPanel.classList.toggle("hidden", !isAdmin);
+  if (!isAdmin) return;
+  try {
+    const snap = await get(ref(db, "eoffice_requests"));
+    const items = [];
+    if (snap.exists()) snap.forEach(child => { const v = child.val(); if (v?.type === "PROJECT_PAYMENT_VERIFICATION" && v.status === "PAYMENT PENDING") items.push({ key: child.key, ...v }); });
+    items.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
+    if (!items.length) { list.innerHTML = '<p style="color:#64748b;">No pending project payments.</p>'; return; }
+    list.innerHTML = items.map(p => `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0;background:white;"><b>${String(p.payerName || "Member").replace(/[<>]/g, "")}</b> — <b>₹${Number(p.amount || 0).toFixed(2)}</b><br><small>Purpose: ${String(p.purpose || "-").replace(/[<>]/g, "")} | Last 4: <b>${String(p.transactionLast4 || "----").replace(/[^0-9]/g, "")}</b> | Project: ${String(p.project || "-").replace(/[<>]/g, "")}</small><br><small>Submitted: ${p.createdAt ? new Date(p.createdAt).toLocaleString() : "-"} | Request: ${p.key}</small><div style="margin-top:8px;"><button class="success" onclick="window.mrpspVerifyAndCreditPayment('${p.key}')">VERIFY & CREDIT FUND</button></div></div>`).join("");
+  } catch (err) { list.innerHTML = `<p style="color:#b91c1c;">Could not load payment requests: ${String(err?.message || err).replace(/[<>]/g, "")}</p>`; console.error(err); }
+};
+
+window.mrpspInitPaymentFeatures = function () {
+  const qrPanel = document.getElementById("mrpspAdminQrUploadPanel");
+  const reviewPanel = document.getElementById("mrpspAdminPaymentReviewPanel");
+  if (qrPanel) qrPanel.classList.toggle("hidden", !isAdmin);
+  if (reviewPanel) reviewPanel.classList.toggle("hidden", !isAdmin);
+  if (mrpspPaymentQrListener) { try { off(ref(db, MRPSP_PAYMENT_QR_PATH)); } catch (_) {} }
+  mrpspPaymentQrListener = onValue(ref(db, MRPSP_PAYMENT_QR_PATH), snap => window.mrpspRenderPermanentPaymentQr(snap.exists() ? snap.val() : null), err => console.error("Payment QR read failed", err));
+  window.mrpspLoadPaymentReviewQueue();
+};
+
 // --- NEW: FINANCE LOGIC ---
 window.toggleFundMode = () => {
     const mode = document.getElementById("fundMode").value;
@@ -3703,6 +3869,7 @@ window.clearPurForm = () => {
     document.getElementById("btnPurSubmit").innerText = "SAVE & DEDUCT FUND";
 };
 window.loadFinanceData = () => {
+    if (window.mrpspInitPaymentFeatures) window.mrpspInitPaymentFeatures();
     // 1. Show Admin Panel
     if(isAdmin) {
         const panel = document.getElementById("adminFundPanel");
@@ -4922,6 +5089,7 @@ onAuthStateChanged(auth, (user) => {
 
         // Set Admin Privileges
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
+        if (window.mrpspInitPaymentFeatures) window.mrpspInitPaymentFeatures();
         if (isAdmin) {
             document.getElementById("adminBadge")?.classList.remove("hidden");
             document.getElementById("btnAdmin")?.classList.remove("hidden");
