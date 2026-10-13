@@ -3019,9 +3019,14 @@ tr:hover { background: #fcfcfd; }
             <h3 style="margin:0; color:var(--metro-red); border:none; padding:0;">
                 <i class="fas fa-triangle-exclamation"></i> Performance Improvement Plan (PIP) Oversight
             </h3>
-            <button onclick="pipOpenIssueModal()" class="danger">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+              <button onclick="pipOpenStandaloneAssessmentModal()" class="info" style="font-weight:900;background:#0369a1;">
+                <i class="fas fa-calendar-check"></i> ASSESSMENT / LETTER (WITH OR WITHOUT PIP)
+              </button>
+              <button onclick="pipOpenIssueModal()" class="danger">
                 <i class="fas fa-user-slash"></i> ISSUE NEW PIP
-            </button>
+              </button>
+            </div>
         </div>
 
         <h4><i class="fas fa-list-check"></i> Active & Past PIP Records</h4>
@@ -3336,6 +3341,28 @@ tr:hover { background: #fcfcfd; }
         </div>
     </div>
 </div>
+<!-- MODAL: ASSESSMENT DATE AND OFFICIAL LETTER (INDEPENDENT OF PIP STATUS) -->
+<div id="pipStandaloneAssessmentModal" class="modal-overlay hidden" style="z-index:10020;">
+  <div class="panel" style="width:620px;max-width:96%;border-top:6px solid #0369a1;max-height:90vh;overflow:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <h3 style="margin:0;color:#0369a1;border:none;padding:0;">Assign Assessment & Letter</h3>
+      <button onclick="document.getElementById('pipStandaloneAssessmentModal').classList.add('hidden')" class="secondary">&times;</button>
+    </div>
+    <p style="font-size:12px;color:#64748b;">Available whether a PIP has been issued or not. This does not issue a PIP.</p>
+    <label>PERSONNEL</label><select id="pipStandaloneUser" style="width:100%;margin-bottom:12px;"><option value="">Loading personnel...</option></select>
+    <label>ASSESSMENT STATUS</label><select id="pipStandaloneAssessmentStatus" style="width:100%;margin-bottom:12px;"><option value="SCHEDULED">Assessment scheduled</option><option value="NOT_SCHEDULED">Not scheduled yet</option><option value="COMPLETED">Assessment completed</option></select>
+    <label>ASSESSMENT DATE & TIME</label><input type="datetime-local" id="pipStandaloneAssessmentDate" style="width:100%;margin-bottom:12px;">
+    <label>ASSESSMENT VENUE</label><input id="pipStandaloneAssessmentVenue" placeholder="Enter venue / location" style="width:100%;margin-bottom:12px;">
+    <label>LETTER ACTION</label><select id="pipStandaloneLetterType" style="width:100%;margin-bottom:12px;"><option value="NONE">Do not assign a letter</option><option value="ASSESSMENT_CALL">Assessment Call Letter</option><option value="ASSESSMENT_SCHEDULE">Assessment Schedule Letter</option><option value="ASSESSMENT_COMPLETION">Assessment Completion Letter</option></select>
+    <label>LETTER ISSUE DATE</label><input type="date" id="pipStandaloneLetterDate" style="width:100%;margin-bottom:12px;">
+    <label>ADDITIONAL INSTRUCTIONS (OPTIONAL)</label><textarea id="pipStandaloneLetterNotes" rows="3" placeholder="Reporting time, documents to bring, instructions..." style="width:100%;margin-bottom:15px;"></textarea>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button onclick="pipSaveStandaloneAssessment(false)" class="success" style="flex:1;font-weight:900;">SAVE ASSIGNMENT</button>
+      <button onclick="pipSaveStandaloneAssessment(true)" class="info" style="flex:1;font-weight:900;background:#0369a1;">SAVE & GENERATE LETTER</button>
+    </div>
+  </div>
+</div>
+
   <!-- MODAL: LIVE OFFLINE ASSESSMENT (ADMIN) -->
 <div id="pipLiveAssessmentModal" class="modal-overlay hidden">
     <div class="panel" style="width:450px; max-width:95%; border-top:6px solid #f59e0b;">
@@ -13231,7 +13258,60 @@ window.pipOpenPromoteModal = async (uid, encodedTargetName) => {
         }
     };
 };
-  // --- UPDATED ADMIN RECORDS (MARKS CLOSED CASES AS DONE) ---
+  // --- INDEPENDENT ASSESSMENT SCHEDULING AND LETTER ASSIGNMENT ---
+window.pipOpenStandaloneAssessmentModal = async () => {
+  const sel = document.getElementById('pipStandaloneUser');
+  sel.innerHTML = '<option value="">Loading personnel...</option>';
+  document.getElementById('pipStandaloneLetterDate').value = new Date().toISOString().slice(0,10);
+  try {
+    const snap = await get(projectAwareRef('users'));
+    sel.innerHTML = '<option value="">-- Select Personnel --</option>';
+    if (snap.exists()) snap.forEach(c => {
+      const u = c.val() || {};
+      if (!ADMIN_EMAILS.includes((u.email || '').toLowerCase())) {
+        const opt = document.createElement('option'); opt.value = c.key;
+        opt.textContent = `${u.name || u.email || c.key} (${u.email || 'no email'})`;
+        opt.dataset.name = u.name || u.email || c.key; opt.dataset.email = u.email || ''; sel.appendChild(opt);
+      }
+    });
+    document.getElementById('pipStandaloneAssessmentModal').classList.remove('hidden');
+  } catch(e) { alert('Could not load personnel: ' + e.message); }
+};
+window.pipSaveStandaloneAssessment = async (generateLetter) => {
+  const sel = document.getElementById('pipStandaloneUser');
+  const uid = sel.value; const opt = sel.options[sel.selectedIndex];
+  if (!uid || !opt) return alert('Please select personnel.');
+  const status = document.getElementById('pipStandaloneAssessmentStatus').value;
+  const dateTime = document.getElementById('pipStandaloneAssessmentDate').value;
+  const venue = document.getElementById('pipStandaloneAssessmentVenue').value.trim();
+  const letterType = document.getElementById('pipStandaloneLetterType').value;
+  const letterDate = document.getElementById('pipStandaloneLetterDate').value;
+  const notes = document.getElementById('pipStandaloneLetterNotes').value.trim();
+  if (status !== 'NOT_SCHEDULED' && !dateTime) return alert('Enter the assessment date and time.');
+  if (dateTime && !venue && status !== 'NOT_SCHEDULED') return alert('Enter the assessment venue.');
+  if (letterType !== 'NONE' && !letterDate) return alert('Select the letter issue date.');
+  const name = opt.dataset.name || opt.textContent;
+  const record = { targetUid: uid, targetName: name, assessmentStatus: status, assessmentDateTime: dateTime || null, venue: venue || '', letterType, letterIssueDate: letterType === 'NONE' ? null : letterDate, letterNotes: notes, updatedAt: serverTimestamp(), updatedBy: currentUser?.name || currentUser?.email || 'Admin' };
+  try {
+    await set(projectAwareRef(`pip_assessments/${uid}`), record);
+    // If a PIP record exists, mirror assessment details there without issuing a new PIP or changing its status.
+    const pipSnap = await get(projectAwareRef(`pip_records/${uid}`));
+    if (pipSnap.exists() && dateTime) await update(projectAwareRef(`pip_records/${uid}`), { assessment: { ...(pipSnap.val().assessment || {}), dateTime, location: venue, standaloneAssigned: true, letterType, letterIssueDate: letterDate || null } });
+    if (generateLetter && letterType !== 'NONE') {
+      const letterTitles = { ASSESSMENT_CALL:'ASSESSMENT CALL LETTER', ASSESSMENT_SCHEDULE:'ASSESSMENT SCHEDULE LETTER', ASSESSMENT_COMPLETION:'ASSESSMENT COMPLETION LETTER' };
+      const fmtDate = v => v ? new Date(v).toLocaleString('en-IN') : 'Not scheduled';
+      const w = window.open('', '_blank');
+      if (!w) return alert('Assignment saved, but the letter window was blocked. Allow pop-ups and generate the letter again.');
+      w.document.write(`<!doctype html><html><head><title>${letterTitles[letterType]}</title><style>body{font-family:Arial,sans-serif;margin:50px;color:#111}h1{text-align:center;font-size:22px;border-bottom:2px solid;padding-bottom:15px}p{line-height:1.7}.meta{margin-top:35px}button{padding:10px 18px}@media print{button{display:none}}</style></head><body><h1>METRO RAILWAY PLATFORM SAFETY PROJECT<br>${letterTitles[letterType]}</h1><p><b>Letter Issue Date:</b> ${fmtDate(letterDate)}</p><p>To,<br><b>${name}</b></p><p>This letter is issued regarding your assessment. Please refer to the details below.</p><div class="meta"><p><b>Assessment status:</b> ${status.replaceAll('_',' ')}</p><p><b>Assessment date & time:</b> ${fmtDate(dateTime)}</p><p><b>Venue:</b> ${venue || 'To be announced'}</p><p><b>Instructions:</b> ${notes || 'Please report on time and bring your valid identification and relevant documents.'}</p></div><p style="margin-top:60px">Authorized Signatory<br>MRPSP Administration</p><button onclick="window.print()">Print / Save as PDF</button></body></html>`);
+      w.document.close();
+    }
+    alert('Assessment / letter assignment saved. No PIP was issued or changed.');
+    if (typeof window.pipLoadAdminRecords === 'function') window.pipLoadAdminRecords();
+    if (!generateLetter || letterType === 'NONE') document.getElementById('pipStandaloneAssessmentModal').classList.add('hidden');
+  } catch(e) { alert('Could not save assignment: ' + e.message); }
+};
+
+// --- UPDATED ADMIN RECORDS (MARKS CLOSED CASES AS DONE) ---
 window.pipLoadAdminRecords = () => {
     const tbody = document.getElementById("pipAdminTableBody");
     tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>Syncing records...</td></tr>";
