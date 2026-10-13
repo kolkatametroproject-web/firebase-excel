@@ -13313,6 +13313,18 @@ window.pipSaveStandaloneAssessment = async (generateLetter) => {
 
 // Open the assessment/letter form directly from a PIP row marked "Not Scheduled".
 window.pipScheduleAssessmentLetterFor = async (uid) => {
+    // Re-check authorization at click time; never allow scheduling for unverified attachments,
+    // closed cases, or exams that have already started.
+    try {
+      const checkSnap = await get(projectAwareRef(`pip_records/${uid}`));
+      if (!checkSnap.exists()) return alert('PIP record not found.');
+      const check = checkSnap.val() || {};
+      const closed = ["PIP_PASSED", "PROMOTED", "DEMOTED", "TERMINATED", "CASE CLOSED", "CLOSED", "RESOLVED"].includes(String(check.status || "").trim().toUpperCase()) || check.caseClosed === true || check.closed === true || !!check.closedAt;
+      const started = ["ASSESSMENT_IN_PROGRESS", "EXAM_STARTED", "ASSESSMENT_STARTED", "IN_PROGRESS"].includes(String(check.status || "").toUpperCase()) || !!check.assessmentStartedAt || check.examStarted === true;
+      if (closed) return alert('This case is closed. Assessment scheduling and letter issue are disabled.');
+      if (check.reportStatus !== 'APPROVED') return alert('You can schedule and issue the assessment letter only after the attachment/report is verified.');
+      if (started) return alert('The exam has already started. Assessment scheduling and letter issue are disabled.');
+    } catch (e) { return alert('Could not verify case status: ' + e.message); }
     await window.pipOpenStandaloneAssessmentModal();
     const userSelect = document.getElementById('pipStandaloneUser');
     if (userSelect) userSelect.value = uid;
@@ -13346,7 +13358,7 @@ window.pipLoadAdminRecords = () => {
             const isExpired = Date.now() > (deadlineMs + GRACE_PERIOD_MS);
             
             // Determine if the PIP is completely finished
-            const isClosed = ["PIP_PASSED", "PROMOTED", "DEMOTED", "TERMINATED"].includes(pip.status);
+            const isClosed = ["PIP_PASSED", "PROMOTED", "DEMOTED", "TERMINATED", "CASE CLOSED", "CLOSED", "RESOLVED"].includes(String(pip.status || "").trim().toUpperCase()) || pip.caseClosed === true || pip.closed === true || !!pip.closedAt;
 
             // Only apply Auto-Lockers and Wipers to active cases
             if (!isClosed) {
@@ -13458,15 +13470,26 @@ window.pipLoadAdminRecords = () => {
                 }
             }
 
-            let assessmentText = `<div style="color:#94a3b8; font-size:11px; margin-bottom:6px;">Not Scheduled</div>
-                <button onclick="pipScheduleAssessmentLetterFor('${uid}')" class="info" style="font-size:10px; padding:6px 8px; font-weight:900; background:#0369a1; white-space:nowrap;">
-                    <i class="fas fa-calendar-plus"></i> SCHEDULE & ISSUE LETTER
-                </button>`;
+            // Assessment schedule letters are available only after the submitted attachment/report is approved,
+            // only while the PIP case is active, and never once the exam has started.
+            const examStarted = ["ASSESSMENT_IN_PROGRESS", "EXAM_STARTED", "ASSESSMENT_STARTED", "IN_PROGRESS"].includes(String(pip.status || "").toUpperCase()) || !!pip.assessmentStartedAt || pip.examStarted === true;
+            const attachmentVerified = pip.reportStatus === "APPROVED";
+            let assessmentText = `<div style="color:#64748b; font-size:11px; margin-bottom:6px;">Not Scheduled</div>`;
+            if (isClosed) {
+                assessmentText += `<small style="color:#b91c1c;font-weight:bold;">Case closed — scheduling disabled</small>`;
+            } else if (!attachmentVerified) {
+                assessmentText += `<small style="color:#b45309;font-weight:bold;">Schedule letter available after attachment is verified</small>`;
+            } else if (examStarted) {
+                assessmentText += `<small style="color:#b91c1c;font-weight:bold;">Exam started — scheduling disabled</small>`;
+            } else {
+                assessmentText += `<button onclick="pipScheduleAssessmentLetterFor('${uid}')" class="info" style="font-size:10px; padding:6px 8px; font-weight:900; background:#0369a1; white-space:nowrap;"><i class="fas fa-calendar-plus"></i> SCHEDULE & ISSUE LETTER</button>`;
+            }
             if (pip.assessment) {
-                assessmentText = `<div style="font-size:11px; font-weight:bold; color:#065f46; margin-bottom:6px;">📅 ${new Date(pip.assessment.dateTime).toLocaleString('en-IN')}</div>
-                    <button onclick="pipScheduleAssessmentLetterFor('${uid}')" class="info" style="font-size:10px; padding:6px 8px; font-weight:900; background:#0369a1; white-space:nowrap;">
-                        <i class="fas fa-file-alt"></i> EDIT / ISSUE LETTER
-                    </button>`;
+                assessmentText = `<div style="font-size:11px; font-weight:bold; color:#065f46; margin-bottom:6px;">📅 ${pip.assessment.dateTime ? new Date(pip.assessment.dateTime).toLocaleString('en-IN') : 'Date pending'}</div>`;
+                if (isClosed) assessmentText += `<small style="color:#b91c1c;font-weight:bold;">Case closed — editing disabled</small>`;
+                else if (!attachmentVerified) assessmentText += `<small style="color:#b45309;font-weight:bold;">Attachment verification required</small>`;
+                else if (examStarted) assessmentText += `<small style="color:#b91c1c;font-weight:bold;">Exam started — editing disabled</small>`;
+                else assessmentText += `<button onclick="pipScheduleAssessmentLetterFor('${uid}')" class="info" style="font-size:10px; padding:6px 8px; font-weight:900; background:#0369a1; white-space:nowrap;"><i class="fas fa-file-alt"></i> EDIT / ISSUE LETTER</button>`;
             }
 
             tbody.innerHTML += `
