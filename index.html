@@ -1002,9 +1002,9 @@ tr:hover { background: #fcfcfd; }
     <button class="secondary" onclick="window.dismissMobileScanInbox()" style="padding:5px 9px;">HIDE</button>
   </div>
   <p id="mobileScanInboxText" style="font-size:13px;margin:10px 0;">A device is requesting a barcode scan.</p>
-  <button class="success" id="mobileScanStartBtn" onclick="window.startMobileRequestedScan()" style="width:100%;">START CONTINUOUS SCAN</button>
-  <button class="danger" id="mobileScanStopBtn" onclick="window.finishMobileRequestedScan()" disabled style="width:100%;margin-top:8px;">END SCAN & SEND FINAL BATCH</button>
-  <button class="secondary" onclick="window.rejectMobileScanRequest()" style="width:100%;margin-top:8px;">DECLINE REQUEST</button>
+  <button class="success" id="mobileScanStartBtn" onclick="window.startMobileRequestedScan()" style="width:100%;">OPEN CAMERA & SCAN</button>
+  <button class="danger" id="mobileScanStopBtn" onclick="window.stopMobileRequestedScan()" style="width:100%;margin-top:8px;display:none;">END SCAN & SEND FINAL BATCH</button>
+  <button class="danger" onclick="window.rejectMobileScanRequest()" style="width:100%;margin-top:8px;">DECLINE REQUEST</button>
   <div id="mobileScanResultStatus" style="font-size:12px;margin-top:8px;color:#cbd5e1;"></div>
 </div>
 
@@ -10793,7 +10793,7 @@ window.onScanSuccess = async function(decodedText) {
                 if (item.isStationery) {
                     const available = Number(item.availableQty ?? item.initialQty ?? 0);
                     if (item.status === "Sold Out" || available <= 0) return alert(`⛔ ${item.item} is out of stock.`);
-                    const rawQty = prompt(`STATIONERY CHECKOUT\nItem: ${item.item}\nPack/unit: ${item.packLabel || 'units'}\nAvailable: ${available}\n\nHow many packs/units are being taken?`, "1");
+                    const rawQty = window.mrpspProcessingRemoteScan ? "1" : prompt(`STATIONERY CHECKOUT\nItem: ${item.item}\nPack/unit: ${item.packLabel || 'units'}\nAvailable: ${available}\n\nHow many packs/units are being taken?`, "1");
                     if (rawQty === null) return;
                     const requestedQty = Number(rawQty);
                     if (!Number.isInteger(requestedQty) || requestedQty < 1) return alert("Enter a whole number greater than zero.");
@@ -10809,7 +10809,7 @@ window.onScanSuccess = async function(decodedText) {
                 const inferredOutstanding = Math.max(0, Number(item.initialQty || 0) - available);
                 const outstanding = Number(item.checkedOutQty ?? inferredOutstanding);
                 if (outstanding <= 0) return alert(`⚠️ No outstanding ${item.packLabel || 'units'} of ${item.item} are checked out to return.`);
-                const rawQty = prompt(`STATIONERY RETURN
+                const rawQty = window.mrpspProcessingRemoteScan ? "1" : prompt(`STATIONERY RETURN
 Item: ${item.item}
 Pack/unit: ${item.packLabel || 'units'}
 Currently checked out: ${outstanding}
@@ -16617,8 +16617,9 @@ window.loadCCRASRecords = async function () {
 
 
 // ==========================================
-// CROSS-DEVICE CONTINUOUS MOBILE SCANNER
-// One Firebase request per scanning session; each QR is appended to results.
+// CROSS-DEVICE MOBILE SCANNER — CONTINUOUS BATCH MODE
+// One Firebase request is reused for up to six scans. Each scanned barcode is
+// stored under scans/<sequence>; the PC drains every unprocessed sequence in order.
 // ==========================================
 const MRPSP_REMOTE_SCAN_PATH = "mobile_scan_requests";
 const MRPSP_DEVICE_KEY = "mrpsp_remote_scan_device_id_v1";
@@ -16632,89 +16633,87 @@ try {
 } catch (_) { mrpspDeviceId = "dev-" + Date.now() + "-" + Math.random().toString(36).slice(2); }
 let mrpspRemoteRequestKey = null;
 let mrpspRemoteRequestListener = null;
-let mrpspRemoteProcessedKeys = new Set();
-let mrpspRemoteProcessing = Promise.resolve();
 let mrpspPhonePendingRequest = null;
 let mrpspPhoneScanner = null;
 let mrpspPhoneScanning = false;
 let mrpspPhoneInboxRef = null;
 let mrpspPhoneInboxListener = null;
-let mrpspPhoneSeenCodes = new Set();
-let mrpspPhoneSendBusy = false;
-let mrpspPhoneScanCount = 0;
-const MRPSP_REMOTE_MAX_CODES = 6;
-
-function mrpspQueueRemoteResults(data, mode, statusEl, requestUid, requestKey) {
-  const resultEntries = Object.entries(data?.results || {}).sort((a,b) => Number(a[1]?.sequence || 0) - Number(b[1]?.sequence || 0));
-  // Support an older one-code request as well.
-  if (!resultEntries.length && data?.result && !mrpspRemoteProcessedKeys.has('legacy-result')) {
-    resultEntries.push(['legacy-result', { value: data.result, sequence: 1 }]);
-  }
-  for (const [key, entry] of resultEntries) {
-    if (mrpspRemoteProcessedKeys.has(key)) continue;
-    const value = String(typeof entry === 'string' ? entry : (entry?.value || '')).trim();
-    if (!value) continue;
-    mrpspRemoteProcessedKeys.add(key);
-    mrpspRemoteProcessing = mrpspRemoteProcessing.then(async () => {
-      try {
-        // Restore the operation mode captured when the PC created the session.
-        window.scanMode = mode;
-        scanMode = mode;
-        await window.onScanSuccess(value);
-        if (statusEl) statusEl.textContent = `Mobile scan received and processed (${mrpspRemoteProcessedKeys.size} code${mrpspRemoteProcessedKeys.size === 1 ? '' : 's'}).`;
-      } catch (e) {
-        console.error('Could not process mobile scan result', e);
-        if (statusEl) statusEl.textContent = 'QR arrived, but portal processing failed: ' + (e?.message || e);
-      }
-    });
-  }
-  if (data?.status === 'COMPLETED' || data?.status === 'DECLINED' || data?.status === 'EXPIRED') {
-    mrpspRemoteProcessing = mrpspRemoteProcessing.then(() => {
-      if (requestUid && requestKey && mrpspRemoteRequestKey === requestKey) {
-        if (mrpspRemoteRequestListener) off(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${requestUid}/${requestKey}`), 'value', mrpspRemoteRequestListener);
-        mrpspRemoteRequestListener = null;
-        mrpspRemoteRequestKey = null;
-      }
-      if (statusEl && data.status === 'COMPLETED') statusEl.textContent = `Mobile scan session ended. Processed ${mrpspRemoteProcessedKeys.size} code(s).`;
-      else if (statusEl && data.status === 'DECLINED') statusEl.textContent = 'Mobile scan session ended without more scans.';
-    });
-  }
-}
+let mrpspPhoneSending = false;
+let mrpspPhoneLastValue = "";
+let mrpspPhoneLastAt = 0;
+let mrpspPhoneSequence = 0;
+let mrpspProcessedSequences = new Set();
+window.mrpspProcessingRemoteScan = false;
+let mrpspRemoteProcessQueue = Promise.resolve();
 
 window.requestMobileScan = async function () {
   const user = auth.currentUser;
-  if (!user) return alert('Sign in first on the requesting device.');
-  const status = document.getElementById('mobileScanRequestStatus');
-  const mode = window.scanMode || scanMode || 'DIRECT';
+  if (!user) return alert("Sign in first on the requesting device.");
+  const status = document.getElementById("mobileScanRequestStatus");
+  const mode = window.scanMode || scanMode || "DIRECT";
   try {
     if (mrpspRemoteRequestListener && mrpspRemoteRequestKey) {
-      off(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), 'value', mrpspRemoteRequestListener);
+      off(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), "value", mrpspRemoteRequestListener);
       mrpspRemoteRequestListener = null;
     }
-    mrpspRemoteProcessedKeys = new Set();
-    mrpspRemoteProcessing = Promise.resolve();
+    mrpspProcessedSequences = new Set();
+    mrpspRemoteProcessQueue = Promise.resolve();
     const reqRef = push(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}`));
     mrpspRemoteRequestKey = reqRef.key;
     await set(reqRef, {
-      status: 'PENDING', requesterUid: user.uid, requesterEmail: user.email || '',
+      status: "PENDING", requesterUid: user.uid, requesterEmail: user.email || "",
       requesterDeviceId: mrpspDeviceId, scanMode: mode,
-      results: {}, resultCount: 0, createdAt: Date.now(), updatedAt: Date.now(),
-      expiresAt: Date.now() + 5 * 60 * 1000
+      createdAt: Date.now(), expiresAt: Date.now() + 5 * 60 * 1000,
+      resultSequence: 0, scans: {}
     });
-    if (status) status.textContent = 'One scan session created. Scan up to 6 codes on your mobile; each will send automatically.';
-    const requestKey = mrpspRemoteRequestKey;
+    if (status) status.textContent = "Waiting for mobile. Scan up to 6 codes; each one will be processed automatically.";
+
     mrpspRemoteRequestListener = snap => {
       if (!snap.exists()) return;
-      mrpspQueueRemoteResults(snap.val(), mode, status, user.uid, requestKey);
+      const data = snap.val() || {};
+      const scanEntries = Object.entries(data.scans || {})
+        .map(([seq, item]) => ({ seq: Number(seq), barcode: String(item?.barcode || "").trim() }))
+        .filter(item => Number.isFinite(item.seq) && item.seq > 0 && item.barcode)
+        .sort((a, b) => a.seq - b.seq);
+      for (const item of scanEntries) {
+        if (mrpspProcessedSequences.has(item.seq)) continue;
+        mrpspProcessedSequences.add(item.seq);
+        mrpspRemoteProcessQueue = mrpspRemoteProcessQueue.then(async () => {
+          if (status) status.textContent = `Receiving and processing ${item.seq}/6: ${item.barcode}`;
+          window.mrpspProcessingRemoteScan = true;
+          try {
+            // Keep the normal scan handler so it updates the existing cart and green success tick.
+            await window.onScanSuccess(item.barcode);
+            if (status) status.textContent = `✓ Received ${item.seq}/6 — ${item.barcode}`;
+          } catch (processError) {
+            console.error("Remote barcode processing failed", processError);
+            if (status) status.textContent = `Scan ${item.seq} received, but processing failed: ${processError?.message || processError}`;
+          } finally {
+            window.mrpspProcessingRemoteScan = false;
+          }
+        });
+      }
+      if (data.status === "COMPLETED" || data.status === "DECLINED" || data.status === "EXPIRED") {
+        mrpspRemoteProcessQueue = mrpspRemoteProcessQueue.finally(() => {
+          if (mrpspRemoteRequestListener && mrpspRemoteRequestKey) {
+            off(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), "value", mrpspRemoteRequestListener);
+          }
+          mrpspRemoteRequestListener = null;
+          mrpspRemoteRequestKey = null;
+          if (status) status.textContent = data.status === "COMPLETED"
+            ? `Mobile scan ended. ${scanEntries.length} code(s) received and processed.`
+            : `Mobile scan ${String(data.status).toLowerCase()}. You can request another scan.`;
+        });
+      }
     };
-    onValue(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${requestKey}`), mrpspRemoteRequestListener, err => {
-      console.error('PC remote scan listener failed', err);
-      if (status) status.textContent = 'Firebase listener failed: ' + (err?.message || err);
+    onValue(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), mrpspRemoteRequestListener, err => {
+      console.error("Remote scan listener failed", err);
+      if (status) status.textContent = `Firebase receive failed: ${err?.code || err?.message || err}`;
     });
   } catch (err) {
-    console.error('Remote scan request failed', err);
-    if (status) status.textContent = `Could not create scan request (${err?.code || 'error'}): ${err?.message || err}`;
-    alert('Could not request mobile scan. Firebase says: ' + (err?.code || '') + ' ' + (err?.message || err));
+    console.error("Remote scan request failed", err);
+    if (status) status.textContent = "Could not create scan request: " + (err?.message || err);
+    alert("Could not request mobile scan. Check Firebase Realtime Database rules: " + (err?.message || err));
   }
 };
 
@@ -16725,168 +16724,174 @@ function mrpspStopPhoneScanner() {
     mrpspPhoneScanning = false;
     try { old.stop().catch(() => {}).finally(() => { try { old.clear(); } catch (_) {} }); }
     catch (_) { try { old.clear(); } catch (_) {} }
-  } else mrpspPhoneScanning = false;
+  } else {
+    mrpspPhoneScanning = false;
+  }
 }
 window.dismissMobileScanInbox = function () {
-  document.getElementById('mobileScanInbox')?.classList.add('hidden');
+  document.getElementById("mobileScanInbox")?.classList.add("hidden");
   mrpspStopPhoneScanner();
-};
-window.finishMobileRequestedScan = async function () {
-  const req = mrpspPhonePendingRequest;
-  const user = auth.currentUser;
-  if (!req || !user) { mrpspStopPhoneScanner(); return; }
-  mrpspStopPhoneScanner();
-  const statusEl = document.getElementById('mobileScanResultStatus');
-  const btn = document.getElementById('mobileScanStartBtn');
-  try {
-    const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${req.key}`);
-    const snap = await get(reqRef);
-    if (!snap.exists() || snap.val().status !== 'PENDING') throw new Error('This scan session is no longer pending.');
-    const data = snap.val();
-    const entries = Object.values(data.results || {});
-    const last = entries.length ? String(entries[entries.length - 1]?.value || '') : '';
-    await update(reqRef, {
-      status: entries.length ? 'COMPLETED' : 'DECLINED',
-      ...(entries.length ? { result: last } : {}),
-      resultCount: entries.length, completedAt: Date.now(), completedByUid: user.uid,
-      completedByEmail: user.email || '', scannerDeviceId: mrpspDeviceId
-    });
-    mrpspPhonePendingRequest = null;
-    if (statusEl) statusEl.textContent = `Scan stopped. Sent ${entries.length} code(s) to the requesting PC.`;
-    if (btn) { btn.disabled = true; btn.textContent = 'SCAN SESSION ENDED'; }
-    setTimeout(() => document.getElementById('mobileScanInbox')?.classList.add('hidden'), 2500);
-  } catch (err) {
-    console.error('Could not finish mobile scan session', err);
-    if (statusEl) statusEl.textContent = `Could not end scan (${err?.code || 'error'}): ${err?.message || err}`;
-  }
 };
 window.startMobileRequestedScan = async function () {
-  if (!auth.currentUser || !mrpspPhonePendingRequest) return alert('There is no pending scan request.');
-  if (mrpspPhonePendingRequest.requesterUid !== auth.currentUser.uid) return alert('This scan request belongs to another account.');
-  if (typeof Html5Qrcode !== 'function') return alert('QR/barcode scanner library did not load. Refresh and try again.');
+  if (!auth.currentUser || !mrpspPhonePendingRequest) return alert("There is no pending scan request.");
+  if (mrpspPhonePendingRequest.requesterUid !== auth.currentUser.uid) return alert("This scan request belongs to another account.");
+  if (typeof Html5Qrcode !== "function") return alert("QR/barcode scanner library did not load. Refresh and try again.");
   if (mrpspPhoneScanning) return;
   mrpspPhoneScanning = true;
-  mrpspPhoneSeenCodes = new Set();
-  mrpspPhoneScanCount = 0;
-  const btn = document.getElementById('mobileScanStartBtn');
-  const status = document.getElementById('mobileScanResultStatus');
-  const stopBtn = document.getElementById('mobileScanStopBtn');
-  if (btn) { btn.disabled = true; btn.textContent = 'SCANNING…'; }
-  if (stopBtn) stopBtn.disabled = false;
-  if (status) status.textContent = 'Opening camera… allow camera permission. Each unique QR will auto-send; maximum 6.';
-  const readerId = 'mrpspMobileRemoteReader';
+  mrpspPhoneSending = false;
+  mrpspPhoneLastValue = "";
+  mrpspPhoneLastAt = 0;
+  mrpspPhoneSequence = Number(mrpspPhonePendingRequest.resultSequence || 0);
+  const btn = document.getElementById("mobileScanStartBtn");
+  const status = document.getElementById("mobileScanResultStatus");
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = "Opening camera… allow camera permission when prompted.";
+  const readerId = "mrpspMobileRemoteReader";
   let reader = document.getElementById(readerId);
   if (!reader) {
-    reader = document.createElement('div'); reader.id = readerId;
-    reader.style.cssText = 'margin-top:12px;background:#fff;border-radius:8px;overflow:hidden;';
-    document.getElementById('mobileScanInbox')?.appendChild(reader);
+    reader = document.createElement("div"); reader.id = readerId;
+    reader.style.cssText = "margin-top:12px;background:#fff;border-radius:8px;overflow:hidden;";
+    document.getElementById("mobileScanInbox")?.appendChild(reader);
   }
-  reader.innerHTML = '';
+  reader.innerHTML = "";
   try {
     mrpspPhoneScanner = new Html5Qrcode(readerId);
-    await mrpspPhoneScanner.start({ facingMode: 'environment' }, { fps: 12, qrbox: { width: 240, height: 180 } }, async decodedText => {
+    await mrpspPhoneScanner.start({ facingMode: "environment" }, { fps: 15, qrbox: { width: 240, height: 180 } }, async decodedText => {
       const req = mrpspPhonePendingRequest;
-      const value = String(decodedText || '').trim();
-      if (!req || !value || !mrpspPhoneScanning || mrpspPhoneSendBusy) return;
-      if (mrpspPhoneSeenCodes.has(value)) return;
-      if (mrpspPhoneScanCount >= MRPSP_REMOTE_MAX_CODES) {
-        await window.finishMobileRequestedScan();
+      const barcode = String(decodedText || "").trim();
+      if (!req || !barcode || !mrpspPhoneScanning || mrpspPhoneSending) return;
+      const now = Date.now();
+      // Ignore the same code while it remains in view; allow it again after a different scan.
+      if (barcode === mrpspPhoneLastValue && now - mrpspPhoneLastAt < 1800) return;
+      if (mrpspPhoneSequence >= 6) {
+        if (status) status.textContent = "Maximum 6 scans reached. Press END SCAN.";
         return;
       }
-      mrpspPhoneSendBusy = true;
-      mrpspPhoneSeenCodes.add(value);
+      mrpspPhoneSending = true;
+      mrpspPhoneLastValue = barcode;
+      mrpspPhoneLastAt = now;
+      const seq = ++mrpspPhoneSequence;
+      if (status) status.textContent = `Sending ${seq}/6: ${barcode}…`;
       try {
-        const user = auth.currentUser;
-        if (!user || user.uid !== req.requesterUid) throw new Error('Please sign in with the same Firebase account on both devices.');
-        const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${req.key}`);
+        const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${auth.currentUser.uid}/${req.key}`);
         const snap = await get(reqRef);
-        if (!snap.exists() || snap.val().status !== 'PENDING') throw new Error('The PC scan request is no longer pending.');
-        const current = snap.val();
-        const currentResults = current.results || {};
-        if (Object.values(currentResults).some(x => String(x?.value || '') === value)) {
-          if (status) status.textContent = `Duplicate QR ignored. ${Object.keys(currentResults).length}/${MRPSP_REMOTE_MAX_CODES} sent.`;
-          return;
+        if (!snap.exists() || snap.val().status !== "PENDING" || snap.val().requesterDeviceId === mrpspDeviceId) {
+          throw new Error("Request is no longer pending or is not from another device.");
         }
-        const sequence = Object.keys(currentResults).length + 1;
-        const resultKey = `scan_${String(sequence).padStart(2, '0')}_${Date.now()}`;
         await update(reqRef, {
-          [`results/${resultKey}`]: { value, sequence, scannedAt: Date.now(), scannerDeviceId: mrpspDeviceId },
-          resultCount: sequence, updatedAt: Date.now()
+          [`scans/${seq}`]: { barcode, scannedAt: Date.now(), scannerDeviceId: mrpspDeviceId },
+          resultSequence: seq,
+          lastResult: barcode,
+          lastScannedAt: Date.now()
         });
-        mrpspPhoneScanCount = sequence;
-        if (status) status.textContent = `AUTO-SENT ${sequence}/${MRPSP_REMOTE_MAX_CODES}. Scan the next QR; no new request is needed.`;
-        if (sequence >= MRPSP_REMOTE_MAX_CODES) {
-          await window.finishMobileRequestedScan();
-        }
+        if (status) status.textContent = `✓ Sent ${seq}/6 — ${barcode}. Scan the next code.`;
+        if (seq >= 6 && status) status.textContent = "✓ Sent 6/6. Press END SCAN to finish.";
+        // Let the camera continue. A different barcode can be sent immediately.
+        setTimeout(() => { mrpspPhoneSending = false; }, 250);
       } catch (err) {
-        mrpspPhoneSeenCodes.delete(value);
-        console.error('Remote scan result could not be auto-sent', err);
-        if (status) status.textContent = `AUTO-SEND FAILED (${err?.code || 'error'}): ${err?.message || err}`;
-      } finally {
-        mrpspPhoneSendBusy = false;
+        console.error("Remote scan result could not be sent", err);
+        if (status) status.textContent = "AUTO-SEND FAILED: " + (err?.code || err?.message || err);
+        mrpspPhoneSequence = Math.max(0, mrpspPhoneSequence - 1);
+        mrpspPhoneLastValue = "";
+        mrpspPhoneSending = false;
       }
-    }, error => console.debug('Mobile scan camera status', error));
-    if (status) status.textContent = 'Camera active. Scan up to 6 unique QR codes; each sends automatically.';
+    }, error => console.debug("Mobile scan camera status", error));
+    if (status) status.textContent = "Camera active. Scan up to 6 codes; each is sent automatically.";
+    if (btn) { btn.textContent = "SCANNING…"; btn.disabled = true; }
+    const stopBtn = document.getElementById("mobileScanStopBtn");
+    if (stopBtn) stopBtn.style.display = "block";
   } catch (err) {
     mrpspPhoneScanning = false;
     mrpspPhoneScanner = null;
-    if (btn) { btn.disabled = false; btn.textContent = 'START CONTINUOUS SCAN'; }
-    if (status) status.textContent = 'Camera could not start. Allow camera access and use HTTPS: ' + (err?.message || err);
+    if (btn) btn.disabled = false;
+    if (status) status.textContent = "Camera could not start. Allow camera access and use HTTPS: " + (err?.message || err);
+  }
+};
+window.stopMobileRequestedScan = async function () {
+  const req = mrpspPhonePendingRequest;
+  const user = auth.currentUser;
+  mrpspPhoneScanning = false;
+  mrpspStopPhoneScanner();
+  const status = document.getElementById("mobileScanResultStatus");
+  const btn = document.getElementById("mobileScanStartBtn");
+  const stopBtn = document.getElementById("mobileScanStopBtn");
+  if (stopBtn) stopBtn.style.display = "none";
+  try {
+    if (req && user) {
+      const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${req.key}`);
+      const snap = await get(reqRef);
+      if (snap.exists() && snap.val().status === "PENDING") {
+        await update(reqRef, {
+          status: "COMPLETED",
+          result: String(snap.val().lastResult || "SCAN_SESSION_FINISHED"),
+          completedAt: Date.now(), completedByUid: user.uid,
+          resultSequence: Number(snap.val().resultSequence || 0)
+        });
+      }
+    }
+    if (status) status.textContent = `Scan ended. ${mrpspPhoneSequence} code(s) sent.`;
+    if (btn) { btn.textContent = "SCAN SESSION ENDED"; btn.disabled = false; }
+  } catch (err) {
+    console.error("Could not end mobile scan", err);
+    if (status) status.textContent = "Could not finish scan: " + (err?.code || err?.message || err);
+    if (btn) btn.disabled = false;
   }
 };
 window.rejectMobileScanRequest = async function () {
   const req = mrpspPhonePendingRequest;
-  const user = auth.currentUser;
-  if (!req || !user) return window.dismissMobileScanInbox();
+  if (!req || !auth.currentUser) return window.dismissMobileScanInbox();
+  mrpspPhoneScanning = false;
   mrpspStopPhoneScanner();
-  try { await update(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${req.key}`), { status: 'DECLINED', declinedAt: Date.now(), declinedByUid: user.uid }); }
-  catch (err) { console.error('Could not decline scan request', err); }
+  try { await update(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${auth.currentUser.uid}/${req.key}`), { status: "DECLINED", result: "SCAN_DECLINED", declinedAt: Date.now(), declinedByUid: auth.currentUser.uid }); }
+  catch (err) { console.error("Could not decline scan", err); }
   mrpspPhonePendingRequest = null;
   window.dismissMobileScanInbox();
 };
 
+// Each signed-in device listens only to requests under its own UID.
 onAuthStateChanged(auth, user => {
   if (mrpspPhoneInboxRef && mrpspPhoneInboxListener) {
-    try { off(mrpspPhoneInboxRef, 'value', mrpspPhoneInboxListener); } catch (_) {}
+    try { off(mrpspPhoneInboxRef, "value", mrpspPhoneInboxListener); } catch (_) {}
   }
-  mrpspPhoneInboxRef = null; mrpspPhoneInboxListener = null;
+  mrpspPhoneInboxRef = null;
+  mrpspPhoneInboxListener = null;
   if (!user) {
-    document.getElementById('mobileScanInbox')?.classList.add('hidden');
-    mrpspPhonePendingRequest = null; mrpspStopPhoneScanner(); return;
+    document.getElementById("mobileScanInbox")?.classList.add("hidden");
+    mrpspPhonePendingRequest = null;
+    mrpspStopPhoneScanner();
+    return;
   }
   const inboxRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}`);
   mrpspPhoneInboxRef = inboxRef;
   mrpspPhoneInboxListener = snap => {
-    const entries = snap.exists() ? Object.entries(snap.val() || {}).map(([key, value]) => ({ key, ...value })) : [];
+    if (!snap.exists()) {
+      if (!mrpspPhonePendingRequest) document.getElementById("mobileScanInbox")?.classList.add("hidden");
+      return;
+    }
+    const entries = Object.entries(snap.val() || {}).map(([key, value]) => ({ key, ...value }));
     const now = Date.now();
-    const pending = entries.filter(r => r.status === 'PENDING' && r.requesterDeviceId !== mrpspDeviceId && Number(r.expiresAt || 0) > now)
+    const pending = entries.filter(r => r.status === "PENDING" && r.requesterDeviceId !== mrpspDeviceId && Number(r.expiresAt || 0) > now)
       .sort((a,b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))[0];
     if (!pending) {
-      if (mrpspPhonePendingRequest) {
-        const old = entries.find(r => r.key === mrpspPhonePendingRequest.key);
-        if (!old || old.status !== 'PENDING') {
-          mrpspPhonePendingRequest = null; mrpspStopPhoneScanner();
-          const status = document.getElementById('mobileScanResultStatus');
-          if (status) status.textContent = 'This scan session has ended.';
-        }
-      }
-      if (!mrpspPhonePendingRequest) setTimeout(() => document.getElementById('mobileScanInbox')?.classList.add('hidden'), 1800);
+      if (!mrpspPhonePendingRequest) document.getElementById("mobileScanInbox")?.classList.add("hidden");
       return;
     }
     mrpspPhonePendingRequest = pending;
-    const inbox = document.getElementById('mobileScanInbox'); if (inbox) inbox.classList.remove('hidden');
-    const label = document.getElementById('mobileScanInboxText');
-    if (label) label.textContent = `Continuous scan requested by ${pending.requesterEmail || 'your account on another device'}. Scan up to 6 unique codes; each sends automatically.`;
-    const btn = document.getElementById('mobileScanStartBtn');
-    if (btn && !mrpspPhoneScanning) { btn.disabled = false; btn.textContent = 'START CONTINUOUS SCAN'; }
+    const inbox = document.getElementById("mobileScanInbox");
+    if (inbox) inbox.classList.remove("hidden");
+    const label = document.getElementById("mobileScanInboxText");
+    if (label) label.textContent = `Scan requested by ${pending.requesterEmail || "your account on another device"}. Mode: ${pending.scanMode || "barcode scan"}. Scan up to 6 codes; each is sent immediately.`;
+    const btn = document.getElementById("mobileScanStartBtn");
+    if (btn && !mrpspPhoneScanning) { btn.disabled = false; btn.textContent = "OPEN CAMERA & SCAN"; }
   };
   onValue(inboxRef, mrpspPhoneInboxListener, err => {
-    console.error('Remote scan listener failed', err);
-    const inbox = document.getElementById('mobileScanInbox'); if (inbox) inbox.classList.remove('hidden');
-    const label = document.getElementById('mobileScanInboxText');
-    if (label) label.textContent = `Firebase inbox failed (${err?.code || 'error'}): ${err?.message || err}. Check the mobile_scan_requests rule and account UID.`;
-    const status = document.getElementById('mobileScanResultStatus');
-    if (status) status.textContent = `Firebase error: ${err?.code || ''} ${err?.message || err}`;
+    console.error("Remote scan listener failed", err);
+    const inbox = document.getElementById("mobileScanInbox");
+    if (inbox) inbox.classList.remove("hidden");
+    const label = document.getElementById("mobileScanInboxText");
+    if (label) label.textContent = err?.code === "PERMISSION_DENIED"
+      ? "Remote scanning is blocked by Firebase Realtime Database rules for this signed-in user."
+      : "Remote scan listener failed: " + (err?.message || err);
   });
 });
 
