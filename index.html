@@ -16665,6 +16665,7 @@ let mrpspPhoneInboxRef = null;
 let mrpspPhoneInboxListener = null;
 let mrpspPhoneLastDecode = "";
 let mrpspPhoneLastDecodeAt = 0;
+let mrpspPhoneSendQueue = Promise.resolve();
 
 function mrpspIsContinuousMode(mode) { return String(mode || "").includes("BATCH"); }
 function mrpspRenderPhoneCollected() {
@@ -16679,7 +16680,10 @@ window.requestMobileScan = async function () {
   const user = auth.currentUser;
   if (!user) return alert("Sign in first on the requesting device.");
   const status = document.getElementById("mobileScanRequestStatus");
-  const mode = window.scanMode || scanMode || "DIRECT";
+  // Read the active mode from both the global and lexical variables. The inventory
+  // batch scanner sets BATCH_CHECKOUT/BATCH_RETURN before this button is used.
+  let mode = window.scanMode || scanMode || "DIRECT";
+  if (String(scanMode || "").startsWith("BATCH_") && !String(mode).startsWith("BATCH_")) mode = scanMode;
   try {
     if (mrpspRemoteRequestListener && mrpspRemoteRequestKey) {
       off(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), "value", mrpspRemoteRequestListener);
@@ -16729,7 +16733,10 @@ window.requestMobileScan = async function () {
         if (status && results.length) status.textContent = `Mobile scanning: ${results.length}/${data.maxScans || 1} code(s) received.`;
       }
     };
-    onValue(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), mrpspRemoteRequestListener);
+    onValue(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), mrpspRemoteRequestListener, err => {
+      console.error("PC mobile-scan listener failed", err);
+      if (status) status.textContent = "PC cannot receive mobile scans: " + (err?.message || err) + ". Check Firebase rules for mobile_scan_requests/" + user.uid + ".";
+    });
   } catch (err) {
     console.error("Remote scan request failed", err);
     if (status) status.textContent = "Could not create scan request: " + (err?.message || err);
@@ -16760,6 +16767,7 @@ window.startMobileRequestedScan = async function () {
   mrpspPhoneSeen = new Set();
   mrpspPhoneLastDecode = "";
   mrpspPhoneLastDecodeAt = 0;
+  mrpspPhoneSendQueue = Promise.resolve();
   mrpspPhoneScanning = true;
   const btn = document.getElementById("mobileScanStartBtn");
   const endBtn = document.getElementById("mobileScanEndBtn");
@@ -16793,24 +16801,29 @@ window.startMobileRequestedScan = async function () {
       mrpspPhoneSeen.add(code);
       mrpspPhoneCollected.push(code);
       mrpspRenderPhoneCollected();
-      if (status) status.textContent = `Scanned ${mrpspPhoneCollected.length}/${maxScans}. Sending to requesting device…`;
-      try {
-        const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${auth.currentUser.uid}/${activeReq.key}`);
+      if (status) status.textContent = `Scanned ${mrpspPhoneCollected.length}/${maxScans}. Sending automatically…`;
+      // Serialize network writes. Each decode immediately queues a write to the SAME
+      // scan session; the phone does not create a new request for each barcode.
+      const thisCode = code;
+      mrpspPhoneSendQueue = mrpspPhoneSendQueue.then(async () => {
+        const user = auth.currentUser;
+        if (!user) throw new Error("Your mobile session signed out. Sign in again.");
+        const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${activeReq.key}`);
         const snap = await get(reqRef);
         if (!snap.exists() || !["PENDING", "SCANNING"].includes(snap.val().status) || snap.val().requesterDeviceId === mrpspDeviceId) {
-          throw new Error("The request is no longer active.");
+          throw new Error("The request is no longer active. Start a new request from the PC.");
         }
-        // One RTDB update per detected code; no new request is needed for each scan.
-        await update(reqRef, { status: "SCANNING", results: mrpspPhoneCollected.slice(), resultCount: mrpspPhoneCollected.length, lastScanAt: Date.now(), scannerDeviceId: mrpspDeviceId, completedByUid: auth.currentUser.uid, completedByEmail: auth.currentUser.email || "" });
-        if (status) status.textContent = `Sent ${mrpspPhoneCollected.length}/${maxScans}. Keep scanning or press END SCAN to stop now.`;
-        if (mrpspPhoneCollected.length >= maxScans) await window.endMobileRequestedScan();
-      } catch (err) {
-        console.error("Remote scan result could not be sent", err);
-        mrpspPhoneSeen.delete(code);
-        mrpspPhoneCollected = mrpspPhoneCollected.filter(v => v !== code);
+        const latestCodes = mrpspPhoneCollected.slice(0, maxScans);
+        await update(reqRef, { status: "SCANNING", results: latestCodes, resultCount: latestCodes.length, lastScanAt: Date.now(), scannerDeviceId: mrpspDeviceId, completedByUid: user.uid, completedByEmail: user.email || "" });
+        if (status) status.textContent = `AUTO-SENT ${latestCodes.length}/${maxScans}. Keep scanning, or press END SCAN to stop.`;
+        if (latestCodes.length >= maxScans && mrpspPhoneScanning) await window.endMobileRequestedScan();
+      }).catch(err => {
+        console.error("Remote scan auto-send failed", err);
+        mrpspPhoneSeen.delete(thisCode);
+        mrpspPhoneCollected = mrpspPhoneCollected.filter(v => v !== thisCode);
         mrpspRenderPhoneCollected();
-        if (status) status.textContent = "Could not send this code: " + (err?.message || err) + ". Try scanning it again.";
-      }
+        if (status) status.textContent = "AUTO-SEND FAILED: " + (err?.message || err) + ". Check Firebase rules/connection, then scan again.";
+      });
     }, error => console.debug("Mobile camera scanning", error));
     if (status) status.textContent = `Camera active. Scan up to ${maxScans} unique code(s); each sends automatically.`;
   } catch (err) {
