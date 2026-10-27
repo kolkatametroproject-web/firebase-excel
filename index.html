@@ -3534,6 +3534,8 @@ tr:hover { background: #fcfcfd; }
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signInAnonymously, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getDatabase, ref, get, query, orderByChild, equalTo, update, push, remove, set, serverTimestamp, onValue, off, limitToLast, onDisconnect } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js";
+import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check.js";
 // Permanent QR payment workflow: members submit only a pending request; admins verify and credit funds.
 const MRPSP_PAYMENT_QR_PATH = "system_settings/permanentPaymentQr";
 let mrpspPaymentRequestsListener = null;
@@ -4104,12 +4106,23 @@ const firebaseConfig = {
 
 // --- INITIALIZE ---
 const app = initializeApp(firebaseConfig);
+// REQUIRED: replace this with the reCAPTCHA v3 site key registered in Firebase App Check.
+// Do not deploy the public quick-transaction callable until App Check is configured.
+const MRPSP_RECAPTCHA_V3_SITE_KEY = "REPLACE_WITH_YOUR_RECAPTCHA_V3_SITE_KEY";
+if (!MRPSP_RECAPTCHA_V3_SITE_KEY.startsWith("REPLACE_")) {
+  initializeAppCheck(app, {
+    provider: new ReCaptchaV3Provider(MRPSP_RECAPTCHA_V3_SITE_KEY),
+    isTokenAutoRefreshEnabled: true
+  });
+}
   window.db = getDatabase(app); 
 window.auth = getAuth(app); // Optional, but helpful for user sessions
 
 console.log("✅ Firebase Bridge Established: window.db is now active.");
 const auth = getAuth(app);
 const db = getDatabase(app);
+const functions = getFunctions(app, "asia-south1");
+const quickAssetApi = httpsCallable(functions, "quickAssetTransaction");
 let activeProject = null;
 let currentProjectPermissions = {};
 // Quick transaction mode uses a short-lived anonymous Firebase session; it never grants general app access.
@@ -6102,30 +6115,11 @@ window.handleFaceScan = async () => {
     updateStatus("Analyzing Biometrics...", "cyan");
 
     try {
-        // --- LOGIN-FREE QUICK TRANSACTION FACE IDENTIFICATION ---
+        // Face descriptor is sent to the trusted callable. User profiles and face templates
+        // are never downloaded to this public browser session.
         if (scanMode === 'QUICK_TRANSACTION_FACE') {
-            const usersSnap = await get(ref(db, 'users'));
-            if (!usersSnap.exists()) throw new Error('No registered face profiles are available.');
-            let matched = null;
-            usersSnap.forEach(child => {
-                if (matched) return;
-                const profile = child.val() || {};
-                if (profile.banned || profile.terminated || !profile.faceData) return;
-                const stored = profile.faceData;
-                const samples = (Array.isArray(stored) && Array.isArray(stored[0])) ? stored : [stored];
-                for (const sample of samples) {
-                    if (Array.isArray(sample) && sample.length === currentDescriptor.length && faceapi.euclideanDistance(sample, currentDescriptor) < 0.50) {
-                        matched = { uid: child.key, name: profile.name || profile.officialName || profile.email || child.key, email: profile.email || '' };
-                        break;
-                    }
-                }
-            });
-            if (!matched) throw new Error('Face not matched. Try again with a registered face.');
-            quickTxnFaceUser = matched;
-            updateStatus('IDENTITY VERIFIED: ' + matched.name, '#00ff00');
-            btn.disabled = false;
-            btn.innerText = '📸 SCAN FACE';
-            await window.commitQuickAssetTransaction();
+            updateStatus('Verifying identity and committing transaction securely…', 'cyan');
+            await window.commitQuickAssetTransaction(Array.from(currentDescriptor));
             return;
         }
 
@@ -16855,11 +16849,7 @@ window.startQuickAssetTransaction = async (type) => {
   quickTxnRender(); quickTxnSetStatus('Starting secure transaction session…');
   document.getElementById('quickTxnModal').classList.remove('hidden');
   try {
-    if (!auth.currentUser) {
-      quickAnonSession = true;
-      await signInAnonymously(auth);
-    }
-    if (!auth.currentUser) throw new Error('Could not establish the temporary Firebase session.');
+    // Quick transactions call a server-side function; no anonymous database session is needed.
     if (typeof Html5Qrcode !== 'function') throw new Error('QR scanner library did not load.');
     const reader = document.getElementById('quickTxnReader'); reader.innerHTML = '';
     quickTxnScanner = new Html5Qrcode('quickTxnReader');
@@ -16873,41 +16863,23 @@ window.startQuickAssetTransaction = async (type) => {
 window.onQuickAssetQr = async (decodedText) => {
   if (!decodedText || quickTxnBusy || quickTxnItems.length >= 6) return;
   const barcode = String(decodedText).trim();
+  if (!barcode || barcode.length > 200) return;
   if (quickTxnItems.some(x => x.barcode === barcode)) return;
   quickTxnBusy = true;
   try {
-    quickTxnSetStatus('Checking QR against existing project inventory…');
-    const matches = [];
-    const lookupErrors = [];
-    for (const project of [{key:'YELLOW_LINE_BREACH', label:'Yellow Line Breach Project', path:'inventory'}, {key:'CCRAS', label:'CCRAS', path:'projects/CCRAS/inventory'}]) {
-      try {
-        const snap = await get(query(ref(db, project.path), orderByChild('barcode'), equalTo(barcode)));
-        if (snap.exists()) snap.forEach(child => matches.push({key:child.key, ...child.val(), projectKey:project.key, projectLabel:project.label, inventoryPath:project.path}));
-      } catch (projectLookupError) {
-        console.warn(`Quick asset QR lookup denied for ${project.label} at ${project.path}:`, projectLookupError);
-        lookupErrors.push({project, error: projectLookupError});
-      }
-    }
-    if (matches.length === 0 && lookupErrors.length > 0) {
-      const deniedProjects = lookupErrors.map(x => x.project.label).join(', ');
-      quickTxnSetStatus(`QR lookup could not verify all projects. Firebase denied access to: ${deniedProjects}. This QR may belong to a restricted project; do not open its database rules publicly.`, '#b91c1c');
-      return;
-    }
-    if (matches.length === 0) { quickTxnSetStatus(`QR ${barcode} is not registered in the accessible project inventory.`, '#b91c1c'); return; }
-    if (matches.length > 1) { quickTxnSetStatus('This QR matches more than one project inventory. Ask the administrator to resolve the duplicate barcode.', '#b91c1c'); return; }
-    const item = matches[0];
-    if (quickTxnProject && quickTxnProject !== item.projectKey) { quickTxnSetStatus('All six items in one batch must belong to the same project. Finish this batch first.', '#b91c1c'); return; }
+    quickTxnSetStatus('Checking QR securely…');
+    const result = await quickAssetApi({ action: 'lookup', barcode });
+    const item = result.data?.item;
+    if (!item) throw new Error('QR code is not registered in inventory.');
+    if (quickTxnProject && quickTxnProject !== item.projectKey) throw new Error('All assets in one batch must belong to the same project. Finish this batch first.');
     const status = String(item.status || 'In Stock').trim();
-    if (quickTxnType === 'CHECKOUT') {
-      if (item.isStationery) { quickTxnSetStatus('Stationery quantity items must use the regular inventory workflow; this fast flow is for individually QR-tagged assets.', '#b91c1c'); return; }
-      if (status !== 'In Stock') { quickTxnSetStatus(`${item.item || barcode} cannot be checked out because its status is ${status}.`, '#b91c1c'); return; }
-    } else {
-      if (item.isStationery) { quickTxnSetStatus('Stationery quantity items must use the regular inventory workflow; this fast flow is for individually QR-tagged assets.', '#b91c1c'); return; }
-      if (status !== 'Checked Out') { quickTxnSetStatus(`${item.item || barcode} cannot be returned because its status is ${status}.`, '#b91c1c'); return; }
-    }
-    quickTxnProject = item.projectKey; quickTxnItems.push(item);
+    if (item.isStationery) throw new Error('Stationery quantity items must use the regular inventory workflow.');
+    if (quickTxnType === 'CHECKOUT' && status !== 'In Stock') throw new Error(`${item.item || barcode} cannot be checked out because its status is ${status}.`);
+    if (quickTxnType === 'RETURN' && status !== 'Checked Out') throw new Error(`${item.item || barcode} cannot be returned because its status is ${status}.`);
+    quickTxnProject = item.projectKey;
+    quickTxnItems.push(item);
     document.getElementById('quickTxnMeta').textContent = `Project: ${item.projectLabel}`;
-    quickTxnRender(); quickTxnSetStatus(`Added ${item.item || barcode}.` , '#047857');
+    quickTxnRender(); quickTxnSetStatus(`Added ${item.item || barcode}.`, '#047857');
     if (quickTxnItems.length >= 6) { await window.stopQuickTxnScanner(); quickTxnSetStatus('Six assets scanned. Continue to face verification.', '#047857'); }
   } catch (e) { quickTxnSetStatus('QR lookup failed: ' + (e.message || e), '#b91c1c'); }
   finally { quickTxnBusy = false; }
@@ -16933,50 +16905,41 @@ window.finishQuickAssetScanning = async () => {
   quickTxnSetStatus('Scan your registered face once to authorize the entire batch.');
   await initCamera(true);
 };
-window.commitQuickAssetTransaction = async () => {
-  if (!quickTxnFaceUser || !quickTxnItems.length || !quickTxnProject) throw new Error('Transaction session is incomplete.');
-  const purpose = quickTxnType === 'CHECKOUT' ? document.getElementById('quickTxnPurpose').value.trim() : `${document.getElementById('quickTxnReturnLocation').value} [${document.getElementById('quickTxnReturnSpot').value.trim()}]`;
-  const timestamp = Date.now();
-  const updates = {};
-  const userName = quickTxnFaceUser.name;
-  const base = quickTxnProject === 'CCRAS' ? 'projects/CCRAS' : '';
-  // Re-read every asset and stage inventory + logs as one atomic multi-location update.
-  for (const scanned of quickTxnItems) {
-    const path = `${base ? base + '/' : ''}inventory/${scanned.key}`;
-    const snap = await get(ref(db, path));
-    if (!snap.exists()) throw new Error(`${scanned.item || scanned.barcode} is no longer in inventory.`);
-    const current = snap.val();
-    const status = String(current.status || 'In Stock').trim();
-    if (quickTxnType === 'CHECKOUT' && status !== 'In Stock') throw new Error(`${current.item || current.barcode} is no longer available. Rescan the batch.`);
-    if (quickTxnType === 'RETURN' && status !== 'Checked Out') throw new Error(`${current.item || current.barcode} is no longer checked out. Rescan the batch.`);
-    if (quickTxnType === 'CHECKOUT') {
-      updates[`${path}/status`] = 'Checked Out'; updates[`${path}/holder`] = userName; updates[`${path}/location`] = purpose;
-      updates[`${path}/usageCount`] = Number(current.usageCount || 0) + 1; updates[`${path}/lastCheckoutAt`] = timestamp;
-      updates[`${path}/lastCheckoutBy`] = userName; updates[`${path}/lastCheckoutPurpose`] = purpose; updates[`${path}/lastCheckoutByUid`] = quickTxnFaceUser.uid;
-    } else {
-      updates[`${path}/status`] = 'In Stock'; updates[`${path}/holder`] = 'Store'; updates[`${path}/location`] = purpose;
-      updates[`${path}/lastReturnedAt`] = timestamp; updates[`${path}/lastReturnedBy`] = userName; updates[`${path}/lastReturnedByUid`] = quickTxnFaceUser.uid;
-    }
-    const logRef = push(ref(db, `${base ? base + '/' : ''}logs`));
-    updates[`${base ? base + '/' : ''}logs/${logRef.key}`] = {type:quickTxnType,item:current.item || 'Unknown item',barcode:current.barcode || scanned.barcode,reason:quickTxnType === 'CHECKOUT' ? purpose : 'Returned to Stock',location:quickTxnType === 'RETURN' ? purpose : 'Field Operations',qty:1,time:timestamp,takenBy:userName,by:userName,byUid:quickTxnFaceUser.uid,status:quickTxnType === 'CHECKOUT' ? 'Checked Out' : 'In Stock',project:quickTxnProject};
+window.commitQuickAssetTransaction = async (faceDescriptor) => {
+  if (!quickTxnItems.length || !quickTxnProject) throw new Error('Transaction session is incomplete.');
+  const purpose = quickTxnType === 'CHECKOUT'
+    ? document.getElementById('quickTxnPurpose').value.trim()
+    : `${document.getElementById('quickTxnReturnLocation').value} [${document.getElementById('quickTxnReturnSpot').value.trim()}]`;
+  if (!purpose || purpose.length > 500) throw new Error('Enter a valid purpose or return location.');
+  const btn = document.getElementById('btnCapture');
+  try {
+    const result = await quickAssetApi({
+      action: 'commit', type: quickTxnType, projectKey: quickTxnProject,
+      barcodes: quickTxnItems.map(x => x.barcode), purpose,
+      faceDescriptor: Array.from(faceDescriptor || [])
+    });
+    const data = result.data || {};
+    const completed = Number(data.completed || 0);
+    const userName = data.userName || 'Verified user';
+    await window.stopQuickTxnScanner();
+    stopCamera();
+    document.getElementById('quickTxnModal').classList.add('hidden');
+    quickTxnSetStatus(`Success: ${completed} asset(s) ${quickTxnType === 'CHECKOUT' ? 'checked out' : 'returned'}.`, '#047857');
+    alert(`SUCCESS: ${completed} asset(s) ${quickTxnType === 'CHECKOUT' ? 'checked out' : 'returned'} by ${userName}.`);
+    quickTxnItems = []; quickTxnProject = null; quickTxnFaceUser = null;
+    scanMode = 'LOGIN';
+  } catch (e) {
+    updateStatus('❌ ' + (e.message || 'Verification failed.'), 'red');
+    quickTxnSetStatus('Transaction not completed: ' + (e.message || e), '#b91c1c');
+    if (btn) { btn.disabled = false; btn.textContent = '📸 SCAN FACE'; }
+    throw e;
   }
-  await update(ref(db), updates);
-  const completed = quickTxnItems.length;
-  await window.stopQuickTxnScanner();
-  stopCamera();
-  document.getElementById('quickTxnModal').classList.add('hidden');
-  quickTxnSetStatus(`Success: ${completed} asset(s) ${quickTxnType === 'CHECKOUT' ? 'checked out' : 'returned'}.`, '#047857');
-  alert(`SUCCESS: ${completed} asset(s) ${quickTxnType === 'CHECKOUT' ? 'checked out' : 'returned'} by ${userName}.`);
-  quickTxnItems = []; quickTxnProject = null; quickTxnFaceUser = null;
-  if (auth.currentUser?.isAnonymous) { quickAnonSession = false; await signOut(auth).catch(() => {}); }
-  scanMode = 'LOGIN';
 };
 window.cancelQuickAssetTransaction = async () => {
   await window.stopQuickTxnScanner();
   if (!document.getElementById('faceModal').classList.contains('hidden')) stopCamera();
   document.getElementById('quickTxnModal').classList.add('hidden');
   quickTxnItems = []; quickTxnProject = null; quickTxnFaceUser = null; quickTxnBusy = false; scanMode = 'LOGIN';
-  if (auth.currentUser?.isAnonymous) { quickAnonSession = false; await signOut(auth).catch(() => {}); }
 };
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
