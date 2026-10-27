@@ -16655,6 +16655,8 @@ let mrpspRemoteRequestListener = null;
 let mrpspPhonePendingRequest = null;
 let mrpspPhoneScanner = null;
 let mrpspPhoneScanning = false;
+let mrpspPhoneInboxRef = null;
+let mrpspPhoneInboxListener = null;
 
 window.requestMobileScan = async function () {
   const user = auth.currentUser;
@@ -16776,14 +16778,25 @@ window.rejectMobileScanRequest = async function () {
 // Each signed-in device listens only to requests under its own UID. A request is
 // offered to a different device, never back to the device that created it.
 onAuthStateChanged(auth, user => {
+  // Remove the previous listener before attaching another one after an auth change.
+  if (mrpspPhoneInboxRef && mrpspPhoneInboxListener) {
+    try { off(mrpspPhoneInboxRef, "value", mrpspPhoneInboxListener); } catch (_) {}
+  }
+  mrpspPhoneInboxRef = null;
+  mrpspPhoneInboxListener = null;
   if (!user) {
     document.getElementById("mobileScanInbox")?.classList.add("hidden");
     mrpspPhonePendingRequest = null;
     mrpspStopPhoneScanner();
     return;
   }
-  onValue(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}`), snap => {
-    if (!snap.exists()) return;
+  const inboxRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}`);
+  mrpspPhoneInboxRef = inboxRef;
+  mrpspPhoneInboxListener = snap => {
+    if (!snap.exists()) {
+      if (!mrpspPhonePendingRequest) document.getElementById("mobileScanInbox")?.classList.add("hidden");
+      return;
+    }
     const entries = Object.entries(snap.val() || {}).map(([key, value]) => ({ key, ...value }));
     const now = Date.now();
     const pending = entries.filter(r => r.status === "PENDING" && r.requesterDeviceId !== mrpspDeviceId && Number(r.expiresAt || 0) > now)
@@ -16799,7 +16812,16 @@ onAuthStateChanged(auth, user => {
     if (label) label.textContent = `A scan is requested by ${pending.requesterEmail || "your account on another device"}. Operation: ${pending.scanMode || "barcode scan"}. This request expires in 5 minutes.`;
     const btn = document.getElementById("mobileScanStartBtn");
     if (btn) { btn.disabled = false; btn.textContent = "OPEN CAMERA & SCAN"; }
-  }, err => console.error("Remote scan listener failed", err));
+  };
+  onValue(inboxRef, mrpspPhoneInboxListener, err => {
+    console.error("Remote scan listener failed", err);
+    const inbox = document.getElementById("mobileScanInbox");
+    if (inbox) inbox.classList.remove("hidden");
+    const label = document.getElementById("mobileScanInboxText");
+    if (label) label.textContent = err?.code === "PERMISSION_DENIED"
+      ? "Remote scanning is blocked by Firebase Realtime Database rules. Add the mobile_scan_requests rule at the database root, then publish the rules."
+      : "Remote scan listener failed: " + (err?.message || err);
+  });
 });
 
 
