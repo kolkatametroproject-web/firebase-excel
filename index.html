@@ -16878,11 +16878,22 @@ window.onQuickAssetQr = async (decodedText) => {
   try {
     quickTxnSetStatus('Checking QR against existing project inventory…');
     const matches = [];
+    const lookupErrors = [];
     for (const project of [{key:'YELLOW_LINE_BREACH', label:'Yellow Line Breach Project', path:'inventory'}, {key:'CCRAS', label:'CCRAS', path:'projects/CCRAS/inventory'}]) {
-      const snap = await get(query(ref(db, project.path), orderByChild('barcode'), equalTo(barcode)));
-      if (snap.exists()) snap.forEach(child => matches.push({key:child.key, ...child.val(), projectKey:project.key, projectLabel:project.label, inventoryPath:project.path}));
+      try {
+        const snap = await get(query(ref(db, project.path), orderByChild('barcode'), equalTo(barcode)));
+        if (snap.exists()) snap.forEach(child => matches.push({key:child.key, ...child.val(), projectKey:project.key, projectLabel:project.label, inventoryPath:project.path}));
+      } catch (projectLookupError) {
+        console.warn(`Quick asset QR lookup denied for ${project.label} at ${project.path}:`, projectLookupError);
+        lookupErrors.push({project, error: projectLookupError});
+      }
     }
-    if (matches.length === 0) { quickTxnSetStatus(`QR ${barcode} is not registered in the existing inventory.`, '#b91c1c'); return; }
+    if (matches.length === 0 && lookupErrors.length > 0) {
+      const deniedProjects = lookupErrors.map(x => x.project.label).join(', ');
+      quickTxnSetStatus(`QR lookup could not verify all projects. Firebase denied access to: ${deniedProjects}. This QR may belong to a restricted project; do not open its database rules publicly.`, '#b91c1c');
+      return;
+    }
+    if (matches.length === 0) { quickTxnSetStatus(`QR ${barcode} is not registered in the accessible project inventory.`, '#b91c1c'); return; }
     if (matches.length > 1) { quickTxnSetStatus('This QR matches more than one project inventory. Ask the administrator to resolve the duplicate barcode.', '#b91c1c'); return; }
     const item = matches[0];
     if (quickTxnProject && quickTxnProject !== item.projectKey) { quickTxnSetStatus('All six items in one batch must belong to the same project. Finish this batch first.', '#b91c1c'); return; }
