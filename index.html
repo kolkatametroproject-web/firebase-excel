@@ -887,7 +887,7 @@ tr:hover { background: #fcfcfd; }
     </p>
   </div>
 
-  <!-- LOGIN-FREE QUICK ASSET TRANSACTION: uses existing project inventory/log paths -->
+  <!-- QUICK ASSET TRANSACTION: single-file client workflow; requires authenticated project access -->
   <div class="login-card" style="margin-top:18px;max-width:620px;width:calc(100% - 36px);padding:22px;">
     <div style="text-align:center;">
       <h3 style="color:#fff;margin:0 0 5px;font-size:1.15rem;"><i class="fas fa-qrcode" style="color:var(--metro-gold);"></i> QUICK ASSET TRANSACTION</h3>
@@ -1003,10 +1003,9 @@ tr:hover { background: #fcfcfd; }
   </div>
   <p id="mobileScanInboxText" style="font-size:13px;margin:10px 0;">A device is requesting a barcode scan.</p>
   <button class="success" id="mobileScanStartBtn" onclick="window.startMobileRequestedScan()" style="width:100%;">START CONTINUOUS SCAN</button>
-  <button class="danger hidden" id="mobileScanEndBtn" onclick="window.endMobileRequestedScan()" style="width:100%;margin-top:8px;">END SCAN & SEND FINAL BATCH</button>
-  <button class="secondary" id="mobileScanDeclineBtn" onclick="window.rejectMobileScanRequest()" style="width:100%;margin-top:8px;">CANCEL REQUEST</button>
+  <button class="danger" id="mobileScanStopBtn" onclick="window.finishMobileRequestedScan()" disabled style="width:100%;margin-top:8px;">END SCAN & SEND FINAL BATCH</button>
+  <button class="secondary" onclick="window.rejectMobileScanRequest()" style="width:100%;margin-top:8px;">DECLINE REQUEST</button>
   <div id="mobileScanResultStatus" style="font-size:12px;margin-top:8px;color:#cbd5e1;"></div>
-  <div id="mobileScanCollectedList" style="font-size:12px;margin-top:8px;max-height:150px;overflow:auto;color:#e2e8f0;"></div>
 </div>
 
 <div id="sigModal" class="modal-overlay hidden" onclick="closeSigModal()">
@@ -3534,7 +3533,7 @@ tr:hover { background: #fcfcfd; }
 <script type="module">
 // --- FIREBASE IMPORTS (Standard Stable Version) ---
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signInAnonymously, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getDatabase, ref, get, query, orderByChild, equalTo, update, push, remove, set, serverTimestamp, onValue, off, limitToLast, onDisconnect } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 // Permanent QR payment workflow: members submit only a pending request; admins verify and credit funds.
 const MRPSP_PAYMENT_QR_PATH = "system_settings/permanentPaymentQr";
@@ -4106,16 +4105,16 @@ const firebaseConfig = {
 
 // --- INITIALIZE ---
 const app = initializeApp(firebaseConfig);
-  window.db = getDatabase(app); 
-window.auth = getAuth(app); // Optional, but helpful for user sessions
-
-console.log("✅ Firebase Bridge Established: window.db is now active.");
+// Single-file configuration: this index.html uses Firebase Auth + Realtime Database directly.
+// No Cloud Function, separate JavaScript file, or App Check placeholder is required.
+// Database rules still apply: quick transactions require a signed-in account with project access.
 const auth = getAuth(app);
 const db = getDatabase(app);
+window.db = db;
+window.auth = auth;
+console.log("✅ Firebase Bridge Established: window.db is now active.");
 let activeProject = null;
 let currentProjectPermissions = {};
-// Quick transaction mode uses a short-lived anonymous Firebase session; it never grants general app access.
-let quickAnonSession = false;
 let quickTxnFaceUser = null;
 let quickTxnScanner = null;
 let quickTxnItems = [];
@@ -5090,8 +5089,7 @@ async function processUpload(dataBase64, fileType, fileName) {
 // ==========================================
 onAuthStateChanged(auth, (user) => {
     if (user && user.isAnonymous) {
-        if (quickAnonSession) { currentUser = user; return; }
-        // Never treat a persisted anonymous quick-session as a normal portal account.
+        // Anonymous accounts are not allowed to access asset transactions in this single-file build.
         signOut(auth).catch(() => {});
         return;
     }
@@ -6104,30 +6102,11 @@ window.handleFaceScan = async () => {
     updateStatus("Analyzing Biometrics...", "cyan");
 
     try {
-        // --- LOGIN-FREE QUICK TRANSACTION FACE IDENTIFICATION ---
+        // Face descriptor is sent to the trusted callable. User profiles and face templates
+        // are never downloaded to this public browser session.
         if (scanMode === 'QUICK_TRANSACTION_FACE') {
-            const usersSnap = await get(ref(db, 'users'));
-            if (!usersSnap.exists()) throw new Error('No registered face profiles are available.');
-            let matched = null;
-            usersSnap.forEach(child => {
-                if (matched) return;
-                const profile = child.val() || {};
-                if (profile.banned || profile.terminated || !profile.faceData) return;
-                const stored = profile.faceData;
-                const samples = (Array.isArray(stored) && Array.isArray(stored[0])) ? stored : [stored];
-                for (const sample of samples) {
-                    if (Array.isArray(sample) && sample.length === currentDescriptor.length && faceapi.euclideanDistance(sample, currentDescriptor) < 0.50) {
-                        matched = { uid: child.key, name: profile.name || profile.officialName || profile.email || child.key, email: profile.email || '' };
-                        break;
-                    }
-                }
-            });
-            if (!matched) throw new Error('Face not matched. Try again with a registered face.');
-            quickTxnFaceUser = matched;
-            updateStatus('IDENTITY VERIFIED: ' + matched.name, '#00ff00');
-            btn.disabled = false;
-            btn.innerText = '📸 SCAN FACE';
-            await window.commitQuickAssetTransaction();
+            updateStatus('Verifying identity and committing transaction securely…', 'cyan');
+            await window.commitQuickAssetTransaction(Array.from(currentDescriptor));
             return;
         }
 
@@ -16639,8 +16618,7 @@ window.loadCCRASRecords = async function () {
 
 // ==========================================
 // CROSS-DEVICE CONTINUOUS MOBILE SCANNER
-// One request per scanning session. Up to six unique QR codes are streamed
-// to the requesting device as they are scanned. END SCAN stops the camera.
+// One Firebase request per scanning session; each QR is appended to results.
 // ==========================================
 const MRPSP_REMOTE_SCAN_PATH = "mobile_scan_requests";
 const MRPSP_DEVICE_KEY = "mrpsp_remote_scan_device_id_v1";
@@ -16654,312 +16632,329 @@ try {
 } catch (_) { mrpspDeviceId = "dev-" + Date.now() + "-" + Math.random().toString(36).slice(2); }
 let mrpspRemoteRequestKey = null;
 let mrpspRemoteRequestListener = null;
-let mrpspPcProcessedCount = 0;
-let mrpspPcProcessingQueue = Promise.resolve();
+let mrpspRemoteProcessedKeys = new Set();
+let mrpspRemoteProcessing = Promise.resolve();
 let mrpspPhonePendingRequest = null;
 let mrpspPhoneScanner = null;
 let mrpspPhoneScanning = false;
-let mrpspPhoneCollected = [];
-let mrpspPhoneSeen = new Set();
 let mrpspPhoneInboxRef = null;
 let mrpspPhoneInboxListener = null;
-let mrpspPhoneLastDecode = "";
-let mrpspPhoneLastDecodeAt = 0;
-let mrpspPhoneSendQueue = Promise.resolve();
+let mrpspPhoneSeenCodes = new Set();
+let mrpspPhoneSendBusy = false;
+let mrpspPhoneScanCount = 0;
+const MRPSP_REMOTE_MAX_CODES = 6;
 
-function mrpspIsContinuousMode(mode) { return String(mode || "").includes("BATCH"); }
-function mrpspRenderPhoneCollected() {
-  const el = document.getElementById("mobileScanCollectedList");
-  if (!el) return;
-  el.innerHTML = mrpspPhoneCollected.length
-    ? `<b>Scanned ${mrpspPhoneCollected.length}/6</b>` + mrpspPhoneCollected.map((v,i) => `<div style="padding:5px 0;border-bottom:1px solid #334155;">${i+1}. ${String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))} <span style="color:#34d399;">SENT</span></div>`).join("")
-    : "No codes scanned yet.";
+function mrpspQueueRemoteResults(data, mode, statusEl, requestUid, requestKey) {
+  const resultEntries = Object.entries(data?.results || {}).sort((a,b) => Number(a[1]?.sequence || 0) - Number(b[1]?.sequence || 0));
+  // Support an older one-code request as well.
+  if (!resultEntries.length && data?.result && !mrpspRemoteProcessedKeys.has('legacy-result')) {
+    resultEntries.push(['legacy-result', { value: data.result, sequence: 1 }]);
+  }
+  for (const [key, entry] of resultEntries) {
+    if (mrpspRemoteProcessedKeys.has(key)) continue;
+    const value = String(typeof entry === 'string' ? entry : (entry?.value || '')).trim();
+    if (!value) continue;
+    mrpspRemoteProcessedKeys.add(key);
+    mrpspRemoteProcessing = mrpspRemoteProcessing.then(async () => {
+      try {
+        // Restore the operation mode captured when the PC created the session.
+        window.scanMode = mode;
+        scanMode = mode;
+        await window.onScanSuccess(value);
+        if (statusEl) statusEl.textContent = `Mobile scan received and processed (${mrpspRemoteProcessedKeys.size} code${mrpspRemoteProcessedKeys.size === 1 ? '' : 's'}).`;
+      } catch (e) {
+        console.error('Could not process mobile scan result', e);
+        if (statusEl) statusEl.textContent = 'QR arrived, but portal processing failed: ' + (e?.message || e);
+      }
+    });
+  }
+  if (data?.status === 'COMPLETED' || data?.status === 'DECLINED' || data?.status === 'EXPIRED') {
+    mrpspRemoteProcessing = mrpspRemoteProcessing.then(() => {
+      if (requestUid && requestKey && mrpspRemoteRequestKey === requestKey) {
+        if (mrpspRemoteRequestListener) off(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${requestUid}/${requestKey}`), 'value', mrpspRemoteRequestListener);
+        mrpspRemoteRequestListener = null;
+        mrpspRemoteRequestKey = null;
+      }
+      if (statusEl && data.status === 'COMPLETED') statusEl.textContent = `Mobile scan session ended. Processed ${mrpspRemoteProcessedKeys.size} code(s).`;
+      else if (statusEl && data.status === 'DECLINED') statusEl.textContent = 'Mobile scan session ended without more scans.';
+    });
+  }
 }
 
 window.requestMobileScan = async function () {
   const user = auth.currentUser;
-  if (!user) return alert("Sign in first on the requesting device.");
-  const status = document.getElementById("mobileScanRequestStatus");
-  // Read the active mode from both the global and lexical variables. The inventory
-  // batch scanner sets BATCH_CHECKOUT/BATCH_RETURN before this button is used.
-  let mode = window.scanMode || scanMode || "DIRECT";
-  if (String(scanMode || "").startsWith("BATCH_") && !String(mode).startsWith("BATCH_")) mode = scanMode;
+  if (!user) return alert('Sign in first on the requesting device.');
+  const status = document.getElementById('mobileScanRequestStatus');
+  const mode = window.scanMode || scanMode || 'DIRECT';
   try {
     if (mrpspRemoteRequestListener && mrpspRemoteRequestKey) {
-      off(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), "value", mrpspRemoteRequestListener);
+      off(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), 'value', mrpspRemoteRequestListener);
       mrpspRemoteRequestListener = null;
     }
-    mrpspPcProcessedCount = 0;
-    mrpspPcProcessingQueue = Promise.resolve();
-    const maxScans = mrpspIsContinuousMode(mode) ? 6 : 1;
+    mrpspRemoteProcessedKeys = new Set();
+    mrpspRemoteProcessing = Promise.resolve();
     const reqRef = push(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}`));
     mrpspRemoteRequestKey = reqRef.key;
     await set(reqRef, {
-      status: "PENDING", requesterUid: user.uid, requesterEmail: user.email || "",
-      requesterDeviceId: mrpspDeviceId, scanMode: mode, maxScans,
-      results: [], createdAt: Date.now(), expiresAt: Date.now() + 5 * 60 * 1000
+      status: 'PENDING', requesterUid: user.uid, requesterEmail: user.email || '',
+      requesterDeviceId: mrpspDeviceId, scanMode: mode,
+      results: {}, resultCount: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      expiresAt: Date.now() + 5 * 60 * 1000
     });
-    if (status) status.textContent = maxScans > 1
-      ? "One mobile request sent. Scan up to 6 codes; each is sent automatically. Press END SCAN on your phone to stop early."
-      : "Request sent. Open the portal on your mobile and scan once.";
-
+    if (status) status.textContent = 'One scan session created. Scan up to 6 codes on your mobile; each will send automatically.';
+    const requestKey = mrpspRemoteRequestKey;
     mrpspRemoteRequestListener = snap => {
       if (!snap.exists()) return;
-      const data = snap.val() || {};
-      const results = Array.isArray(data.results) ? data.results : Object.values(data.results || {});
-      while (mrpspPcProcessedCount < results.length) {
-        const index = mrpspPcProcessedCount++;
-        const value = String(results[index] || "").trim();
-        if (!value) continue;
-        mrpspPcProcessingQueue = mrpspPcProcessingQueue.then(async () => {
-          if (status) status.textContent = `Received ${index + 1}/${data.maxScans || 1} from mobile. Processing…`;
-          await window.onScanSuccess(value);
-        }).catch(err => {
-          console.error("Mobile scan result processing failed", err);
-          if (status) status.textContent = "A mobile scan was received but processing failed: " + (err?.message || err);
-        });
-      }
-      if (data.status === "COMPLETED") {
-        if (status) status.textContent = `Mobile scanning ended. ${results.length} code(s) sent. Processing received codes…`;
-        mrpspPcProcessingQueue.finally(() => {
-          if (status) status.textContent = `Mobile scan session ended. ${results.length} code(s) received.`;
-        });
-        off(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), "value", mrpspRemoteRequestListener);
-        mrpspRemoteRequestListener = null;
-        mrpspRemoteRequestKey = null;
-      } else if (data.status === "DECLINED" || data.status === "EXPIRED" || data.status === "CANCELLED") {
-        if (status) status.textContent = "Mobile scan request " + data.status.toLowerCase() + ". You can request another scan.";
-      } else if (data.status === "PENDING" || data.status === "SCANNING") {
-        if (status && results.length) status.textContent = `Mobile scanning: ${results.length}/${data.maxScans || 1} code(s) received.`;
-      }
+      mrpspQueueRemoteResults(snap.val(), mode, status, user.uid, requestKey);
     };
-    onValue(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${mrpspRemoteRequestKey}`), mrpspRemoteRequestListener, err => {
-      console.error("PC mobile-scan listener failed", err);
-      if (status) status.textContent = "PC cannot receive mobile scans: " + (err?.message || err) + ". Check Firebase rules for mobile_scan_requests/" + user.uid + ".";
+    onValue(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${requestKey}`), mrpspRemoteRequestListener, err => {
+      console.error('PC remote scan listener failed', err);
+      if (status) status.textContent = 'Firebase listener failed: ' + (err?.message || err);
     });
   } catch (err) {
-    console.error("Remote scan request failed", err);
-    if (status) status.textContent = "Could not create scan request: " + (err?.message || err);
-    alert("Could not request mobile scan. Check Firebase Realtime Database rules: " + (err?.message || err));
+    console.error('Remote scan request failed', err);
+    if (status) status.textContent = `Could not create scan request (${err?.code || 'error'}): ${err?.message || err}`;
+    alert('Could not request mobile scan. Firebase says: ' + (err?.code || '') + ' ' + (err?.message || err));
   }
 };
 
 function mrpspStopPhoneScanner() {
-  const old = mrpspPhoneScanner;
-  mrpspPhoneScanner = null;
-  mrpspPhoneScanning = false;
-  if (old) {
-    try { Promise.resolve(old.stop()).catch(() => {}).finally(() => { try { old.clear(); } catch (_) {} }); }
+  if (mrpspPhoneScanner) {
+    const old = mrpspPhoneScanner;
+    mrpspPhoneScanner = null;
+    mrpspPhoneScanning = false;
+    try { old.stop().catch(() => {}).finally(() => { try { old.clear(); } catch (_) {} }); }
     catch (_) { try { old.clear(); } catch (_) {} }
-  }
+  } else mrpspPhoneScanning = false;
 }
 window.dismissMobileScanInbox = function () {
+  document.getElementById('mobileScanInbox')?.classList.add('hidden');
   mrpspStopPhoneScanner();
-  document.getElementById("mobileScanInbox")?.classList.add("hidden");
+};
+window.finishMobileRequestedScan = async function () {
+  const req = mrpspPhonePendingRequest;
+  const user = auth.currentUser;
+  if (!req || !user) { mrpspStopPhoneScanner(); return; }
+  mrpspStopPhoneScanner();
+  const statusEl = document.getElementById('mobileScanResultStatus');
+  const btn = document.getElementById('mobileScanStartBtn');
+  try {
+    const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${req.key}`);
+    const snap = await get(reqRef);
+    if (!snap.exists() || snap.val().status !== 'PENDING') throw new Error('This scan session is no longer pending.');
+    const data = snap.val();
+    const entries = Object.values(data.results || {});
+    const last = entries.length ? String(entries[entries.length - 1]?.value || '') : '';
+    await update(reqRef, {
+      status: entries.length ? 'COMPLETED' : 'DECLINED',
+      ...(entries.length ? { result: last } : {}),
+      resultCount: entries.length, completedAt: Date.now(), completedByUid: user.uid,
+      completedByEmail: user.email || '', scannerDeviceId: mrpspDeviceId
+    });
+    mrpspPhonePendingRequest = null;
+    if (statusEl) statusEl.textContent = `Scan stopped. Sent ${entries.length} code(s) to the requesting PC.`;
+    if (btn) { btn.disabled = true; btn.textContent = 'SCAN SESSION ENDED'; }
+    setTimeout(() => document.getElementById('mobileScanInbox')?.classList.add('hidden'), 2500);
+  } catch (err) {
+    console.error('Could not finish mobile scan session', err);
+    if (statusEl) statusEl.textContent = `Could not end scan (${err?.code || 'error'}): ${err?.message || err}`;
+  }
 };
 window.startMobileRequestedScan = async function () {
-  const req = mrpspPhonePendingRequest;
-  if (!auth.currentUser || !req) return alert("There is no pending scan request.");
-  if (req.requesterUid !== auth.currentUser.uid) return alert("This scan request belongs to another account.");
-  if (typeof Html5Qrcode !== "function") return alert("QR/barcode scanner library did not load. Refresh and try again.");
+  if (!auth.currentUser || !mrpspPhonePendingRequest) return alert('There is no pending scan request.');
+  if (mrpspPhonePendingRequest.requesterUid !== auth.currentUser.uid) return alert('This scan request belongs to another account.');
+  if (typeof Html5Qrcode !== 'function') return alert('QR/barcode scanner library did not load. Refresh and try again.');
   if (mrpspPhoneScanning) return;
-  mrpspPhoneCollected = [];
-  mrpspPhoneSeen = new Set();
-  mrpspPhoneLastDecode = "";
-  mrpspPhoneLastDecodeAt = 0;
-  mrpspPhoneSendQueue = Promise.resolve();
   mrpspPhoneScanning = true;
-  const btn = document.getElementById("mobileScanStartBtn");
-  const endBtn = document.getElementById("mobileScanEndBtn");
-  const declineBtn = document.getElementById("mobileScanDeclineBtn");
-  const status = document.getElementById("mobileScanResultStatus");
-  const maxScans = Math.max(1, Math.min(6, Number(req.maxScans || (mrpspIsContinuousMode(req.scanMode) ? 6 : 1))));
-  if (btn) btn.disabled = true;
-  if (endBtn) endBtn.classList.remove("hidden");
-  if (declineBtn) declineBtn.classList.add("hidden");
-  if (status) status.textContent = `Opening camera… scan up to ${maxScans} unique code(s). Each code is sent immediately; press END SCAN whenever you are finished.`;
-  mrpspRenderPhoneCollected();
-  const readerId = "mrpspMobileRemoteReader";
+  mrpspPhoneSeenCodes = new Set();
+  mrpspPhoneScanCount = 0;
+  const btn = document.getElementById('mobileScanStartBtn');
+  const status = document.getElementById('mobileScanResultStatus');
+  const stopBtn = document.getElementById('mobileScanStopBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'SCANNING…'; }
+  if (stopBtn) stopBtn.disabled = false;
+  if (status) status.textContent = 'Opening camera… allow camera permission. Each unique QR will auto-send; maximum 6.';
+  const readerId = 'mrpspMobileRemoteReader';
   let reader = document.getElementById(readerId);
   if (!reader) {
-    reader = document.createElement("div"); reader.id = readerId;
-    reader.style.cssText = "margin-top:12px;background:#fff;border-radius:8px;overflow:hidden;";
-    document.getElementById("mobileScanInbox")?.appendChild(reader);
+    reader = document.createElement('div'); reader.id = readerId;
+    reader.style.cssText = 'margin-top:12px;background:#fff;border-radius:8px;overflow:hidden;';
+    document.getElementById('mobileScanInbox')?.appendChild(reader);
   }
-  reader.innerHTML = "";
+  reader.innerHTML = '';
   try {
     mrpspPhoneScanner = new Html5Qrcode(readerId);
-    await mrpspPhoneScanner.start({ facingMode: "environment" }, { fps: 18, qrbox: { width: 240, height: 180 }, aspectRatio: 1.0 }, async decodedText => {
-      const code = String(decodedText || "").trim();
-      const activeReq = mrpspPhonePendingRequest;
-      if (!activeReq || !code || !mrpspPhoneScanning || mrpspPhoneSeen.has(code)) return;
-      const now = Date.now();
-      if (code === mrpspPhoneLastDecode && now - mrpspPhoneLastDecodeAt < 1200) return;
-      mrpspPhoneLastDecode = code;
-      mrpspPhoneLastDecodeAt = now;
-      if (mrpspPhoneCollected.length >= maxScans) return;
-      mrpspPhoneSeen.add(code);
-      mrpspPhoneCollected.push(code);
-      mrpspRenderPhoneCollected();
-      if (status) status.textContent = `Scanned ${mrpspPhoneCollected.length}/${maxScans}. Sending automatically…`;
-      // Serialize network writes. Each decode immediately queues a write to the SAME
-      // scan session; the phone does not create a new request for each barcode.
-      const thisCode = code;
-      mrpspPhoneSendQueue = mrpspPhoneSendQueue.then(async () => {
+    await mrpspPhoneScanner.start({ facingMode: 'environment' }, { fps: 12, qrbox: { width: 240, height: 180 } }, async decodedText => {
+      const req = mrpspPhonePendingRequest;
+      const value = String(decodedText || '').trim();
+      if (!req || !value || !mrpspPhoneScanning || mrpspPhoneSendBusy) return;
+      if (mrpspPhoneSeenCodes.has(value)) return;
+      if (mrpspPhoneScanCount >= MRPSP_REMOTE_MAX_CODES) {
+        await window.finishMobileRequestedScan();
+        return;
+      }
+      mrpspPhoneSendBusy = true;
+      mrpspPhoneSeenCodes.add(value);
+      try {
         const user = auth.currentUser;
-        if (!user) throw new Error("Your mobile session signed out. Sign in again.");
-        const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${activeReq.key}`);
+        if (!user || user.uid !== req.requesterUid) throw new Error('Please sign in with the same Firebase account on both devices.');
+        const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${req.key}`);
         const snap = await get(reqRef);
-        if (!snap.exists() || !["PENDING", "SCANNING"].includes(snap.val().status) || snap.val().requesterDeviceId === mrpspDeviceId) {
-          throw new Error("The request is no longer active. Start a new request from the PC.");
+        if (!snap.exists() || snap.val().status !== 'PENDING') throw new Error('The PC scan request is no longer pending.');
+        const current = snap.val();
+        const currentResults = current.results || {};
+        if (Object.values(currentResults).some(x => String(x?.value || '') === value)) {
+          if (status) status.textContent = `Duplicate QR ignored. ${Object.keys(currentResults).length}/${MRPSP_REMOTE_MAX_CODES} sent.`;
+          return;
         }
-        const latestCodes = mrpspPhoneCollected.slice(0, maxScans);
-        await update(reqRef, { status: "SCANNING", results: latestCodes, resultCount: latestCodes.length, lastScanAt: Date.now(), scannerDeviceId: mrpspDeviceId, completedByUid: user.uid, completedByEmail: user.email || "" });
-        if (status) status.textContent = `AUTO-SENT ${latestCodes.length}/${maxScans}. Keep scanning, or press END SCAN to stop.`;
-        if (latestCodes.length >= maxScans && mrpspPhoneScanning) await window.endMobileRequestedScan();
-      }).catch(err => {
-        console.error("Remote scan auto-send failed", err);
-        mrpspPhoneSeen.delete(thisCode);
-        mrpspPhoneCollected = mrpspPhoneCollected.filter(v => v !== thisCode);
-        mrpspRenderPhoneCollected();
-        if (status) status.textContent = "AUTO-SEND FAILED: " + (err?.message || err) + ". Check Firebase rules/connection, then scan again.";
-      });
-    }, error => console.debug("Mobile camera scanning", error));
-    if (status) status.textContent = `Camera active. Scan up to ${maxScans} unique code(s); each sends automatically.`;
+        const sequence = Object.keys(currentResults).length + 1;
+        const resultKey = `scan_${String(sequence).padStart(2, '0')}_${Date.now()}`;
+        await update(reqRef, {
+          [`results/${resultKey}`]: { value, sequence, scannedAt: Date.now(), scannerDeviceId: mrpspDeviceId },
+          resultCount: sequence, updatedAt: Date.now()
+        });
+        mrpspPhoneScanCount = sequence;
+        if (status) status.textContent = `AUTO-SENT ${sequence}/${MRPSP_REMOTE_MAX_CODES}. Scan the next QR; no new request is needed.`;
+        if (sequence >= MRPSP_REMOTE_MAX_CODES) {
+          await window.finishMobileRequestedScan();
+        }
+      } catch (err) {
+        mrpspPhoneSeenCodes.delete(value);
+        console.error('Remote scan result could not be auto-sent', err);
+        if (status) status.textContent = `AUTO-SEND FAILED (${err?.code || 'error'}): ${err?.message || err}`;
+      } finally {
+        mrpspPhoneSendBusy = false;
+      }
+    }, error => console.debug('Mobile scan camera status', error));
+    if (status) status.textContent = 'Camera active. Scan up to 6 unique QR codes; each sends automatically.';
   } catch (err) {
     mrpspPhoneScanning = false;
     mrpspPhoneScanner = null;
-    if (btn) btn.disabled = false;
-    if (endBtn) endBtn.classList.add("hidden");
-    if (declineBtn) declineBtn.classList.remove("hidden");
-    if (status) status.textContent = "Camera could not start. Allow camera access and use HTTPS: " + (err?.message || err);
-  }
-};
-window.endMobileRequestedScan = async function () {
-  const req = mrpspPhonePendingRequest;
-  const status = document.getElementById("mobileScanResultStatus");
-  mrpspStopPhoneScanner();
-  const endBtn = document.getElementById("mobileScanEndBtn");
-  if (endBtn) endBtn.classList.add("hidden");
-  const btn = document.getElementById("mobileScanStartBtn");
-  if (btn) { btn.disabled = true; btn.textContent = "SCAN SESSION ENDED"; }
-  if (!req || !auth.currentUser) {
-    if (status) status.textContent = `Scanning stopped. ${mrpspPhoneCollected.length} code(s) collected.`;
-    return;
-  }
-  try {
-    const reqRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${auth.currentUser.uid}/${req.key}`);
-    const snap = await get(reqRef);
-    if (snap.exists() && ["PENDING", "SCANNING"].includes(snap.val().status)) {
-      await update(reqRef, { status: "COMPLETED", results: mrpspPhoneCollected.slice(), resultCount: mrpspPhoneCollected.length, completedAt: Date.now(), scannerDeviceId: mrpspDeviceId });
-    }
-    if (status) status.textContent = `Scan ended. ${mrpspPhoneCollected.length} code(s) sent to the requesting device.`;
-    mrpspPhonePendingRequest = null;
-    setTimeout(() => document.getElementById("mobileScanInbox")?.classList.add("hidden"), 3000);
-  } catch (err) {
-    console.error("Could not end mobile scan", err);
-    if (status) status.textContent = "Camera stopped, but could not notify the requesting device: " + (err?.message || err);
+    if (btn) { btn.disabled = false; btn.textContent = 'START CONTINUOUS SCAN'; }
+    if (status) status.textContent = 'Camera could not start. Allow camera access and use HTTPS: ' + (err?.message || err);
   }
 };
 window.rejectMobileScanRequest = async function () {
   const req = mrpspPhonePendingRequest;
-  if (!req || !auth.currentUser) return window.dismissMobileScanInbox();
+  const user = auth.currentUser;
+  if (!req || !user) return window.dismissMobileScanInbox();
   mrpspStopPhoneScanner();
-  try { await update(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${auth.currentUser.uid}/${req.key}`), { status: "DECLINED", declinedAt: Date.now(), declinedByUid: auth.currentUser.uid }); }
-  catch (err) { console.error("Could not decline scan request", err); }
+  try { await update(ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}/${req.key}`), { status: 'DECLINED', declinedAt: Date.now(), declinedByUid: user.uid }); }
+  catch (err) { console.error('Could not decline scan request', err); }
   mrpspPhonePendingRequest = null;
   window.dismissMobileScanInbox();
 };
 
-// Each signed-in device listens only to requests under its own UID.
 onAuthStateChanged(auth, user => {
   if (mrpspPhoneInboxRef && mrpspPhoneInboxListener) {
-    try { off(mrpspPhoneInboxRef, "value", mrpspPhoneInboxListener); } catch (_) {}
+    try { off(mrpspPhoneInboxRef, 'value', mrpspPhoneInboxListener); } catch (_) {}
   }
-  mrpspPhoneInboxRef = null;
-  mrpspPhoneInboxListener = null;
+  mrpspPhoneInboxRef = null; mrpspPhoneInboxListener = null;
   if (!user) {
-    document.getElementById("mobileScanInbox")?.classList.add("hidden");
-    mrpspPhonePendingRequest = null;
-    mrpspStopPhoneScanner();
-    return;
+    document.getElementById('mobileScanInbox')?.classList.add('hidden');
+    mrpspPhonePendingRequest = null; mrpspStopPhoneScanner(); return;
   }
   const inboxRef = ref(db, `${MRPSP_REMOTE_SCAN_PATH}/${user.uid}`);
   mrpspPhoneInboxRef = inboxRef;
   mrpspPhoneInboxListener = snap => {
-    if (!snap.exists()) {
-      if (!mrpspPhonePendingRequest) document.getElementById("mobileScanInbox")?.classList.add("hidden");
-      return;
-    }
-    const entries = Object.entries(snap.val() || {}).map(([key, value]) => ({ key, ...value }));
+    const entries = snap.exists() ? Object.entries(snap.val() || {}).map(([key, value]) => ({ key, ...value })) : [];
     const now = Date.now();
-    const pending = entries.filter(r => ["PENDING", "SCANNING"].includes(r.status) && r.requesterDeviceId !== mrpspDeviceId && Number(r.expiresAt || 0) > now)
+    const pending = entries.filter(r => r.status === 'PENDING' && r.requesterDeviceId !== mrpspDeviceId && Number(r.expiresAt || 0) > now)
       .sort((a,b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))[0];
     if (!pending) {
-      if (!mrpspPhonePendingRequest) document.getElementById("mobileScanInbox")?.classList.add("hidden");
+      if (mrpspPhonePendingRequest) {
+        const old = entries.find(r => r.key === mrpspPhonePendingRequest.key);
+        if (!old || old.status !== 'PENDING') {
+          mrpspPhonePendingRequest = null; mrpspStopPhoneScanner();
+          const status = document.getElementById('mobileScanResultStatus');
+          if (status) status.textContent = 'This scan session has ended.';
+        }
+      }
+      if (!mrpspPhonePendingRequest) setTimeout(() => document.getElementById('mobileScanInbox')?.classList.add('hidden'), 1800);
       return;
     }
-    if (mrpspPhonePendingRequest?.key !== pending.key) {
-      mrpspPhonePendingRequest = pending;
-      mrpspPhoneCollected = [];
-      mrpspPhoneSeen = new Set();
-    } else {
-      mrpspPhonePendingRequest = { ...mrpspPhonePendingRequest, ...pending };
-    }
-    const inbox = document.getElementById("mobileScanInbox");
-    if (inbox) inbox.classList.remove("hidden");
-    const label = document.getElementById("mobileScanInboxText");
-    if (label) label.textContent = `Request from ${pending.requesterEmail || "your account on another device"}. ${mrpspIsContinuousMode(pending.scanMode) ? "Continuous mode: up to 6 unique codes, each sent automatically." : "Single scan request."} Use END SCAN at any time to stop.`;
-    const btn = document.getElementById("mobileScanStartBtn");
-    if (btn && !mrpspPhoneScanning && !["COMPLETED", "DECLINED"].includes(pending.status)) { btn.disabled = false; btn.textContent = "START CONTINUOUS SCAN"; }
+    mrpspPhonePendingRequest = pending;
+    const inbox = document.getElementById('mobileScanInbox'); if (inbox) inbox.classList.remove('hidden');
+    const label = document.getElementById('mobileScanInboxText');
+    if (label) label.textContent = `Continuous scan requested by ${pending.requesterEmail || 'your account on another device'}. Scan up to 6 unique codes; each sends automatically.`;
+    const btn = document.getElementById('mobileScanStartBtn');
+    if (btn && !mrpspPhoneScanning) { btn.disabled = false; btn.textContent = 'START CONTINUOUS SCAN'; }
   };
   onValue(inboxRef, mrpspPhoneInboxListener, err => {
-    console.error("Remote scan listener failed", err);
-    const inbox = document.getElementById("mobileScanInbox");
-    if (inbox) inbox.classList.remove("hidden");
-    const label = document.getElementById("mobileScanInboxText");
-    if (label) label.textContent = err?.code === "PERMISSION_DENIED"
-      ? "Remote scanning is blocked by Firebase Realtime Database rules. Add the mobile_scan_requests rule at the database root, then publish the rules."
-      : "Remote scan listener failed: " + (err?.message || err);
+    console.error('Remote scan listener failed', err);
+    const inbox = document.getElementById('mobileScanInbox'); if (inbox) inbox.classList.remove('hidden');
+    const label = document.getElementById('mobileScanInboxText');
+    if (label) label.textContent = `Firebase inbox failed (${err?.code || 'error'}): ${err?.message || err}. Check the mobile_scan_requests rule and account UID.`;
+    const status = document.getElementById('mobileScanResultStatus');
+    if (status) status.textContent = `Firebase error: ${err?.code || ''} ${err?.message || err}`;
   });
 });
 
-
-
-// ================= LOGIN-FREE QUICK ASSET CHECKOUT / RETURN =================
+// ================= SINGLE-FILE QUICK ASSET CHECKOUT / RETURN =================
+// All quick transaction logic is inside index.html. No Cloud Function is called.
+// Because database rules must not be made public, a normal authenticated user with
+// permission for the asset's project is required.
 function quickTxnSetStatus(message, color = '#b45309') {
-  const el = document.getElementById('quickTxnStatus'); if (el) { el.textContent = message; el.style.color = color; }
+  const el = document.getElementById('quickTxnStatus');
+  if (el) { el.textContent = message; el.style.color = color; }
+}
+function quickTxnEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function quickTxnRender() {
   const count = document.getElementById('quickTxnCount');
   const list = document.getElementById('quickTxnList');
   if (count) count.textContent = `${quickTxnItems.length} / 6 assets scanned`;
-  if (list) list.innerHTML = quickTxnItems.map((it, i) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:9px;border:1px solid #e2e8f0;border-radius:8px;margin:6px 0;background:#f8fafc;"><div><b>${i+1}. ${String(it.item || 'Unnamed asset').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</b><div style="font-size:11px;color:#64748b;">${String(it.barcode || '').replace(/[&<>"']/g, '')} · ${it.projectLabel}</div></div><button type="button" class="danger" style="padding:5px 9px;" onclick="window.removeQuickTxnItem(${i})">REMOVE</button></div>`).join('');
+  if (list) list.innerHTML = quickTxnItems.map((it, i) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:9px;border:1px solid #e2e8f0;border-radius:8px;margin:6px 0;background:#f8fafc;"><div><b>${i+1}. ${quickTxnEscape(it.item || 'Unnamed asset')}</b><div style="font-size:11px;color:#64748b;">${quickTxnEscape(it.barcode || '')} · ${quickTxnEscape(it.projectLabel || it.projectKey)}</div></div><button type="button" class="danger" style="padding:5px 9px;" onclick="window.removeQuickTxnItem(${i})">REMOVE</button></div>`).join('');
 }
-window.removeQuickTxnItem = (index) => { if (quickTxnBusy) return; quickTxnItems.splice(index, 1); if (!quickTxnItems.length) quickTxnProject = null; quickTxnRender(); };
+function quickTxnProjectAllowed(projectKey) {
+  return typeof hasProjectAccess === 'function' && hasProjectAccess(projectKey);
+}
+function quickTxnInventoryPath(projectKey) {
+  return projectKey === 'CCRAS' ? 'projects/CCRAS/inventory' : 'inventory';
+}
+function quickTxnLogsPath(projectKey) {
+  return projectKey === 'CCRAS' ? 'projects/CCRAS/logs' : 'logs';
+}
+window.removeQuickTxnItem = (index) => {
+  if (quickTxnBusy) return;
+  quickTxnItems.splice(index, 1);
+  if (!quickTxnItems.length) quickTxnProject = null;
+  quickTxnRender();
+};
 window.startQuickAssetTransaction = async (type) => {
   if (quickTxnBusy) return;
   if (!['CHECKOUT','RETURN'].includes(type)) return;
-  if (auth.currentUser && !auth.currentUser.isAnonymous) return alert('Please sign out of the full portal first to use Quick Asset Transaction.');
+  if (!auth.currentUser || auth.currentUser.isAnonymous) {
+    alert('Please sign in with your MRPSP account first. This single-HTML version cannot safely bypass Firebase database permissions.');
+    return;
+  }
+  try {
+    currentUser = auth.currentUser;
+    await loadMyProjectPermissions();
+  } catch (e) {
+    alert('Could not load your project permissions: ' + (e.message || e));
+    return;
+  }
+  if (!quickTxnProjectAllowed('CCRAS') && !quickTxnProjectAllowed('YELLOW_LINE_BREACH')) {
+    alert('Your account has no access to the CCRAS or Yellow Line inventory. Ask an administrator to assign project access.');
+    return;
+  }
   quickTxnType = type; quickTxnItems = []; quickTxnProject = null; quickTxnFaceUser = null;
   document.getElementById('quickTxnTitle').textContent = type === 'CHECKOUT' ? 'Quick Asset Checkout' : 'Quick Asset Return';
-  document.getElementById('quickTxnHint').textContent = 'Scan up to six unique asset QR tags, then verify your face once.';
+  document.getElementById('quickTxnHint').textContent = 'Scan up to six unique asset QR tags, then verify your registered face once.';
   document.getElementById('quickTxnPurposeWrap').classList.toggle('hidden', type !== 'CHECKOUT');
   document.getElementById('quickTxnReturnWrap').classList.toggle('hidden', type !== 'RETURN');
   document.getElementById('quickTxnPurpose').value = '';
   document.getElementById('quickTxnReturnLocation').value = '';
   document.getElementById('quickTxnReturnSpot').value = '';
-  document.getElementById('quickTxnMeta').textContent = 'Project: detected automatically from the first QR';
+  document.getElementById('quickTxnMeta').textContent = 'Project: detected from the scanned QR';
   document.getElementById('quickTxnFinishScan').disabled = false;
   document.getElementById('quickTxnFinishScan').textContent = 'FINISH SCANNING & FACE VERIFY';
-  quickTxnRender(); quickTxnSetStatus('Starting secure transaction session…');
+  quickTxnRender();
+  quickTxnSetStatus('Starting scanner…');
   document.getElementById('quickTxnModal').classList.remove('hidden');
   try {
-    if (!auth.currentUser) {
-      quickAnonSession = true;
-      await signInAnonymously(auth);
-    }
-    if (!auth.currentUser) throw new Error('Could not establish the temporary Firebase session.');
     if (typeof Html5Qrcode !== 'function') throw new Error('QR scanner library did not load.');
     const reader = document.getElementById('quickTxnReader'); reader.innerHTML = '';
     quickTxnScanner = new Html5Qrcode('quickTxnReader');
@@ -16967,53 +16962,55 @@ window.startQuickAssetTransaction = async (type) => {
     quickTxnSetStatus('Camera ready. Scan assets one by one.');
   } catch (e) {
     quickTxnSetStatus('Could not start: ' + (e.message || e), '#b91c1c');
-    if (auth.currentUser?.isAnonymous) { quickAnonSession = false; await signOut(auth).catch(() => {}); }
   }
 };
 window.onQuickAssetQr = async (decodedText) => {
   if (!decodedText || quickTxnBusy || quickTxnItems.length >= 6) return;
   const barcode = String(decodedText).trim();
-  if (quickTxnItems.some(x => x.barcode === barcode)) return;
+  if (!barcode || barcode.length > 200 || quickTxnItems.some(x => x.barcode === barcode)) return;
   quickTxnBusy = true;
   try {
-    quickTxnSetStatus('Checking QR against existing project inventory…');
-    const matches = [];
-    const lookupErrors = [];
-    for (const project of [{key:'YELLOW_LINE_BREACH', label:'Yellow Line Breach Project', path:'inventory'}, {key:'CCRAS', label:'CCRAS', path:'projects/CCRAS/inventory'}]) {
+    quickTxnSetStatus('Looking up asset in projects your account can access…');
+    const candidates = [];
+    if (quickTxnProjectAllowed('YELLOW_LINE_BREACH')) candidates.push({key:'YELLOW_LINE_BREACH', label:'Yellow Line Breach Project', path:'inventory'});
+    if (quickTxnProjectAllowed('CCRAS')) candidates.push({key:'CCRAS', label:'CCRAS', path:'projects/CCRAS/inventory'});
+    let found = null;
+    let lookupErrors = [];
+    for (const project of candidates) {
       try {
-        const snap = await get(query(ref(db, project.path), orderByChild('barcode'), equalTo(barcode)));
-        if (snap.exists()) snap.forEach(child => matches.push({key:child.key, ...child.val(), projectKey:project.key, projectLabel:project.label, inventoryPath:project.path}));
-      } catch (projectLookupError) {
-        console.warn(`Quick asset QR lookup denied for ${project.label} at ${project.path}:`, projectLookupError);
-        lookupErrors.push({project, error: projectLookupError});
-      }
+        const q = query(ref(db, project.path), orderByChild('barcode'), equalTo(barcode));
+        const snap = await get(q);
+        if (snap.exists()) {
+          const first = Object.entries(snap.val())[0];
+          found = { key:first[0], value:first[1], projectKey:project.key, projectLabel:project.label, barcode };
+          break;
+        }
+      } catch (err) { lookupErrors.push(err); }
     }
-    if (matches.length === 0 && lookupErrors.length > 0) {
-      const deniedProjects = lookupErrors.map(x => x.project.label).join(', ');
-      quickTxnSetStatus(`QR lookup could not verify all projects. Firebase denied access to: ${deniedProjects}. This QR may belong to a restricted project; do not open its database rules publicly.`, '#b91c1c');
-      return;
+    if (!found) {
+      if (lookupErrors.length === candidates.length) throw new Error('Firebase denied inventory access. Confirm your account has project access and that the database rules allow authorized users to read that project.');
+      throw new Error('QR code was not found in any inventory your account can access.');
     }
-    if (matches.length === 0) { quickTxnSetStatus(`QR ${barcode} is not registered in the accessible project inventory.`, '#b91c1c'); return; }
-    if (matches.length > 1) { quickTxnSetStatus('This QR matches more than one project inventory. Ask the administrator to resolve the duplicate barcode.', '#b91c1c'); return; }
-    const item = matches[0];
-    if (quickTxnProject && quickTxnProject !== item.projectKey) { quickTxnSetStatus('All six items in one batch must belong to the same project. Finish this batch first.', '#b91c1c'); return; }
+    if (quickTxnProject && quickTxnProject !== found.projectKey) throw new Error('All assets in one batch must belong to the same project. Finish this batch first.');
+    const item = found.value || {};
     const status = String(item.status || 'In Stock').trim();
-    if (quickTxnType === 'CHECKOUT') {
-      if (item.isStationery) { quickTxnSetStatus('Stationery quantity items must use the regular inventory workflow; this fast flow is for individually QR-tagged assets.', '#b91c1c'); return; }
-      if (status !== 'In Stock') { quickTxnSetStatus(`${item.item || barcode} cannot be checked out because its status is ${status}.`, '#b91c1c'); return; }
-    } else {
-      if (item.isStationery) { quickTxnSetStatus('Stationery quantity items must use the regular inventory workflow; this fast flow is for individually QR-tagged assets.', '#b91c1c'); return; }
-      if (status !== 'Checked Out') { quickTxnSetStatus(`${item.item || barcode} cannot be returned because its status is ${status}.`, '#b91c1c'); return; }
-    }
-    quickTxnProject = item.projectKey; quickTxnItems.push(item);
-    document.getElementById('quickTxnMeta').textContent = `Project: ${item.projectLabel}`;
-    quickTxnRender(); quickTxnSetStatus(`Added ${item.item || barcode}.` , '#047857');
+    if (item.isStationery) throw new Error('Stationery quantity items must use the regular inventory workflow.');
+    if (quickTxnType === 'CHECKOUT' && status !== 'In Stock') throw new Error(`${item.item || barcode} cannot be checked out because its status is ${status}.`);
+    if (quickTxnType === 'RETURN' && status !== 'Checked Out') throw new Error(`${item.item || barcode} cannot be returned because its status is ${status}.`);
+    quickTxnProject = found.projectKey;
+    quickTxnItems.push({ ...item, key:found.key, barcode, projectKey:found.projectKey, projectLabel:found.projectLabel });
+    document.getElementById('quickTxnMeta').textContent = `Project: ${found.projectLabel}`;
+    quickTxnRender(); quickTxnSetStatus(`Added ${item.item || barcode}.`, '#047857');
     if (quickTxnItems.length >= 6) { await window.stopQuickTxnScanner(); quickTxnSetStatus('Six assets scanned. Continue to face verification.', '#047857'); }
   } catch (e) { quickTxnSetStatus('QR lookup failed: ' + (e.message || e), '#b91c1c'); }
   finally { quickTxnBusy = false; }
 };
 window.stopQuickTxnScanner = async () => {
-  if (quickTxnScanner) { try { if (quickTxnScanner.isScanning) await quickTxnScanner.stop(); } catch (_) {} try { await quickTxnScanner.clear(); } catch (_) {} quickTxnScanner = null; }
+  if (quickTxnScanner) {
+    try { if (quickTxnScanner.isScanning) await quickTxnScanner.stop(); } catch (_) {}
+    try { await quickTxnScanner.clear(); } catch (_) {}
+    quickTxnScanner = null;
+  }
 };
 window.finishQuickAssetScanning = async () => {
   if (quickTxnBusy) return;
@@ -17030,54 +17027,87 @@ window.finishQuickAssetScanning = async () => {
   document.getElementById('btnCapture').disabled = false;
   document.getElementById('btnCapture').textContent = '📸 SCAN FACE';
   document.getElementById('faceModal').classList.remove('hidden');
-  quickTxnSetStatus('Scan your registered face once to authorize the entire batch.');
+  quickTxnSetStatus('Scan your registered face once to authorize the batch.');
   await initCamera(true);
 };
-window.commitQuickAssetTransaction = async () => {
-  if (!quickTxnFaceUser || !quickTxnItems.length || !quickTxnProject) throw new Error('Transaction session is incomplete.');
-  const purpose = quickTxnType === 'CHECKOUT' ? document.getElementById('quickTxnPurpose').value.trim() : `${document.getElementById('quickTxnReturnLocation').value} [${document.getElementById('quickTxnReturnSpot').value.trim()}]`;
-  const timestamp = Date.now();
-  const updates = {};
-  const userName = quickTxnFaceUser.name;
-  const base = quickTxnProject === 'CCRAS' ? 'projects/CCRAS' : '';
-  // Re-read every asset and stage inventory + logs as one atomic multi-location update.
-  for (const scanned of quickTxnItems) {
-    const path = `${base ? base + '/' : ''}inventory/${scanned.key}`;
-    const snap = await get(ref(db, path));
-    if (!snap.exists()) throw new Error(`${scanned.item || scanned.barcode} is no longer in inventory.`);
-    const current = snap.val();
-    const status = String(current.status || 'In Stock').trim();
-    if (quickTxnType === 'CHECKOUT' && status !== 'In Stock') throw new Error(`${current.item || current.barcode} is no longer available. Rescan the batch.`);
-    if (quickTxnType === 'RETURN' && status !== 'Checked Out') throw new Error(`${current.item || current.barcode} is no longer checked out. Rescan the batch.`);
-    if (quickTxnType === 'CHECKOUT') {
-      updates[`${path}/status`] = 'Checked Out'; updates[`${path}/holder`] = userName; updates[`${path}/location`] = purpose;
-      updates[`${path}/usageCount`] = Number(current.usageCount || 0) + 1; updates[`${path}/lastCheckoutAt`] = timestamp;
-      updates[`${path}/lastCheckoutBy`] = userName; updates[`${path}/lastCheckoutPurpose`] = purpose; updates[`${path}/lastCheckoutByUid`] = quickTxnFaceUser.uid;
-    } else {
-      updates[`${path}/status`] = 'In Stock'; updates[`${path}/holder`] = 'Store'; updates[`${path}/location`] = purpose;
-      updates[`${path}/lastReturnedAt`] = timestamp; updates[`${path}/lastReturnedBy`] = userName; updates[`${path}/lastReturnedByUid`] = quickTxnFaceUser.uid;
+window.commitQuickAssetTransaction = async (faceDescriptor) => {
+  if (!quickTxnItems.length || !quickTxnProject) throw new Error('Transaction session is incomplete.');
+  if (!auth.currentUser || auth.currentUser.isAnonymous) throw new Error('Your session expired. Sign in and try again.');
+  if (!quickTxnProjectAllowed(quickTxnProject)) throw new Error('Your account does not have access to this project.');
+  const purpose = quickTxnType === 'CHECKOUT'
+    ? document.getElementById('quickTxnPurpose').value.trim()
+    : `${document.getElementById('quickTxnReturnLocation').value} [${document.getElementById('quickTxnReturnSpot').value.trim()}]`;
+  if (!purpose || purpose.length > 500) throw new Error('Enter a valid purpose or return location.');
+  const btn = document.getElementById('btnCapture');
+  try {
+    // Only read the currently authenticated user's own face template.
+    const profileSnap = await get(ref(db, `users/${auth.currentUser.uid}`));
+    const profile = profileSnap.val() || {};
+    if (!profileSnap.exists() || profile.banned || profile.terminated) throw new Error('Your account is not permitted to perform transactions.');
+    const stored = profile.faceData;
+    if (!stored) throw new Error('No registered face template found for your account. Register your face from your profile first.');
+    const samples = Array.isArray(stored) && Array.isArray(stored[0]) ? stored : [stored];
+    let matched = false;
+    for (const sample of samples) {
+      if (Array.isArray(sample) && sample.length === faceDescriptor.length && faceapi.euclideanDistance(sample, faceDescriptor) < 0.50) { matched = true; break; }
     }
-    const logRef = push(ref(db, `${base ? base + '/' : ''}logs`));
-    updates[`${base ? base + '/' : ''}logs/${logRef.key}`] = {type:quickTxnType,item:current.item || 'Unknown item',barcode:current.barcode || scanned.barcode,reason:quickTxnType === 'CHECKOUT' ? purpose : 'Returned to Stock',location:quickTxnType === 'RETURN' ? purpose : 'Field Operations',qty:1,time:timestamp,takenBy:userName,by:userName,byUid:quickTxnFaceUser.uid,status:quickTxnType === 'CHECKOUT' ? 'Checked Out' : 'In Stock',project:quickTxnProject};
+    if (!matched) throw new Error('Face did not match your registered profile. No transaction was written.');
+
+    const uid = auth.currentUser.uid;
+    const email = auth.currentUser.email || '';
+    const userName = profile.name || auth.currentUser.displayName || email || uid;
+    const base = quickTxnInventoryPath(quickTxnProject);
+    const logBase = quickTxnLogsPath(quickTxnProject);
+    const updates = {};
+    const timestamp = Date.now();
+    // Re-read every asset immediately before writing, so stale scan results are not trusted.
+    for (const scanned of quickTxnItems) {
+      const freshSnap = await get(ref(db, `${base}/${scanned.key}`));
+      if (!freshSnap.exists()) throw new Error(`Asset ${scanned.barcode} no longer exists.`);
+      const fresh = freshSnap.val();
+      if (String(fresh.barcode || '') !== String(scanned.barcode)) throw new Error(`Asset barcode changed for ${scanned.barcode}. Scan it again.`);
+      if (fresh.isStationery) throw new Error('Stationery quantity items must use the regular inventory workflow.');
+      const status = String(fresh.status || 'In Stock').trim();
+      if (quickTxnType === 'CHECKOUT' && status !== 'In Stock') throw new Error(`${fresh.item || scanned.barcode} is now ${status}; no transaction was written.`);
+      if (quickTxnType === 'RETURN' && status !== 'Checked Out') throw new Error(`${fresh.item || scanned.barcode} is now ${status}; no transaction was written.`);
+      const itemUpdates = quickTxnType === 'CHECKOUT'
+        ? { status:'Checked Out', holder:userName, holderUid:uid, holderEmail:email, location:purpose, usageCount:Number(fresh.usageCount || 0)+1, lastCheckoutAt:timestamp, lastCheckoutBy:userName, lastCheckoutPurpose:purpose }
+        : { status:'In Stock', holder:'Store', holderUid:null, holderEmail:null, location:purpose, lastReturnedAt:timestamp, lastReturnedBy:userName };
+      Object.entries(itemUpdates).forEach(([k,v]) => updates[`${base}/${scanned.key}/${k}`] = v);
+      const logKey = push(ref(db, logBase)).key;
+      updates[`${logBase}/${logKey}`] = {
+        type:quickTxnType, item:fresh.item || 'Unknown item', barcode:scanned.barcode,
+        reason:quickTxnType === 'CHECKOUT' ? purpose : 'Returned to Stock',
+        location:quickTxnType === 'RETURN' ? purpose : 'Field Operations',
+        qty:1, time:timestamp, takenBy:userName, by:userName,
+        userUid:uid, userEmail:email,
+        status:quickTxnType === 'CHECKOUT' ? 'Checked Out' : 'In Stock',
+        project:quickTxnProject
+      };
+    }
+    // Single multi-location update: all asset status changes and logs succeed together or fail together.
+    await update(ref(db), updates);
+    await window.stopQuickTxnScanner();
+    stopCamera();
+    document.getElementById('quickTxnModal').classList.add('hidden');
+    document.getElementById('faceModal').classList.add('hidden');
+    quickTxnSetStatus(`Success: ${quickTxnItems.length} asset(s) ${quickTxnType === 'CHECKOUT' ? 'checked out' : 'returned'}.`, '#047857');
+    alert(`SUCCESS: ${quickTxnItems.length} asset(s) ${quickTxnType === 'CHECKOUT' ? 'checked out' : 'returned'} by ${userName}.`);
+    quickTxnItems = []; quickTxnProject = null; quickTxnFaceUser = null; scanMode = 'LOGIN';
+  } catch (e) {
+    updateStatus('❌ ' + (e.message || 'Verification failed.'), 'red');
+    quickTxnSetStatus('Transaction not completed: ' + (e.message || e), '#b91c1c');
+    if (btn) { btn.disabled = false; btn.textContent = '📸 SCAN FACE'; }
+    throw e;
   }
-  await update(ref(db), updates);
-  const completed = quickTxnItems.length;
-  await window.stopQuickTxnScanner();
-  stopCamera();
-  document.getElementById('quickTxnModal').classList.add('hidden');
-  quickTxnSetStatus(`Success: ${completed} asset(s) ${quickTxnType === 'CHECKOUT' ? 'checked out' : 'returned'}.`, '#047857');
-  alert(`SUCCESS: ${completed} asset(s) ${quickTxnType === 'CHECKOUT' ? 'checked out' : 'returned'} by ${userName}.`);
-  quickTxnItems = []; quickTxnProject = null; quickTxnFaceUser = null;
-  if (auth.currentUser?.isAnonymous) { quickAnonSession = false; await signOut(auth).catch(() => {}); }
-  scanMode = 'LOGIN';
 };
 window.cancelQuickAssetTransaction = async () => {
   await window.stopQuickTxnScanner();
   if (!document.getElementById('faceModal').classList.contains('hidden')) stopCamera();
   document.getElementById('quickTxnModal').classList.add('hidden');
   quickTxnItems = []; quickTxnProject = null; quickTxnFaceUser = null; quickTxnBusy = false; scanMode = 'LOGIN';
-  if (auth.currentUser?.isAnonymous) { quickAnonSession = false; await signOut(auth).catch(() => {}); }
 };
+
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
