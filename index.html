@@ -1241,6 +1241,7 @@ tr:hover { background: #fcfcfd; }
         <button onclick="toggleInvMode('checkout')" class="warning"><i class="fas fa-sign-out-alt"></i> Checkout</button>
         <button onclick="toggleInvMode('return')" class="info" style="background:var(--metro-blue); border-color:var(--metro-blue);"><i class="fas fa-sign-in-alt"></i> Return</button>
         <button onclick="toggleInvMode('history')" class="secondary"><i class="fas fa-history"></i> Audit Trail</button>
+        <button onclick="toggleInvMode('stationery')" class="success" style="background:#15803d;border-color:#15803d;"><i class="fas fa-box-open"></i> Consumable / Stationery</button>
     </div>
 <div id="inv-add" class="panel hidden" style="border-top: 4px solid var(--success-green);">
     <h3 id="invFormTitle" style="color:var(--success-green);"><i class="fas fa-plus-circle"></i> Register New Asset</h3>
@@ -1850,6 +1851,13 @@ tr:hover { background: #fcfcfd; }
     </div>
 </div>
 <div id="tab-funds" class="hidden">
+    <!-- PAYMENT WORKSPACE: navigation follows the Asset Tracking toolbar style -->
+    <div style="margin-bottom:20px;display:flex;gap:10px;flex-wrap:wrap;padding:10px;background:#e2e8f0;border-radius:6px;">
+      <button type="button" id="btnPaymentStudent" class="info" onclick="window.togglePaymentMode('student')"><i class="fas fa-user"></i> Member Payment</button>
+      <button type="button" id="btnPaymentVerify" class="warning hidden" onclick="window.togglePaymentMode('verify')"><i class="fas fa-clipboard-check"></i> Payment Verification</button>
+      <button type="button" id="btnPaymentQr" class="secondary hidden" onclick="window.togglePaymentMode('qr')"><i class="fas fa-qrcode"></i> Payment QR Setup</button>
+    </div>
+    <div id="paymentMode-student">
     <div class="panel" style="border-top:4px solid #15803d; margin-bottom:18px;">
       <h3 style="margin-top:0;color:#166534;"><i class="fas fa-qrcode"></i> Project Payment</h3>
       <p style="color:#475569;">Scan the permanent QR uploaded by an administrator and pay using your UPI app. Then submit the amount and the <b>last 4 digits of the UPI transaction/reference ID</b>. The payment stays pending until an administrator verifies it. Submission alone never credits the fund.</p>
@@ -1871,18 +1879,24 @@ tr:hover { background: #fcfcfd; }
           <div id="mrpspPaymentPendingMessage" style="margin-top:10px;"></div>
         </div>
       </div>
-      <div id="mrpspAdminQrUploadPanel" class="hidden" style="margin-top:16px;padding:14px;border:1px dashed #64748b;border-radius:8px;background:#f8fafc;">
-        <h4 style="margin:0 0 8px;color:#1e3a8a;">Administrator: Permanent Payment QR</h4>
-        <label for="mrpspPermanentQrFile">Upload QR image (PNG/JPG/WebP)</label><input id="mrpspPermanentQrFile" type="file" accept="image/png,image/jpeg,image/webp">
-        <label for="mrpspQrLabel">QR label / receiving account note (optional)</label><input id="mrpspQrLabel" maxlength="120" placeholder="e.g. Project fund UPI QR">
-        <button type="button" class="success" onclick="window.mrpspSavePermanentPaymentQr()">SAVE PERMANENT QR</button>
-        <small style="display:block;color:#64748b;margin-top:6px;">The QR is stored in Firebase settings and shown to all signed-in project members. Use a small image (preferably under 300 KB).</small>
-      </div>
     </div>
+    </div>
+    <div id="paymentMode-verify" class="hidden">
     <div id="mrpspAdminPaymentReviewPanel" class="panel hidden" style="border-top:4px solid #b45309;margin-bottom:18px;">
       <h3 style="margin-top:0;color:#92400e;"><i class="fas fa-clipboard-check"></i> Admin Payment Verification</h3>
       <p style="color:#64748b;">Verify the actual transaction in the receiving account before approving. Approval creates one approved CREDIT entry in Project Funds. Never approve based only on the last four digits.</p>
       <div id="mrpspAdminPaymentReviewList">Loading pending payments…</div>
+    </div>
+    </div>
+    <div id="paymentMode-qr" class="hidden">
+      <div id="mrpspAdminQrUploadPanel" class="panel hidden" style="border-top:4px solid var(--metro-blue);margin-bottom:18px;">
+        <h3><i class="fas fa-qrcode"></i> Permanent Payment QR Setup</h3>
+        <p style="color:#64748b;">Upload the official payment QR. Members will see this QR in the Member Payment section.</p>
+        <label for="mrpspPermanentQrFile">Upload QR image (PNG/JPG/WebP)</label><input id="mrpspPermanentQrFile" type="file" accept="image/png,image/jpeg,image/webp">
+        <label for="mrpspQrLabel">QR label / receiving account note (optional)</label><input id="mrpspQrLabel" maxlength="120" placeholder="e.g. Project fund UPI QR">
+        <button type="button" class="success" onclick="window.mrpspSavePermanentPaymentQr()"><i class="fas fa-save"></i> SAVE PERMANENT QR</button>
+        <small style="display:block;color:#64748b;margin-top:8px;">Use a PNG, JPG or WebP image under 300 KB.</small>
+      </div>
     </div>
     <div class="finance-dashboard">
         <div class="fin-card income">
@@ -3539,6 +3553,29 @@ import { getDatabase, ref, get, query, orderByChild, equalTo, update, push, remo
 const MRPSP_PAYMENT_QR_PATH = "system_settings/permanentPaymentQr";
 let mrpspPaymentRequestsListener = null;
 let mrpspPaymentQrListener = null;
+
+// Payment sub-navigation styled to match Asset Tracking controls.
+window.togglePaymentMode = function (mode) {
+  const allowed = ['student', 'verify', 'qr'];
+  if (!allowed.includes(mode)) mode = 'student';
+  if ((mode === 'verify' || mode === 'qr') && !isAdmin) {
+    alert('Administrator access required.');
+    mode = 'student';
+  }
+  allowed.forEach(name => {
+    const panel = document.getElementById(`paymentMode-${name}`);
+    if (panel) panel.classList.toggle('hidden', name !== mode);
+  });
+  const buttons = { student: 'btnPaymentStudent', verify: 'btnPaymentVerify', qr: 'btnPaymentQr' };
+  Object.entries(buttons).forEach(([name, id]) => {
+    const button = document.getElementById(id);
+    if (!button) return;
+    button.classList.toggle('active', name === mode);
+    if (name === mode) { button.style.outline = '2px solid var(--metro-gold)'; }
+    else { button.style.outline = ''; }
+  });
+  if (mode === 'verify') window.mrpspLoadPaymentReviewQueue?.();
+};
 window.mrpspSubmitPaymentForVerification = async function () {
   const amount = Number(document.getElementById("mrpspPayAmount")?.value);
   const payerName = (document.getElementById("mrpspPayName")?.value || "").trim();
@@ -3662,6 +3699,9 @@ window.mrpspInitPaymentFeatures = function () {
   const reviewPanel = document.getElementById("mrpspAdminPaymentReviewPanel");
   if (qrPanel) qrPanel.classList.toggle("hidden", !isAdmin);
   if (reviewPanel) reviewPanel.classList.toggle("hidden", !isAdmin);
+  document.getElementById("btnPaymentVerify")?.classList.toggle("hidden", !isAdmin);
+  document.getElementById("btnPaymentQr")?.classList.toggle("hidden", !isAdmin);
+  window.togglePaymentMode("student");
   if (mrpspPaymentQrListener) { try { off(ref(db, MRPSP_PAYMENT_QR_PATH)); } catch (_) {} }
   mrpspPaymentQrListener = onValue(ref(db, MRPSP_PAYMENT_QR_PATH), snap => window.mrpspRenderPermanentPaymentQr(snap.exists() ? snap.val() : null), err => console.error("Payment QR read failed", err));
   window.mrpspLoadPaymentReviewQueue();
@@ -4672,7 +4712,7 @@ window.loadInventory = () => {
 
             // Construct the Table Row
             const row = `
-            <tr class="stock-row" data-invoice="${v.invoiceNo || ''}" style="${isSold ? 'background:#f8fafc; color:#64748b;' : ''}">
+            <tr class="stock-row" data-invoice="${v.invoiceNo || ''}" data-stationery="${v.isStationery ? 'true' : 'false'}" style="${isSold ? 'background:#f8fafc; color:#64748b;' : ''}">
                 <td style="font-family:monospace; font-weight:bold;">${v.barcode || '--'}</td>
                 <td style="font-weight:bold;">
                     ${v.item}
@@ -4702,6 +4742,7 @@ window.loadInventory = () => {
         if (summaryEl) {
             summaryEl.innerHTML = `Total Assets: ${total} | <span style="color:#15803d; font-weight:bold;">Available: ${available}</span>`;
         }
+        if (typeof window.filterStockTable === 'function') window.filterStockTable();
     });
 };
 window.printReport = (mode) => {
@@ -6846,7 +6887,11 @@ function ccrasRef(path) {
     return projectAwareRef( `projects/CCRAS/${path}`);
 }
 // --- FIXED TOGGLE FUNCTION (Crash-Free for Checkout & Return) ---
+window.inventoryCategoryFilter = 'all';
 window.toggleInvMode = (mode) => {
+    // The stationery shortcut reuses the normal stock table and filters it to consumables.
+    window.inventoryCategoryFilter = mode === 'stationery' ? 'stationery' : 'all';
+    if (mode === 'stationery') mode = 'list';
     // 1. Hide All Panels
     document.getElementById("inv-add").classList.add("hidden");
     document.getElementById("inv-checkout").classList.add("hidden");
@@ -8735,6 +8780,8 @@ window.filterStockTable = () => {
     const rows = document.getElementsByClassName("stock-row");
 
     Array.from(rows).forEach(row => {
+        const isStationeryRow = row.getAttribute('data-stationery') === 'true';
+        const categoryMatch = window.inventoryCategoryFilter !== 'stationery' || isStationeryRow;
         const barcode = row.cells[0].innerText.toLowerCase();
         const name = row.cells[1].innerText.toLowerCase();
         const station = row.cells[3].innerText.toLowerCase();
@@ -8744,8 +8791,8 @@ window.filterStockTable = () => {
         const isSold = row.getAttribute("data-sold") === "true";
 
         if (input === "") {
-            // Default view: Hide sold items, show active stock
-            row.style.display = isSold ? "none" : "";
+            // Default view: Hide sold items, show active stock. Stationery shortcut filters consumables only.
+            row.style.display = (!isSold && categoryMatch) ? "" : "none";
         } else {
             // Search active
             let match = false;
@@ -8758,7 +8805,7 @@ window.filterStockTable = () => {
                 match = name.includes(input) || barcode.includes(input) || station.includes(input) || invoice.includes(input);
             }
 
-            row.style.display = match ? "" : "none";
+            row.style.display = (match && categoryMatch) ? "" : "none";
         }
     });
 };
