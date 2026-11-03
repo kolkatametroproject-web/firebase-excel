@@ -3558,7 +3558,7 @@ window.mrpspSubmitPaymentForVerification = async function () {
     note: "Pending until administrator verifies the actual transaction in the receiving account."
   };
   try {
-    const reqRef = await push(ref(db, "eoffice_requests"), request);
+    const reqRef = await push(ref(db, "project_payment_requests"), request);
     const msg = document.getElementById("mrpspPaymentPendingMessage");
     if (msg) msg.innerHTML = `<div style="padding:10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;color:#92400e;"><b>Payment submitted — PENDING VERIFICATION.</b><br>Request ID: <code>${reqRef.key}</code><br>Fund credit will happen only after an administrator verifies the payment.</div>`;
     document.getElementById("mrpspPayAmount").value = "";
@@ -3602,7 +3602,7 @@ window.mrpspRenderPermanentPaymentQr = function (value) {
 window.mrpspVerifyAndCreditPayment = async function (requestKey) {
   if (!isAdmin || !auth.currentUser) return alert("Only an administrator can verify and credit a payment.");
   try {
-    const reqRef = ref(db, `eoffice_requests/${requestKey}`);
+    const reqRef = ref(db, `project_payment_requests/${requestKey}`);
     const snap = await get(reqRef);
     if (!snap.exists()) return alert("Payment request not found.");
     const payment = snap.val();
@@ -3648,7 +3648,7 @@ window.mrpspLoadPaymentReviewQueue = async function () {
   if (qrPanel) qrPanel.classList.toggle("hidden", !isAdmin);
   if (!isAdmin) return;
   try {
-    const snap = await get(ref(db, "eoffice_requests"));
+    const snap = await get(ref(db, "project_payment_requests"));
     const items = [];
     if (snap.exists()) snap.forEach(child => { const v = child.val(); if (v?.type === "PROJECT_PAYMENT_VERIFICATION" && v.status === "PAYMENT PENDING") items.push({ key: child.key, ...v }); });
     items.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -4607,7 +4607,7 @@ window.loadInventory = () => {
         window.inventoryUnsubscribe();
         window.inventoryUnsubscribe = null;
     }
-    window.inventoryUnsubscribe = onValue(projectAwareRef("inventory"), (snap) => {
+    window.inventoryUnsubscribe = onValue(ref(db, 'inventory'), (snap) => {
         b.innerHTML = "";
         let total = 0;
         let available = 0;
@@ -4771,7 +4771,7 @@ window.checkBarcodeUnique = async (code) => {
     document.getElementById("btnAddStock").innerText = "Save Item to Stock";
 
     // Query DB to see if barcode exists
-    const invRef = projectAwareRef( "inventory");
+    const invRef = ref(db, 'inventory');
     const q = query(invRef, orderByChild("barcode"), equalTo(code));
     const snap = await get(q);
 
@@ -5479,7 +5479,7 @@ window.executeBatchTransaction = async (type) => {
         // This prevents a stale cart or a different project path from causing false status results.
         const freshItems = [];
         for (const cartItem of cart) {
-            const itemRef = projectAwareRef(`inventory/${cartItem.key}`);
+            const itemRef = ref(db, `inventory/${cartItem.key}`);
             const itemSnap = await get(itemRef);
             if (!itemSnap.exists()) throw new Error(`Asset ${cartItem.barcode || cartItem.item} no longer exists.`);
             const current = { key: cartItem.key, ...itemSnap.val() };
@@ -5516,10 +5516,9 @@ window.executeBatchTransaction = async (type) => {
             freshItems.push(current);
         }
 
-        // IMPORTANT: use projectAwareRef for both inventory and logs.
-        // CCRAS writes under projects/CCRAS; Yellow Line uses its existing root paths.
+        // Shared inventory is global; operational logs remain project-scoped.
         for (const item of freshItems) {
-            const itemRef = projectAwareRef(`inventory/${item.key}`);
+            const itemRef = ref(db, `inventory/${item.key}`);
             const currentSnap = await get(itemRef);
             const current = currentSnap.val();
             let itemUpdate;
@@ -5531,6 +5530,8 @@ window.executeBatchTransaction = async (type) => {
                 itemUpdate = {
                     status: remainingQty > 0 ? "In Stock" : "Out of Stock",
                     holder: "Store",
+                    currentProject: activeProject || "YELLOW_LINE",
+                    currentLocation: purposeOrLoc,
                     availableQty: remainingQty,
                     checkedOutQty: Number(current.checkedOutQty || 0) + takenQty,
                     usageCount: Number(current.usageCount || 0) + 1,
@@ -5545,6 +5546,8 @@ window.executeBatchTransaction = async (type) => {
                     status: "Checked Out",
                     holder: userName,
                     location: purposeOrLoc,
+                    currentProject: activeProject || "YELLOW_LINE",
+                    currentLocation: purposeOrLoc,
                     usageCount: Number(current.usageCount || 0) + 1,
                     lastCheckoutAt: timestamp,
                     lastCheckoutBy: userName,
@@ -5561,6 +5564,8 @@ window.executeBatchTransaction = async (type) => {
                     status: newAvailable > 0 ? "In Stock" : "Out of Stock",
                     holder: "Store",
                     location: purposeOrLoc,
+                    currentProject: activeProject || "YELLOW_LINE",
+                    currentLocation: purposeOrLoc,
                     availableQty: newAvailable,
                     checkedOutQty: Math.max(0, outstandingNow - returningQty),
                     lastReturnedQty: returningQty,
@@ -5573,11 +5578,28 @@ window.executeBatchTransaction = async (type) => {
                     status: "In Stock",
                     holder: "Store",
                     location: purposeOrLoc,
+                    currentProject: activeProject || "YELLOW_LINE",
+                    currentLocation: purposeOrLoc,
                     lastReturnedAt: timestamp,
                     lastReturnedBy: userName
                 };
             }
             await update(itemRef, itemUpdate);
+
+            await push(ref(db, "asset_transactions"), {
+                assetId: item.key,
+                barcode: item.barcode || "",
+                item: item.item || "Unknown item",
+                type,
+                registeredProject: current.registeredProject || current.project || "LEGACY",
+                fromProject: type === "CHECKOUT" ? (current.currentProject || current.registeredProject || "UNKNOWN") : (current.currentProject || activeProject || "UNKNOWN"),
+                toProject: type === "CHECKOUT" ? (activeProject || "YELLOW_LINE") : (activeProject || "YELLOW_LINE"),
+                currentLocation: purposeOrLoc,
+                operatorUid: auth.currentUser?.uid || "",
+                operatorName: userName,
+                timestamp,
+                quantity: item.isStationery ? Number(type === "CHECKOUT" ? (item.checkoutQty || 0) : (item.returnQty || 0)) : 1
+            });
 
             await push(projectAwareRef("logs"), {
                 type,
@@ -6875,7 +6897,7 @@ window.toggleInvMode = (mode) => {
 function populateCheckoutSelect() {
     const sel = document.getElementById("checkoutSelect");
     sel.innerHTML = "<option value=''>Loading...</option>";
-    onValue(projectAwareRef( "inventory"), snap => {
+    onValue(ref(db, 'inventory'), snap => {
         sel.innerHTML = "<option value=''>Select Item...</option>";
         snap.forEach(c => {
             const v = c.val();
@@ -6898,7 +6920,7 @@ async function populateReturnSelect() {
 
     try {
         // A. Get current Inventory (for keys)
-        const invSnap = await get(projectAwareRef( "inventory"));
+        const invSnap = await get(ref(db, 'inventory'));
         const inventoryMap = {}; // Maps ItemName -> { key, exists, barcode }
         invSnap.forEach(c => {
             const val = c.val();
@@ -7115,7 +7137,7 @@ async function processTransaction(adminName, customReturnLocation = null) {
     const isCheckout = (currentTransactionType === 'CHECKOUT');
 
     try {
-        const invRef = projectAwareRef( `inventory/${itemKey}`);
+        const invRef = ref(db, `inventory/${itemKey}`);
         const invSnap = await get(invRef);
         const currentData = invSnap.val();
 
@@ -7151,7 +7173,7 @@ async function processTransaction(adminName, customReturnLocation = null) {
 }
   window.loadWarSales = async () => {
     const tbody = document.getElementById("warSalesTableBody");
-    const snap = await get(projectAwareRef( "inventory"));
+    const snap = await get(ref(db, 'inventory'));
     const salesGroup = {}; 
     
     snap.forEach(c => {
@@ -7189,7 +7211,7 @@ async function processTransaction(adminName, customReturnLocation = null) {
     if (!confirm(`⚠ CRITICAL: Wiping Invoice ${invoiceNo} will restock all associated items and delete this sale record permanently. Proceed?`)) return;
 
     try {
-        const snap = await get(projectAwareRef( "inventory"));
+        const snap = await get(ref(db, 'inventory'));
         const updates = {};
 
         snap.forEach(c => {
@@ -8466,7 +8488,7 @@ function loadInventory() {
 
   // --- RE-STOCK FUNCTION: BRING BACK SOLD ITEMS WITHIN 7 DAYS ---
 window.revertSale = async (key, itemName) => {
-    const snap = await get(projectAwareRef( `inventory/${key}`));
+    const snap = await get(ref(db, `inventory/${key}`));
     const v = snap.val();
     const oldInvoice = v.invoiceNo || "N/A";
     const oldStation = v.assignedStation || "Unknown Site";
@@ -8478,7 +8500,7 @@ window.revertSale = async (key, itemName) => {
     if(!confirm(`RESTORE TO INVENTORY?\nReason: ${returnReason}\n\nProceed to wipe Invoice data and generate Return Note?`)) return;
 
     try {
-        await update(projectAwareRef( `inventory/${key}`), {
+        await update(ref(db, `inventory/${key}`), {
             status: "In Stock",
             holder: "Store",
             location: "D2 Building - Heerok Sir Lab [Returned]",
@@ -8520,7 +8542,7 @@ window.revertSale = async (key, itemName) => {
 
     try {
         // 2. Database Query
-        const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(tag));
+        const q = query(ref(db, 'inventory'), orderByChild("barcode"), equalTo(tag));
         const snap = await get(q);
 
         if (!snap.exists()) {
@@ -8538,7 +8560,7 @@ window.revertSale = async (key, itemName) => {
         }
 
         // 4. Update Inventory Node
-        await update(projectAwareRef( `inventory/${key}`), {
+        await update(ref(db, `inventory/${key}`), {
             status: "In Stock",
             holder: "Store",
             location: "Recovered: " + reason,
@@ -8612,7 +8634,7 @@ window.generateAndSaveTag = async () => {
         if(key) {
             // --- EDIT MODE: OVERWRITE ---
             // The old tag will stop working because we are changing the 'barcode' field in the DB
-            await update(projectAwareRef( `inventory/${key}`), itemData);
+            await update(ref(db, `inventory/${key}`), itemData);
             
             // Log the overwrite
             await push(projectAwareRef( "logs"), {
@@ -8628,7 +8650,7 @@ window.generateAndSaveTag = async () => {
             itemData.status = "In Stock";
             itemData.holder = "Store";
             itemData.usageCount = 0;
-            const newRef = await push(projectAwareRef( "inventory"), itemData);
+            const newRef = await push(ref(db, 'inventory'), itemData);
             finalKey = newRef.key;
         }
 
@@ -8657,7 +8679,7 @@ window.generateAndSaveTag = async () => {
 
 window.editExistingItem = async (key) => {
     try {
-        const snap = await get(projectAwareRef(`inventory/${key}`));
+        const snap = await get(ref(db, `inventory/${key}`));
         if (!snap.exists()) return alert("Asset record not found.");
         const d = snap.val() || {};
         toggleInvMode('add');
@@ -8797,7 +8819,7 @@ window.saveAndGenerateTag = async () => {
     try {
         let existing = {};
         if (key) {
-            const snap = await get(projectAwareRef(`inventory/${key}`));
+            const snap = await get(ref(db, `inventory/${key}`));
             if (!snap.exists()) return alert("Asset record was not found. No changes were saved.");
             existing = snap.val() || {};
         }
@@ -9069,7 +9091,7 @@ window.executeDirectUpdate = async () => {
     if (isStationery && !packLabel) return alert("Enter the pack/unit description.");
 
     try {
-        const snap = await get(projectAwareRef(`inventory/${key}`));
+        const snap = await get(ref(db, `inventory/${key}`));
         if (!snap.exists()) return alert("Asset record not found. No changes were saved.");
         const existing = snap.val() || {};
         const changes = {
@@ -9084,11 +9106,14 @@ window.executeDirectUpdate = async () => {
         if (isStationery && !Number.isFinite(Number(existing.availableQty))) {
             changes.availableQty = Number(existing.initialQty || 1);
         }
-        await update(projectAwareRef(`inventory/${key}`), changes);
+        changes.registeredProject = existing.registeredProject || existing.project || activeProject || "YELLOW_LINE";
+        changes.currentProject = existing.currentProject || activeProject || "YELLOW_LINE";
+        changes.currentLocation = existing.currentLocation || existing.location || location;
+        await update(ref(db, `inventory/${key}`), changes);
 
         // Read the saved record back before reporting success. This catches
         // path/project mismatches and makes the asset view refresh deterministic.
-        const savedSnap = await get(projectAwareRef(`inventory/${key}`));
+        const savedSnap = await get(ref(db, `inventory/${key}`));
         if (!savedSnap.exists()) {
             throw new Error("Save completed but the asset could not be read back from the active project inventory.");
         }
@@ -9123,9 +9148,14 @@ window.executeManualSave = async () => {
         delete finalData.dbKey;
 
         if(existingKey) {
-            await update(projectAwareRef( `inventory/${existingKey}`), finalData);
+            await update(ref(db, `inventory/${existingKey}`), finalData);
         } else {
-            await push(projectAwareRef( "inventory"), finalData);
+            finalData.registeredProject = activeProject || "YELLOW_LINE";
+            finalData.currentProject = activeProject || "YELLOW_LINE";
+            finalData.currentLocation = finalData.location || "Store";
+            finalData.createdAt = Date.now();
+            finalData.createdByUid = auth.currentUser?.uid || "";
+            await push(ref(db, 'inventory'), finalData);
         }
 
         if (typeof window.loadInventory === "function") window.loadInventory();
@@ -9376,7 +9406,7 @@ window.deletePurchase = async (key) => {
         await remove(projectAwareRef( `finance/${key}`));
     }
 };
-window.delInv = (k) => remove(projectAwareRef( `inventory/${k}`));
+window.delInv = (k) => remove(ref(db, `inventory/${k}`));
 
 function loadAssignments() {
     onValue(projectAwareRef( `assignments/${currentUser.uid}`), snap => {
@@ -9524,7 +9554,7 @@ function populateAllMetroStations() {
 // Fix for ReferenceError: Defining globally
 window.populateBillingAssets = async () => {
     try {
-        const snap = await get(projectAwareRef( "inventory"));
+        const snap = await get(ref(db, 'inventory'));
         const sel = document.getElementById("billAssetSelect");
         if(sel) {
             sel.innerHTML = "<option value=''>-- Select Item --</option>";
@@ -9564,7 +9594,7 @@ window.addScannedItemToBill = async () => {
     if(isAlreadyInCart) return alert("Item already in cart.");
 
     try {
-        const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(barcode));
+        const q = query(ref(db, 'inventory'), orderByChild("barcode"), equalTo(barcode));
         const snap = await get(q);
         if (!snap.exists()) return alert("Tag ID Not Found.");
 
@@ -9745,7 +9775,7 @@ window.saveWarrantyConfig = async () => {
     if(!tag) return alert("Please enter Asset Tag ID.");
 
     try {
-        const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(tag));
+        const q = query(ref(db, 'inventory'), orderByChild("barcode"), equalTo(tag));
         const snap = await get(q);
         if(!snap.exists()) return alert("❌ Error: Tag ID not found.");
         
@@ -9754,7 +9784,7 @@ window.saveWarrantyConfig = async () => {
         const finalMonths = (type === "WARRANTY" && unit === "Years") ? duration * 12 : duration;
 
         // Save to Database
-        await update(projectAwareRef( `inventory/${key}`), {
+        await update(ref(db, `inventory/${key}`), {
             warrantyMonths: finalMonths,
             manualWarDate: startDateVal || null,
             noWarranty: (type === "NON-WARRANTY"),
@@ -9774,7 +9804,7 @@ window.saveWarrantyConfig = async () => {
 
 // 4. Official Warranty Print Layout (REMOVED SIGNATURE)
 window.printCustomerCopy = async (invoiceNo) => {
-    const snap = await get(projectAwareRef( "inventory"));
+    const snap = await get(ref(db, 'inventory'));
     const items = [];
     let site = "", saleDate = "";
 
@@ -9909,7 +9939,7 @@ window.submitWarrantyClaim = async () => {
 // 6. Support Loaders (Dashboard, Setup, Active List, Sales)
 async function refreshWarDash() {
     try {
-        const snap = await get(projectAwareRef( "inventory"));
+        const snap = await get(ref(db, 'inventory'));
         let total = 0;
         let protectedCount = 0;
 
@@ -9942,7 +9972,7 @@ async function loadWarSetup() {
     if (!tbody) return;
 
     try {
-        const snap = await get(projectAwareRef( "inventory")); 
+        const snap = await get(ref(db, 'inventory')); 
         tbody.innerHTML = "";
 
         if (!snap.exists()) {
@@ -9974,7 +10004,7 @@ async function loadWarSetup() {
 }
 async function loadWarSales() {
     const tbody = document.getElementById("warSalesTableBody");
-    const snap = await get(projectAwareRef( "inventory"));
+    const snap = await get(ref(db, 'inventory'));
     const salesGroup = {}; 
     
     snap.forEach(c => {
@@ -10020,7 +10050,7 @@ window.reissueInvoice = async (invoiceNo, saleDateTs) => {
     if (!confirm("Confirm Reissue of Official Tax Invoice?")) return;
 
     try {
-        const snap = await get(projectAwareRef( "inventory"));
+        const snap = await get(ref(db, 'inventory'));
         const items = [];
         let site = "";
 
@@ -10116,7 +10146,7 @@ window.reissueInvoice = async (invoiceNo, saleDateTs) => {
 };
 async function loadActiveWarranty() {
     const tbody = document.getElementById("warActiveTableBody");
-    const snap = await get(projectAwareRef( "inventory"));
+    const snap = await get(ref(db, 'inventory'));
     tbody.innerHTML = "";
     snap.forEach(c => {
         const v = c.val();
@@ -10160,7 +10190,7 @@ window.addToRecoveryCart = async (tagId) => {
     }
 
     try {
-        const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(tag));
+        const q = query(ref(db, 'inventory'), orderByChild("barcode"), equalTo(tag));
         const snap = await get(q);
 
         if (!snap.exists()) return alert("Tag not found in database.");
@@ -10570,7 +10600,7 @@ async function renderTechArea(ticketKey, claim) {
     const priceLabel = document.getElementById("techPurchasePrice");
 
     try {
-        const invSnap = await get(projectAwareRef( "inventory"));
+        const invSnap = await get(ref(db, 'inventory'));
         let matched = false;
         invSnap.forEach(c => {
             const item = c.val();
@@ -10628,8 +10658,8 @@ window.adminVerifyClaim = async (ticketKey, decision) => {
             adminNote = "Claim denied: Asset shows signs of unauthorized tampering or physical impact.";
             
             // Mark the actual asset as void in the master inventory
-            const assetSnap = await get(query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(data.barcode || "")));
-            assetSnap.forEach(c => update(projectAwareRef( `inventory/${c.key}`), { noWarranty: true, protectionActivated: false }));
+            const assetSnap = await get(query(ref(db, 'inventory'), orderByChild("barcode"), equalTo(data.barcode || "")));
+            assetSnap.forEach(c => update(ref(db, `inventory/${c.key}`), { noWarranty: true, protectionActivated: false }));
             break;
 
         case 'REJECT':
@@ -10736,10 +10766,10 @@ window.resetTechVerification = () => {
     if(!confirm("CRITICAL: Wipe Invoice data for this item? The item will be restocked and the sale log deleted.")) return;
 
     try {
-        const snap = await get(projectAwareRef( `inventory/${itemKey}`));
+        const snap = await get(ref(db, `inventory/${itemKey}`));
         const v = snap.val();
         
-        await update(projectAwareRef( `inventory/${itemKey}`), {
+        await update(ref(db, `inventory/${itemKey}`), {
             status: "In Stock",
             holder: "Store",
             invoiceNo: null, // Wipe Invoice
@@ -10781,7 +10811,7 @@ window.onScanSuccess = async function(decodedText) {
             }
 
             // 2. Fetch Item from DB
-            const q = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const q = query(ref(db, 'inventory'), orderByChild("barcode"), equalTo(scannedInput));
             const snap = await get(q);
             
             if (!snap.exists()) return alert(`❌ Tag ${scannedInput} Not Registered.`);
@@ -10881,8 +10911,8 @@ How many unused packs/units are being returned?`, String(outstanding));
                     const existingKey = finalData.dbKey;
                     delete finalData.dbKey; 
 
-                    if(existingKey) await update(projectAwareRef( `inventory/${existingKey}`), finalData);
-                    else await push(projectAwareRef( "inventory"), finalData);
+                    if(existingKey) await update(ref(db, `inventory/${existingKey}`), finalData);
+                    else await push(ref(db, 'inventory'), finalData);
 
                     alert("✅ VERIFICATION SUCCESSFUL\nAsset has been officially registered.");
                     
@@ -10950,7 +10980,7 @@ How many unused packs/units are being returned?`, String(outstanding));
                 return alert("⚠️ Verify the job ticket first. This scan is not a checkout/return operation.");
             }
 
-            const assetQuery = query(projectAwareRef("inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const assetQuery = query(ref(db, 'inventory'), orderByChild("barcode"), equalTo(scannedInput));
             const assetSnap = await get(assetQuery);
             if (!assetSnap.exists()) {
                 document.getElementById("techMismatchArea")?.classList.remove("hidden");
@@ -10979,7 +11009,7 @@ How many unused packs/units are being returned?`, String(outstanding));
 
         // --- 🟢 MODE: WARRANTY CLAIM ---
         else if (activeScanMode === 'WARRANTY_CLAIM') {
-            const qWar = query(projectAwareRef( "inventory"), orderByChild("barcode"), equalTo(scannedInput));
+            const qWar = query(ref(db, 'inventory'), orderByChild("barcode"), equalTo(scannedInput));
             const snap = await get(qWar);
             if (!snap.exists()) return alert("❌ Tag Not Registered");
             
@@ -13456,7 +13486,7 @@ window.fmProcessScannedBatch = async () => {
     window.fmScannedAssetsData = [];
     
     try {
-        const invSnap = await get(projectAwareRef( "inventory"));
+        const invSnap = await get(ref(db, 'inventory'));
         let html = "";
         
         invSnap.forEach(c => {
@@ -17111,329 +17141,6 @@ window.cancelQuickAssetTransaction = async () => {
   if (!document.getElementById('faceModal').classList.contains('hidden')) stopCamera();
   document.getElementById('quickTxnModal').classList.add('hidden');
   quickTxnItems = []; quickTxnProject = null; quickTxnFaceUser = null; quickTxnBusy = false; scanMode = 'LOGIN';
-};
-
-
-// ================================================================
-// MRPSP SHELF INVENTORY WORKFLOW (additive; keeps Asset Tracking master)
-// Shelf records reference existing inventory keys. No duplicate assets.
-// ================================================================
-(function installShelfInventory() {
-  const tab = document.getElementById('tab-inventory');
-  if (!tab || document.getElementById('mrpspShelfPanel')) return;
-  const toolbar = tab.querySelector('div[style*="background: #e2e8f0"]');
-  if (toolbar) {
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'info';
-    b.innerHTML = '<i class="fas fa-warehouse"></i> Shelf Inventory';
-    b.onclick = () => window.openShelfInventory();
-    toolbar.appendChild(b);
-  }
-  tab.insertAdjacentHTML('beforeend', `
-  <section id="mrpspShelfPanel" class="panel hidden" style="border-top:4px solid #0f766e;margin-top:16px;">
-    <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
-      <div><h3 style="margin:0;color:#0f766e;"><i class="fas fa-warehouse"></i> Shelf Inventory Management</h3>
-      <small style="color:#64748b;">Shelf QR → existing Asset Tracking QR → transaction log</small></div>
-      <button type="button" class="secondary" onclick="window.closeShelfInventory()">CLOSE</button>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:16px 0;">
-      <button type="button" class="success" onclick="window.showShelfMode('register')">REGISTER SHELF</button>
-      <button type="button" class="info" onclick="window.showShelfMode('checkin')">CHECK IN</button>
-      <button type="button" class="warning" onclick="window.showShelfMode('checkout')">CHECK OUT</button>
-      <button type="button" class="secondary" onclick="window.showShelfMode('list')">SHELF LIST</button>
-    </div>
-    <div id="shelfMode-register" class="panel" style="border:1px solid #bbf7d0;">
-      <h4 style="margin-top:0;color:#166534;">1. Register a shelf</h4>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;">
-        <div><label>Laboratory / Location</label><input id="shelfLocation" placeholder="e.g. CONTROL SYSTEM LAB"></div>
-        <div><label>Shelf ID (unique)</label><input id="shelfIdInput" placeholder="e.g. LAB-A-S01" maxlength="40"></div>
-        <div><label>Description (optional)</label><input id="shelfDescription" placeholder="e.g. Component rack A"></div>
-      </div>
-      <button type="button" class="success" style="margin-top:12px;" onclick="window.registerMrpspShelf()">GENERATE SHELF QR</button>
-      <div id="shelfQrOutput" style="display:none;margin-top:16px;padding:16px;border:1px dashed #94a3b8;border-radius:8px;text-align:center;">
-        <h4 id="shelfQrTitle"></h4><div id="shelfQrCanvas" style="display:inline-block;background:white;padding:10px;"></div>
-        <p id="shelfQrPayload" style="font-family:monospace;word-break:break-all;"></p>
-        <button type="button" class="secondary" onclick="window.printShelfQr()">PRINT SHELF QR</button>
-      </div>
-    </div>
-    <div id="shelfMode-checkin" class="panel hidden" style="border:1px solid #bfdbfe;">
-      <h4 style="margin-top:0;color:#1d4ed8;">2. Check in products to a shelf</h4>
-      <p style="color:#475569;">Scan the shelf QR first, then scan up to six existing product QR tags. After every six products, the scanner pauses and asks you to rescan the same shelf QR. Press END CHECK-IN when finished.</p>
-      <div id="shelfCheckinStatus" style="padding:10px;background:#eff6ff;border-radius:8px;margin:10px 0;">No shelf selected.</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button type="button" class="info" onclick="window.startShelfCheckin()">SCAN SHELF / PRODUCTS</button>
-        <button type="button" class="success" onclick="window.finishShelfCheckin()">END CHECK-IN & SAVE</button>
-      </div>
-      <div id="shelfCheckinCart" style="margin-top:12px;"></div>
-    </div>
-    <div id="shelfMode-checkout" class="panel hidden" style="border:1px solid #fed7aa;">
-      <h4 style="margin-top:0;color:#c2410c;">3. Check out products from a shelf</h4>
-      <p style="color:#475569;">Scan the shelf QR. Tick the products to issue, then scan each selected product QR. The scan count must exactly match the selected count. A face check verifies the logged-in operator; the recipient's ID is recorded separately.</p>
-      <div id="shelfCheckoutStatus" style="padding:10px;background:#fff7ed;border-radius:8px;margin:10px 0;">No shelf selected.</div>
-      <button type="button" class="warning" onclick="window.startShelfCheckout()">SCAN SHELF QR</button>
-      <div id="shelfCheckoutProducts" style="margin-top:12px;"></div>
-      <div id="shelfCheckoutRecipient" class="hidden" style="margin-top:12px;padding:12px;background:#fff7ed;border-radius:8px;">
-        <label>Recipient / Person ID</label><input id="shelfRecipientId" placeholder="Enter receiving person's ID">
-        <label>Recipient name</label><input id="shelfRecipientName" placeholder="Enter receiving person's name">
-        <button type="button" class="info" onclick="window.scanSelectedShelfProducts()">SCAN SELECTED PRODUCTS</button>
-      </div>
-      <div id="shelfCheckoutScanList" style="margin-top:12px;"></div>
-      <button id="shelfCheckoutFaceButton" type="button" class="success hidden" style="margin-top:12px;" onclick="window.verifyShelfCheckoutFace()">VERIFY OPERATOR FACE & COMPLETE CHECK-OUT</button>
-    </div>
-    <div id="shelfMode-list" class="panel hidden">
-      <h4 style="margin-top:0;">Registered shelves</h4>
-      <button type="button" class="secondary" onclick="window.loadMrpspShelves()">REFRESH</button>
-      <div id="shelfListOutput" style="margin-top:12px;">Press refresh to load shelves.</div>
-    </div>
-  </section>
-  <div id="mrpspShelfScannerModal" class="modal-overlay hidden" style="z-index:2100;">
-    <div class="panel" style="width:min(560px,96vw);max-height:92vh;overflow:auto;">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;"><h3 style="margin:0;">Shelf / Asset QR Scanner</h3><button type="button" class="danger" onclick="window.stopShelfScanner()">CLOSE SCANNER</button></div>
-      <p id="shelfScannerPrompt" style="font-weight:700;color:#0f766e;">Point camera at the QR code.</p>
-      <div id="mrpspShelfReader" style="margin-top:12px;"></div>
-    </div>
-  </div>`);
-})();
-
-let mrpspShelfScanner = null;
-let mrpspShelfScanBusy = false;
-let mrpspShelfPhase = 'IDLE';
-let mrpspShelfCurrent = null;
-let mrpspShelfPendingCheckin = [];
-let mrpspShelfSelected = [];
-let mrpspShelfScannedOut = [];
-let mrpspShelfCheckoutItems = [];
-let mrpspShelfFaceBusy = false;
-
-function mrpspShelfBasePath() { return activeProject === 'CCRAS' ? 'projects/CCRAS' : ''; }
-function mrpspShelfPath(path) { const base = mrpspShelfBasePath(); return base ? `${base}/${path}` : path; }
-function mrpspShelfEscape(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function mrpspShelfRequireAuth() {
-  if (!auth?.currentUser || auth.currentUser.isAnonymous) throw new Error('Please sign in with your MRPSP account first.');
-  if (typeof hasProjectAccess === 'function' && !hasProjectAccess(activeProject)) throw new Error('You do not have access to this project.');
-}
-function mrpspShelfSetStatus(id, msg, color='#334155') { const el=document.getElementById(id); if(el){el.textContent=msg;el.style.color=color;} }
-window.openShelfInventory = () => {
-  document.querySelectorAll('#tab-inventory > .panel').forEach(el => { if(el.id !== 'mrpspShelfPanel') el.classList.add('hidden'); });
-  ['inv-add','inv-checkout','inv-return','inv-history','inv-list'].forEach(id=>document.getElementById(id)?.classList.add('hidden'));
-  document.getElementById('mrpspShelfPanel')?.classList.remove('hidden');
-  window.showShelfMode('register');
-};
-window.closeShelfInventory = () => { document.getElementById('mrpspShelfPanel')?.classList.add('hidden'); window.toggleInvMode?.('list'); };
-window.showShelfMode = mode => {
-  ['register','checkin','checkout','list'].forEach(m=>document.getElementById(`shelfMode-${m}`)?.classList.toggle('hidden',m!==mode));
-  if(mode==='list') window.loadMrpspShelves();
-};
-window.registerMrpspShelf = async () => {
-  try {
-    mrpspShelfRequireAuth();
-    const location=document.getElementById('shelfLocation').value.trim();
-    const shelfId=document.getElementById('shelfIdInput').value.trim().toUpperCase();
-    const description=document.getElementById('shelfDescription').value.trim();
-    if(!location || !shelfId) throw new Error('Enter both laboratory/location and Shelf ID.');
-    if(!/^[A-Z0-9_-]{2,40}$/.test(shelfId)) throw new Error('Shelf ID may contain only letters, numbers, hyphens and underscores.');
-    const key=shelfId.replace(/[.#$\[\]/]/g,'_');
-    const shelfRef=ref(db,mrpspShelfPath(`shelves/${key}`));
-    const existing=await get(shelfRef); if(existing.exists()) throw new Error('This Shelf ID is already registered. Choose another ID.');
-    const payload=`MRPSP-SHELF|${activeProject}|${shelfId}`;
-    const record={shelfId,location,description,qrData:payload,project:activeProject,products:{},createdAt:Date.now(),createdBy:auth.currentUser.uid,createdByEmail:auth.currentUser.email||''};
-    await set(shelfRef,record);
-    document.getElementById('shelfQrOutput').style.display='block';
-    document.getElementById('shelfQrTitle').textContent=`${shelfId} · ${location}`;
-    document.getElementById('shelfQrPayload').textContent=payload;
-    const qr=document.getElementById('shelfQrCanvas'); qr.innerHTML='';
-    if(typeof QRCode!=='function') throw new Error('QR generator library did not load. Shelf was saved; reload to generate the QR.');
-    new QRCode(qr,{text:payload,width:220,height:220,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.H});
-    alert(`Shelf ${shelfId} registered successfully.`);
-  } catch(e) { alert('Shelf registration failed: '+(e.message||e)); }
-};
-window.printShelfQr = () => {
-  const node=document.getElementById('shelfQrOutput'); if(!node || node.style.display==='none') return;
-  const w=window.open('','_blank','width=600,height=700'); if(!w) return alert('Allow pop-ups to print the shelf QR.');
-  w.document.write(`<html><head><title>MRPSP Shelf QR</title></head><body style="font-family:Arial;text-align:center;padding:30px">${node.innerHTML}</body></html>`);w.document.close();w.focus();w.print();
-};
-window.loadMrpspShelves = async () => {
-  const out=document.getElementById('shelfListOutput'); if(!out) return;
-  try {
-    mrpspShelfRequireAuth(); out.textContent='Loading shelves…';
-    const snap=await get(ref(db,mrpspShelfPath('shelves'))); const rows=[];
-    if(snap.exists()) snap.forEach(c=>{const v=c.val()||{};rows.push({key:c.key,...v});});
-    rows.sort((a,b)=>String(a.shelfId).localeCompare(String(b.shelfId)));
-    out.innerHTML=rows.length?`<div class="table-wrapper"><table><thead><tr><th>Shelf ID</th><th>Location</th><th>Products</th><th>Description</th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${mrpspShelfEscape(x.shelfId)}</b></td><td>${mrpspShelfEscape(x.location)}</td><td>${Object.keys(x.products||{}).length}</td><td>${mrpspShelfEscape(x.description||'')}</td></tr>`).join('')}</tbody></table></div>`:'No shelves registered yet.';
-  } catch(e) { out.textContent='Could not load shelves: '+(e.message||e); }
-};
-async function mrpspShelfStartScanner(promptText, callback) {
-  await window.stopShelfScanner();
-  document.getElementById('shelfScannerPrompt').textContent=promptText;
-  document.getElementById('mrpspShelfScannerModal').classList.remove('hidden');
-  const reader=document.getElementById('mrpspShelfReader');reader.innerHTML='';
-  if(typeof Html5Qrcode!=='function') throw new Error('QR scanner library did not load.');
-  mrpspShelfScanner=new Html5Qrcode('mrpspShelfReader');
-  await mrpspShelfScanner.start({facingMode:'environment'},{fps:12,qrbox:{width:230,height:230},aspectRatio:1},async decoded=>{
-    if(mrpspShelfScanBusy) return; mrpspShelfScanBusy=true;
-    try { await callback(String(decoded||'').trim()); } catch(e) { alert(e.message||e); }
-    finally { mrpspShelfScanBusy=false; }
-  },()=>{});
-}
-window.stopShelfScanner = async () => {
-  if(mrpspShelfScanner){try{if(mrpspShelfScanner.isScanning)await mrpspShelfScanner.stop();}catch(e){}try{await mrpspShelfScanner.clear();}catch(e){}mrpspShelfScanner=null;}
-  document.getElementById('mrpspShelfScannerModal')?.classList.add('hidden');
-};
-async function mrpspShelfResolveShelf(qr) {
-  const parts=String(qr).split('|');
-  if(parts.length!==3 || parts[0]!=='MRPSP-SHELF') throw new Error('This is not a valid MRPSP shelf QR.');
-  if(parts[1]!==activeProject) throw new Error(`This shelf belongs to ${parts[1]}, not the active project ${activeProject}.`);
-  const shelfId=parts[2]; const key=shelfId.replace(/[.#$\[\]/]/g,'_');
-  const snap=await get(ref(db,mrpspShelfPath(`shelves/${key}`)));
-  if(!snap.exists() || snap.val().qrData!==qr) throw new Error('Shelf QR is not registered or does not match the saved shelf.');
-  return {key,...snap.val()};
-}
-async function mrpspShelfFindAsset(barcode) {
-  const snap=await get(query(projectAwareRef('inventory'),orderByChild('barcode'),equalTo(barcode)));
-  if(!snap.exists()) throw new Error(`Product QR ${barcode} was not found in Asset Tracking.`);
-  let found=null;snap.forEach(c=>{if(!found)found={key:c.key,...c.val()};});
-  if(!found) throw new Error('Asset record could not be read.');
-  return found;
-}
-function mrpspRenderCheckinCart(){
-  const el=document.getElementById('shelfCheckinCart'); if(!el)return;
-  el.innerHTML=mrpspShelfPendingCheckin.length?`<b>${mrpspShelfPendingCheckin.length} product(s) staged</b><ol>${mrpspShelfPendingCheckin.map(x=>`<li>${mrpspShelfEscape(x.item)} <small>(${mrpspShelfEscape(x.barcode)})</small></li>`).join('')}</ol>`:'No products scanned yet.';
-}
-window.startShelfCheckin = async () => {
-  try {
-    mrpspShelfRequireAuth(); mrpspShelfCurrent=null;mrpspShelfPendingCheckin=[];mrpspShelfPhase='NEED_SHELF';mrpspRenderCheckinCart();
-    mrpspShelfSetStatus('shelfCheckinStatus','Scan the shelf QR to begin.','#1d4ed8');
-    await mrpspShelfStartScanner('FIRST: scan the shelf QR.',async code=>{
-      if(mrpspShelfPhase==='NEED_SHELF' || mrpspShelfPhase==='NEED_RESCAN'){
-        const shelf=await mrpspShelfResolveShelf(code);
-        if(mrpspShelfCurrent && shelf.key!==mrpspShelfCurrent.key) throw new Error('Rescan the same shelf QR to continue this check-in.');
-        mrpspShelfCurrent=shelf;mrpspShelfPhase='ASSETS';
-        mrpspShelfSetStatus('shelfCheckinStatus',`Shelf ${shelf.shelfId} selected. Scan product QR tags (${mrpspShelfPendingCheckin.length}/6 in current batch).`,'#166534');
-        document.getElementById('shelfScannerPrompt').textContent='Now scan product QR tags. Six maximum before shelf rescan.';return;
-      }
-      if(mrpspShelfPhase!=='ASSETS') return;
-      if(code.startsWith('MRPSP-SHELF|')) throw new Error('Scan a product QR now.');
-      if(mrpspShelfPendingCheckin.some(x=>x.barcode===code)) throw new Error('This product has already been scanned in this check-in.');
-      const item=await mrpspShelfFindAsset(code);
-      if(item.isStationery) throw new Error('Consumable/quantity stock is not supported in shelf asset check-in. Use the regular stock workflow.');
-      if(item.status==='Checked Out') throw new Error(`${item.item} is checked out and cannot be placed on a shelf.`);
-      if(item.currentShelfId && item.currentShelfId!==mrpspShelfCurrent.shelfId) throw new Error(`${item.item} is already assigned to shelf ${item.currentShelfId}.`);
-      mrpspShelfPendingCheckin.push(item);mrpspRenderCheckinCart();
-      mrpspShelfSetStatus('shelfCheckinStatus',`${item.item} added. ${mrpspShelfPendingCheckin.length}/6 in this batch.`,'#166534');
-      if(mrpspShelfPendingCheckin.length%6===0){mrpspShelfPhase='NEED_RESCAN';document.getElementById('shelfScannerPrompt').textContent='Six products scanned. Scan the SAME shelf QR to continue.';mrpspShelfSetStatus('shelfCheckinStatus','Six products scanned. Rescan the SAME shelf QR to continue, or press END CHECK-IN & SAVE.','#b45309');}
-    });
-  } catch(e){alert('Could not start check-in: '+(e.message||e));}
-};
-window.finishShelfCheckin = async () => {
-  try {
-    mrpspShelfRequireAuth();await window.stopShelfScanner();
-    if(!mrpspShelfCurrent) throw new Error('Scan a shelf QR first.');
-    if(!mrpspShelfPendingCheckin.length) throw new Error('Scan at least one product QR before ending check-in.');
-    const timestamp=Date.now(),base=mrpspShelfBasePath(),updates={};
-    const shelfPath=`${base?base+'/':''}shelves/${mrpspShelfCurrent.key}`;
-    const freshShelf=await get(ref(db,shelfPath));if(!freshShelf.exists())throw new Error('Shelf no longer exists.');
-    const currentProducts=freshShelf.val().products||{};
-    for(const staged of mrpspShelfPendingCheckin){
-      const itemPath=`${base?base+'/':''}inventory/${staged.key}`;
-      const fresh=await get(ref(db,itemPath));if(!fresh.exists())throw new Error(`${staged.item} was removed from Asset Tracking.`);
-      const val=fresh.val();if(val.barcode!==staged.barcode)throw new Error(`Barcode changed for ${staged.item}.`);
-      if(val.status==='Checked Out')throw new Error(`${staged.item} is currently checked out.`);
-      if(val.currentShelfId && val.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${staged.item} is assigned to another shelf.`);
-      updates[`${itemPath}/currentShelfId`]=mrpspShelfCurrent.shelfId;
-      updates[`${itemPath}/location`]=mrpspShelfCurrent.location;
-      updates[`${itemPath}/status`]='In Stock';
-      updates[`${itemPath}/shelfUpdatedAt`]=timestamp;
-      updates[`${shelfPath}/products/${staged.key}`]={barcode:staged.barcode,item:val.item||staged.item,addedAt:timestamp,addedBy:auth.currentUser.uid};
-    }
-    const logKey=push(ref(db,`${base?base+'/':''}shelf_transactions`)).key;
-    updates[`${base?base+'/':''}shelf_transactions/${logKey}`]={type:'CHECK_IN',shelfId:mrpspShelfCurrent.shelfId,productKeys:mrpspShelfPendingCheckin.map(x=>x.key),barcodes:mrpspShelfPendingCheckin.map(x=>x.barcode),count:mrpspShelfPendingCheckin.length,operatorUid:auth.currentUser.uid,operatorEmail:auth.currentUser.email||'',timestamp};
-    await update(ref(db),updates);
-    alert(`${mrpspShelfPendingCheckin.length} product(s) checked in to ${mrpspShelfCurrent.shelfId}.`);
-    mrpspShelfPendingCheckin=[];mrpspShelfCurrent=null;mrpspShelfPhase='IDLE';mrpspRenderCheckinCart();mrpspShelfSetStatus('shelfCheckinStatus','Check-in completed.');
-  } catch(e){alert('Check-in not saved: '+(e.message||e));}
-};
-window.startShelfCheckout = async () => {
-  try {
-    mrpspShelfRequireAuth();mrpspShelfCurrent=null;mrpspShelfSelected=[];mrpspShelfScannedOut=[];mrpspShelfCheckoutItems=[];
-    document.getElementById('shelfCheckoutProducts').innerHTML='';document.getElementById('shelfCheckoutRecipient').classList.add('hidden');document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');
-    mrpspShelfSetStatus('shelfCheckoutStatus','Scan the shelf QR.','#9a3412');
-    await mrpspShelfStartScanner('Scan the shelf QR to load its product list.',async code=>{
-      const shelf=await mrpspShelfResolveShelf(code);mrpspShelfCurrent=shelf;
-      const products=shelf.products||{};const entries=Object.entries(products);
-      const rows=[];
-      for(const [key,p] of entries){const snap=await get(projectAwareRef(`inventory/${key}`));if(snap.exists())rows.push({key,...snap.val()});}
-      mrpspShelfCheckoutItems=rows;
-      document.getElementById('shelfCheckoutProducts').innerHTML=rows.length?`<b>${mrpspShelfEscape(shelf.shelfId)} · ${rows.length} product(s)</b><div style="display:grid;gap:8px;margin-top:10px;">${rows.map(x=>`<label style="display:flex;gap:9px;align-items:center;padding:9px;border:1px solid #e2e8f0;border-radius:7px;"><input type="checkbox" class="shelfCheckoutTick" value="${mrpspShelfEscape(x.key)}" style="width:18px;height:18px;"> <span><b>${mrpspShelfEscape(x.item)}</b><small style="display:block;color:#64748b;">${mrpspShelfEscape(x.barcode)}</small></span></label>`).join('')}</div>`:'This shelf has no registered products.';
-      document.getElementById('shelfCheckoutRecipient').classList.toggle('hidden',!rows.length);
-      mrpspShelfSetStatus('shelfCheckoutStatus',`Shelf ${shelf.shelfId} loaded. Tick the products to issue.`,'#166534');await window.stopShelfScanner();
-    });
-  } catch(e){alert('Could not load shelf: '+(e.message||e));}
-};
-window.scanSelectedShelfProducts = async () => {
-  try {
-    if(!mrpspShelfCurrent)throw new Error('Scan a shelf QR first.');
-    mrpspShelfSelected=Array.from(document.querySelectorAll('.shelfCheckoutTick:checked')).map(x=>x.value);
-    if(!mrpspShelfSelected.length)throw new Error('Tick at least one product.');
-    const id=document.getElementById('shelfRecipientId').value.trim(),name=document.getElementById('shelfRecipientName').value.trim();
-    if(!id||!name)throw new Error('Enter the receiving person ID and name.');
-    mrpspShelfScannedOut=[];document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');
-    mrpspShelfSetStatus('shelfCheckoutStatus',`Scan ${mrpspShelfSelected.length} selected product QR code(s).`,'#9a3412');
-    await mrpspShelfStartScanner(`Scan selected products: 0 / ${mrpspShelfSelected.length}`,async code=>{
-      if(code.startsWith('MRPSP-SHELF|'))throw new Error('Scan selected product QR tags, not the shelf QR.');
-      if(mrpspShelfScannedOut.some(x=>x.barcode===code))throw new Error('This product QR has already been scanned.');
-      const item=await mrpspShelfFindAsset(code);
-      if(!mrpspShelfSelected.includes(item.key))throw new Error(`${item.item} was not ticked in the product list.`);
-      if(item.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${item.item} is no longer registered on this shelf.`);
-      mrpspShelfScannedOut.push(item);document.getElementById('shelfScannerPrompt').textContent=`Scanned ${mrpspShelfScannedOut.length} / ${mrpspShelfSelected.length}`;
-      document.getElementById('shelfCheckoutScanList').innerHTML=`<b>Scanned ${mrpspShelfScannedOut.length}/${mrpspShelfSelected.length}</b><ol>${mrpspShelfScannedOut.map(x=>`<li>${mrpspShelfEscape(x.item)}</li>`).join('')}</ol>`;
-      if(mrpspShelfScannedOut.length===mrpspShelfSelected.length){await window.stopShelfScanner();document.getElementById('shelfCheckoutFaceButton').classList.remove('hidden');mrpspShelfSetStatus('shelfCheckoutStatus','All selected products scanned. Verify operator face to complete.','#166534');}
-    });
-  } catch(e){alert('Product scanning could not continue: '+(e.message||e));}
-};
-window.verifyShelfCheckoutFace = async () => {
-  try {
-    mrpspShelfRequireAuth();
-    if(mrpspShelfScannedOut.length!==mrpspShelfSelected.length)throw new Error('Scan every selected product before face verification.');
-    scanMode='SHELF_CHECKOUT_FACE';
-    document.getElementById('modalTitle').textContent='Verify Operator Face';
-    document.getElementById('modalDesc').textContent='The signed-in operator must match their registered face. The recipient ID/name will be recorded separately.';
-    document.getElementById('btnCapture').onclick=window.handleFaceScan;
-    document.getElementById('btnCapture').disabled=false;document.getElementById('btnCapture').textContent='📸 VERIFY FACE';
-    document.getElementById('faceModal').classList.remove('hidden');await initCamera(true);
-  } catch(e){alert(e.message||e);}
-};
-const mrpspOriginalHandleFaceScan=window.handleFaceScan;
-window.handleFaceScan=async function(){
-  if(scanMode!=='SHELF_CHECKOUT_FACE') return mrpspOriginalHandleFaceScan.apply(this,arguments);
-  const btn=document.getElementById('btnCapture');
-  if(!currentDescriptor){updateStatus('No face detected.','red');return;}
-  btn.disabled=true;btn.textContent='VERIFYING…';
-  try{
-    const uid=auth.currentUser.uid;const profileSnap=await get(ref(db,`users/${uid}`));const profile=profileSnap.val()||{};
-    if(!profileSnap.exists()||profile.banned||profile.terminated)throw new Error('Operator account is not permitted to transact.');
-    if(!profile.faceData)throw new Error('No registered face template found for the signed-in operator.');
-    const samples=Array.isArray(profile.faceData)&&Array.isArray(profile.faceData[0])?profile.faceData:[profile.faceData];
-    const matched=samples.some(sample=>Array.isArray(sample)&&sample.length===currentDescriptor.length&&faceapi.euclideanDistance(sample,currentDescriptor)<0.50);
-    if(!matched)throw new Error('Face did not match the signed-in operator. No products were checked out.');
-    await stopCamera();
-    const timestamp=Date.now(),base=mrpspShelfBasePath(),updates={};
-    const shelfPath=`${base?base+'/':''}shelves/${mrpspShelfCurrent.key}`;
-    const shelfSnap=await get(ref(db,shelfPath));if(!shelfSnap.exists())throw new Error('Shelf record no longer exists.');
-    for(const scanned of mrpspShelfScannedOut){
-      const itemPath=`${base?base+'/':''}inventory/${scanned.key}`;const freshSnap=await get(ref(db,itemPath));if(!freshSnap.exists())throw new Error(`${scanned.item} no longer exists.`);
-      const fresh=freshSnap.val();if(fresh.barcode!==scanned.barcode||fresh.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${scanned.item} has changed since scanning. No transaction was saved.`);
-      if(fresh.status==='Checked Out')throw new Error(`${scanned.item} is already checked out.`);
-      updates[`${itemPath}/status`]='Checked Out';updates[`${itemPath}/holder`]=document.getElementById('shelfRecipientName').value.trim();updates[`${itemPath}/holderPersonId`]=document.getElementById('shelfRecipientId').value.trim();updates[`${itemPath}/holderUid`]=null;updates[`${itemPath}/location`]='Checked Out';updates[`${itemPath}/currentShelfId`]=null;updates[`${itemPath}/lastCheckoutAt`]=timestamp;updates[`${shelfPath}/products/${scanned.key}`]=null;
-    }
-    const logKey=push(ref(db,`${base?base+'/':''}shelf_transactions`)).key;
-    updates[`${base?base+'/':''}shelf_transactions/${logKey}`]={type:'CHECK_OUT',shelfId:mrpspShelfCurrent.shelfId,productKeys:mrpspShelfScannedOut.map(x=>x.key),barcodes:mrpspShelfScannedOut.map(x=>x.barcode),count:mrpspShelfScannedOut.length,recipientId:document.getElementById('shelfRecipientId').value.trim(),recipientName:document.getElementById('shelfRecipientName').value.trim(),operatorUid:uid,operatorName:profile.name||auth.currentUser.email||uid,faceVerified:true,timestamp};
-    await update(ref(db),updates);
-    document.getElementById('faceModal').classList.add('hidden');document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');
-    mrpspShelfSetStatus('shelfCheckoutStatus',`${mrpspShelfScannedOut.length} product(s) checked out successfully.`,'#166534');
-    alert(`${mrpspShelfScannedOut.length} product(s) checked out to ${document.getElementById('shelfRecipientName').value.trim()} (${document.getElementById('shelfRecipientId').value.trim()}).`);
-    scanMode='LOGIN';mrpspShelfCurrent=null;mrpspShelfSelected=[];mrpspShelfScannedOut=[];
-    if(typeof window.loadInventory==='function')window.loadInventory();
-  }catch(e){updateStatus('❌ '+(e.message||e),'red');alert('Check-out not completed: '+(e.message||e));btn.disabled=false;btn.textContent='📸 VERIFY FACE';}
 };
 
 </script>
