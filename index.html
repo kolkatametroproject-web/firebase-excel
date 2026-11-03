@@ -17113,6 +17113,329 @@ window.cancelQuickAssetTransaction = async () => {
   quickTxnItems = []; quickTxnProject = null; quickTxnFaceUser = null; quickTxnBusy = false; scanMode = 'LOGIN';
 };
 
+
+// ================================================================
+// MRPSP SHELF INVENTORY WORKFLOW (additive; keeps Asset Tracking master)
+// Shelf records reference existing inventory keys. No duplicate assets.
+// ================================================================
+(function installShelfInventory() {
+  const tab = document.getElementById('tab-inventory');
+  if (!tab || document.getElementById('mrpspShelfPanel')) return;
+  const toolbar = tab.querySelector('div[style*="background: #e2e8f0"]');
+  if (toolbar) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'info';
+    b.innerHTML = '<i class="fas fa-warehouse"></i> Shelf Inventory';
+    b.onclick = () => window.openShelfInventory();
+    toolbar.appendChild(b);
+  }
+  tab.insertAdjacentHTML('beforeend', `
+  <section id="mrpspShelfPanel" class="panel hidden" style="border-top:4px solid #0f766e;margin-top:16px;">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+      <div><h3 style="margin:0;color:#0f766e;"><i class="fas fa-warehouse"></i> Shelf Inventory Management</h3>
+      <small style="color:#64748b;">Shelf QR → existing Asset Tracking QR → transaction log</small></div>
+      <button type="button" class="secondary" onclick="window.closeShelfInventory()">CLOSE</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:16px 0;">
+      <button type="button" class="success" onclick="window.showShelfMode('register')">REGISTER SHELF</button>
+      <button type="button" class="info" onclick="window.showShelfMode('checkin')">CHECK IN</button>
+      <button type="button" class="warning" onclick="window.showShelfMode('checkout')">CHECK OUT</button>
+      <button type="button" class="secondary" onclick="window.showShelfMode('list')">SHELF LIST</button>
+    </div>
+    <div id="shelfMode-register" class="panel" style="border:1px solid #bbf7d0;">
+      <h4 style="margin-top:0;color:#166534;">1. Register a shelf</h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;">
+        <div><label>Laboratory / Location</label><input id="shelfLocation" placeholder="e.g. CONTROL SYSTEM LAB"></div>
+        <div><label>Shelf ID (unique)</label><input id="shelfIdInput" placeholder="e.g. LAB-A-S01" maxlength="40"></div>
+        <div><label>Description (optional)</label><input id="shelfDescription" placeholder="e.g. Component rack A"></div>
+      </div>
+      <button type="button" class="success" style="margin-top:12px;" onclick="window.registerMrpspShelf()">GENERATE SHELF QR</button>
+      <div id="shelfQrOutput" style="display:none;margin-top:16px;padding:16px;border:1px dashed #94a3b8;border-radius:8px;text-align:center;">
+        <h4 id="shelfQrTitle"></h4><div id="shelfQrCanvas" style="display:inline-block;background:white;padding:10px;"></div>
+        <p id="shelfQrPayload" style="font-family:monospace;word-break:break-all;"></p>
+        <button type="button" class="secondary" onclick="window.printShelfQr()">PRINT SHELF QR</button>
+      </div>
+    </div>
+    <div id="shelfMode-checkin" class="panel hidden" style="border:1px solid #bfdbfe;">
+      <h4 style="margin-top:0;color:#1d4ed8;">2. Check in products to a shelf</h4>
+      <p style="color:#475569;">Scan the shelf QR first, then scan up to six existing product QR tags. After every six products, the scanner pauses and asks you to rescan the same shelf QR. Press END CHECK-IN when finished.</p>
+      <div id="shelfCheckinStatus" style="padding:10px;background:#eff6ff;border-radius:8px;margin:10px 0;">No shelf selected.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="info" onclick="window.startShelfCheckin()">SCAN SHELF / PRODUCTS</button>
+        <button type="button" class="success" onclick="window.finishShelfCheckin()">END CHECK-IN & SAVE</button>
+      </div>
+      <div id="shelfCheckinCart" style="margin-top:12px;"></div>
+    </div>
+    <div id="shelfMode-checkout" class="panel hidden" style="border:1px solid #fed7aa;">
+      <h4 style="margin-top:0;color:#c2410c;">3. Check out products from a shelf</h4>
+      <p style="color:#475569;">Scan the shelf QR. Tick the products to issue, then scan each selected product QR. The scan count must exactly match the selected count. A face check verifies the logged-in operator; the recipient's ID is recorded separately.</p>
+      <div id="shelfCheckoutStatus" style="padding:10px;background:#fff7ed;border-radius:8px;margin:10px 0;">No shelf selected.</div>
+      <button type="button" class="warning" onclick="window.startShelfCheckout()">SCAN SHELF QR</button>
+      <div id="shelfCheckoutProducts" style="margin-top:12px;"></div>
+      <div id="shelfCheckoutRecipient" class="hidden" style="margin-top:12px;padding:12px;background:#fff7ed;border-radius:8px;">
+        <label>Recipient / Person ID</label><input id="shelfRecipientId" placeholder="Enter receiving person's ID">
+        <label>Recipient name</label><input id="shelfRecipientName" placeholder="Enter receiving person's name">
+        <button type="button" class="info" onclick="window.scanSelectedShelfProducts()">SCAN SELECTED PRODUCTS</button>
+      </div>
+      <div id="shelfCheckoutScanList" style="margin-top:12px;"></div>
+      <button id="shelfCheckoutFaceButton" type="button" class="success hidden" style="margin-top:12px;" onclick="window.verifyShelfCheckoutFace()">VERIFY OPERATOR FACE & COMPLETE CHECK-OUT</button>
+    </div>
+    <div id="shelfMode-list" class="panel hidden">
+      <h4 style="margin-top:0;">Registered shelves</h4>
+      <button type="button" class="secondary" onclick="window.loadMrpspShelves()">REFRESH</button>
+      <div id="shelfListOutput" style="margin-top:12px;">Press refresh to load shelves.</div>
+    </div>
+  </section>
+  <div id="mrpspShelfScannerModal" class="modal-overlay hidden" style="z-index:2100;">
+    <div class="panel" style="width:min(560px,96vw);max-height:92vh;overflow:auto;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;"><h3 style="margin:0;">Shelf / Asset QR Scanner</h3><button type="button" class="danger" onclick="window.stopShelfScanner()">CLOSE SCANNER</button></div>
+      <p id="shelfScannerPrompt" style="font-weight:700;color:#0f766e;">Point camera at the QR code.</p>
+      <div id="mrpspShelfReader" style="margin-top:12px;"></div>
+    </div>
+  </div>`);
+})();
+
+let mrpspShelfScanner = null;
+let mrpspShelfScanBusy = false;
+let mrpspShelfPhase = 'IDLE';
+let mrpspShelfCurrent = null;
+let mrpspShelfPendingCheckin = [];
+let mrpspShelfSelected = [];
+let mrpspShelfScannedOut = [];
+let mrpspShelfCheckoutItems = [];
+let mrpspShelfFaceBusy = false;
+
+function mrpspShelfBasePath() { return activeProject === 'CCRAS' ? 'projects/CCRAS' : ''; }
+function mrpspShelfPath(path) { const base = mrpspShelfBasePath(); return base ? `${base}/${path}` : path; }
+function mrpspShelfEscape(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function mrpspShelfRequireAuth() {
+  if (!auth?.currentUser || auth.currentUser.isAnonymous) throw new Error('Please sign in with your MRPSP account first.');
+  if (typeof hasProjectAccess === 'function' && !hasProjectAccess(activeProject)) throw new Error('You do not have access to this project.');
+}
+function mrpspShelfSetStatus(id, msg, color='#334155') { const el=document.getElementById(id); if(el){el.textContent=msg;el.style.color=color;} }
+window.openShelfInventory = () => {
+  document.querySelectorAll('#tab-inventory > .panel').forEach(el => { if(el.id !== 'mrpspShelfPanel') el.classList.add('hidden'); });
+  ['inv-add','inv-checkout','inv-return','inv-history','inv-list'].forEach(id=>document.getElementById(id)?.classList.add('hidden'));
+  document.getElementById('mrpspShelfPanel')?.classList.remove('hidden');
+  window.showShelfMode('register');
+};
+window.closeShelfInventory = () => { document.getElementById('mrpspShelfPanel')?.classList.add('hidden'); window.toggleInvMode?.('list'); };
+window.showShelfMode = mode => {
+  ['register','checkin','checkout','list'].forEach(m=>document.getElementById(`shelfMode-${m}`)?.classList.toggle('hidden',m!==mode));
+  if(mode==='list') window.loadMrpspShelves();
+};
+window.registerMrpspShelf = async () => {
+  try {
+    mrpspShelfRequireAuth();
+    const location=document.getElementById('shelfLocation').value.trim();
+    const shelfId=document.getElementById('shelfIdInput').value.trim().toUpperCase();
+    const description=document.getElementById('shelfDescription').value.trim();
+    if(!location || !shelfId) throw new Error('Enter both laboratory/location and Shelf ID.');
+    if(!/^[A-Z0-9_-]{2,40}$/.test(shelfId)) throw new Error('Shelf ID may contain only letters, numbers, hyphens and underscores.');
+    const key=shelfId.replace(/[.#$\[\]/]/g,'_');
+    const shelfRef=ref(db,mrpspShelfPath(`shelves/${key}`));
+    const existing=await get(shelfRef); if(existing.exists()) throw new Error('This Shelf ID is already registered. Choose another ID.');
+    const payload=`MRPSP-SHELF|${activeProject}|${shelfId}`;
+    const record={shelfId,location,description,qrData:payload,project:activeProject,products:{},createdAt:Date.now(),createdBy:auth.currentUser.uid,createdByEmail:auth.currentUser.email||''};
+    await set(shelfRef,record);
+    document.getElementById('shelfQrOutput').style.display='block';
+    document.getElementById('shelfQrTitle').textContent=`${shelfId} · ${location}`;
+    document.getElementById('shelfQrPayload').textContent=payload;
+    const qr=document.getElementById('shelfQrCanvas'); qr.innerHTML='';
+    if(typeof QRCode!=='function') throw new Error('QR generator library did not load. Shelf was saved; reload to generate the QR.');
+    new QRCode(qr,{text:payload,width:220,height:220,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.H});
+    alert(`Shelf ${shelfId} registered successfully.`);
+  } catch(e) { alert('Shelf registration failed: '+(e.message||e)); }
+};
+window.printShelfQr = () => {
+  const node=document.getElementById('shelfQrOutput'); if(!node || node.style.display==='none') return;
+  const w=window.open('','_blank','width=600,height=700'); if(!w) return alert('Allow pop-ups to print the shelf QR.');
+  w.document.write(`<html><head><title>MRPSP Shelf QR</title></head><body style="font-family:Arial;text-align:center;padding:30px">${node.innerHTML}</body></html>`);w.document.close();w.focus();w.print();
+};
+window.loadMrpspShelves = async () => {
+  const out=document.getElementById('shelfListOutput'); if(!out) return;
+  try {
+    mrpspShelfRequireAuth(); out.textContent='Loading shelves…';
+    const snap=await get(ref(db,mrpspShelfPath('shelves'))); const rows=[];
+    if(snap.exists()) snap.forEach(c=>{const v=c.val()||{};rows.push({key:c.key,...v});});
+    rows.sort((a,b)=>String(a.shelfId).localeCompare(String(b.shelfId)));
+    out.innerHTML=rows.length?`<div class="table-wrapper"><table><thead><tr><th>Shelf ID</th><th>Location</th><th>Products</th><th>Description</th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${mrpspShelfEscape(x.shelfId)}</b></td><td>${mrpspShelfEscape(x.location)}</td><td>${Object.keys(x.products||{}).length}</td><td>${mrpspShelfEscape(x.description||'')}</td></tr>`).join('')}</tbody></table></div>`:'No shelves registered yet.';
+  } catch(e) { out.textContent='Could not load shelves: '+(e.message||e); }
+};
+async function mrpspShelfStartScanner(promptText, callback) {
+  await window.stopShelfScanner();
+  document.getElementById('shelfScannerPrompt').textContent=promptText;
+  document.getElementById('mrpspShelfScannerModal').classList.remove('hidden');
+  const reader=document.getElementById('mrpspShelfReader');reader.innerHTML='';
+  if(typeof Html5Qrcode!=='function') throw new Error('QR scanner library did not load.');
+  mrpspShelfScanner=new Html5Qrcode('mrpspShelfReader');
+  await mrpspShelfScanner.start({facingMode:'environment'},{fps:12,qrbox:{width:230,height:230},aspectRatio:1},async decoded=>{
+    if(mrpspShelfScanBusy) return; mrpspShelfScanBusy=true;
+    try { await callback(String(decoded||'').trim()); } catch(e) { alert(e.message||e); }
+    finally { mrpspShelfScanBusy=false; }
+  },()=>{});
+}
+window.stopShelfScanner = async () => {
+  if(mrpspShelfScanner){try{if(mrpspShelfScanner.isScanning)await mrpspShelfScanner.stop();}catch(e){}try{await mrpspShelfScanner.clear();}catch(e){}mrpspShelfScanner=null;}
+  document.getElementById('mrpspShelfScannerModal')?.classList.add('hidden');
+};
+async function mrpspShelfResolveShelf(qr) {
+  const parts=String(qr).split('|');
+  if(parts.length!==3 || parts[0]!=='MRPSP-SHELF') throw new Error('This is not a valid MRPSP shelf QR.');
+  if(parts[1]!==activeProject) throw new Error(`This shelf belongs to ${parts[1]}, not the active project ${activeProject}.`);
+  const shelfId=parts[2]; const key=shelfId.replace(/[.#$\[\]/]/g,'_');
+  const snap=await get(ref(db,mrpspShelfPath(`shelves/${key}`)));
+  if(!snap.exists() || snap.val().qrData!==qr) throw new Error('Shelf QR is not registered or does not match the saved shelf.');
+  return {key,...snap.val()};
+}
+async function mrpspShelfFindAsset(barcode) {
+  const snap=await get(query(projectAwareRef('inventory'),orderByChild('barcode'),equalTo(barcode)));
+  if(!snap.exists()) throw new Error(`Product QR ${barcode} was not found in Asset Tracking.`);
+  let found=null;snap.forEach(c=>{if(!found)found={key:c.key,...c.val()};});
+  if(!found) throw new Error('Asset record could not be read.');
+  return found;
+}
+function mrpspRenderCheckinCart(){
+  const el=document.getElementById('shelfCheckinCart'); if(!el)return;
+  el.innerHTML=mrpspShelfPendingCheckin.length?`<b>${mrpspShelfPendingCheckin.length} product(s) staged</b><ol>${mrpspShelfPendingCheckin.map(x=>`<li>${mrpspShelfEscape(x.item)} <small>(${mrpspShelfEscape(x.barcode)})</small></li>`).join('')}</ol>`:'No products scanned yet.';
+}
+window.startShelfCheckin = async () => {
+  try {
+    mrpspShelfRequireAuth(); mrpspShelfCurrent=null;mrpspShelfPendingCheckin=[];mrpspShelfPhase='NEED_SHELF';mrpspRenderCheckinCart();
+    mrpspShelfSetStatus('shelfCheckinStatus','Scan the shelf QR to begin.','#1d4ed8');
+    await mrpspShelfStartScanner('FIRST: scan the shelf QR.',async code=>{
+      if(mrpspShelfPhase==='NEED_SHELF' || mrpspShelfPhase==='NEED_RESCAN'){
+        const shelf=await mrpspShelfResolveShelf(code);
+        if(mrpspShelfCurrent && shelf.key!==mrpspShelfCurrent.key) throw new Error('Rescan the same shelf QR to continue this check-in.');
+        mrpspShelfCurrent=shelf;mrpspShelfPhase='ASSETS';
+        mrpspShelfSetStatus('shelfCheckinStatus',`Shelf ${shelf.shelfId} selected. Scan product QR tags (${mrpspShelfPendingCheckin.length}/6 in current batch).`,'#166534');
+        document.getElementById('shelfScannerPrompt').textContent='Now scan product QR tags. Six maximum before shelf rescan.';return;
+      }
+      if(mrpspShelfPhase!=='ASSETS') return;
+      if(code.startsWith('MRPSP-SHELF|')) throw new Error('Scan a product QR now.');
+      if(mrpspShelfPendingCheckin.some(x=>x.barcode===code)) throw new Error('This product has already been scanned in this check-in.');
+      const item=await mrpspShelfFindAsset(code);
+      if(item.isStationery) throw new Error('Consumable/quantity stock is not supported in shelf asset check-in. Use the regular stock workflow.');
+      if(item.status==='Checked Out') throw new Error(`${item.item} is checked out and cannot be placed on a shelf.`);
+      if(item.currentShelfId && item.currentShelfId!==mrpspShelfCurrent.shelfId) throw new Error(`${item.item} is already assigned to shelf ${item.currentShelfId}.`);
+      mrpspShelfPendingCheckin.push(item);mrpspRenderCheckinCart();
+      mrpspShelfSetStatus('shelfCheckinStatus',`${item.item} added. ${mrpspShelfPendingCheckin.length}/6 in this batch.`,'#166534');
+      if(mrpspShelfPendingCheckin.length%6===0){mrpspShelfPhase='NEED_RESCAN';document.getElementById('shelfScannerPrompt').textContent='Six products scanned. Scan the SAME shelf QR to continue.';mrpspShelfSetStatus('shelfCheckinStatus','Six products scanned. Rescan the SAME shelf QR to continue, or press END CHECK-IN & SAVE.','#b45309');}
+    });
+  } catch(e){alert('Could not start check-in: '+(e.message||e));}
+};
+window.finishShelfCheckin = async () => {
+  try {
+    mrpspShelfRequireAuth();await window.stopShelfScanner();
+    if(!mrpspShelfCurrent) throw new Error('Scan a shelf QR first.');
+    if(!mrpspShelfPendingCheckin.length) throw new Error('Scan at least one product QR before ending check-in.');
+    const timestamp=Date.now(),base=mrpspShelfBasePath(),updates={};
+    const shelfPath=`${base?base+'/':''}shelves/${mrpspShelfCurrent.key}`;
+    const freshShelf=await get(ref(db,shelfPath));if(!freshShelf.exists())throw new Error('Shelf no longer exists.');
+    const currentProducts=freshShelf.val().products||{};
+    for(const staged of mrpspShelfPendingCheckin){
+      const itemPath=`${base?base+'/':''}inventory/${staged.key}`;
+      const fresh=await get(ref(db,itemPath));if(!fresh.exists())throw new Error(`${staged.item} was removed from Asset Tracking.`);
+      const val=fresh.val();if(val.barcode!==staged.barcode)throw new Error(`Barcode changed for ${staged.item}.`);
+      if(val.status==='Checked Out')throw new Error(`${staged.item} is currently checked out.`);
+      if(val.currentShelfId && val.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${staged.item} is assigned to another shelf.`);
+      updates[`${itemPath}/currentShelfId`]=mrpspShelfCurrent.shelfId;
+      updates[`${itemPath}/location`]=mrpspShelfCurrent.location;
+      updates[`${itemPath}/status`]='In Stock';
+      updates[`${itemPath}/shelfUpdatedAt`]=timestamp;
+      updates[`${shelfPath}/products/${staged.key}`]={barcode:staged.barcode,item:val.item||staged.item,addedAt:timestamp,addedBy:auth.currentUser.uid};
+    }
+    const logKey=push(ref(db,`${base?base+'/':''}shelf_transactions`)).key;
+    updates[`${base?base+'/':''}shelf_transactions/${logKey}`]={type:'CHECK_IN',shelfId:mrpspShelfCurrent.shelfId,productKeys:mrpspShelfPendingCheckin.map(x=>x.key),barcodes:mrpspShelfPendingCheckin.map(x=>x.barcode),count:mrpspShelfPendingCheckin.length,operatorUid:auth.currentUser.uid,operatorEmail:auth.currentUser.email||'',timestamp};
+    await update(ref(db),updates);
+    alert(`${mrpspShelfPendingCheckin.length} product(s) checked in to ${mrpspShelfCurrent.shelfId}.`);
+    mrpspShelfPendingCheckin=[];mrpspShelfCurrent=null;mrpspShelfPhase='IDLE';mrpspRenderCheckinCart();mrpspShelfSetStatus('shelfCheckinStatus','Check-in completed.');
+  } catch(e){alert('Check-in not saved: '+(e.message||e));}
+};
+window.startShelfCheckout = async () => {
+  try {
+    mrpspShelfRequireAuth();mrpspShelfCurrent=null;mrpspShelfSelected=[];mrpspShelfScannedOut=[];mrpspShelfCheckoutItems=[];
+    document.getElementById('shelfCheckoutProducts').innerHTML='';document.getElementById('shelfCheckoutRecipient').classList.add('hidden');document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');
+    mrpspShelfSetStatus('shelfCheckoutStatus','Scan the shelf QR.','#9a3412');
+    await mrpspShelfStartScanner('Scan the shelf QR to load its product list.',async code=>{
+      const shelf=await mrpspShelfResolveShelf(code);mrpspShelfCurrent=shelf;
+      const products=shelf.products||{};const entries=Object.entries(products);
+      const rows=[];
+      for(const [key,p] of entries){const snap=await get(projectAwareRef(`inventory/${key}`));if(snap.exists())rows.push({key,...snap.val()});}
+      mrpspShelfCheckoutItems=rows;
+      document.getElementById('shelfCheckoutProducts').innerHTML=rows.length?`<b>${mrpspShelfEscape(shelf.shelfId)} · ${rows.length} product(s)</b><div style="display:grid;gap:8px;margin-top:10px;">${rows.map(x=>`<label style="display:flex;gap:9px;align-items:center;padding:9px;border:1px solid #e2e8f0;border-radius:7px;"><input type="checkbox" class="shelfCheckoutTick" value="${mrpspShelfEscape(x.key)}" style="width:18px;height:18px;"> <span><b>${mrpspShelfEscape(x.item)}</b><small style="display:block;color:#64748b;">${mrpspShelfEscape(x.barcode)}</small></span></label>`).join('')}</div>`:'This shelf has no registered products.';
+      document.getElementById('shelfCheckoutRecipient').classList.toggle('hidden',!rows.length);
+      mrpspShelfSetStatus('shelfCheckoutStatus',`Shelf ${shelf.shelfId} loaded. Tick the products to issue.`,'#166534');await window.stopShelfScanner();
+    });
+  } catch(e){alert('Could not load shelf: '+(e.message||e));}
+};
+window.scanSelectedShelfProducts = async () => {
+  try {
+    if(!mrpspShelfCurrent)throw new Error('Scan a shelf QR first.');
+    mrpspShelfSelected=Array.from(document.querySelectorAll('.shelfCheckoutTick:checked')).map(x=>x.value);
+    if(!mrpspShelfSelected.length)throw new Error('Tick at least one product.');
+    const id=document.getElementById('shelfRecipientId').value.trim(),name=document.getElementById('shelfRecipientName').value.trim();
+    if(!id||!name)throw new Error('Enter the receiving person ID and name.');
+    mrpspShelfScannedOut=[];document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');
+    mrpspShelfSetStatus('shelfCheckoutStatus',`Scan ${mrpspShelfSelected.length} selected product QR code(s).`,'#9a3412');
+    await mrpspShelfStartScanner(`Scan selected products: 0 / ${mrpspShelfSelected.length}`,async code=>{
+      if(code.startsWith('MRPSP-SHELF|'))throw new Error('Scan selected product QR tags, not the shelf QR.');
+      if(mrpspShelfScannedOut.some(x=>x.barcode===code))throw new Error('This product QR has already been scanned.');
+      const item=await mrpspShelfFindAsset(code);
+      if(!mrpspShelfSelected.includes(item.key))throw new Error(`${item.item} was not ticked in the product list.`);
+      if(item.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${item.item} is no longer registered on this shelf.`);
+      mrpspShelfScannedOut.push(item);document.getElementById('shelfScannerPrompt').textContent=`Scanned ${mrpspShelfScannedOut.length} / ${mrpspShelfSelected.length}`;
+      document.getElementById('shelfCheckoutScanList').innerHTML=`<b>Scanned ${mrpspShelfScannedOut.length}/${mrpspShelfSelected.length}</b><ol>${mrpspShelfScannedOut.map(x=>`<li>${mrpspShelfEscape(x.item)}</li>`).join('')}</ol>`;
+      if(mrpspShelfScannedOut.length===mrpspShelfSelected.length){await window.stopShelfScanner();document.getElementById('shelfCheckoutFaceButton').classList.remove('hidden');mrpspShelfSetStatus('shelfCheckoutStatus','All selected products scanned. Verify operator face to complete.','#166534');}
+    });
+  } catch(e){alert('Product scanning could not continue: '+(e.message||e));}
+};
+window.verifyShelfCheckoutFace = async () => {
+  try {
+    mrpspShelfRequireAuth();
+    if(mrpspShelfScannedOut.length!==mrpspShelfSelected.length)throw new Error('Scan every selected product before face verification.');
+    scanMode='SHELF_CHECKOUT_FACE';
+    document.getElementById('modalTitle').textContent='Verify Operator Face';
+    document.getElementById('modalDesc').textContent='The signed-in operator must match their registered face. The recipient ID/name will be recorded separately.';
+    document.getElementById('btnCapture').onclick=window.handleFaceScan;
+    document.getElementById('btnCapture').disabled=false;document.getElementById('btnCapture').textContent='📸 VERIFY FACE';
+    document.getElementById('faceModal').classList.remove('hidden');await initCamera(true);
+  } catch(e){alert(e.message||e);}
+};
+const mrpspOriginalHandleFaceScan=window.handleFaceScan;
+window.handleFaceScan=async function(){
+  if(scanMode!=='SHELF_CHECKOUT_FACE') return mrpspOriginalHandleFaceScan.apply(this,arguments);
+  const btn=document.getElementById('btnCapture');
+  if(!currentDescriptor){updateStatus('No face detected.','red');return;}
+  btn.disabled=true;btn.textContent='VERIFYING…';
+  try{
+    const uid=auth.currentUser.uid;const profileSnap=await get(ref(db,`users/${uid}`));const profile=profileSnap.val()||{};
+    if(!profileSnap.exists()||profile.banned||profile.terminated)throw new Error('Operator account is not permitted to transact.');
+    if(!profile.faceData)throw new Error('No registered face template found for the signed-in operator.');
+    const samples=Array.isArray(profile.faceData)&&Array.isArray(profile.faceData[0])?profile.faceData:[profile.faceData];
+    const matched=samples.some(sample=>Array.isArray(sample)&&sample.length===currentDescriptor.length&&faceapi.euclideanDistance(sample,currentDescriptor)<0.50);
+    if(!matched)throw new Error('Face did not match the signed-in operator. No products were checked out.');
+    await stopCamera();
+    const timestamp=Date.now(),base=mrpspShelfBasePath(),updates={};
+    const shelfPath=`${base?base+'/':''}shelves/${mrpspShelfCurrent.key}`;
+    const shelfSnap=await get(ref(db,shelfPath));if(!shelfSnap.exists())throw new Error('Shelf record no longer exists.');
+    for(const scanned of mrpspShelfScannedOut){
+      const itemPath=`${base?base+'/':''}inventory/${scanned.key}`;const freshSnap=await get(ref(db,itemPath));if(!freshSnap.exists())throw new Error(`${scanned.item} no longer exists.`);
+      const fresh=freshSnap.val();if(fresh.barcode!==scanned.barcode||fresh.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${scanned.item} has changed since scanning. No transaction was saved.`);
+      if(fresh.status==='Checked Out')throw new Error(`${scanned.item} is already checked out.`);
+      updates[`${itemPath}/status`]='Checked Out';updates[`${itemPath}/holder`]=document.getElementById('shelfRecipientName').value.trim();updates[`${itemPath}/holderPersonId`]=document.getElementById('shelfRecipientId').value.trim();updates[`${itemPath}/holderUid`]=null;updates[`${itemPath}/location`]='Checked Out';updates[`${itemPath}/currentShelfId`]=null;updates[`${itemPath}/lastCheckoutAt`]=timestamp;updates[`${shelfPath}/products/${scanned.key}`]=null;
+    }
+    const logKey=push(ref(db,`${base?base+'/':''}shelf_transactions`)).key;
+    updates[`${base?base+'/':''}shelf_transactions/${logKey}`]={type:'CHECK_OUT',shelfId:mrpspShelfCurrent.shelfId,productKeys:mrpspShelfScannedOut.map(x=>x.key),barcodes:mrpspShelfScannedOut.map(x=>x.barcode),count:mrpspShelfScannedOut.length,recipientId:document.getElementById('shelfRecipientId').value.trim(),recipientName:document.getElementById('shelfRecipientName').value.trim(),operatorUid:uid,operatorName:profile.name||auth.currentUser.email||uid,faceVerified:true,timestamp};
+    await update(ref(db),updates);
+    document.getElementById('faceModal').classList.add('hidden');document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');
+    mrpspShelfSetStatus('shelfCheckoutStatus',`${mrpspShelfScannedOut.length} product(s) checked out successfully.`,'#166534');
+    alert(`${mrpspShelfScannedOut.length} product(s) checked out to ${document.getElementById('shelfRecipientName').value.trim()} (${document.getElementById('shelfRecipientId').value.trim()}).`);
+    scanMode='LOGIN';mrpspShelfCurrent=null;mrpspShelfSelected=[];mrpspShelfScannedOut=[];
+    if(typeof window.loadInventory==='function')window.loadInventory();
+  }catch(e){updateStatus('❌ '+(e.message||e),'red');alert('Check-out not completed: '+(e.message||e));btn.disabled=false;btn.textContent='📸 VERIFY FACE';}
+};
+
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
