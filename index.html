@@ -3944,47 +3944,69 @@ window.calcPurTotal = () => {
     document.getElementById("purTotal").value = (p*q).toFixed(2);
 };
 window.submitPurchase = async () => {
-    const item = document.getElementById("purItem").value;
-    const price = document.getElementById("purPrice").value;
-    const qty = document.getElementById("purQty").value;
-    const total = document.getElementById("purTotal").value;
-    const billUrl = document.getElementById("purBillUrl").value; // New Field
-    const key = document.getElementById("editPurchaseKey").value;
-    
-    if(!item || !total) return alert("Please fill details");
-    
-    // STRICT VALIDATION: Bill is required
-    if(!billUrl) return alert("⚠ STOP: Bill/Drive Link is REQUIRED for purchases.\n\n(If bill is pending, please type 'Pending' in the link box to proceed).");
+    const item = (document.getElementById("purItem")?.value || "").trim();
+    const platform = (document.getElementById("purPlatform")?.value || "").trim();
+    const orderId = (document.getElementById("purOrderId")?.value || "").trim();
+    const price = Number(document.getElementById("purPrice")?.value);
+    const qty = Number(document.getElementById("purQty")?.value);
+    const total = Number(document.getElementById("purTotal")?.value);
+    const billUrl = (document.getElementById("purBillUrl")?.value || "").trim();
+    const key = (document.getElementById("editPurchaseKey")?.value || "").trim();
 
-    const status = isAdmin ? "Approved" : "Pending";
+    if (!currentUser || !auth.currentUser) return alert("Please sign in before submitting a purchase request.");
+    if (!item) return alert("Please enter the product name.");
+    if (!Number.isFinite(price) || price <= 0) return alert("Enter a valid unit price greater than zero.");
+    if (!Number.isInteger(qty) || qty <= 0) return alert("Enter a valid whole-number quantity greater than zero.");
+    if (!Number.isFinite(total) || total <= 0 || Math.abs(total - price * qty) > 0.01) {
+        return alert("The purchase total is invalid. Please recheck price and quantity.");
+    }
+    if (!billUrl) return alert("⚠ Bill/Invoice link is required. If the bill is pending, type 'Pending'.");
+
+    // Students may create requests only. Existing records can only be edited by admins.
+    if (key && !isAdmin) return alert("Only an administrator can edit an existing procurement record.");
 
     const data = {
-        type: "DEBIT", 
-        productName: item, 
-        platform: document.getElementById("purPlatform").value,
-        orderId: document.getElementById("purOrderId").value, 
-        unitPrice: price, 
-        qty: qty,
-        amount: parseFloat(total), 
-        desc: `Purchase: ${item}`, 
-        billUrl: billUrl, // Save Link
-        status: status,
-        by: currentUser.email,
-        timestamp: serverTimestamp()
+        type: "DEBIT",
+        productName: item,
+        platform,
+        orderId,
+        unitPrice: price,
+        qty,
+        amount: Number(total.toFixed(2)),
+        desc: `Purchase: ${item}`,
+        billUrl,
+        by: currentUser.email || auth.currentUser.email || "Unknown",
+        updatedAt: serverTimestamp()
     };
-    
+
     try {
-        if(key) { 
-            await update(projectAwareRef( `finance/${key}`), data); 
-            alert("Purchase Entry Updated!"); 
-        } else { 
-            await push(projectAwareRef( "finance"), data); 
-            alert(isAdmin ? "Purchase Saved." : "Purchase Request Sent.");
+        if (key) {
+            // Preserve the existing approval state while editing the record.
+            const existingSnap = await get(projectAwareRef(`finance/${key}`));
+            if (!existingSnap.exists()) throw new Error("The purchase record no longer exists.");
+            const existing = existingSnap.val() || {};
+            data.status = existing.status || "Pending";
+            data.timestamp = existing.timestamp || serverTimestamp();
+            data.editedBy = auth.currentUser.email || "Admin";
+            await update(projectAwareRef(`finance/${key}`), data);
+            alert("Purchase entry updated. Its previous approval status was preserved.");
+        } else {
+            // A student request is always Pending. Admin-created entries are Approved.
+            data.status = isAdmin ? "Approved" : "Pending";
+            data.timestamp = serverTimestamp();
+            if (isAdmin) data.approvedBy = auth.currentUser.email || "Admin";
+            await push(projectAwareRef("finance"), data);
+            alert(isAdmin ? "Purchase saved and approved." : "Purchase request submitted for admin approval.");
         }
         clearPurForm();
-    } catch(e) { alert(e.message); }
+        if (typeof window.loadPurchaseData === "function") window.loadPurchaseData();
+        if (typeof window.loadFinanceData === "function") window.loadFinanceData();
+    } catch (e) {
+        alert("Could not save purchase: " + (e?.message || e));
+    }
 };
 window.editPurchase = async (key) => {
+    if (!isAdmin) return alert("Only an administrator can edit procurement records.");
     const snap = await get(projectAwareRef( `finance/${key}`));
     const d = snap.val();
     document.getElementById("purItem").value = d.productName;
@@ -8006,7 +8028,7 @@ window.switchTab = (t) => {
     // Existing non-admin restrictions
     if (!isAdmin) {
         const restrictedTabs = [
-            "attendance", "funds", "purchase", "billing", "directives"
+            "attendance", "funds", "billing", "directives"
         ];
 
         if (restrictedTabs.includes(t)) {
@@ -9329,7 +9351,8 @@ async function populateCommentUsers() {
 }
 window.loadPurchaseData = () => {
     const formPanel = document.getElementById("purchaseFormPanel");
-    if(formPanel) formPanel.classList.remove("hidden");
+    // Procurement request form is available to signed-in students and admins.
+    if (formPanel) formPanel.classList.remove("hidden");
 
     const tbody = document.getElementById("purchaseTableBody");
     if(!tbody) return;
@@ -9337,7 +9360,7 @@ window.loadPurchaseData = () => {
 
     const theadRow = document.querySelector("#tab-purchase thead tr");
     if(theadRow) {
-        let headerHTML = `<th>Sl</th><th>Product Details</th><th>Vendor & Order ID</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th>`;
+        let headerHTML = `<th>Sl</th><th>Product Details</th><th>Vendor & Order ID</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Bill / Invoice</th><th>Status</th>`;
         if(isAdmin) headerHTML += `<th>Action</th>`;
         theadRow.innerHTML = headerHTML;
     }
@@ -9415,6 +9438,7 @@ window.loadPurchaseData = () => {
                                 <td>${t.qty || 1}</td>
                                 <td>${t.unitPrice || '-'}</td>
                                 <td style="color:var(--metro-red); font-weight:bold;">₹ ${amount.toFixed(2)}</td>
+                                <td>${t.billUrl && /^https?:\/\//i.test(String(t.billUrl)) ? `<a href="${String(t.billUrl).replace(/"/g, "&quot;")}" target="_blank" rel="noopener noreferrer">Open Bill</a>` : (t.billUrl === "Pending" ? "Pending" : "-")}</td>
                                 <td>${statusBadge}</td>
                                 ${actionCell}
                             </tr>
@@ -9431,6 +9455,7 @@ window.loadPurchaseData = () => {
 };
 // --- APPROVE: Deducts Fund ---
 window.approvePurchase = async (key) => {
+    if (!isAdmin) return alert("Administrator access is required to approve purchases.");
     if(!confirm("✅ Approve this purchase?\n\nThis will deduct funds from the Balance Sheet.")) return;
     try {
         await update(projectAwareRef( `finance/${key}`), { status: "Approved" });
@@ -9440,6 +9465,7 @@ window.approvePurchase = async (key) => {
 
 // --- DENY: Marks as Rejected (No Deduction) ---
 window.denyPurchase = async (key) => {
+    if (!isAdmin) return alert("Administrator access is required to reject purchases.");
     if(!confirm("🚫 Deny/Reject this request?\n\nIt will remain in history but NOT affect the budget.")) return;
     try {
         await update(projectAwareRef( `finance/${key}`), { status: "Rejected" });
@@ -9448,12 +9474,14 @@ window.denyPurchase = async (key) => {
 
 // --- DELETE: Removes Completely ---
 window.deletePurchase = async (key) => {
+    if (!isAdmin) return alert("Administrator access is required to delete purchases.");
     if(confirm("🗑 PERMANENTLY DELETE this record?\n\nThis cannot be undone.")) {
         await remove(projectAwareRef( `finance/${key}`));
     }
 };
 // --- NEW: DELETE PURCHASE ---
 window.deletePurchase = async (key) => {
+    if (!isAdmin) return alert("Administrator access is required to delete purchases.");
     if(confirm("⚠ Delete this purchase entry?\n\nThe amount will be credited back to the available balance.")) {
         await remove(projectAwareRef( `finance/${key}`));
     }
