@@ -3687,6 +3687,31 @@ Optional verification note (or Cancel):`, "Verified against bank/UPI statement")
   }
 };
 
+window.mrpspRejectPayment = async function (requestKey) {
+  if (!isAdmin || !auth.currentUser) return alert("Only an administrator can reject a payment.");
+  const reason = prompt("Enter the reason for rejecting this payment. This will be recorded for the member:");
+  if (reason === null) return;
+  if (!reason.trim()) return alert("A rejection reason is mandatory.");
+  try {
+    const reqRef = ref(db, `eoffice_requests/${requestKey}`);
+    const snap = await get(reqRef);
+    if (!snap.exists()) return alert("Payment request not found.");
+    const payment = snap.val();
+    if (payment.type !== "PROJECT_PAYMENT_VERIFICATION") return alert("This is not a project payment request.");
+    if (payment.status !== "PAYMENT PENDING" || payment.verified === true || payment.creditEntryKey) return alert("Only an unprocessed pending payment can be rejected.");
+    await update(reqRef, {
+      status: "REJECTED", verified: false,
+      rejectedBy: auth.currentUser.email || auth.currentUser.uid,
+      rejectedAt: Date.now(), rejectionReason: reason.trim()
+    });
+    alert("Payment request rejected. No Project Funds credit was created.");
+    window.mrpspLoadPaymentReviewQueue();
+  } catch (err) {
+    console.error("Payment rejection failed", err);
+    alert("Could not reject payment: " + (err?.message || err));
+  }
+};
+
 window.mrpspLoadPaymentReviewQueue = async function () {
   const panel = document.getElementById("mrpspAdminPaymentReviewPanel");
   const list = document.getElementById("mrpspAdminPaymentReviewList");
@@ -3701,7 +3726,7 @@ window.mrpspLoadPaymentReviewQueue = async function () {
     if (snap.exists()) snap.forEach(child => { const v = child.val(); if (v?.type === "PROJECT_PAYMENT_VERIFICATION" && v.status === "PAYMENT PENDING") items.push({ key: child.key, ...v }); });
     items.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
     if (!items.length) { list.innerHTML = '<p style="color:#64748b;">No pending project payments.</p>'; return; }
-    list.innerHTML = items.map(p => `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0;background:white;"><b>${String(p.payerName || "Member").replace(/[<>]/g, "")}</b> — <b>₹${Number(p.amount || 0).toFixed(2)}</b><br><small>Purpose: ${String(p.purpose || "-").replace(/[<>]/g, "")} | Last 4: <b>${String(p.transactionLast4 || "----").replace(/[^0-9]/g, "")}</b> | Project: ${String(p.project || "-").replace(/[<>]/g, "")}</small><br><small>Submitted: ${p.createdAt ? new Date(p.createdAt).toLocaleString() : "-"} | Request: ${p.key}</small><div style="margin-top:8px;"><button class="success" onclick="window.mrpspVerifyAndCreditPayment('${p.key}')">VERIFY & CREDIT FUND</button></div></div>`).join("");
+    list.innerHTML = items.map(p => `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0;background:white;"><b>${String(p.payerName || "Member").replace(/[<>]/g, "")}</b> — <b>₹${Number(p.amount || 0).toFixed(2)}</b><br><small>Purpose: ${String(p.purpose || "-").replace(/[<>]/g, "")} | Last 4: <b>${String(p.transactionLast4 || "----").replace(/[^0-9]/g, "")}</b> | Project: ${String(p.project || "-").replace(/[<>]/g, "")}</small><br><small>Submitted: ${p.createdAt ? new Date(p.createdAt).toLocaleString() : "-"} | Request: ${p.key}</small><div style="margin-top:8px;"><button class="success" onclick="window.mrpspVerifyAndCreditPayment('${p.key}')">VERIFY & CREDIT FUND</button> <button class="danger" onclick="window.mrpspRejectPayment('${p.key}')">REJECT PAYMENT</button></div></div>`).join("");
   } catch (err) { list.innerHTML = `<p style="color:#b91c1c;">Could not load payment requests: ${String(err?.message || err).replace(/[<>]/g, "")}</p>`; console.error(err); }
 };
 
@@ -17213,7 +17238,7 @@ window.cancelQuickAssetTransaction = async () => {
     </div>
     <div id="shelfMode-checkin" class="panel hidden" style="border:1px solid #bfdbfe;">
       <h4 style="margin-top:0;color:#1d4ed8;">2. Check in products to a shelf</h4>
-      <p style="color:#475569;">Scan the shelf QR first, then scan up to six existing product QR tags. After every six products, the scanner pauses and asks you to rescan the same shelf QR. Press END CHECK-IN when finished.</p>
+      <p style="color:#475569;">Scan the shelf QR first, then scan up to six product QR tags. Products already issued (Checked Out) can be returned through this same CHECK IN workflow. After every six products, rescan the same shelf QR. Press END CHECK-IN when finished.</p>
       <div id="shelfCheckinStatus" style="padding:10px;background:#eff6ff;border-radius:8px;margin:10px 0;">No shelf selected.</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button type="button" class="info" onclick="window.startShelfCheckin()">SCAN SHELF / PRODUCTS</button>
@@ -17371,7 +17396,7 @@ async function mrpspShelfFindAsset(barcode) {
 }
 function mrpspRenderCheckinCart(){
   const el=document.getElementById('shelfCheckinCart'); if(!el)return;
-  el.innerHTML=mrpspShelfPendingCheckin.length?`<b>${mrpspShelfPendingCheckin.length} product(s) staged</b><ol>${mrpspShelfPendingCheckin.map(x=>`<li>${mrpspShelfEscape(x.item)} <small>(${mrpspShelfEscape(x.barcode)})</small></li>`).join('')}</ol>`:'No products scanned yet.';
+  el.innerHTML=mrpspShelfPendingCheckin.length?`<b>${mrpspShelfPendingCheckin.length} product(s) staged</b><ol>${mrpspShelfPendingCheckin.map(x=>`<li>${mrpspShelfEscape(x.item)} <small>(${mrpspShelfEscape(x.barcode)})</small> ${x.isReturn?'<b style="color:#b45309">RETURN</b>':'<b style="color:#166534">STOCK-IN</b>'}</li>`).join('')}</ol>`:'No products scanned yet.';
 }
 window.startShelfCheckin = async () => {
   try {
@@ -17389,10 +17414,10 @@ window.startShelfCheckin = async () => {
       if(code.startsWith('MRPSP-SHELF|')) throw new Error('Scan a product QR now.');
       if(mrpspShelfPendingCheckin.some(x=>x.barcode===code)) throw new Error('This product has already been scanned in this check-in.');
       const item=await mrpspShelfFindAsset(code);
-      if(item.status==='Checked Out') throw new Error(`${item.item} is checked out and cannot be placed on a shelf.`);
-      if(item.currentShelfId && item.currentShelfId!==mrpspShelfCurrent.shelfId) throw new Error(`${item.item} is already assigned to shelf ${item.currentShelfId}.`);
-      mrpspShelfPendingCheckin.push(item);mrpspRenderCheckinCart();
-      mrpspShelfSetStatus('shelfCheckinStatus',`${item.item} added. ${mrpspShelfPendingCheckin.length}/6 in this batch.`,'#166534');
+      const isReturn=String(item.status||'').toLowerCase()==='checked out';
+      if(!isReturn && item.currentShelfId && item.currentShelfId!==mrpspShelfCurrent.shelfId) throw new Error(`${item.item} is already assigned to shelf ${item.currentShelfId}.`);
+      mrpspShelfPendingCheckin.push({...item,isReturn});mrpspRenderCheckinCart();
+      mrpspShelfSetStatus('shelfCheckinStatus',isReturn?`${item.item} recognised as an issued product. It will be RETURNED to this shelf.`:`${item.item} added to shelf stock. ${mrpspShelfPendingCheckin.length}/6 in this batch.`,'#166534');
       if(mrpspShelfPendingCheckin.length%6===0){mrpspShelfPhase='NEED_RESCAN';document.getElementById('shelfScannerPrompt').textContent='Six products scanned. Scan the SAME shelf QR to continue.';mrpspShelfSetStatus('shelfCheckinStatus','Six products scanned. Rescan the SAME shelf QR to continue, or press END CHECK-IN & SAVE.','#b45309');}
     });
   } catch(e){alert('Could not start check-in: '+(e.message||e));}
@@ -17410,18 +17435,20 @@ window.finishShelfCheckin = async () => {
       const itemPath=`${base?base+'/':''}inventory/${staged.key}`;
       const fresh=await get(ref(db,itemPath));if(!fresh.exists())throw new Error(`${staged.item} was removed from Asset Tracking.`);
       const val=fresh.val();if(val.barcode!==staged.barcode)throw new Error(`Barcode changed for ${staged.item}.`);
-      if(val.status==='Checked Out')throw new Error(`${staged.item} is currently checked out.`);
-      if(val.currentShelfId && val.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${staged.item} is assigned to another shelf.`);
+      const isReturn=String(val.status||'').toLowerCase()==='checked out';
+      if(isReturn!==!!staged.isReturn)throw new Error(`${staged.item} stock status changed after scanning. Please scan it again.`);
+      if(!isReturn && val.currentShelfId && val.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${staged.item} is assigned to another shelf.`);
       updates[`${itemPath}/currentShelfId`]=mrpspShelfCurrent.shelfId;
       updates[`${itemPath}/location`]=mrpspShelfCurrent.location;
       updates[`${itemPath}/status`]='In Stock';
       updates[`${itemPath}/shelfUpdatedAt`]=timestamp;
-      updates[`${shelfPath}/products/${staged.key}`]={barcode:staged.barcode,item:val.item||staged.item,addedAt:timestamp,addedBy:auth.currentUser.uid};
+      if(isReturn){updates[`${itemPath}/holder`]=null;updates[`${itemPath}/holderPersonId`]=null;updates[`${itemPath}/holderUid`]=null;updates[`${itemPath}/lastReturnedAt`]=timestamp;updates[`${itemPath}/lastReturnShelfId`]=mrpspShelfCurrent.shelfId;}
+      updates[`${shelfPath}/products/${staged.key}`]={barcode:staged.barcode,item:val.item||staged.item,addedAt:timestamp,addedBy:auth.currentUser.uid, ...(isReturn?{returnedAt:timestamp,returningOperatorUid:auth.currentUser.uid}:{})};
     }
     const logKey=push(ref(db,`${base?base+'/':''}shelf_transactions`)).key;
-    updates[`${base?base+'/':''}shelf_transactions/${logKey}`]={type:'CHECK_IN',shelfId:mrpspShelfCurrent.shelfId,productKeys:mrpspShelfPendingCheckin.map(x=>x.key),barcodes:mrpspShelfPendingCheckin.map(x=>x.barcode),count:mrpspShelfPendingCheckin.length,operatorUid:auth.currentUser.uid,operatorEmail:auth.currentUser.email||'',timestamp};
+    updates[`${base?base+'/':''}shelf_transactions/${logKey}`]={type:'CHECK_IN',shelfId:mrpspShelfCurrent.shelfId,productKeys:mrpspShelfPendingCheckin.map(x=>x.key),barcodes:mrpspShelfPendingCheckin.map(x=>x.barcode),count:mrpspShelfPendingCheckin.length,returnCount:mrpspShelfPendingCheckin.filter(x=>x.isReturn).length,returnedProductKeys:mrpspShelfPendingCheckin.filter(x=>x.isReturn).map(x=>x.key),operatorUid:auth.currentUser.uid,operatorEmail:auth.currentUser.email||'',timestamp};
     await update(ref(db),updates);
-    alert(`${mrpspShelfPendingCheckin.length} product(s) checked in to ${mrpspShelfCurrent.shelfId}.`);
+    const returned=mrpspShelfPendingCheckin.filter(x=>x.isReturn).length;alert(`${mrpspShelfPendingCheckin.length} product(s) checked in to ${mrpspShelfCurrent.shelfId}. ${returned} returned, ${mrpspShelfPendingCheckin.length-returned} added to stock.`);
     mrpspShelfPendingCheckin=[];mrpspShelfCurrent=null;mrpspShelfPhase='IDLE';mrpspRenderCheckinCart();mrpspShelfSetStatus('shelfCheckinStatus','Check-in completed.');
   } catch(e){alert('Check-in not saved: '+(e.message||e));}
 };
