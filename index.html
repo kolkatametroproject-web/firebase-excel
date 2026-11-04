@@ -17227,10 +17227,28 @@ window.cancelQuickAssetTransaction = async () => {
       <div id="shelfCheckoutStatus" style="padding:10px;background:#fff7ed;border-radius:8px;margin:10px 0;">No shelf selected.</div>
       <button type="button" class="warning" onclick="window.startShelfCheckout()">SCAN SHELF QR</button>
       <div id="shelfCheckoutProducts" style="margin-top:12px;"></div>
-      <div id="shelfCheckoutRecipient" class="hidden" style="margin-top:12px;padding:12px;background:#fff7ed;border-radius:8px;">
-        <label>Recipient / Person ID</label><input id="shelfRecipientId" placeholder="Enter receiving person's ID">
-        <label>Recipient name</label><input id="shelfRecipientName" placeholder="Enter receiving person's name">
-        <button type="button" class="info" onclick="window.scanSelectedShelfProducts()">SCAN SELECTED PRODUCTS</button>
+      <div id="shelfCheckoutRecipient" class="hidden" style="margin-top:14px;padding:18px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 4px 14px rgba(15,23,42,.05);">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+          <div><div style="font-size:11px;font-weight:800;letter-spacing:1.1px;color:#64748b;">ISSUE AUTHORISATION</div><h4 style="margin:3px 0 0;color:#0f172a;font-size:17px;">Who is receiving these items?</h4></div>
+          <span style="font-size:11px;font-weight:700;color:#0369a1;background:#e0f2fe;padding:6px 10px;border-radius:20px;">Choose one method</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:14px;">
+          <button id="shelfManualModeBtn" type="button" onclick="window.setShelfRecipientMode('manual')" style="text-align:left;padding:14px;background:#fff;color:#0f172a;border:1px solid #94a3b8;border-radius:10px;box-shadow:none;"><span style="display:block;font-size:14px;font-weight:800;"><i class="fas fa-keyboard"></i> Manual entry</span><small style="display:block;margin-top:5px;color:#64748b;font-weight:500;">Enter recipient details and authorise with Admin PIN</small></button>
+          <button id="shelfFaceModeBtn" type="button" onclick="window.setShelfRecipientMode('face')" style="text-align:left;padding:14px;background:#fff;color:#0f172a;border:1px solid #94a3b8;border-radius:10px;box-shadow:none;"><span style="display:block;font-size:14px;font-weight:800;"><i class="fas fa-user-check"></i> Face scan</span><small style="display:block;margin-top:5px;color:#64748b;font-weight:500;">Identify the signed-in recipient using registered face</small></button>
+        </div>
+        <div id="shelfManualRecipientPanel" class="hidden" style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;">
+            <div><label style="font-size:12px;font-weight:700;color:#334155;">Recipient / Person ID</label><input id="shelfRecipientId" placeholder="Enter receiving person's ID" autocomplete="off"></div>
+            <div><label style="font-size:12px;font-weight:700;color:#334155;">Recipient name</label><input id="shelfRecipientName" placeholder="Enter receiving person's name" autocomplete="off"></div>
+          </div>
+          <div style="max-width:320px;margin-top:12px;"><label style="font-size:12px;font-weight:700;color:#334155;">Admin PIN authorisation</label><input id="shelfManualAdminPin" type="password" inputmode="numeric" autocomplete="off" placeholder="Enter Admin PIN"></div>
+          <button id="shelfManualAuthorizeBtn" type="button" class="success" style="margin-top:12px;width:100%;max-width:320px;" onclick="window.authorizeShelfManualCheckout()"><i class="fas fa-lock-open"></i> AUTHORISE & COMPLETE ISSUE</button>
+        </div>
+        <div id="shelfFaceRecipientPanel" class="hidden" style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px;">
+          <p style="margin:0 0 10px;color:#475569;font-size:13px;">Face scan identifies the recipient and completes the issue in the same step. No PIN or second verification is required.</p>
+          <button id="shelfFaceAuthorizeBtn" type="button" class="info" style="width:100%;" onclick="window.verifyShelfCheckoutFace()"><i class="fas fa-camera"></i> SCAN FACE & COMPLETE ISSUE</button>
+        </div>
+        <button type="button" class="warning" style="width:100%;margin-top:14px;" onclick="window.scanSelectedShelfProducts()"><i class="fas fa-qrcode"></i> SCAN SELECTED PRODUCT TAGS</button>
       </div>
       <div id="shelfCheckoutScanList" style="margin-top:12px;"></div>
       <button id="shelfCheckoutFaceButton" type="button" class="success hidden" style="margin-top:12px;" onclick="window.verifyShelfCheckoutFace()">VERIFY OPERATOR FACE & COMPLETE CHECK-OUT</button>
@@ -17259,6 +17277,7 @@ let mrpspShelfSelected = [];
 let mrpspShelfScannedOut = [];
 let mrpspShelfCheckoutItems = [];
 let mrpspShelfFaceBusy = false;
+let mrpspShelfRecipientMode = '';
 
 function mrpspShelfBasePath() { return activeProject === 'CCRAS' ? 'projects/CCRAS' : ''; }
 function mrpspShelfPath(path) { const base = mrpspShelfBasePath(); return base ? `${base}/${path}` : path; }
@@ -17409,7 +17428,7 @@ window.finishShelfCheckin = async () => {
 window.startShelfCheckout = async () => {
   try {
     mrpspShelfRequireAuth();mrpspShelfCurrent=null;mrpspShelfSelected=[];mrpspShelfScannedOut=[];mrpspShelfCheckoutItems=[];
-    document.getElementById('shelfCheckoutProducts').innerHTML='';document.getElementById('shelfCheckoutRecipient').classList.add('hidden');document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');
+    document.getElementById('shelfCheckoutProducts').innerHTML='';document.getElementById('shelfCheckoutRecipient').classList.add('hidden');document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');mrpspShelfRecipientMode='';document.getElementById('shelfManualRecipientPanel')?.classList.add('hidden');document.getElementById('shelfFaceRecipientPanel')?.classList.add('hidden');document.getElementById('shelfRecipientId')&&(document.getElementById('shelfRecipientId').value='');document.getElementById('shelfRecipientName')&&(document.getElementById('shelfRecipientName').value='');document.getElementById('shelfManualAdminPin')&&(document.getElementById('shelfManualAdminPin').value='');
     mrpspShelfSetStatus('shelfCheckoutStatus','Scan the shelf QR.','#9a3412');
     await mrpspShelfStartScanner('Scan the shelf QR to load its product list.',async code=>{
       const shelf=await mrpspShelfResolveShelf(code);mrpspShelfCurrent=shelf;
@@ -17423,14 +17442,27 @@ window.startShelfCheckout = async () => {
     });
   } catch(e){alert('Could not load shelf: '+(e.message||e));}
 };
+window.setShelfRecipientMode = mode => {
+  if(!['manual','face'].includes(mode)) return;
+  mrpspShelfRecipientMode=mode;
+  document.getElementById('shelfManualRecipientPanel').classList.toggle('hidden',mode!=='manual');
+  document.getElementById('shelfFaceRecipientPanel').classList.toggle('hidden',mode!=='face');
+  const manual=document.getElementById('shelfManualModeBtn'),face=document.getElementById('shelfFaceModeBtn');
+  manual.style.border=mode==='manual'?'2px solid #2563eb':'1px solid #94a3b8';manual.style.background=mode==='manual'?'#eff6ff':'#fff';
+  face.style.border=mode==='face'?'2px solid #2563eb':'1px solid #94a3b8';face.style.background=mode==='face'?'#eff6ff':'#fff';
+  mrpspShelfSetStatus('shelfCheckoutStatus',mode==='manual'?'Manual recipient entry selected. Admin PIN is required.':'Face scan selected. The recognised profile will be recorded as recipient.','#1d4ed8');
+};
 window.scanSelectedShelfProducts = async () => {
   try {
     if(!mrpspShelfCurrent)throw new Error('Scan a shelf QR first.');
     mrpspShelfSelected=Array.from(document.querySelectorAll('.shelfCheckoutTick:checked')).map(x=>x.value);
     if(!mrpspShelfSelected.length)throw new Error('Tick at least one product.');
-    const id=document.getElementById('shelfRecipientId').value.trim(),name=document.getElementById('shelfRecipientName').value.trim();
-    if(!id||!name)throw new Error('Enter the receiving person ID and name.');
-    mrpspShelfScannedOut=[];document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');
+    if(!mrpspShelfRecipientMode)throw new Error('Choose Manual Entry or Face Scan first.');
+    if(mrpspShelfRecipientMode==='manual'){
+      const id=document.getElementById('shelfRecipientId').value.trim(),name=document.getElementById('shelfRecipientName').value.trim();
+      if(!id||!name)throw new Error('Enter the receiving person ID and name.');
+    }
+    mrpspShelfScannedOut=[];
     mrpspShelfSetStatus('shelfCheckoutStatus',`Scan ${mrpspShelfSelected.length} selected product QR code(s).`,'#9a3412');
     await mrpspShelfStartScanner(`Scan selected products: 0 / ${mrpspShelfSelected.length}`,async code=>{
       if(code.startsWith('MRPSP-SHELF|'))throw new Error('Scan selected product QR tags, not the shelf QR.');
@@ -17439,20 +17471,65 @@ window.scanSelectedShelfProducts = async () => {
       if(!mrpspShelfSelected.includes(item.key))throw new Error(`${item.item} was not ticked in the product list.`);
       if(item.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${item.item} is no longer registered on this shelf.`);
       mrpspShelfScannedOut.push(item);document.getElementById('shelfScannerPrompt').textContent=`Scanned ${mrpspShelfScannedOut.length} / ${mrpspShelfSelected.length}`;
-      document.getElementById('shelfCheckoutScanList').innerHTML=`<b>Scanned ${mrpspShelfScannedOut.length}/${mrpspShelfSelected.length}</b><ol>${mrpspShelfScannedOut.map(x=>`<li>${mrpspShelfEscape(x.item)}</li>`).join('')}</ol>`;
-      if(mrpspShelfScannedOut.length===mrpspShelfSelected.length){await window.stopShelfScanner();document.getElementById('shelfCheckoutFaceButton').classList.remove('hidden');mrpspShelfSetStatus('shelfCheckoutStatus','All selected products scanned. Verify operator face to complete.','#166534');}
+      document.getElementById('shelfCheckoutScanList').innerHTML=`<div style="padding:14px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc;"><b style="color:#0f172a;">Scan progress: ${mrpspShelfScannedOut.length}/${mrpspShelfSelected.length}</b><ol style="margin:8px 0 0;padding-left:22px;">${mrpspShelfScannedOut.map(x=>`<li>${mrpspShelfEscape(x.item)} <small style="color:#64748b;">${mrpspShelfEscape(x.barcode)}</small></li>`).join('')}</ol></div>`;
+      if(mrpspShelfScannedOut.length===mrpspShelfSelected.length){
+        await window.stopShelfScanner();
+        mrpspShelfSetStatus('shelfCheckoutStatus','All selected products scanned. Complete the chosen recipient authorisation below.','#166534');
+        if(mrpspShelfRecipientMode==='manual')document.getElementById('shelfManualAdminPin')?.focus();
+      }
     });
   } catch(e){alert('Product scanning could not continue: '+(e.message||e));}
+};
+async function mrpspCompleteShelfCheckout(recipient, authorizationMethod, profile={}) {
+  mrpspShelfRequireAuth();
+  if(mrpspShelfScannedOut.length!==mrpspShelfSelected.length || !mrpspShelfSelected.length)throw new Error('Scan every selected product before completing the issue.');
+  if(!recipient?.id || !recipient?.name)throw new Error('Recipient ID and name are required.');
+  const uid=auth.currentUser.uid,timestamp=Date.now(),base=mrpspShelfBasePath(),updates={};
+  const shelfPath=`${base?base+'/':''}shelves/${mrpspShelfCurrent.key}`;
+  const shelfSnap=await get(ref(db,shelfPath));if(!shelfSnap.exists())throw new Error('Shelf record no longer exists.');
+  for(const scanned of mrpspShelfScannedOut){
+    const itemPath=`${base?base+'/':''}inventory/${scanned.key}`;const freshSnap=await get(ref(db,itemPath));if(!freshSnap.exists())throw new Error(`${scanned.item} no longer exists.`);
+    const fresh=freshSnap.val();if(fresh.barcode!==scanned.barcode||fresh.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${scanned.item} has changed since scanning. No transaction was saved.`);
+    if(fresh.status==='Checked Out')throw new Error(`${scanned.item} is already checked out.`);
+    updates[`${itemPath}/status`]='Checked Out';updates[`${itemPath}/holder`]=recipient.name;updates[`${itemPath}/holderPersonId`]=recipient.id;updates[`${itemPath}/holderUid`]=recipient.uid||null;updates[`${itemPath}/location`]='Checked Out';updates[`${itemPath}/currentShelfId`]=null;updates[`${itemPath}/lastCheckoutAt`]=timestamp;updates[`${shelfPath}/products/${scanned.key}`]=null;
+  }
+  const logKey=push(ref(db,`${base?base+'/':''}shelf_transactions`)).key;
+  updates[`${base?base+'/':''}shelf_transactions/${logKey}`]={type:'CHECK_OUT',shelfId:mrpspShelfCurrent.shelfId,productKeys:mrpspShelfScannedOut.map(x=>x.key),barcodes:mrpspShelfScannedOut.map(x=>x.barcode),count:mrpspShelfScannedOut.length,recipientId:recipient.id,recipientName:recipient.name,recipientUid:recipient.uid||null,operatorUid:uid,operatorName:profile.name||auth.currentUser.email||uid,authorizationMethod,faceVerified:authorizationMethod==='FACE_SCAN',adminPinAuthorized:authorizationMethod==='ADMIN_PIN',timestamp};
+  await update(ref(db),updates);
+  const count=mrpspShelfScannedOut.length,name=recipient.name,id=recipient.id;
+  document.getElementById('faceModal')?.classList.add('hidden');document.getElementById('shelfManualAdminPin')&&(document.getElementById('shelfManualAdminPin').value='');
+  mrpspShelfSetStatus('shelfCheckoutStatus',`${count} product(s) issued successfully to ${name}.`,'#166534');
+  alert(`${count} product(s) checked out to ${name} (${id}).`);
+  scanMode='LOGIN';mrpspShelfCurrent=null;mrpspShelfSelected=[];mrpspShelfScannedOut=[];mrpspShelfRecipientMode='';
+  if(typeof window.loadInventory==='function')window.loadInventory();
+}
+window.authorizeShelfManualCheckout = async () => {
+  const btn=document.getElementById('shelfManualAuthorizeBtn');
+  try{
+    const id=document.getElementById('shelfRecipientId').value.trim(),name=document.getElementById('shelfRecipientName').value.trim(),pin=document.getElementById('shelfManualAdminPin').value;
+    if(mrpspShelfRecipientMode!=='manual')throw new Error('Select Manual Entry first.');
+    if(!id||!name)throw new Error('Enter recipient ID and name.');
+    if(!pin)throw new Error('Enter Admin PIN.');
+    if(mrpspShelfScannedOut.length!==mrpspShelfSelected.length||!mrpspShelfSelected.length)throw new Error('Scan all selected product QR codes first.');
+    btn.disabled=true;btn.textContent='VERIFYING ADMIN PIN…';
+    const snap=await get(projectAwareRef('system_settings/master_pin'));
+    if(!snap.exists() || snap.val()===null || String(snap.val()).trim()==='')throw new Error('Admin PIN is not configured in system settings. Ask an administrator to configure it.');
+    if(String(pin)!==String(snap.val()))throw new Error('Incorrect Admin PIN. No items were issued.');
+    await mrpspCompleteShelfCheckout({id,name},'ADMIN_PIN');
+  }catch(e){alert('Manual issue not authorised: '+(e.message||e));}
+  finally{if(btn){btn.disabled=false;btn.innerHTML='<i class="fas fa-lock-open"></i> AUTHORISE & COMPLETE ISSUE';}}
 };
 window.verifyShelfCheckoutFace = async () => {
   try {
     mrpspShelfRequireAuth();
-    if(mrpspShelfScannedOut.length!==mrpspShelfSelected.length)throw new Error('Scan every selected product before face verification.');
+    if(mrpspShelfRecipientMode!=='face')throw new Error('Select Face Scan first.');
+    if(mrpspShelfScannedOut.length!==mrpspShelfSelected.length||!mrpspShelfSelected.length)throw new Error('Scan every selected product before face scan.');
     scanMode='SHELF_CHECKOUT_FACE';
-    document.getElementById('modalTitle').textContent='Verify Operator Face';
-    document.getElementById('modalDesc').textContent='The signed-in operator must match their registered face. The recipient ID/name will be recorded separately.';
+    document.getElementById('modalTitle').textContent='Identify Recipient';
+    document.getElementById('modalDesc').textContent='Scan the recipient’s registered face. A successful match completes the issue without another verification step.';
+    document.getElementById('videoContainer').classList.remove('hidden');document.getElementById('camControls').classList.remove('hidden');document.getElementById('otpUI').classList.add('hidden');
     document.getElementById('btnCapture').onclick=window.handleFaceScan;
-    document.getElementById('btnCapture').disabled=false;document.getElementById('btnCapture').textContent='📸 VERIFY FACE';
+    document.getElementById('btnCapture').disabled=false;document.getElementById('btnCapture').textContent='📸 IDENTIFY & COMPLETE ISSUE';
     document.getElementById('faceModal').classList.remove('hidden');await initCamera(true);
   } catch(e){alert(e.message||e);}
 };
@@ -17468,26 +17545,12 @@ window.handleFaceScan=async function(){
     if(!profile.faceData)throw new Error('No registered face template found for the signed-in operator.');
     const samples=Array.isArray(profile.faceData)&&Array.isArray(profile.faceData[0])?profile.faceData:[profile.faceData];
     const matched=samples.some(sample=>Array.isArray(sample)&&sample.length===currentDescriptor.length&&faceapi.euclideanDistance(sample,currentDescriptor)<0.50);
-    if(!matched)throw new Error('Face did not match the signed-in operator. No products were checked out.');
+    if(!matched)throw new Error('Face did not match the signed-in recipient profile. No products were issued.');
     await stopCamera();
-    const timestamp=Date.now(),base=mrpspShelfBasePath(),updates={};
-    const shelfPath=`${base?base+'/':''}shelves/${mrpspShelfCurrent.key}`;
-    const shelfSnap=await get(ref(db,shelfPath));if(!shelfSnap.exists())throw new Error('Shelf record no longer exists.');
-    for(const scanned of mrpspShelfScannedOut){
-      const itemPath=`${base?base+'/':''}inventory/${scanned.key}`;const freshSnap=await get(ref(db,itemPath));if(!freshSnap.exists())throw new Error(`${scanned.item} no longer exists.`);
-      const fresh=freshSnap.val();if(fresh.barcode!==scanned.barcode||fresh.currentShelfId!==mrpspShelfCurrent.shelfId)throw new Error(`${scanned.item} has changed since scanning. No transaction was saved.`);
-      if(fresh.status==='Checked Out')throw new Error(`${scanned.item} is already checked out.`);
-      updates[`${itemPath}/status`]='Checked Out';updates[`${itemPath}/holder`]=document.getElementById('shelfRecipientName').value.trim();updates[`${itemPath}/holderPersonId`]=document.getElementById('shelfRecipientId').value.trim();updates[`${itemPath}/holderUid`]=null;updates[`${itemPath}/location`]='Checked Out';updates[`${itemPath}/currentShelfId`]=null;updates[`${itemPath}/lastCheckoutAt`]=timestamp;updates[`${shelfPath}/products/${scanned.key}`]=null;
-    }
-    const logKey=push(ref(db,`${base?base+'/':''}shelf_transactions`)).key;
-    updates[`${base?base+'/':''}shelf_transactions/${logKey}`]={type:'CHECK_OUT',shelfId:mrpspShelfCurrent.shelfId,productKeys:mrpspShelfScannedOut.map(x=>x.key),barcodes:mrpspShelfScannedOut.map(x=>x.barcode),count:mrpspShelfScannedOut.length,recipientId:document.getElementById('shelfRecipientId').value.trim(),recipientName:document.getElementById('shelfRecipientName').value.trim(),operatorUid:uid,operatorName:profile.name||auth.currentUser.email||uid,faceVerified:true,timestamp};
-    await update(ref(db),updates);
-    document.getElementById('faceModal').classList.add('hidden');document.getElementById('shelfCheckoutFaceButton').classList.add('hidden');
-    mrpspShelfSetStatus('shelfCheckoutStatus',`${mrpspShelfScannedOut.length} product(s) checked out successfully.`,'#166534');
-    alert(`${mrpspShelfScannedOut.length} product(s) checked out to ${document.getElementById('shelfRecipientName').value.trim()} (${document.getElementById('shelfRecipientId').value.trim()}).`);
-    scanMode='LOGIN';mrpspShelfCurrent=null;mrpspShelfSelected=[];mrpspShelfScannedOut=[];
-    if(typeof window.loadInventory==='function')window.loadInventory();
-  }catch(e){updateStatus('❌ '+(e.message||e),'red');alert('Check-out not completed: '+(e.message||e));btn.disabled=false;btn.textContent='📸 VERIFY FACE';}
+    const recipientId=profile.personId||profile.employeeId||profile.studentId||profile.uid||uid;
+    const recipientName=profile.name||profile.fullName||auth.currentUser.displayName||auth.currentUser.email||uid;
+    await mrpspCompleteShelfCheckout({id:String(recipientId),name:String(recipientName),uid},'FACE_SCAN',profile);
+  }catch(e){updateStatus('❌ '+(e.message||e),'red');alert('Check-out not completed: '+(e.message||e));btn.disabled=false;btn.textContent='📸 IDENTIFY & COMPLETE ISSUE';}
 };
 
 </script>
