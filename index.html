@@ -3380,11 +3380,11 @@ tr:hover { background: #fcfcfd; }
     <section id="wfDashboardView" class="wf-dashboard-shell">
       <div class="wf-dashboard-heading"><div><span class="wf-kicker">MRPSP WORK MANAGEMENT</span><h2>Workflow Dashboard</h2><p>One independent workspace for this project. Select a work item to manage its teams, assignments and progress.</p></div><span id="wfProjectWorkspaceBadge" class="wf-project-badge">PROJECT WORKSPACE</span></div>
       <div id="wfDashboardOverview"><p class="wf-help">Loading dashboard…</p></div>
-      <div class="wf-dashboard-actions"><button type="button" class="wf-nav-primary" onclick="window.wfOpenWizard(1)">＋ Create Main Work</button><button type="button" class="wf-nav-secondary" onclick="window.wfRenderDashboard();window.wfLoadWorkItems();">↻ Refresh dashboard</button></div>
+      <div class="wf-dashboard-actions"><button type="button" class="wf-nav-primary" onclick="window.wfOpenWizard(1)">＋ Create Main Work</button><button type="button" class="wf-nav-secondary" onclick="window.wfRenderDashboard();window.wfLoadWorkItems();">↻ Refresh dashboard</button><button type="button" class="wf-nav-secondary" onclick="window.wfReturnHomeDashboard()">⌂ Return to Home Dashboard</button><button type="button" class="wf-nav-secondary" onclick="window.wfPurgePreviousWorkflowData()" style="border-color:#b91c1c;color:#b91c1c;">Clear Previous Workflow Data</button></div>
       <h3 class="wf-dashboard-section-title">All Work Items</h3><div id="wfWorkItemsList" class="wf-dashboard-work-list"><p class="wf-help">Loading work items…</p></div>
     </section>
     <div id="wfWizardView" style="display:none;">
-      <button type="button" class="wf-nav-secondary" onclick="window.wfShowDashboard()" style="margin:0 0 12px;">← Back to Dashboard</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px;"><button type="button" class="wf-nav-secondary" onclick="window.wfShowDashboard()">← Back to Workflow Dashboard</button><button type="button" class="wf-nav-secondary" onclick="window.wfReturnHomeDashboard()">⌂ Return to Home Dashboard</button></div>
 
     <div id="wfWizardHeader" class="wf-wizard-header">
       <div class="wf-wizard-title"><div><span class="wf-kicker">MRPSP WORK MANAGEMENT</span><h2>Project Workflow</h2><p>Create a work item first, then configure teams, assignments and collaboration.</p></div><span id="wfWizardStepBadge" class="wf-step-badge">STEP 1 OF 5</span></div>
@@ -18404,7 +18404,34 @@ window.handleFaceScan=async function(){
   window.wfEditMainWork=()=>{if(!window.wfActiveWorkId||!window.wfActiveWorkData)return alert('Select a work item first.');const w=window.wfActiveWorkData;if(Number(w.editCount||0)>=4)return alert('This work item has reached its maximum of 4 edits.');document.getElementById('wfMainWorkTitle').value=w.title||'';document.getElementById('wfMainWorkDescription').value=w.description||'';document.getElementById('wfMainWorkDeadline').value=w.deadline?new Date(w.deadline).toLocaleString('sv-SE').replace(' ','T').slice(0,16):'';document.getElementById('wfMainWorkReference').value=w.reference||'';window.wfEditingMainWork=true;const c=document.getElementById('wfWorkEditCounter');if(c)c.textContent=`Edit ${Number(w.editCount||0)+1} of 4 available.`;window.wfOpenWizard(1);};
   window.wfSaveMainWork=async()=>{if(!window.wfCanManageMainWork())return alert('Only PH/Admin can create or edit main work. Your signed-in account: '+(myEmail()||'email unavailable'));const title=document.getElementById('wfMainWorkTitle').value.trim(),description=document.getElementById('wfMainWorkDescription').value.trim(),deadlineValue=document.getElementById('wfMainWorkDeadline').value,reference=document.getElementById('wfMainWorkReference').value.trim();if(!title||!description)return alert('Work title and description are mandatory.');const deadline=deadlineValue?new Date(deadlineValue).getTime():null;if(deadlineValue&&(!Number.isFinite(deadline)||deadline<=Date.now()))return alert('Overall deadline must be in the future.');try{if(window.wfEditingMainWork){const old=window.wfActiveWorkData||{},count=Number(old.editCount||0);if(count>=4)return alert('This work item has reached its maximum of 4 edits.');const changed=title!==(old.title||'')||description!==(old.description||'')||deadline!==(old.deadline||null)||reference!==(old.reference||'');if(!changed)return alert('No changes detected.');const updated={...old,title,description,deadline,reference,editCount:count+1,updatedAt:Date.now(),updatedBy:window.window.currentUser?.uid||''};await update(scopedProjectRef(`${ROOT}/${window.wfActiveWorkId}`),updated);window.wfActiveWorkData=updated;alert(`Main work updated. ${4-updated.editCount} edit(s) remaining.`);}else{const record={title,description,deadline,reference,editCount:0,createdAt:Date.now(),createdBy:window.window.currentUser?.uid||'',createdByEmail:window.window.currentUser?.email||'',updatedAt:Date.now()};const newRef=await push(scopedProjectRef(ROOT));await set(newRef,record);await window.wfSetActiveWork(newRef.key,record);alert('Main work created. Continue to Step 2 to create its teams.');}window.wfEditingMainWork=false;await window.wfLoadWorkItems();if(window.wfActiveWorkId)window.wfOpenWizard(2);}catch(e){alert('Could not save main work: '+(e.message||e));}};
   window.wfDeleteMainWork=async id=>{if(!window.wfCanManageMainWork())return alert('Only PH/Admin can delete work.');const snap=await get(scopedProjectRef(`${ROOT}/${id}`));if(!snap.exists())return alert('Work item not found.');const w=snap.val()||{},title=String(w.title||'Untitled work');if(!confirm(`FIRST CONFIRMATION\n\nPermanently delete "${title}" and ALL associated data?\n\nThis affects only ${projectKey()} and cannot be undone. Continue?`))return;if(!confirm(`SECOND CONFIRMATION\n\nConfirm permanent deletion of "${title}" from ${projectKey()}.`))return;const typed=prompt(`TYPE THE EXACT WORK TITLE TO DELETE:\n\n${title}`);if(typed!==title)return alert('Work title did not match. Nothing was deleted.');try{await remove(scopedProjectRef(`${ROOT}/${id}`));if(window.wfActiveWorkId===id)await window.wfSetActiveWork(null,null);await window.wfLoadWorkItems();await window.wfShowDashboard();alert(`"${title}" and all associated ${projectKey()} data stored under this work item have been deleted.`);}catch(e){alert('Deletion failed: '+(e.message||e));}};
-  window.wfInitWorkItems=async()=>{if(!window.window.currentUser?.uid||!window.activeProject)return;window.wfActiveWorkId=null;window.wfActiveWorkData=null;await window.wfMigrateLegacyData();const items=await window.wfLoadWorkItems();let saved=null;try{saved=localStorage.getItem(activeWorkKey());}catch(e){}if(saved){const snap=await get(scopedProjectRef(`${ROOT}/${saved}`));if(snap.exists())await window.wfSetActiveWork(saved,snap.val());else await window.wfSetActiveWork(null,null);}if(!window.wfActiveWorkId&&items.length)await window.wfSetActiveWork(items[0].id,items[0]);if(!window.wfActiveWorkId){const d=document.getElementById('wfDashboardView'),w=document.getElementById('wfWizardView');if(d)d.style.display='block';if(w)w.style.display='none';}await window.wfRenderDashboard();};
+  window.wfReturnHomeDashboard=function(){
+    // Return to the portal's main dashboard without signing out.
+    const candidates=['dashboard','tab-dashboard','home','tab-home','mainDashboard'];
+    for(const id of candidates){const el=document.getElementById(id);if(el){if(typeof window.switchTab==='function'){try{window.switchTab(id.replace(/^tab-/,''));return;}catch(e){}}el.classList.remove('hidden');el.style.display='';document.getElementById('tab-workflow')?.classList.add('hidden');return;}}
+    if(typeof window.switchTab==='function'){try{window.switchTab('dashboard');return;}catch(e){}}
+    alert('Could not locate the Home Dashboard tab. Use the portal Home navigation item.');
+  };
+  window.wfPurgePreviousWorkflowData=async function(){
+    if(!window.wfCanManageMainWork || !window.wfCanManageMainWork())return alert('Only PH/Admin can clear previous workflow data.');
+    const phrase='CLEAR ALL WORKFLOW DATA';
+    if(!confirm('This permanently deletes workflow data ONLY for CCRAS and Hardware. It does not delete inventory, finance, users, attendance, procurement or other portal data. Continue?'))return;
+    if(!confirm('SECOND CONFIRMATION: all previous and current work items, teams, assignments, tasks, submissions, messages, resources, logs and migration markers in BOTH workspaces will be deleted.'))return;
+    if(prompt('Type exactly: '+phrase)!==phrase)return alert('Confirmation did not match. Nothing was deleted.');
+    try{
+      const paths=[
+        'projects/CCRAS/workflow_work_items','projects/HARDWARE/workflow_work_items',
+        'projects/CCRAS/workflow_migrations','projects/HARDWARE/workflow_migrations',
+        'projects/CCRAS/workflow_teams','projects/CCRAS/workflow_team_assignments','projects/CCRAS/workflows','projects/CCRAS/workflow_team_change_logs','projects/CCRAS/workflow_activity_logs','projects/CCRAS/workflow_team_messages','projects/CCRAS/workflow_shared_resources',
+        'workflow_work_items','workflow_teams','workflow_team_assignments','workflows','workflow_team_change_logs','workflow_activity_logs','workflow_team_messages','workflow_shared_resources'
+      ];
+      for(const path of paths) await remove(ref(window.db,path));
+      window.wfActiveWorkId=null;window.wfActiveWorkData=null;
+      try{localStorage.removeItem('mrpsp_active_work_id_ccras');localStorage.removeItem('mrpsp_active_work_id_hardware');}catch(e){}
+      await window.wfLoadWorkItems();await window.wfRenderDashboard();window.wfShowDashboard();
+      alert('Previous workflow data has been cleared from CCRAS and Hardware only. Other portal data was not touched.');
+    }catch(e){alert('Workflow cleanup failed: '+(e.message||e));}
+  };
+  window.wfInitWorkItems=async()=>{if(!window.window.currentUser?.uid||!window.activeProject)return;window.wfActiveWorkId=null;window.wfActiveWorkData=null;/* Legacy workflow data is intentionally not migrated: PH/Admin may clear it using the explicit cleanup action. */ const items=await window.wfLoadWorkItems();let saved=null;try{saved=localStorage.getItem(activeWorkKey());}catch(e){}if(saved){const snap=await get(scopedProjectRef(`${ROOT}/${saved}`));if(snap.exists())await window.wfSetActiveWork(saved,snap.val());else await window.wfSetActiveWork(null,null);}if(!window.wfActiveWorkId&&items.length)await window.wfSetActiveWork(items[0].id,items[0]);if(!window.wfActiveWorkId){const d=document.getElementById('wfDashboardView'),w=document.getElementById('wfWizardView');if(d)d.style.display='block';if(w)w.style.display='none';}await window.wfRenderDashboard();};
  }
  if(window.wfDbApi) bootstrap();
  else window.addEventListener("wf-firebase-api-ready", bootstrap, {once:true});
@@ -18423,10 +18450,17 @@ window.handleFaceScan=async function(){
  document.querySelectorAll('#tab-workflow .wf-wizard-stage').forEach(el=>el.classList.toggle('wf-stage-active',Number(el.dataset.wfStep)===activeStep));
  document.querySelectorAll('.wf-step-dot').forEach(el=>{const n=Number(el.dataset.dot);el.classList.toggle('active',n===activeStep);el.classList.toggle('done',n<activeStep);});
  if($('wfWizardStepBadge'))$('wfWizardStepBadge').textContent=`STEP ${activeStep} OF 5`;if($('wfWizardHint'))$('wfWizardHint').textContent=hints[activeStep];
- if($('wfWizardBack'))$('wfWizardBack').style.display=activeStep>1?'inline-block':'none';if($('wfWizardNext'))$('wfWizardNext').style.display=activeStep===5?'inline-block':'none';
+ if($('wfWizardBack'))$('wfWizardBack').style.display=activeStep>1?'inline-block':'none';if($('wfWizardNext')){$('wfWizardNext').style.display=activeStep===5?'none':'inline-block';const blocked=stepIsLocked(activeStep+1);$('wfWizardNext').disabled=blocked;$('wfWizardNext').title=blocked?'Next step is locked. Back navigation remains available.':'';}
  if(activeStep===2&&window.wfLoadTeamSetup)window.wfLoadTeamSetup();if(activeStep===4&&window.wfLoadTeamAssignments)window.wfLoadTeamAssignments();if(activeStep===5){if(window.wfLoadTracking)window.wfLoadTracking();if(window.wfLoadCollaboration)window.wfLoadCollaboration();}
  };
- window.wfWizardBack=()=>window.wfShowWizardStep(activeStep-1);window.wfWizardNext=()=>window.wfShowWizardStep(activeStep+1);
+ window.wfWizardBack=()=>window.wfShowWizardStep(activeStep-1);
+ function stepIsLocked(nextStep){
+   const d=window.wfActiveWorkData||{};
+   const locks=d.lockedSteps||d.stepLocks||d.workflowLocks||{};
+   const entry=locks[nextStep]??locks[String(nextStep)]??locks['step'+nextStep];
+   return d.workflowLocked===true || d.locked===true || d.isLocked===true || entry===true || entry?.locked===true || entry?.isLocked===true;
+ }
+ window.wfWizardNext=()=>{const next=activeStep+1;if(next>5)return;if(stepIsLocked(next)){alert('This workflow step is locked. You cannot proceed to the next step, but you can use Back to return to an earlier step.');return;}window.wfShowWizardStep(next);};
  window.wfEditTeamFormation=async()=>{if(!manager())return alert('Only PH/Admin can edit team formation.');wfReturnStepAfterTeamEdit=activeStep===2?3:activeStep;await window.wfLoadTeamSetup();window.wfShowWizardStep(2);};
  window.wfWizardAfterTeamSave=()=>{const dest=wfReturnStepAfterTeamEdit||3;wfReturnStepAfterTeamEdit=null;window.wfShowWizardStep(dest);};
  window.wfWizardAfterTaskAssign=()=>window.wfShowWizardStep(4);window.wfWizardAfterDistribution=()=>window.wfShowWizardStep(5);
