@@ -9017,7 +9017,237 @@ window.printAssetTag = () => {
     win.document.write('<style>body{text-align:center;font-family:sans-serif;padding:20px;} img{max-width:100%;}</style>');
     win.document.write('</head><body>');
     win.document.write(printContent);
-    win.document.write('</body></html>');
+    win.document.write('
+<style id="wf-role-separated-workspaces-css">
+#wfRoleWorkspace{background:#f4f7fb;border:1px solid #e2e8f0;border-radius:18px;padding:20px;margin:12px 0}
+#wfRoleWorkspace .wf-role-head{background:linear-gradient(135deg,#0b1f3a,#173e69);color:#fff;border-radius:14px;padding:20px;margin-bottom:16px}
+#wfRoleWorkspace .wf-role-head h2{margin:5px 0;color:#fff;font-size:23px}
+#wfRoleWorkspace .wf-role-head p{margin:4px 0;color:#dbeafe;font-size:13px}
+#wfRoleWorkspace .wf-role-kicker{font-size:10px;font-weight:900;letter-spacing:1.3px;color:#93c5fd}
+#wfRoleWorkspace .wf-role-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0}
+#wfRoleWorkspace .wf-role-meta>div{background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:12px}
+#wfRoleWorkspace .wf-role-meta small{display:block;color:#64748b;font-size:10px;font-weight:800;text-transform:uppercase}
+#wfRoleWorkspace .wf-role-meta b{display:block;color:#10213e;font-size:13px;margin-top:4px;overflow-wrap:anywhere}
+#wfRoleWorkspace .wf-role-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
+#wfRoleWorkspace .wf-role-tabs button{background:#e8eef6;color:#173e69;border:1px solid #d7e1ed}
+#wfRoleWorkspace .wf-role-tabs button.active{background:#173e69;color:#fff}
+#wfRoleWorkspace .wf-role-section{display:none}
+#wfRoleWorkspace .wf-role-section.active{display:block}
+#wfRoleWorkspace .wf-role-section>.panel,#wfRoleWorkspace #wfTeamAssignmentPanel{margin:0 0 14px}
+#wfRoleWorkspace .wf-role-note{padding:13px 15px;background:#fff;border:1px solid #dbe5f0;border-radius:11px;color:#475569;font-size:12px;margin:10px 0}
+#wfRoleWorkspace .wf-role-home{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+@media(max-width:700px){#wfRoleWorkspace{padding:12px}#wfRoleWorkspace .wf-role-meta{grid-template-columns:1fr}#wfRoleWorkspace .wf-role-head h2{font-size:20px}}
+</style>
+<script id="wf-final-role-workspace-controller">
+(function(){
+  'use strict';
+  const $=id=>document.getElementById(id);
+  const escRole=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const isManager=()=>{
+    try{
+      if(typeof window.wfCanManageMainWork==='function') return !!window.wfCanManageMainWork();
+      if(typeof window.canManageTeams==='function') return !!window.canManageTeams();
+    }catch(e){}
+    return false;
+  };
+  let roleWorkspaceBuilt=false, roleType='unknown', activeRoleTab='distribution';
+  let originalLoad=window.loadWorkflows;
+  let originalTeamSetup=window.wfLoadTeamSetup;
+  function roleOfUser(){
+    if(isManager()) return 'manager';
+    return window.wfIsTeamIncharge===true?'incharge':'student';
+  }
+  function currentWork(){
+    const w=window.wfActiveWorkData||{};
+    return {
+      title:w.title||'Selected work item',
+      description:w.description||'No work description has been provided.',
+      deadline:w.deadline?new Date(w.deadline).toLocaleString('en-IN'):'Not specified',
+      reference:w.reference||'Not specified'
+    };
+  }
+  function ensureRoleWorkspace(){
+    const wizard=$('wfWizardView');
+    if(!wizard)return null;
+    let root=$('wfRoleWorkspace');
+    if(!root){
+      root=document.createElement('section');
+      root.id='wfRoleWorkspace';
+      root.style.display='none';
+      wizard.parentNode.insertBefore(root,wizard);
+    }
+    return root;
+  }
+  function makeRoleShell(role){
+    const root=ensureRoleWorkspace(); if(!root)return;
+    roleType=role;
+    const incharge=role==='incharge';
+    root.innerHTML=`
+      <div class="wf-role-head">
+        <span class="wf-role-kicker">MRPSP · ${incharge?'TEAM OPERATIONS':'STUDENT WORKSPACE'}</span>
+        <h2>${incharge?'Team In-charge Workspace':'My Assigned Work'}</h2>
+        <p>${incharge?'Manage your team assignments, distribute individual tasks, verify submissions and submit the final team deliverable.':'View your assigned work, submit your contribution and track feedback from your team in-charge.'}</p>
+        <div class="wf-role-meta">
+          <div><small>Active work</small><b id="wfRoleWorkTitle"></b></div>
+          <div><small>Overall deadline</small><b id="wfRoleWorkDeadline"></b></div>
+          <div><small>${incharge?'Your team':'Your account'}</small><b id="wfRoleIdentity"></b></div>
+        </div>
+        <div class="wf-role-home">
+          <button type="button" class="wf-nav-secondary" id="wfRoleBackWork">← Workflow Dashboard</button>
+          <button type="button" class="wf-nav-primary" onclick="window.wfReturnHomeDashboard()">⌂ Home Dashboard</button>
+        </div>
+      </div>
+      <div id="wfRoleWorkDescription" class="wf-role-note"></div>
+      ${incharge?`
+        <div class="wf-role-tabs">
+          <button type="button" data-role-tab="distribution" class="active">Distribute Work</button>
+          <button type="button" data-role-tab="verification">Verify Student Work</button>
+          <button type="button" data-role-tab="teamstatus">Team Status</button>
+        </div>
+        <div id="wfRoleDistribution" class="wf-role-section active"></div>
+        <div id="wfRoleVerification" class="wf-role-section"></div>
+        <div id="wfRoleTeamStatus" class="wf-role-section"></div>
+      `:`
+        <div class="wf-role-tabs"><button type="button" data-role-tab="mytasks" class="active">My Tasks & Submissions</button></div>
+        <div id="wfRoleMyTasks" class="wf-role-section active"></div>
+      `}
+    `;
+    root.querySelector('#wfRoleBackWork').addEventListener('click',()=>window.wfShowDashboard());
+    root.querySelectorAll('[data-role-tab]').forEach(btn=>btn.addEventListener('click',()=>showRoleTab(btn.dataset.roleTab)));
+    roleWorkspaceBuilt=true;
+    mountRolePanels(role);
+    refreshRoleHeader();
+    return root;
+  }
+  function showRoleTab(tab){
+    activeRoleTab=tab;
+    const root=$('wfRoleWorkspace');if(!root)return;
+    root.querySelectorAll('[data-role-tab]').forEach(b=>b.classList.toggle('active',b.dataset.roleTab===tab));
+    root.querySelectorAll('.wf-role-section').forEach(s=>s.classList.toggle('active',s.id===({
+      distribution:'wfRoleDistribution',verification:'wfRoleVerification',teamstatus:'wfRoleTeamStatus',mytasks:'wfRoleMyTasks'
+    }[tab])));
+    if(tab==='teamstatus'&&window.wfLoadTeamMemberStatus)window.wfLoadTeamMemberStatus();
+    if(tab==='verification'&&window.loadWorkflows)window.loadWorkflows();
+  }
+  function mountRolePanels(role){
+    const root=$('wfRoleWorkspace');if(!root)return;
+    const assignment=$('wfTeamAssignmentPanel');
+    const queue=document.querySelector('#tab-workflow [data-oversight-panel="queue"]');
+    const teamStatus=$('wfTeamStatusView');
+    const distView=$('wfDistributionView');
+    if(role==='incharge'){
+      if(assignment)$('wfRoleDistribution').appendChild(assignment);
+      if(queue)$('wfRoleVerification').appendChild(queue);
+      if(teamStatus)$('wfRoleTeamStatus').appendChild(teamStatus);
+      if(distView)distView.style.display='block';
+      if(teamStatus)teamStatus.style.display='block';
+      if(assignment)assignment.style.display='block';
+      if(queue)queue.style.display='block';
+    }else{
+      if(queue)$('wfRoleMyTasks').appendChild(queue);
+      if(queue)queue.style.display='block';
+      if(assignment)assignment.style.display='none';
+    }
+    const header=$('wfWizardHeader');if(header)header.style.display='none';
+    const wizard=$('wfWizardView');if(wizard)wizard.style.display='block';
+    root.style.display='block';
+  }
+  function refreshRoleHeader(){
+    const root=$('wfRoleWorkspace');if(!root)return;
+    const w=currentWork();
+    const title=$('wfRoleWorkTitle'),deadline=$('wfRoleWorkDeadline'),identity=$('wfRoleIdentity'),desc=$('wfRoleWorkDescription');
+    if(title)title.textContent=w.title;
+    if(deadline)deadline.textContent=w.deadline;
+    if(identity)identity.textContent=roleType==='incharge'?(window.wfMyTeamName||'Team not assigned'):(window.currentUser?.name||window.currentUser?.email||'Student');
+    if(desc)desc.innerHTML='<b>Work brief:</b> '+escRole(w.description)+'<br><small>Reference: '+escRole(w.reference)+'</small>';
+  }
+  function applyRoleView(){
+    const role=roleOfUser();
+    if(role==='manager'){
+      const root=$('wfRoleWorkspace');if(root)root.style.display='none';
+      const header=$('wfWizardHeader');if(header)header.style.display='block';
+      const wizard=$('wfWizardView');if(wizard)wizard.style.display='block';
+      return;
+    }
+    if(!window.wfActiveWorkId){
+      const root=$('wfRoleWorkspace');if(root)root.style.display='none';
+      const dashboard=$('wfDashboardView');if(dashboard)dashboard.style.display='block';
+      const wizard=$('wfWizardView');if(wizard)wizard.style.display='none';
+      return;
+    }
+    makeRoleShell(role);
+    refreshRoleHeader();
+    const wizard=$('wfWizardView');if(wizard)wizard.style.display='none';
+    const root=$('wfRoleWorkspace');if(root)root.style.display='block';
+    // Keep the existing task table loader active, but expose only the role-specific queue.
+    if(role==='incharge')showRoleTab(activeRoleTab==='teamstatus'?'teamstatus':'distribution');
+    else showRoleTab('mytasks');
+  }
+  if(typeof originalTeamSetup==='function'){
+    window.wfLoadTeamSetup=async function(){
+      const result=await originalTeamSetup.apply(this,arguments);
+      const panel=$('wfTeamSetupPanel');
+      if(panel)panel.style.setProperty('display',isManager()&&Number(window.wfActiveStep||1)===2?'block':'none','important');
+      return result;
+    };
+  }
+  if(typeof originalLoad==='function'){
+    window.loadWorkflows=async function(){
+      const result=await originalLoad.apply(this,arguments);
+      // Role detection is deliberately performed only after team membership has loaded.
+      if(window.wfActiveWorkId && !isManager()){
+        roleType=roleOfUser();
+        applyRoleView();
+      }else{
+        applyRoleView();
+      }
+      return result;
+    };
+  }
+  const priorStep=window.wfShowWizardStep;
+  if(typeof priorStep==='function'){
+    window.wfShowWizardStep=function(step){
+      const result=priorStep.apply(this,arguments);
+      if(isManager()){
+        const panel=$('wfTeamSetupPanel');
+        if(panel)panel.style.setProperty('display',Number(window.wfActiveStep)===2?'block':'none','important');
+      }
+      return result;
+    };
+  }
+  const priorSetActive=window.wfSetActiveWork;
+  if(typeof priorSetActive==='function'){
+    window.wfSetActiveWork=async function(){
+      const result=await priorSetActive.apply(this,arguments);
+      if(!isManager())applyRoleView();
+      return result;
+    };
+  }
+  // Hide PH-only dashboard actions and edit/delete controls for non-managers.
+  const priorRender=window.wfRenderDashboard;
+  if(typeof priorRender==='function'){
+    window.wfRenderDashboard=async function(){
+      const result=await priorRender.apply(this,arguments);
+      if(!isManager()){
+        document.querySelectorAll('#wfDashboardView .wf-dashboard-actions button').forEach(b=>{
+          if(/create main work|clear previous workflow data/i.test(b.textContent))b.style.display='none';
+        });
+        document.querySelectorAll('#wfDashboardView .wf-dashboard-work-actions button').forEach(b=>{
+          if(/edit|delete/i.test(b.textContent))b.style.display='none';
+        });
+      }
+      return result;
+    };
+  }
+  // If the current user is an in-charge or student, never expose the PH wizard stages.
+  document.addEventListener('DOMContentLoaded',()=>{
+    const root=ensureRoleWorkspace();
+    if(root)root.style.display='none';
+  });
+})();
+</script>
+
+</body></html>');
     win.document.close();
     win.focus();
     setTimeout(() => { win.print(); win.close(); }, 500);
