@@ -3476,7 +3476,8 @@ tr:hover { background: #fcfcfd; }
     </div>
     <div class="panel wf-wizard-stage" data-wf-step="4">
         <div class="wf-oversight-panel" data-oversight-panel="queue" style="display:none;">
-        <h3><i class="fas fa-clipboard-list"></i> Assigned Work & Verification Queue</h3>
+        <h3><i class="fas fa-clipboard-list"></i> My Work & Submission Centre</h3>
+        <p class="wf-help">Students see the main work brief, their own allocated tasks, deadlines, submission history and in-charge feedback. Team in-charges see their team's task distribution and verification queue. PH/Admin can oversee all submissions.</p>
         <div class="table-wrapper">
             <table style="width:100%">
                 <thead style="background:#0f172a; color:white;">
@@ -18025,9 +18026,9 @@ window.handleFaceScan=async function(){
         const alreadyAssigned=new Set(Array.isArray(a.assignedStudentUids)?a.assignedStudentUids:[]);
         const options=users.filter(u=>memberIds.includes(u.uid)).map(u=>`<label><input type="checkbox" class="wf-dist-check" data-assignment="${esc(c.key)}" value="${esc(u.uid)}" ${alreadyAssigned.has(u.uid)?'checked':''}> ${esc(u.name)}</label>`).join('');
         const assignedNames=(Array.isArray(a.assignedStudentUids)?a.assignedStudentUids:[]).map(uid=>users.find(u=>u.uid===uid)?.name||uid);
-        const distributedInfo=a.status==='DISTRIBUTED'?`<div class="wf-help" style="margin-top:9px;"><b>Distributed to:</b> ${assignedNames.map(esc).join(', ')||'Members selected'}<br><b>Distributed at:</b> ${a.distributedAt?new Date(a.distributedAt).toLocaleString('en-IN'):'Timestamp recorded'}</div>`:'';
+        const distributedInfo=a.status==='DISTRIBUTED'?`<div class="wf-help" style="margin-top:9px;"><b>Distribution locked:</b> ${a.distributionLocked?'Yes':'No'}<br><b>Distributed to:</b> ${assignedNames.map(esc).join(', ')||'Members selected'}<br><b>Distributed at:</b> ${a.distributedAt?new Date(a.distributedAt).toLocaleString('en-IN'):'Timestamp recorded'}</div>`:'';
         const distribute=(mine && a.status==='AWAITING_DISTRIBUTION') ? `<div style="margin-top:12px;text-align:left;"><label class="wf-field-label" for="wfTeamDeadline_${c.key}">Set your team's deadline</label><input type="datetime-local" id="wfTeamDeadline_${c.key}" class="form-control" value="${a.teamDeadline?new Date(a.teamDeadline).toLocaleString('sv-SE').replace(' ','T').slice(0,16):''}" style="width:100%;margin:6px 0 12px;"><span class="wf-field-label">Choose students for this task</span><div class="wf-assignment-students">${options||'<span class="wf-help">No students assigned to this team yet.</span>'}</div><button class="info" onclick="window.wfDistributeTeamTask('${c.key}')" style="width:100%;font-weight:850;border-radius:10px;padding:11px;">DISTRIBUTE TASK TO SELECTED STUDENTS</button></div>` : '';
-        const teamSubmit=(mine && a.status==='DISTRIBUTED')?`<button class="success" onclick="window.wfSubmitTeamToPH('${c.key}')" style="margin-top:10px;width:100%;font-weight:850;border-radius:10px;padding:10px;">SUBMIT VERIFIED TEAM WORK TO PH</button>`:'';
+        const teamSubmit=(mine && a.status==='DISTRIBUTED')?`<div style="margin-top:12px;padding:12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;"><b style="display:block;margin-bottom:6px;">Team final deliverable</b><p class="wf-help">After every student submission is checked, upload the final combined PPT/PDF for PH and other reviewers.</p><label class="wf-field-label" for="wfFinalFile_${c.key}">Final team presentation (PPT/PPTX/PDF)</label><input type="file" id="wfFinalFile_${c.key}" accept=".ppt,.pptx,.pdf,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" style="display:block;width:100%;margin:6px 0 10px;"><textarea id="wfFinalNote_${c.key}" rows="2" placeholder="Final notes for PH / reviewers" style="width:100%;margin-bottom:8px;"></textarea><button class="success" onclick="window.wfSubmitTeamToPH('${c.key}')" style="width:100%;font-weight:850;border-radius:10px;padding:10px;">UPLOAD FINAL TEAM WORK & SUBMIT TO PH</button>${a.teamFinalFileName?`<small style="display:block;margin-top:8px;">Previously submitted: ${esc(a.teamFinalFileName)} · ${esc(a.teamFinalStatus||'Submitted')}</small>`:''}</div>`:'';
         rows.push(`<div class="wf-assignment-card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><b style="color:#0f172a;">${esc(a.teamName||a.teamId)} | ${esc(a.desc)}</b><span style="font-size:11px;font-weight:850;color:${a.status==='DISTRIBUTED'?'#047857':'#b45309'};">${esc(a.status||'')}</span></div><small style="color:#64748b;display:block;margin-top:5px;">In-charge: ${esc(a.inchargeName||'')} | Deadline: ${a.deadline?new Date(a.deadline).toLocaleString('en-IN'):'-'}</small>${distributedInfo}${distribute}${teamSubmit}</div>`);
       });
       host.innerHTML=rows.join('') || '<p style="color:#64748b;">No team assignments are available for your account.</p>';
@@ -18044,13 +18045,23 @@ window.handleFaceScan=async function(){
       if(taskSnap.exists())taskSnap.forEach(c=>{const t=c.val()||{};if(t.parentAssignmentKey===assignmentKey)teamTasks.push({id:c.key,...t});});
       if(!teamTasks.length)throw new Error('No student tasks were found for this team assignment.');
       const notVerified=teamTasks.filter(t=>!['PENDING_PH','COMPLETED'].includes(t.status));
-      if(notVerified.length)throw new Error(`${notVerified.length} student task(s) are still awaiting submission or in-charge verification. Verify all student submissions before forwarding.`);
+      if(notVerified.length)throw new Error(`${notVerified.length} student task(s) are still awaiting submission or in-charge verification. Verify every student's work before forwarding.`);
+      const fileInput=document.getElementById(`wfFinalFile_${assignmentKey}`);
+      const file=fileInput?.files?.[0];
+      if(!file && !a.teamFinalFile)throw new Error('Upload the final combined PPT, PPTX or PDF before submitting to PH.');
+      if(file && file.size>10*1024*1024)throw new Error('Final presentation is too large. Maximum size is 10MB.');
+      const note=document.getElementById(`wfFinalNote_${assignmentKey}`)?.value?.trim()||a.teamFinalNote||'';
       const summary=teamTasks.map(t=>`${t.targetName||t.targetUid}: ${t.status}`).join('; ');
-      await update(wfScopedRef(`workflow_team_assignments/${assignmentKey}`),{teamStatus:'SUBMITTED_TO_PH',teamSubmittedAt:serverTimestamp(),teamSubmittedBy:currentUser.uid,teamSubmittedByName:currentUser.name||currentUser.email||'Team In-charge'});
-      await wfLog('TEAM_SUBMITTED_TO_PH','Team in-charge submitted verified team work to PH',`${a.teamName||a.teamId} | ${a.desc} | ${summary}`,{teamId:a.teamId,teamName:a.teamName,taskId:assignmentKey});
-      alert('Verified team work has been submitted to PH. Individual tasks are now available for PH review.');
-      await window.wfLoadTeamAssignments();
-      if(typeof window.wfLoadTracking==='function')await window.wfLoadTracking();
+      const save=async(data,name)=>{
+        const payload={teamStatus:'SUBMITTED_TO_PH',teamSubmittedAt:serverTimestamp(),teamSubmittedBy:currentUser.uid,teamSubmittedByName:currentUser.name||currentUser.email||'Team In-charge',teamFinalFile:data||a.teamFinalFile||null,teamFinalFileName:name||a.teamFinalFileName||null,teamFinalNote:note,teamFinalStatus:'Submitted to PH'};
+        await update(wfScopedRef(`workflow_team_assignments/${assignmentKey}`),payload);
+        await wfLog('TEAM_SUBMITTED_TO_PH','Final team presentation uploaded and submitted to PH',`${a.teamName||a.teamId} | ${a.desc} | Final file: ${name||a.teamFinalFileName||'Previously uploaded'} | Notes: ${note} | Student verification: ${summary}`,{teamId:a.teamId,teamName:a.teamName,taskId:assignmentKey});
+        alert('Final team presentation uploaded and submitted to PH successfully.');
+        await window.wfLoadTeamAssignments();
+        if(typeof window.wfLoadTracking==='function')await window.wfLoadTracking();
+      };
+      if(file){const reader=new FileReader();reader.onload=()=>save(reader.result,file.name).catch(e=>alert('Final upload failed: '+(e.message||e)));reader.onerror=()=>alert('Could not read the selected presentation file.');reader.readAsDataURL(file);}
+      else await save(null,null);
     }catch(e){alert('Team submission failed: '+(e.message||e));}
   };
 
@@ -18083,7 +18094,7 @@ window.handleFaceScan=async function(){
         if(u.email) await window.sendEmailNotification(u.email,u.name,a.desc,new Date(a.deadline).toLocaleString('sv-SE').replace(' ','T').slice(0,16));
         created.push(ref.key);
       }
-      await update(wfScopedRef(`workflow_team_assignments/${assignmentKey}`),{status:'DISTRIBUTED',assignedStudentUids:selected,distributedAt:serverTimestamp(),distributedBy:currentUser.uid,teamDeadline,teamDeadlineSetBy:currentUser.uid,teamDeadlineSetAt:serverTimestamp()});
+      await update(wfScopedRef(`workflow_team_assignments/${assignmentKey}`),{status:'DISTRIBUTED',distributionLocked:true,assignedStudentUids:selected,distributedAt:serverTimestamp(),distributedBy:currentUser.uid,teamDeadline,teamDeadlineSetBy:currentUser.uid,teamDeadlineSetAt:serverTimestamp()});
       const distributedTo=[];
       for(const uid of selected){const person=await getUserEmail(uid);distributedTo.push(`${person.name||'Student'} (${person.email||uid})`);}
       await wfLog('TASK_DISTRIBUTED','Work distributed to students',`${a.desc} | Distributed by: ${currentUser?.name||currentUser?.email||'Team in-charge'} | Assigned to: ${distributedTo.join(', ')} | Team deadline set by in-charge: ${wfDate(teamDeadline)} | Overall deadline: ${a.deadline?wfDate(a.deadline):'Not set'}`,{teamId:a.teamId,teamName:a.teamName,taskId:assignmentKey});
@@ -18136,7 +18147,7 @@ window.handleFaceScan=async function(){
         if(isHOD&&wf.status==='PENDING_HOD'){actions+=`<button onclick="openWfAction('${c.key}','ADMIN')" class="success" style="font-size:10px;padding:6px;">HOD REVIEW</button>`;}
         if(expired && (isPH||isAdm)) actions+=`<div style="margin-top:4px;"><button onclick="executeWfFailAction('${c.key}','${wf.targetUid}','${encodeURIComponent(wf.targetName||'Student')}')" class="danger" style="font-size:10px;padding:6px;">OPEN DEADLINE / PIP ACTIONS</button></div>`;
         if((isAdm||isPH||isHOD)&&!wf.teamId) actions+=`<div style="margin-top:4px;"><button onclick="cancelWorkflow('${c.key}')" class="danger" style="font-size:10px;padding:6px;">DELETE TASK</button></div>`;
-        rows.push(`<tr style="border-bottom:1px solid #e2e8f0;"><td><div style="font-weight:bold;white-space:pre-wrap;">${esc(wf.desc)}</div><small style="color:#64748b;">Issued by: ${esc(wf.issuedBy||'-')} ${wf.teamName?'| '+esc(wf.teamName):''}</small></td><td><b>${esc(wf.targetName||'-')}</b><br><small>${wf.inchargeName?'In-charge: '+esc(wf.inchargeName):''}</small></td><td style="font-size:11px;color:var(--metro-red);">${wf.deadline?new Date(wf.deadline).toLocaleString('en-IN'):'-'}</td><td><span style="background:${color}20;color:${color};padding:4px 8px;border-radius:4px;font-size:10px;font-weight:bold;">${esc(String(wf.status||'').replace(/_/g,' '))}</span>${wf.adminRemarks?`<br><small style="color:#b91c1c;">Notes: ${esc(wf.adminRemarks)}</small>`:''}</td><td style="text-align:center;">${actions||'-'}</td></tr>`);
+        rows.push(`<tr style="border-bottom:1px solid #e2e8f0;"><td><div style="font-weight:bold;white-space:pre-wrap;">${esc(wf.desc)}</div><small style="color:#64748b;">Issued by: ${esc(wf.issuedBy||'-')} ${wf.teamName?'| '+esc(wf.teamName):''}</small></td><td><b>${esc(wf.targetName||'-')}</b><br><small>${wf.inchargeName?'In-charge: '+esc(wf.inchargeName):''}</small></td><td style="font-size:11px;color:var(--metro-red);">${wf.deadline?new Date(wf.deadline).toLocaleString('en-IN'):'-'}${wf.teamDeadline?' <br><small>Team deadline</small>':''}</td><td><span style="background:${color}20;color:${color};padding:4px 8px;border-radius:4px;font-size:10px;font-weight:bold;">${esc(String(wf.status||'').replace(/_/g,' '))}</span>${wf.adminRemarks?`<br><small style="color:#b91c1c;">Notes: ${esc(wf.adminRemarks)}</small>`:''}</td><td style="text-align:center;">${actions||'-'}</td></tr>`);
       });
       tbody.innerHTML=rows.join('')||"<tr><td colspan='5' style='text-align:center;'>No tasks assigned to your account.</td></tr>";
     });
