@@ -18657,5 +18657,221 @@ window.handleFaceScan=async function(){
  document.addEventListener('DOMContentLoaded',()=>setTimeout(async()=>{if(window.wfActiveWorkId&&window.wfLoadTeamSetup)await window.wfLoadTeamSetup();await apply();},0));window.wfRenderRoleWorkspace=apply;
 })();
 </script>
+
+<style id="mrpsp-simple-workflow-style">
+#tab-workflow{padding:18px;max-width:1500px;margin:auto;color:#172033}
+#tab-workflow .sw-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;background:#10243d;color:#fff;border-bottom:4px solid #e9ad2d;border-radius:12px;padding:20px;margin-bottom:16px}
+#tab-workflow .sw-head h2{margin:0 0 5px;font-size:22px;color:#fff}#tab-workflow .sw-head p{margin:0;color:#cbd5e1;font-size:12px}
+#tab-workflow .sw-nav{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 18px}
+#tab-workflow .sw-nav button{background:#e9eef5;color:#26364b;box-shadow:none;text-transform:none;letter-spacing:0;padding:9px 13px}
+#tab-workflow .sw-nav button.active{background:#10243d;color:#fff}
+#tab-workflow .sw-panel{background:#fff;border:1px solid #dce3ec;border-radius:12px;padding:18px;margin:12px 0;box-shadow:0 3px 12px #10243d0a}
+#tab-workflow .sw-panel h3{margin:0 0 14px;color:#10243d;font-size:16px}
+#tab-workflow .sw-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+#tab-workflow label{display:block;font-size:11px;font-weight:800;color:#526176;margin:8px 0 5px;text-transform:uppercase}
+#tab-workflow input,#tab-workflow textarea,#tab-workflow select{width:100%;box-sizing:border-box;border:1px solid #cfd8e3;border-radius:7px;padding:10px;background:#fff;color:#172033;font:inherit;margin:0}
+#tab-workflow textarea{min-height:82px;resize:vertical}
+#tab-workflow .sw-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+#tab-workflow .sw-row>*{flex:1}
+#tab-workflow .sw-btn{padding:9px 13px;border-radius:7px;background:#173c60;color:#fff;border:0;cursor:pointer;font-weight:800;font-size:11px}
+#tab-workflow .sw-btn.gold{background:#b77912}.sw-btn.green{background:#13845b}.sw-btn.red{background:#b42336}.sw-btn.grey{background:#64748b}
+#tab-workflow .sw-muted{font-size:12px;color:#64748b}.sw-item{border:1px solid #dce3ec;border-radius:9px;padding:13px;margin:9px 0;background:#fff}
+#tab-workflow .sw-item h4{margin:0 0 6px;color:#142d49;font-size:14px}
+#tab-workflow .sw-pill{display:inline-block;padding:4px 8px;border-radius:20px;background:#edf2f7;color:#334155;font-size:10px;font-weight:800}
+#tab-workflow .sw-pill.ok{background:#dcfce7;color:#166534}.sw-pill.warn{background:#fff7dd;color:#92400e}.sw-pill.bad{background:#fee2e2;color:#991b1b}
+#tab-workflow .sw-list{display:grid;gap:8px}.sw-checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:5px;max-height:180px;overflow:auto;border:1px solid #dce3ec;border-radius:8px;padding:8px}
+#tab-workflow .sw-checks label{display:flex;align-items:center;gap:7px;text-transform:none;font-weight:600;margin:3px;font-size:12px}#tab-workflow .sw-checks input{width:auto}
+#tab-workflow .sw-hidden{display:none!important}.sw-divider{border:0;border-top:1px solid #e5eaf0;margin:14px 0}
+@media(max-width:700px){#tab-workflow{padding:8px}.sw-grid{grid-template-columns:1fr!important}#tab-workflow .sw-panel{padding:12px}}
+</style>
+<script id="mrpsp-simple-workflow">
+(function(){
+'use strict';
+const $=id=>document.getElementById(id), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let activeSection='work', cache={works:[],teams:[],tasks:[],users:[],finals:[]}, busy=false;
+const api=()=>window.wfDbApi||{};
+const project=()=>window.activeProject==='CCRAS'?'CCRAS':'HARDWARE';
+const root=()=>`projects/${project()}/workflow_work_items`;
+const dbref=path=>api().ref(window.db,`${root()}/${String(path||'').replace(/^\/+/, '')}`);
+const uid=()=>window.currentUser?.uid||window.auth?.currentUser?.uid||'';
+const userEmail=()=>window.currentUser?.email||window.auth?.currentUser?.email||'';
+const admin=()=>{try{return !!(window.wfCanManageMainWork&&window.wfCanManageMainWork());}catch(e){return false;}};
+const stamp=()=>api().serverTimestamp?api().serverTimestamp():Date.now();
+const active=()=>window.swWorkId||null;
+const base=()=>{if(!active())throw Error('Select a Main Work first.');return `${active()}/`;};
+const r=(path)=>dbref(base()+path);
+const fileRead=file=>new Promise((resolve,reject)=>{const fr=new FileReader();fr.onload=()=>resolve(fr.result);fr.onerror=reject;fr.readAsDataURL(file);});
+const dateText=v=>v?new Date(Number(v)).toLocaleString('en-IN'):'Not set';
+const dtLocal=v=>v?new Date(Number(v)-new Date(Number(v)).getTimezoneOffset()*60000).toISOString().slice(0,16):'';
+function role(){if(admin())return 'admin';return window.swRole||'student';}
+function setRoleFromTeams(){const me=uid();window.swRole=cache.teams.some(t=>t.inchargeUid===me)?'incharge':'student';}
+function notify(msg){alert(msg);}
+function mount(){
+ const host=$('tab-workflow');if(!host)return;
+ host.innerHTML=`<div class="sw-head"><div><h2>MRPSP Work Management</h2><p>Simple assignment, verification and final review workspace</p></div><div class="sw-row" style="flex:0 0 auto"><span id="swProject" class="sw-pill" style="background:#fff;color:#173c60">${project()}</span><button class="sw-btn grey" onclick="window.swRefresh()">REFRESH</button></div></div>
+ <div id="swRoleNote" class="sw-muted"></div><div id="swNav" class="sw-nav"></div><div id="swBody"></div>`;
+}
+function nav(){
+ const links=role()==='admin'?[['work','Main Work'],['teams','Teams'],['progress','Progress'],['review','Final Review'],['history','History']]:role()==='incharge'?[['work','Assigned Work'],['tasks','Distribute Tasks'],['verify','Verify Submissions'],['final','Final Submit']]:[['work','My Task'],['status','My Status']];
+ $('swNav').innerHTML=links.map(([id,label])=>`<button class="${activeSection===id?'active':''}" onclick="window.swSection('${id}')">${label}</button>`).join('');
+ $('swRoleNote').textContent=`Signed in: ${userEmail()} · Role: ${role().toUpperCase()} · Workspace: ${project()}`;
+}
+window.swSection=id=>{activeSection=id;render();};
+window.swRefresh=async()=>{await load();render();};
+async function load(){
+ if(!uid()||!window.activeProject)return;
+ const g=async path=>{const s=await api().get(dbref(path));return s.exists()?s.val():null;};
+ const [w,tasks,teams,users,finals]=await Promise.all([
+  g(''),g(`${active()||'__none__'}/simple_tasks`),g(`${active()||'__none__'}/simple_teams`),api().get(api().ref(window.db,'users')),g(`${active()||'__none__'}/simple_final_submissions`)
+ ]);
+ cache.works=[];const ws=await api().get(dbref(''));if(ws.exists())ws.forEach(c=>cache.works.push({id:c.key,...(c.val()||{})}));
+ cache.teams=teams?Object.entries(teams).map(([id,v])=>({id,...v})):[];cache.tasks=tasks?Object.entries(tasks).map(([id,v])=>({id,...v})):[];cache.finals=finals?Object.entries(finals).map(([id,v])=>({id,...v})):[];
+ cache.users=[];if(users.exists())users.forEach(c=>{const u=c.val()||{};if(u.email)cache.users.push({uid:c.key,name:u.name||u.fullName||u.email,email:u.email,role:u.role||u.userRole||''});});
+ cache.users.sort((a,b)=>a.name.localeCompare(b.name));
+ if(active()&&!cache.works.some(w=>w.id===active()))window.swWorkId=null;
+ if(!active()&&cache.works.length&&role()!=='admin'){const me=uid();const t=cache.teams.find(x=>x.inchargeUid===me||Object.keys(x.members||{}).includes(me));if(t){window.swWorkId=cache.works[0].id;}}
+ if(active())setRoleFromTeams();
+}
+async function audit(action,details,targetUid){
+ try{await api().push(r('simple_history'),{action,details,actorUid:uid(),actorEmail:userEmail(),targetUid:targetUid||null,at:stamp()});}catch(e){console.warn('History log failed',e);}
+}
+async function saveWork(){
+ if(!admin())return notify('PH/Admin access required.');
+ const title=$('swWorkTitle').value.trim(),description=$('swWorkDesc').value.trim(),deadline=$('swWorkDeadline').value;
+ if(!title||!deadline)return notify('Enter a title and overall deadline.');
+ const ms=new Date(deadline).getTime();if(!Number.isFinite(ms)||ms<Date.now())return notify('Overall deadline must be in the future.');
+ const id=$('swEditWorkId').value;
+ const data={title,description,deadline:ms,updatedAt:stamp(),updatedBy:uid()};
+ if(id){await api().update(dbref(id),data);await audit('MAIN_WORK_EDITED',title);}
+ else{data.createdAt=stamp();data.createdBy=uid();const ref=await api().push(dbref(''),data);window.swWorkId=ref.key;await audit('MAIN_WORK_CREATED',title);}
+ $('swEditWorkId').value='';await load();activeSection='work';render();
+}
+function workPanel(){
+ const selected=cache.works.find(w=>w.id===active());
+ const form=admin()?`<section class="sw-panel"><h3>${selected?'Edit Main Work':'Create Main Work'}</h3><input id="swEditWorkId" type="hidden"><div class="sw-grid"><div><label>Main work title</label><input id="swWorkTitle" placeholder="Enter work title"></div><div><label>Overall deadline</label><input id="swWorkDeadline" type="datetime-local"></div></div><label>Description</label><textarea id="swWorkDesc" placeholder="Describe the expected outcome and scope"></textarea><div class="sw-row" style="margin-top:10px"><button class="sw-btn green" onclick="window.swSaveWork()">SAVE MAIN WORK</button><button class="sw-btn grey" onclick="window.swClearWorkForm()">CLEAR</button></div></section>`:'';
+ const list=role()==='admin'?cache.works:cache.works.filter(w=>cache.teams.some(t=>t.inchargeUid===uid()&&t.workId===w.id)||cache.tasks.some(t=>t.targetUid===uid()&&t.workId===w.id));
+ return `${form}<section class="sw-panel"><h3>${role()==='student'?'Your assigned work':role()==='incharge'?'Your team work':'Main Work Items'}</h3>${list.map(w=>`<div class="sw-item"><div class="sw-row"><div><h4>${esc(w.title)}</h4><div class="sw-muted">${esc(w.description||'')}</div><small>Deadline: ${dateText(w.deadline)}</small></div><button class="sw-btn ${active()===w.id?'green':''}" onclick="window.swOpenWork('${w.id}')">${active()===w.id?'OPEN':'VIEW WORK'}</button>${admin()?`<button class="sw-btn gold" onclick="window.swEditWork('${w.id}')">EDIT</button>`:''}</div></div>`).join('')||'<p class="sw-muted">No work item available.</p>'}</section>${selected?`<section class="sw-panel"><h3>Selected Main Work</h3><b>${esc(selected.title)}</b><p>${esc(selected.description||'')}</p><span class="sw-pill">Overall deadline: ${dateText(selected.deadline)}</span></section>`:''}`;
+}
+window.swSaveWork=saveWork;
+window.swClearWorkForm=()=>{['swEditWorkId','swWorkTitle','swWorkDesc','swWorkDeadline'].forEach(x=>{if($(x))$(x).value='';});};
+window.swOpenWork=async id=>{window.swWorkId=id;await load();activeSection='work';render();};
+window.swEditWork=id=>{const w=cache.works.find(x=>x.id===id);if(!w)return;$('swEditWorkId').value=id;$('swWorkTitle').value=w.title||'';$('swWorkDesc').value=w.description||'';$('swWorkDeadline').value=dtLocal(w.deadline);window.swWorkId=id;window.swSection('work');};
+async function saveTeams(){
+ if(!admin())return notify('PH/Admin access required.');
+ const cards=[...document.querySelectorAll('[data-sw-team]')],newTeams={};
+ for(const card of cards){const id=card.dataset.swTeam,name=card.querySelector('[data-name]').value.trim(),lead=card.querySelector('[data-lead]').value,members=[...card.querySelectorAll('[data-member]:checked')].map(x=>x.value);
+  if(!name||!lead)return notify('Every team needs a name and one in-charge.');
+  if(members.includes(lead))return notify('In-charge cannot also be a student member.');
+  newTeams[id]={teamId:id,teamName:name,inchargeUid:lead,members:Object.fromEntries(members.map(x=>[x,true])),workId:active(),updatedAt:stamp()};
+ }
+ const owners={};for(const [id,t] of Object.entries(newTeams)){for(const m of Object.keys(t.members)){if(owners[m])return notify('A student can belong to only one team for this Main Work.');owners[m]=id;}}
+ await api().set(r('simple_teams'),newTeams);await audit('TEAMS_UPDATED',`${Object.keys(newTeams).length} teams saved.`);await load();render();
+}
+function teamsPanel(){
+ const people=cache.users.filter(u=>u.uid!==uid()),teams=cache.teams;
+ return `<section class="sw-panel"><h3>Create and manage teams</h3><p class="sw-muted">Each team has one in-charge. A student can be assigned to only one team for this Main Work.</p><div id="swTeamCards">${teams.map(t=>teamCard(t,people)).join('')||teamCard({id:'team_'+Date.now(),teamName:'Team 1',members:{}},people)}</div><button class="sw-btn grey" onclick="window.swAddTeam()">+ ADD TEAM</button><button class="sw-btn green" onclick="window.swSaveTeams()">SAVE TEAMS</button></section>`;
+}
+function teamCard(t,people){return `<div class="sw-item" data-sw-team="${esc(t.id)}"><div class="sw-grid"><div><label>Team name</label><input data-name value="${esc(t.teamName||'')}"></div><div><label>Team in-charge</label><select data-lead><option value="">Select in-charge</option>${people.map(u=>`<option value="${esc(u.uid)}" ${u.uid===t.inchargeUid?'selected':''}>${esc(u.name)} (${esc(u.email)})</option>`).join('')}</select></div></div><label>Team members</label><div class="sw-checks">${people.filter(u=>u.uid!==t.inchargeUid).map(u=>`<label><input data-member type="checkbox" value="${esc(u.uid)}" ${t.members?.[u.uid]?'checked':''}>${esc(u.name)} <small>${esc(u.email)}</small></label>`).join('')}</div></div>`;}
+window.swAddTeam=()=>{$('swTeamCards').insertAdjacentHTML('beforeend',teamCard({id:'team_'+Date.now(),teamName:'New Team',members:{}},cache.users.filter(u=>u.uid!==uid()));};
+window.swSaveTeams=saveTeams;
+async function assignTask(){
+ if(role()!=='incharge')return notify('Only the assigned Team In-charge can distribute tasks.');
+ const team=cache.teams.find(t=>t.inchargeUid===uid());if(!team)return notify('No team is assigned to your account.');
+ const target=$('swTargetStudent').value,title=$('swTaskTitle').value.trim(),desc=$('swTaskDesc').value.trim(),deadline=$('swTaskDeadline').value;
+ if(!target||!title||!deadline)return notify('Select a student and enter task title and deadline.');
+ const ms=new Date(deadline).getTime(),work=cache.works.find(w=>w.id===active());
+ if(!Number.isFinite(ms)||ms<=Date.now())return notify('Individual deadline must be in the future.');
+ if(work?.deadline&&ms>Number(work.deadline))return notify('Individual deadline cannot exceed the overall PH/Admin deadline.');
+ if(cache.tasks.some(t=>t.targetUid===target&&t.workId===active()))return notify('This student already has a task for this Main Work.');
+ const student=cache.users.find(u=>u.uid===target);
+ const data={workId:active(),teamId:team.id,teamName:team.teamName,inchargeUid:uid(),targetUid:target,targetName:student?.name||student?.email||target,title,description:desc,deadline:ms,status:'ASSIGNED',createdAt:stamp(),updatedAt:stamp(),history:[]};
+ const ref=await api().push(r('simple_tasks'),data);
+ await api().set(r(`simple_student_tasks/${target}/${ref.key}`),{taskId:ref.key,workId:active(),teamId:team.id,title,description:desc,deadline:ms,status:'ASSIGNED',inchargeUid:uid(),createdAt:data.createdAt});
+ await audit('TASK_ASSIGNED',`${title} assigned to ${data.targetName}`,target);notify('Task sent to student.');await load();render();
+}
+function distributePanel(){
+ const team=cache.teams.find(t=>t.inchargeUid===uid()),members=team?Object.keys(team.members||{}):[];
+ const work=cache.works.find(w=>w.id===active());
+ return `<section class="sw-panel"><h3>Distribute individual task</h3><p class="sw-muted">${esc(work?.title||'')} · Overall deadline: ${dateText(work?.deadline)}</p>${team?`<label>Student</label><select id="swTargetStudent"><option value="">Select a student</option>${members.map(id=>{const u=cache.users.find(x=>x.uid===id);return `<option value="${esc(id)}">${esc(u?.name||u?.email||id)}</option>`;}).join('')}</select><div class="sw-grid"><div><label>Task title</label><input id="swTaskTitle" placeholder="Assigned portion"></div><div><label>Individual deadline</label><input id="swTaskDeadline" type="datetime-local"></div></div><label>Task description / instructions</label><textarea id="swTaskDesc" placeholder="Explain exactly what the student must complete"></textarea><button class="sw-btn green" onclick="window.swAssignTask()">SEND TASK</button>`:'<p class="sw-muted">No team has been assigned to your account for this work item.</p>'}</section>`;
+}
+window.swAssignTask=assignTask;
+async function submitStudent(taskId){
+ const task=cache.tasks.find(t=>t.id===taskId);if(!task||task.targetUid!==uid())return notify('This is not your task.');
+ if(!['ASSIGNED','CORRECTION_REQUESTED'].includes(task.status))return notify('This task is not open for submission.');
+ const file=$('swStudentFile')?.files?.[0],remarks=$('swStudentRemarks')?.value.trim()||'';
+ if(!file)return notify('Select your completed file before submitting.');
+ if(file.size>8*1024*1024)return notify('File is larger than 8 MB. Please compress it.');
+ const data=await fileRead(file),entry={fileData:data,fileName:file.name,remarks,submittedAt:stamp(),submittedBy:uid()};
+ const hist=[...(task.history||[]),{status:'SUBMITTED',at:entry.submittedAt,by:uid(),remarks}];
+ await api().update(r(`simple_tasks/${taskId}`),{submission:entry,history:hist,status:'SUBMITTED',updatedAt:stamp()});
+ await api().set(r(`simple_student_tasks/${uid()}/${taskId}`),{taskId,workId:active(),teamId:task.teamId,title:task.title,description:task.description,deadline:task.deadline,status:'SUBMITTED',inchargeUid:task.inchargeUid,submission:{fileName:file.name,remarks,submittedAt:entry.submittedAt}});
+ await audit('STUDENT_SUBMITTED',`${task.title}: ${file.name}`,uid());notify('Your work has been submitted to the Team In-charge.');await load();render();
+}
+function studentPanel(){
+ const mine=cache.tasks.filter(t=>t.targetUid===uid());
+ return `<section class="sw-panel"><h3>My assigned tasks</h3>${mine.map(t=>`<div class="sw-item"><h4>${esc(t.title)}</h4><p>${esc(t.description||'')}</p><div class="sw-row"><span class="sw-pill ${t.status==='INCHARGE_VERIFIED'?'ok':t.status==='CORRECTION_REQUESTED'?'warn':''}">${esc(t.status)}</span><span class="sw-muted">Deadline: ${dateText(t.deadline)}</span></div>${t.feedback?`<p><b>In-charge feedback:</b> ${esc(t.feedback)}</p>`:''}${['ASSIGNED','CORRECTION_REQUESTED'].includes(t.status)?`<label>Completed work (PDF, PPT, PPTX or other file)</label><input id="swStudentFile" type="file" accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.zip,.png,.jpg,.jpeg"><label>Optional remarks</label><textarea id="swStudentRemarks" placeholder="Add remarks for your in-charge"></textarea><button class="sw-btn green" onclick="window.swStudentSubmit('${t.id}')">SUBMIT WORK</button>`:''}${t.submission?.fileName?`<p class="sw-muted">Latest submission: ${esc(t.submission.fileName)} · ${dateText(t.submission.submittedAt)}</p>`:''}</div>`).join('')||'<p class="sw-muted">No individual task has been assigned to you yet.</p>'}</section>`;
+}
+window.swStudentSubmit=submitStudent;
+async function reviewTask(id,approve){
+ const t=cache.tasks.find(x=>x.id===id);if(!t||t.inchargeUid!==uid())return notify('Only your assigned in-charge can review this task.');
+ const feedback=$(`swFeedback_${id}`)?.value.trim()||'';
+ if(!approve&&!feedback)return notify('Enter correction feedback before requesting changes.');
+ const status=approve?'INCHARGE_VERIFIED':'CORRECTION_REQUESTED',hist=[...(t.history||[]),{status,at:stamp(),by:uid(),feedback}];
+ await api().update(r(`simple_tasks/${id}`),{status,feedback,history:hist,verifiedAt:approve?stamp():null,updatedAt:stamp()});
+ await api().update(r(`simple_student_tasks/${t.targetUid}/${id}`),{status,feedback});
+ await audit(approve?'TASK_VERIFIED':'CORRECTION_REQUESTED',`${t.title}: ${feedback}`,t.targetUid);await load();render();
+}
+window.swReviewTask=reviewTask;
+function verifyPanel(){
+ const team=cache.teams.find(t=>t.inchargeUid===uid()),mine=cache.tasks.filter(t=>t.teamId===team?.id);
+ return `<section class="sw-panel"><h3>Student submissions</h3>${mine.map(t=>`<div class="sw-item"><div class="sw-row"><div><h4>${esc(t.targetName)} · ${esc(t.title)}</h4><p class="sw-muted">${esc(t.description||'')}</p></div><span class="sw-pill ${t.status==='INCHARGE_VERIFIED'?'ok':t.status==='CORRECTION_REQUESTED'?'warn':''}">${esc(t.status)}</span></div><p class="sw-muted">Deadline: ${dateText(t.deadline)} · Submitted: ${dateText(t.submission?.submittedAt)}</p>${t.submission?.fileData?`<a href="${t.submission.fileData}" download="${esc(t.submission.fileName||'submission')}">Download ${esc(t.submission.fileName||'student file')}</a>`:'<span class="sw-muted">No submission uploaded.</span>'}${t.submission?.remarks?`<p>Student remarks: ${esc(t.submission.remarks)}</p>`:''}<label>Feedback / correction instructions</label><textarea id="swFeedback_${t.id}">${esc(t.feedback||'')}</textarea><div class="sw-row"><button class="sw-btn green" onclick="window.swReviewTask('${t.id}',true)" ${t.status!=='SUBMITTED'?'disabled':''}>ACCEPT & VERIFY</button><button class="sw-btn gold" onclick="window.swReviewTask('${t.id}',false)" ${!['SUBMITTED','CORRECTION_REQUESTED'].includes(t.status)?'disabled':''}>REQUEST CORRECTION</button></div></div>`).join('')||'<p class="sw-muted">No tasks have been distributed to this team.</p>'}</section>`;
+}
+function finalPanel(){
+ const team=cache.teams.find(t=>t.inchargeUid===uid()),mine=cache.tasks.filter(t=>t.teamId===team?.id),all=mine.length>0&&mine.every(t=>t.status==='INCHARGE_VERIFIED');
+ return `<section class="sw-panel"><h3>Final combined submission</h3><p class="sw-muted">All student portions must be verified before the final file can be submitted to PH/Admin.</p><div class="sw-list">${mine.map(t=>`<div class="sw-row"><span>${esc(t.targetName)} · ${esc(t.title)}</span><span class="sw-pill ${t.status==='INCHARGE_VERIFIED'?'ok':'warn'}">${esc(t.status)}</span></div>`).join('')}</div><hr class="sw-divider"><label>Final combined file (PPT, PPTX or PDF)</label><input id="swFinalFile" type="file" accept=".ppt,.pptx,.pdf,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"><label>Note to PH/Admin (optional)</label><textarea id="swFinalNote"></textarea><button class="sw-btn green" ${all?'':'disabled'} onclick="window.swFinalSubmit()">FINAL SUBMIT TO PH</button>${!all?'<p class="sw-muted">Final submission is locked until every assigned student task is verified.</p>':''}</section>`;
+}
+window.swFinalSubmit=async()=>{
+ const team=cache.teams.find(t=>t.inchargeUid===uid()),mine=cache.tasks.filter(t=>t.teamId===team?.id);
+ if(!mine.length||mine.some(t=>t.status!=='INCHARGE_VERIFIED'))return notify('Verify every student task before final submission.');
+ const f=$('swFinalFile').files?.[0];if(!f)return notify('Select the combined final file.');
+ if(!/\.(ppt|pptx|pdf)$/i.test(f.name))return notify('Only PPT, PPTX and PDF files are accepted.');
+ if(f.size>8*1024*1024)return notify('Final file exceeds 8 MB. Please compress it.');
+ const payload={teamId:team.id,teamName:team.teamName,inchargeUid:uid(),fileData:await fileRead(f),fileName:f.name,note:$('swFinalNote').value.trim(),status:'SUBMITTED_TO_PH',submittedAt:stamp(),history:[{status:'SUBMITTED_TO_PH',at:stamp(),by:uid()}]};
+ await api().set(r(`simple_final_submissions/${team.id}`),payload);await audit('FINAL_SUBMITTED_TO_PH',`${team.teamName}: ${f.name}`);notify('Final submission sent to PH/Admin.');await load();render();
+};
+function finalReviewPanel(){
+ return `<section class="sw-panel"><h3>Final submissions from teams</h3>${cache.finals.map(f=>`<div class="sw-item"><h4>${esc(f.teamName||f.id)}</h4><p class="sw-muted">${esc(f.fileName||'')} · ${dateText(f.submittedAt)}</p><a href="${f.fileData}" download="${esc(f.fileName||'final-submission')}">Download final file</a><p>${esc(f.note||'')}</p><span class="sw-pill ${f.status==='ACCEPTED'?'ok':f.status==='REJECTED'?'bad':'warn'}">${esc(f.status)}</span><label>PH/Admin feedback</label><textarea id="swFinalFeedback_${f.id}">${esc(f.feedback||'')}</textarea><div class="sw-row"><button class="sw-btn green" onclick="window.swReviewFinal('${f.id}','ACCEPTED')">ACCEPT</button><button class="sw-btn red" onclick="window.swReviewFinal('${f.id}','REJECTED')">REJECT WITH FEEDBACK</button></div></div>`).join('')||'<p class="sw-muted">No final team submissions yet.</p>'}</section>`;
+}
+window.swReviewFinal=async(teamId,status)=>{
+ const feedback=$(`swFinalFeedback_${teamId}`)?.value.trim()||'';if(status==='REJECTED'&&!feedback)return notify('Enter feedback before rejecting.');
+ const p={status,feedback,reviewedAt:stamp(),reviewedBy:uid()};
+ await api().update(r(`simple_final_submissions/${teamId}`),p);await audit(`FINAL_${status}`,`${teamId}: ${feedback}`);await load();render();
+};
+function progressPanel(){
+ return `<section class="sw-panel"><h3>Team and individual progress</h3>${cache.teams.map(t=>{const tasks=cache.tasks.filter(x=>x.teamId===t.id),verified=tasks.filter(x=>x.status==='INCHARGE_VERIFIED').length;return `<div class="sw-item"><h4>${esc(t.teamName)}</h4><p class="sw-muted">In-charge: ${esc(cache.users.find(u=>u.uid===t.inchargeUid)?.name||t.inchargeUid)} · ${verified}/${tasks.length} verified</p>${tasks.map(x=>`<div class="sw-row"><span>${esc(x.targetName)} · ${esc(x.title)}</span><span class="sw-pill">${esc(x.status)}</span></div>`).join('')}</div>`;}).join('')||'<p class="sw-muted">No teams created.</p>'}</section>`;
+}
+function historyPanel(){
+ const entries=[];return `<section class="sw-panel"><h3>Submission and action history</h3><p class="sw-muted">Audit history is stored in Firebase for this Main Work. Refresh to load the latest records.</p><div id="swHistoryList">Loading history…</div></section>`;
+}
+async function renderHistory(){const host=$('swHistoryList');if(!host)return;const s=await api().get(r('simple_history'));const a=[];if(s.exists())s.forEach(c=>a.push(c.val()));a.sort((x,y)=>(y.at||0)-(x.at||0));host.innerHTML=a.map(x=>`<div class="sw-item"><b>${esc(x.action)}</b><div>${esc(x.details)}</div><small>${esc(x.actorEmail||x.actorUid)} · ${dateText(x.at)}</small></div>`).join('')||'<p class="sw-muted">No history recorded yet.</p>';}
+function render(){
+ if(!$('tab-workflow'))return;
+ const current=cache.works.find(w=>w.id===active());const panel=role()==='admin'?{work:workPanel,teams:teamsPanel,progress:progressPanel,review:finalReviewPanel,history:historyPanel}[activeSection]:role()==='incharge'?{work:workPanel,tasks:distributePanel,verify:verifyPanel,final:finalPanel}[activeSection]:{work:studentPanel,status:studentPanel}[activeSection];
+ nav();
+ if(!current&&role()!=='admin'){$('swBody').innerHTML='<section class="sw-panel"><h3>No work assigned</h3><p class="sw-muted">Ask PH/Admin to assign a Main Work and team.</p></section>';return;}
+ $('swBody').innerHTML=(panel||workPanel)();
+ if(activeSection==='history')renderHistory();
+}
+window.wfInitWorkItems=async function(){if(!uid()||!window.activeProject)return;mount();window.swWorkId=null;await load();if(role()==='admin'){activeSection='work';}else{const team=cache.teams.find(t=>t.inchargeUid===uid());const task=cache.tasks.find(t=>t.targetUid===uid());window.swWorkId=team?.workId||task?.workId||cache.works[0]?.id||null;activeSection=role()==='incharge'?'work':'work';}await load();render();};
+const originalSetActive=window.wfSetActiveWork;
+window.wfSetActiveWork=async function(id,data){window.swWorkId=id||null;mount();await load();render();return typeof originalSetActive==='function'?undefined:undefined;};
+window.wfShowDashboard=function(){mount();load().then(render);};
+window.wfOpenWizard=function(){window.wfShowDashboard();};
+window.swBoot=async()=>{if(!uid()||!window.activeProject)return;await window.wfInitWorkItems();};
+document.addEventListener('click',e=>{if(e.target.closest('[data-tab="workflow"],[onclick*="workflow"]'))setTimeout(()=>{if(uid()&&window.activeProject&&!$('swBody'))mount();},50);});
+window.addEventListener('wf-firebase-api-ready',()=>{if(uid()&&window.activeProject)window.swBoot();});
+})();
+</script>
+
 </body>
 </html>
