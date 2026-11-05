@@ -3364,12 +3364,12 @@ tr:hover { background: #fcfcfd; }
     <div class="panel wf-wizard-stage" data-wf-step="1" id="wfTeamSetupPanel" style="display:none;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
           <div><div class="wf-stage-heading"><span class="wf-stage-no">01</span><div><h3 style="margin:0 0 5px;"><i class="fas fa-people-group"></i> Team Formation</h3>
-          <p class="wf-help" style="margin:0;">Create all three teams, set each team name and in-charge, then allocate students. A student can belong to one team only. Changes after saving require a reason.</p></div></div>
+          <p class="wf-help" style="margin:0;">Create all three teams, set each team name and in-charge, then allocate students. A student can belong to one team only. You can update team names, in-charges and student membership at any time. Changes are automatically logged; a reason is optional.</p></div></div>
           <span style="background:#ecfdf5;color:#047857;border-radius:99px;padding:7px 11px;font-size:11px;font-weight:850;"><i class="fas fa-shield-check"></i> SINGLE-TEAM ALLOCATION</span>
         </div>
         <div class="wf-team-toolbar"><input id="wfTeamSearch" class="wf-team-search" placeholder="Search students by name or email..." oninput="window.wfFilterTeamMembers(this.value)"><span id="wfTeamAllocationSummary" class="wf-team-count">0 students allocated</span></div>
         <div id="wfTeamCards" class="wf-team-grid"></div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:16px;"><button onclick="window.wfSaveTeams()" class="success wf-primary-btn"><i class="fas fa-lock"></i> SAVE & LOCK TEAM STRUCTURE</button></div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:16px;"><button onclick="window.wfSaveTeams()" class="success wf-primary-btn"><i class="fas fa-save"></i> SAVE / UPDATE TEAM STRUCTURE</button></div>
       </div>
     <div class="panel wf-wizard-stage" data-wf-step="3" id="wfTeamAssignmentPanel">
         <h3 style="margin-top:0;"><i class="fas fa-inbox"></i> Team Task Distribution</h3>
@@ -17872,19 +17872,21 @@ window.handleFaceScan=async function(){
         const a=teamMembersFrom(before).slice().sort().join('|'),b=teamMembersFrom(after).slice().sort().join('|');
         return before.teamName!==after.teamName || before.inchargeUid!==after.inchargeUid || a!==b;
       });
+      // Team membership and in-charge assignments remain editable after initial setup.
+      // A reason is optional; changes are still automatically recorded for accountability.
       let reason='Initial team setup';
-      if(changed && TEAM_IDS.some(id=>wfSavedTeamsCache[id])){
-        reason=prompt('You are changing the saved team structure. Enter the reason for this change:','');
-        if(!reason||!reason.trim())return alert('A reason is required to change the locked team structure.');
-        reason=reason.trim();
+      const isUpdate=changed && TEAM_IDS.some(id=>wfSavedTeamsCache[id]);
+      if(isUpdate){
+        const entered=prompt('Team structure can be updated at any time. Optional: enter a reason for this change.','');
+        reason=(entered||'No reason provided').trim()||'No reason provided';
       }
       await set(projectAwareRef('workflow_teams'), teams);
-      await wfLog('TEAM_FORMATION','Team formation saved',TEAM_IDS.map(id=>`${teams[id].teamName}: ${teams[id].memberUids.length} students; in-charge ${teams[id].inchargeName}`).join(' | '));
-      if(changed && TEAM_IDS.some(id=>wfSavedTeamsCache[id])){
+      await wfLog(isUpdate?'TEAM_STRUCTURE_CHANGED':'TEAM_FORMATION',isUpdate?'Team structure updated':'Team formation saved',
+        `${reason}. `+TEAM_IDS.map(id=>`${teams[id].teamName}: ${teams[id].memberUids.length} students; in-charge ${teams[id].inchargeName}`).join(' | '));
+      if(isUpdate){
         await push(projectAwareRef('workflow_team_change_logs'),{reason,changedBy:currentUser?.email||'',changedAt:serverTimestamp(),previousTeams:old,newTeams:teams});
-        await wfLog('TEAM_STRUCTURE_CHANGED','Team structure changed',reason);
       }
-      alert('Team structure saved. Each student is allocated to one team only.');
+      alert(isUpdate?'Team structure updated successfully. The change has been recorded in the activity log.':'Team structure saved successfully. You can update teams again at any time.');
       await window.wfLoadTeamSetup();
       if(window.wfWizardAfterTeamSave)window.wfWizardAfterTeamSave(); await window.wfLoadTeamAssignments();
     } catch(e) { alert('Could not save team structure: '+(e.message||e)); }
