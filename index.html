@@ -903,6 +903,28 @@ tr:hover { background: #fcfcfd; }
 @media(max-width:700px){.wf-member-status-card{grid-template-columns:1fr}.wf-subtab{flex:1 1 42%;}}
 </style>
 <style id="wf-five-step-work-css">#wfWizardHeader .wf-stepper{gap:6px}#wfWizardHeader .wf-step-dot{font-size:10px;min-width:0}#wfWizardHeader .wf-step-dot b{white-space:normal}#wfCreateWorkPanel input,#wfCreateWorkPanel textarea{width:100%;box-sizing:border-box}@media(max-width:700px){#wfWizardHeader .wf-step-dot{font-size:8px}#wfWizardHeader .wf-step-dot span{width:24px;height:24px}}</style>
+<style id="wf-clean-single-tab-layout">
+/* Workflow is a single dedicated tab. Keep its stages mutually exclusive. */
+#tab-workflow { width:100%; }
+#tab-workflow .wf-wizard-header { margin: 14px 0 18px; border-radius:16px; padding:20px; }
+#tab-workflow .wf-stepper { display:flex; align-items:center; gap:8px; overflow-x:auto; padding:12px 2px 4px; }
+#tab-workflow .wf-step-dot { flex:0 0 auto; }
+#tab-workflow .wf-step-line { flex:1 1 24px; min-width:12px; }
+#tab-workflow .wf-wizard-stage { display:none !important; margin:16px 0 !important; padding:22px !important; border:1px solid #e2e8f0; border-radius:16px; box-shadow:0 5px 18px rgba(15,23,42,.06); }
+#tab-workflow .wf-wizard-stage.wf-stage-active { display:block !important; }
+#tab-workflow .wf-stage-heading { margin-bottom:18px; }
+#tab-workflow .wf-task-compose { gap:14px; padding:16px; border-radius:12px; background:#f8fafc; border:1px solid #e2e8f0; }
+#tab-workflow .wf-team-grid { margin-top:18px; }
+#tab-workflow .wf-subtabs { margin:14px 0; }
+#tab-workflow .wf-wizard-nav { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+#tab-workflow .wf-wizard-nav #wfWizardHint { flex:1 1 240px; }
+@media(max-width:700px) {
+ #tab-workflow .wf-wizard-header { padding:15px; }
+ #tab-workflow .wf-wizard-stage { padding:15px !important; }
+ #tab-workflow .wf-stepper { justify-content:flex-start; }
+}
+</style>
+
 </head>
 
 <body>
@@ -3348,10 +3370,6 @@ tr:hover { background: #fcfcfd; }
         <div class="wf-step-dot" data-dot="3"><span>3</span><b>Assign Work</b></div><div class="wf-step-line"></div>
         <div class="wf-step-dot" data-dot="4"><span>4</span><b>Distribute</b></div><div class="wf-step-line"></div>
         <div class="wf-step-dot" data-dot="5"><span>5</span><b>Track & Collaborate</b></div>
-      </div><div class="wf-step-line"></div>
-        <div class="wf-step-dot" data-dot="2"><span>2</span><b>Assign Work</b></div><div class="wf-step-line"></div>
-        <div class="wf-step-dot" data-dot="3"><span>3</span><b>Distribute Work</b></div><div class="wf-step-line"></div>
-        <div class="wf-step-dot" data-dot="4"><span>4</span><b>Track & Collaborate</b></div>
       </div>
       <div id="wfActiveWorkBanner" style="display:none;margin:12px 0;padding:9px 12px;border-radius:10px;background:rgba(255,255,255,.10);color:#fff;font-size:12px;"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;">
@@ -5356,6 +5374,7 @@ onAuthStateChanged(auth, (user) => {
     }
 
     currentUser = user;
+    window.currentUser = user;
     if (typeof startPresenceSystem === "function") startPresenceSystem(user);
 
     const userRef = projectAwareRef( `users/${user.uid}`);
@@ -8967,7 +8986,28 @@ window.printAssetTag = () => {
     win.document.write('<style>body{text-align:center;font-family:sans-serif;padding:20px;} img{max-width:100%;}</style>');
     win.document.write('</head><body>');
     win.document.write(printContent);
-    win.document.write('</body></html>');
+    win.document.write('<script id="wf-final-stage-guard">
+(function(){
+ const tab=document.getElementById('tab-workflow');
+ if(!tab)return;
+ const apply=function(){
+   const m=(document.getElementById('wfWizardStepBadge')?.textContent||'').match(/STEP\\s+(\\d+)/i);
+   const step=m?Number(m[1]):1;
+   tab.querySelectorAll('.wf-wizard-stage[data-wf-step]').forEach(el=>{
+     const active=Number(el.dataset.wfStep)===step;
+     el.classList.toggle('wf-stage-active',active);
+     el.style.setProperty('display',active?'block':'none','important');
+   });
+ };
+ const prior=window.wfShowWizardStep;
+ if(typeof prior==='function')window.wfShowWizardStep=function(n){prior.call(this,n);apply();};
+ document.addEventListener('DOMContentLoaded',apply);
+ const oldSwitch=window.switchTab;
+ if(typeof oldSwitch==='function')window.switchTab=function(){const r=oldSwitch.apply(this,arguments);if(arguments[0]==='workflow')apply();return r;};
+})();
+</script>
+
+</body></html>');
     win.document.close();
     win.focus();
     setTimeout(() => { win.print(); win.close(); }, 500);
@@ -18181,12 +18221,17 @@ window.handleFaceScan=async function(){
   const originalLoadWorkflows=window.loadWorkflows;
   window.loadWorkflows=async()=>{await originalLoadWorkflows();await wfLoadTracking();await wfLoadCollaboration();};
   const wfBindLiveTracking=()=>{
-    if(wfLiveTrackingBound)return;wfLiveTrackingBound=true;
-    onValue(wfScopedRef('workflow_activity_logs'),()=>wfLoadTracking());
-    onValue(wfScopedRef('workflow_team_messages'),()=>wfLoadCollaboration());
-    onValue(wfScopedRef('workflow_shared_resources'),()=>wfLoadCollaboration());
+    if(wfLiveTrackingBound||!window.wfActiveWorkId)return;
+    wfLiveTrackingBound=true;
+    try {
+      onValue(wfScopedRef('workflow_activity_logs'),()=>wfLoadTracking());
+      onValue(wfScopedRef('workflow_team_messages'),()=>wfLoadCollaboration());
+      onValue(wfScopedRef('workflow_shared_resources'),()=>wfLoadCollaboration());
+    } catch(e) {
+      wfLiveTrackingBound=false;
+      console.warn('Workflow live listeners will bind after a work item is selected.',e);
+    }
   };
-  wfBindLiveTracking();
 })();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
@@ -18260,6 +18305,7 @@ window.handleFaceScan=async function(){
     try{if(id)localStorage.setItem('mrpsp_active_work_id',id);else localStorage.removeItem('mrpsp_active_work_id');}catch(e){}
     const banner=document.getElementById('wfActiveWorkBanner');if(banner){banner.style.display=id?'block':'none';banner.textContent=id?`ACTIVE WORK: ${data?.title||id}`:'';}
     const editBtn=document.getElementById('wfEditMainWork');if(editBtn)editBtn.style.display=id&&typeof canManageTeams==='function'&&canManageTeams()?'inline-flex':'none';
+    if(id&&typeof wfBindLiveTracking==='function')wfBindLiveTracking();
     if(id&&window.wfLoadTeamSetup)await window.wfLoadTeamSetup();
     if(id&&window.wfLoadTeamAssignments)await window.wfLoadTeamAssignments();
     if(window.wfLoadWorkItems)await window.wfLoadWorkItems();
@@ -18290,7 +18336,7 @@ window.handleFaceScan=async function(){
     window.wfEditingMainWork=false;await window.wfLoadWorkItems();if(window.wfActiveWorkId)window.wfShowWizardStep(2);
   }catch(e){alert('Could not save main work: '+(e.message||e));}};
   window.wfDeleteMainWork=async id=>{if(typeof canManageTeams!=='function'||!canManageTeams())return alert('Only PH/Admin can delete work.');const snap=await get(projectAwareRef(`${ROOT}/${id}`));if(!snap.exists())return alert('Work item not found.');const w=snap.val()||{},title=String(w.title||'Untitled work');if(!confirm(`FIRST CONFIRMATION\n\nPermanently delete "${title}" and ALL associated data: teams, assignments, student tasks, submissions, activity logs, messages and shared resources?\n\nThis cannot be undone. Continue?`))return;if(!confirm(`SECOND CONFIRMATION\n\nConfirm permanent deletion of every record belonging to "${title}".`))return;const typed=prompt(`TYPE THE EXACT WORK TITLE TO DELETE:\n\n${title}`);if(typed!==title)return alert('Work title did not match. Nothing was deleted.');try{await remove(projectAwareRef(`${ROOT}/${id}`));if(window.wfActiveWorkId===id)await window.wfSetActiveWork(null,null);await window.wfLoadWorkItems();window.wfShowWizardStep(1);alert(`"${title}" and all data stored under this work item have been deleted.`);}catch(e){alert('Deletion failed: '+(e.message||e));}};
-  window.wfInitWorkItems=async()=>{if(!currentUser?.uid)return;await window.wfLoadWorkItems();let saved=null;try{saved=localStorage.getItem('mrpsp_active_work_id');}catch(e){}if(saved){const snap=await get(projectAwareRef(`${ROOT}/${saved}`));if(snap.exists())await window.wfSetActiveWork(saved,snap.val());}if(!window.wfActiveWorkId){const all=await get(projectAwareRef(ROOT));if(all.exists()){let first=null;all.forEach(c=>{if(!first)first={id:c.key,data:c.val()||{}};});if(first)await window.wfSetActiveWork(first.id,first.data);}}if(!window.wfActiveWorkId&&typeof canManageTeams==='function'&&canManageTeams())window.wfShowWizardStep(1);};
+  window.wfInitWorkItems=async()=>{if(!(window.currentUser?.uid||currentUser?.uid))return;await window.wfLoadWorkItems();let saved=null;try{saved=localStorage.getItem('mrpsp_active_work_id');}catch(e){}if(saved){const snap=await get(projectAwareRef(`${ROOT}/${saved}`));if(snap.exists())await window.wfSetActiveWork(saved,snap.val());}if(!window.wfActiveWorkId){const all=await get(projectAwareRef(ROOT));if(all.exists()){let first=null;all.forEach(c=>{if(!first)first={id:c.key,data:c.val()||{}};});if(first)await window.wfSetActiveWork(first.id,first.data);}}if(!window.wfActiveWorkId&&typeof canManageTeams==='function'&&canManageTeams())window.wfShowWizardStep(1);};
 })();
 </script>
 
