@@ -18894,7 +18894,7 @@ async function load(){
  const all=snap.exists()?snap.val():{};
  cache.works=Object.entries(all).filter(([id,v])=>v&&typeof v==='object'&&(v.title||v.workTitle)).map(([id,v])=>({id,...v}));
  const usersSnap=await api().get(api().ref(window.db,'users'));
- cache.users=[];if(usersSnap.exists())usersSnap.forEach(c=>{const u=c.val()||{};cache.users.push({uid:c.key,name:u.name||u.fullName||u.displayName||u.email||c.key,email:u.email||'',role:u.role||u.userRole||''});});
+ cache.users=[];if(usersSnap.exists())usersSnap.forEach(c=>{const u=c.val()||{};cache.users.push({uid:c.key,name:u.name||u.fullName||u.displayName||u.email||c.key,email:u.email||'',personalEmail1:u.personalEmail1||'',personalEmail2:u.personalEmail2||'',role:u.role||u.userRole||''});});
  cache.users.sort((a,b)=>a.name.localeCompare(b.name));
  const me=uid();
  const memberships=[];
@@ -18919,6 +18919,20 @@ async function load(){
 async function audit(action,details,targetUid){
  try{await api().push(r('simple_history'),{action,details,actorUid:uid(),actorEmail:userEmail(),targetUid:targetUid||null,at:stamp()});}catch(e){console.warn('History log failed',e);}
 }
+
+// Workflow email notifications use the portal's existing Google Apps Script mail dispatcher.
+// A successful no-cors request means queued by the browser, not proof of inbox delivery.
+function mailOf(user){return user?.personalEmail1||user?.personalEmail2||user?.email||'';}
+async function workflowMail(to,subject,status,details){
+ const recipients=[...new Set((Array.isArray(to)?to:[to]).filter(Boolean).map(x=>String(x).trim()).filter(x=>x.includes('@')))];
+ if(!recipients.length)return;
+ const sender=window.sendStatusEmailNotification;
+ if(typeof sender!=='function'){console.warn('Workflow mail dispatcher is unavailable.');return;}
+ for(const email of recipients){try{await sender(email,'MRPSP User',subject,status,details||'Please sign in to the MRPSP portal for details.');}catch(err){console.error('Workflow email request failed for '+email,err);}}
+}
+function emailsForUids(ids){return [...new Set((ids||[]).map(id=>mailOf(cache.users.find(u=>u.uid===id))).filter(Boolean))];}
+function phEmails(){return Array.isArray(window.PH_EMAILS)?window.PH_EMAILS:[];}
+function hodEmails(){return Array.isArray(window.HOD_EMAILS)?window.HOD_EMAILS:[];}
 async function saveWork(){
  if(!admin())return notify('PH/Admin access required.');
  const title=$('swWorkTitle').value.trim(),description=$('swWorkDesc').value.trim(),deadline=$('swWorkDeadline').value;
@@ -18926,8 +18940,8 @@ async function saveWork(){
  const ms=new Date(deadline).getTime();if(!Number.isFinite(ms)||ms<Date.now())return notify('Overall deadline must be in the future.');
  const id=$('swEditWorkId').value;
  const data={title,description,deadline:ms,updatedAt:stamp(),updatedBy:uid()};
- if(id){await api().update(dbref(id),data);await audit('MAIN_WORK_EDITED',title);}
- else{data.createdAt=stamp();data.createdBy=uid();const ref=await api().push(dbref(''),data);window.swWorkId=ref.key;await audit('MAIN_WORK_CREATED',title);}
+ if(id){await api().update(dbref(id),data);await audit('MAIN_WORK_EDITED',title);await workflowMail(phEmails().filter(e=>e.toLowerCase()!==userEmail().toLowerCase()),'Main Work Updated: '+title,'MAIN WORK UPDATED','The Main Work details or deadline were updated. New deadline: '+dateText(ms));}
+ else{data.createdAt=stamp();data.createdBy=uid();const ref=await api().push(dbref(''),data);window.swWorkId=ref.key;await audit('MAIN_WORK_CREATED',title);await workflowMail(phEmails().filter(e=>e.toLowerCase()!==userEmail().toLowerCase()),'New Main Work Created: '+title,'MAIN WORK CREATED','A new Main Work has been created. Deadline: '+dateText(ms)+'. Description: '+(description||'Not provided'));}
  $('swEditWorkId').value='';await load();activeSection='work';render();
 }
 function workPanel(){
@@ -18949,7 +18963,7 @@ async function saveTeams(){
   newTeams[id]={teamId:id,teamName:name,inchargeUid:lead,members:Object.fromEntries(members.map(x=>[x,true])),workId:active(),updatedAt:stamp()};
  }
  const owners={};for(const [id,t] of Object.entries(newTeams)){for(const m of Object.keys(t.members)){if(owners[m])return notify('A student can belong to only one team for this Main Work.');owners[m]=id;}}
- await api().set(r('simple_teams'),newTeams);await audit('TEAMS_UPDATED',`${Object.keys(newTeams).length} teams saved.`);await load();render();
+ await api().set(r('simple_teams'),newTeams);await audit('TEAMS_UPDATED',`${Object.keys(newTeams).length} teams saved.`);for(const t of Object.values(newTeams)){const recipients=emailsForUids([t.inchargeUid,...Object.keys(t.members||{})]);await workflowMail(recipients,'Team Formation: '+t.teamName,'TEAM ASSIGNED','You have been added to '+t.teamName+' for Main Work: '+(cache.works.find(w=>w.id===active())?.title||'')+'. In-charge: '+(cache.users.find(u=>u.uid===t.inchargeUid)?.name||'Assigned In-charge')+'. Please sign in to view the work details and deadlines.');}await load();render();
 }
 function teamsPanel(){
  const people=cache.users.filter(u=>u.uid!==uid()),teams=cache.teams;
@@ -18971,7 +18985,7 @@ async function assignTask(){
  const data={workId:active(),teamId:team.id,teamName:team.teamName,inchargeUid:uid(),targetUid:target,targetName:student?.name||student?.email||target,title,description:desc,deadline:ms,status:'ASSIGNED',createdAt:stamp(),updatedAt:stamp(),history:[]};
  const ref=await api().push(r('simple_tasks'),data);
  await api().set(r(`simple_student_tasks/${target}/${ref.key}`),{taskId:ref.key,workId:active(),teamId:team.id,title,description:desc,deadline:ms,status:'ASSIGNED',inchargeUid:uid(),createdAt:data.createdAt});
- await audit('TASK_ASSIGNED',`${title} assigned to ${data.targetName}`,target);notify('Task sent to student.');await load();render();
+ await audit('TASK_ASSIGNED',`${title} assigned to ${data.targetName}`,target);await workflowMail(mailOf(student),'New Individual Task: '+title,'TASK ASSIGNED','Main Work: '+(work?.title||'')+'\nTask: '+title+'\nInstructions: '+(desc||'See portal')+'\nDeadline: '+dateText(ms)+'\nAssigned by: '+(window.currentUser?.name||userEmail()));notify('Task sent to student.');await load();render();
 }
 function distributePanel(){
  const team=cache.teams.find(t=>t.inchargeUid===uid()),members=team?Object.keys(team.members||{}):[];
@@ -18989,7 +19003,7 @@ async function submitStudent(taskId){
  const hist=[...(task.history||[]),{status:'SUBMITTED',at:entry.submittedAt,by:uid(),remarks}];
  await api().update(r(`simple_tasks/${taskId}`),{submission:entry,history:hist,status:'SUBMITTED',updatedAt:stamp()});
  await api().set(r(`simple_student_tasks/${uid()}/${taskId}`),{taskId,workId:active(),teamId:task.teamId,title:task.title,description:task.description,deadline:task.deadline,status:'SUBMITTED',inchargeUid:task.inchargeUid,submission:{fileName:file.name,remarks,submittedAt:entry.submittedAt}});
- await audit('STUDENT_SUBMITTED',`${task.title}: ${file.name}`,uid());notify('Your work has been submitted to the Team In-charge.');await load();render();
+ await audit('STUDENT_SUBMITTED',`${task.title}: ${file.name}`,uid());const lead=cache.users.find(u=>u.uid===task.inchargeUid);await workflowMail(mailOf(lead),'Student Submission Received: '+task.title,'STUDENT SUBMISSION RECEIVED','Student: '+(task.targetName||userEmail())+'\nTask: '+task.title+'\nFile: '+file.name+'\nRemarks: '+(remarks||'None')+'\nPlease review the submission in the MRPSP portal.');notify('Your work has been submitted to the Team In-charge.');await load();render();
 }
 function studentPanel(){
  const mine=cache.tasks.filter(t=>t.targetUid===uid());
@@ -19003,7 +19017,7 @@ async function reviewTask(id,approve){
  const status=approve?'INCHARGE_VERIFIED':'CORRECTION_REQUESTED',hist=[...(t.history||[]),{status,at:stamp(),by:uid(),feedback}];
  await api().update(r(`simple_tasks/${id}`),{status,feedback,history:hist,verifiedAt:approve?stamp():null,updatedAt:stamp()});
  await api().update(r(`simple_student_tasks/${t.targetUid}/${id}`),{status,feedback});
- await audit(approve?'TASK_VERIFIED':'CORRECTION_REQUESTED',`${t.title}: ${feedback}`,t.targetUid);await load();render();
+ await audit(approve?'TASK_VERIFIED':'CORRECTION_REQUESTED',`${t.title}: ${feedback}`,t.targetUid);const student=cache.users.find(u=>u.uid===t.targetUid);await workflowMail(mailOf(student),'Task '+(approve?'Approved':'Correction Required')+': '+t.title,approve?'TASK APPROVED':'TASK REJECTED / CORRECTION REQUIRED','Your task was '+(approve?'approved by the Team In-charge.':'returned for correction by the Team In-charge.')+'\nTask: '+t.title+'\nReason / feedback: '+(feedback||'No additional remarks.')+'\nPlease sign in to the MRPSP portal to view the updated status.');await load();render();
 }
 window.swReviewTask=reviewTask;
 function verifyPanel(){
@@ -19021,7 +19035,7 @@ window.swFinalSubmit=async()=>{
  if(!/\.(ppt|pptx|pdf)$/i.test(f.name))return notify('Only PPT, PPTX and PDF files are accepted.');
  if(f.size>8*1024*1024)return notify('Final file exceeds 8 MB. Please compress it.');
  const payload={teamId:team.id,teamName:team.teamName,inchargeUid:uid(),fileData:await fileRead(f),fileName:f.name,note:$('swFinalNote').value.trim(),status:'SUBMITTED_TO_PH',submittedAt:stamp(),history:[{status:'SUBMITTED_TO_PH',at:stamp(),by:uid()}]};
- await api().set(r(`simple_final_submissions/${team.id}`),payload);await audit('FINAL_SUBMITTED_TO_PH',`${team.teamName}: ${f.name}`);notify('Final submission sent to PH/Admin.');await load();render();
+ await api().set(r(`simple_final_submissions/${team.id}`),payload);await audit('FINAL_SUBMITTED_TO_PH',`${team.teamName}: ${f.name}`);await workflowMail(phEmails(),'Final Team Submission Awaiting PH Review: '+team.teamName,'FINAL SUBMISSION RECEIVED','Team: '+team.teamName+'\nFile: '+f.name+'\nIn-charge: '+(window.currentUser?.name||userEmail())+'\nNote: '+(payload.note||'None')+'\nPlease review and approve or reject the final document in the MRPSP portal.');notify('Final submission sent to PH/Admin.');await load();render();
 };
 function finalReviewPanel(){
  return `<section class="sw-panel"><h3>Final submissions from teams</h3>${cache.finals.map(f=>`<div class="sw-item"><h4>${esc(f.teamName||f.id)}</h4><p class="sw-muted">${esc(f.fileName||'')} · ${dateText(f.submittedAt)}</p><a href="${f.fileData}" download="${esc(f.fileName||'final-submission')}">Download final file</a><p>${esc(f.note||'')}</p><span class="sw-pill ${f.status==='ACCEPTED'?'ok':f.status==='REJECTED'?'bad':'warn'}">${esc(f.status)}</span><label>PH/Admin feedback</label><textarea id="swFinalFeedback_${f.id}">${esc(f.feedback||'')}</textarea><div class="sw-row"><button class="sw-btn green" onclick="window.swReviewFinal('${f.id}','ACCEPTED')">ACCEPT</button><button class="sw-btn red" onclick="window.swReviewFinal('${f.id}','REJECTED')">REJECT WITH FEEDBACK</button></div></div>`).join('')||'<p class="sw-muted">No final team submissions yet.</p>'}</section>`;
@@ -19029,7 +19043,7 @@ function finalReviewPanel(){
 window.swReviewFinal=async(teamId,status)=>{
  const feedback=$(`swFinalFeedback_${teamId}`)?.value.trim()||'';if(status==='REJECTED'&&!feedback)return notify('Enter feedback before rejecting.');
  const p={status,feedback,reviewedAt:stamp(),reviewedBy:uid()};
- await api().update(r(`simple_final_submissions/${teamId}`),p);await audit(`FINAL_${status}`,`${teamId}: ${feedback}`);await load();render();
+ await api().update(r(`simple_final_submissions/${teamId}`),p);await audit(`FINAL_${status}`,`${teamId}: ${feedback}`);const finalItem=cache.finals.find(x=>x.id===teamId),lead=cache.users.find(u=>u.uid===finalItem?.inchargeUid);if(status==='ACCEPTED'){await workflowMail(hodEmails(),'PH Approved Final Submission: '+(finalItem?.teamName||teamId),'PH APPROVAL - HOD REVIEW REQUIRED','PH has approved the final team document. Team: '+(finalItem?.teamName||teamId)+'\nFile: '+(finalItem?.fileName||'')+'\nPH remarks: '+(feedback||'Approved without remarks')+'\nPlease complete the HOD-level review in the MRPSP portal.');await workflowMail(mailOf(lead),'Final Submission Approved by PH','PH APPROVED','Your final team document has been approved by PH and forwarded for HOD-level review. Remarks: '+(feedback||'No additional remarks.'));}else{await workflowMail(mailOf(lead),'Final Submission Returned: '+(finalItem?.teamName||teamId),'PH REJECTED FINAL SUBMISSION','PH has returned your final document. Reason: '+feedback+'\nPlease review the feedback and upload a corrected final document.');}await load();render();
 };
 function progressPanel(){
  return `<section class="sw-panel"><h3>Team and individual progress</h3>${cache.teams.map(t=>{const tasks=cache.tasks.filter(x=>x.teamId===t.id),verified=tasks.filter(x=>x.status==='INCHARGE_VERIFIED').length;return `<div class="sw-item"><h4>${esc(t.teamName)}</h4><p class="sw-muted">In-charge: ${esc(cache.users.find(u=>u.uid===t.inchargeUid)?.name||t.inchargeUid)} · ${verified}/${tasks.length} verified</p>${tasks.map(x=>`<div class="sw-row"><span>${esc(x.targetName)} · ${esc(x.title)}</span><span class="sw-pill">${esc(x.status)}</span></div>`).join('')}</div>`;}).join('')||'<p class="sw-muted">No teams created.</p>'}</section>`;
