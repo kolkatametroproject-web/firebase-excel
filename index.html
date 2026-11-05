@@ -8986,28 +8986,7 @@ window.printAssetTag = () => {
     win.document.write('<style>body{text-align:center;font-family:sans-serif;padding:20px;} img{max-width:100%;}</style>');
     win.document.write('</head><body>');
     win.document.write(printContent);
-    win.document.write('<script id="wf-final-stage-guard">
-(function(){
- const tab=document.getElementById('tab-workflow');
- if(!tab)return;
- const apply=function(){
-   const m=(document.getElementById('wfWizardStepBadge')?.textContent||'').match(/STEP\\s+(\\d+)/i);
-   const step=m?Number(m[1]):1;
-   tab.querySelectorAll('.wf-wizard-stage[data-wf-step]').forEach(el=>{
-     const active=Number(el.dataset.wfStep)===step;
-     el.classList.toggle('wf-stage-active',active);
-     el.style.setProperty('display',active?'block':'none','important');
-   });
- };
- const prior=window.wfShowWizardStep;
- if(typeof prior==='function')window.wfShowWizardStep=function(n){prior.call(this,n);apply();};
- document.addEventListener('DOMContentLoaded',apply);
- const oldSwitch=window.switchTab;
- if(typeof oldSwitch==='function')window.switchTab=function(){const r=oldSwitch.apply(this,arguments);if(arguments[0]==='workflow')apply();return r;};
-})();
-</script>
-
-</body></html>');
+    win.document.write('</body></html>');
     win.document.close();
     win.focus();
     setTimeout(() => { win.print(); win.close(); }, 500);
@@ -18219,7 +18198,7 @@ window.handleFaceScan=async function(){
   // Live tracking and collaboration are available to all authenticated project users.
   let wfLiveTrackingBound=false;
   const originalLoadWorkflows=window.loadWorkflows;
-  window.loadWorkflows=async()=>{await originalLoadWorkflows();await wfLoadTracking();await wfLoadCollaboration();};
+  window.loadWorkflows=async()=>{await originalLoadWorkflows();if(window.wfActiveWorkId){await wfLoadTracking();await wfLoadCollaboration();}};
   const wfBindLiveTracking=()=>{
     if(wfLiveTrackingBound||!window.wfActiveWorkId)return;
     wfLiveTrackingBound=true;
@@ -18232,6 +18211,7 @@ window.handleFaceScan=async function(){
       console.warn('Workflow live listeners will bind after a work item is selected.',e);
     }
   };
+  window.wfBindLiveTracking=wfBindLiveTracking;
 })();
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
@@ -18305,7 +18285,7 @@ window.handleFaceScan=async function(){
     try{if(id)localStorage.setItem('mrpsp_active_work_id',id);else localStorage.removeItem('mrpsp_active_work_id');}catch(e){}
     const banner=document.getElementById('wfActiveWorkBanner');if(banner){banner.style.display=id?'block':'none';banner.textContent=id?`ACTIVE WORK: ${data?.title||id}`:'';}
     const editBtn=document.getElementById('wfEditMainWork');if(editBtn)editBtn.style.display=id&&typeof canManageTeams==='function'&&canManageTeams()?'inline-flex':'none';
-    if(id&&typeof wfBindLiveTracking==='function')wfBindLiveTracking();
+    if(id&&typeof window.wfBindLiveTracking==='function')window.wfBindLiveTracking();
     if(id&&window.wfLoadTeamSetup)await window.wfLoadTeamSetup();
     if(id&&window.wfLoadTeamAssignments)await window.wfLoadTeamAssignments();
     if(window.wfLoadWorkItems)await window.wfLoadWorkItems();
@@ -18331,12 +18311,12 @@ window.handleFaceScan=async function(){
   window.wfEditingMainWork=false;
   window.wfEditMainWork=()=>{if(!window.wfActiveWorkId||!window.wfActiveWorkData)return alert('Select a work item first.');const w=window.wfActiveWorkData;if(Number(w.editCount||0)>=4)return alert('This work item has reached its maximum of 4 edits.');document.getElementById('wfMainWorkTitle').value=w.title||'';document.getElementById('wfMainWorkDescription').value=w.description||'';document.getElementById('wfMainWorkDeadline').value=w.deadline?new Date(w.deadline).toLocaleString('sv-SE').replace(' ','T').slice(0,16):'';document.getElementById('wfMainWorkReference').value=w.reference||'';window.wfEditingMainWork=true;const c=document.getElementById('wfWorkEditCounter');if(c)c.textContent=`Edit ${Number(w.editCount||0)+1} of 4 available.`;window.wfShowWizardStep(1);};
   window.wfSaveMainWork=async()=>{if(typeof canManageTeams!=='function'||!canManageTeams())return alert('Only PH/Admin can create or edit main work.');const title=document.getElementById('wfMainWorkTitle').value.trim(),description=document.getElementById('wfMainWorkDescription').value.trim(),deadlineValue=document.getElementById('wfMainWorkDeadline').value,reference=document.getElementById('wfMainWorkReference').value.trim();if(!title||!description)return alert('Work title and description are mandatory.');const deadline=deadlineValue?new Date(deadlineValue).getTime():null;if(deadlineValue&&(!Number.isFinite(deadline)||deadline<=Date.now()))return alert('Overall deadline must be in the future.');try{
-    if(window.wfEditingMainWork){const old=window.wfActiveWorkData||{},count=Number(old.editCount||0);if(count>=4)return alert('This work item has reached its maximum of 4 edits.');const changed=title!==(old.title||'')||description!==(old.description||'')||deadline!==(old.deadline||null)||reference!==(old.reference||'');if(!changed)return alert('No changes detected.');const updated={...old,title,description,deadline,reference,editCount:count+1,updatedAt:Date.now(),updatedBy:currentUser?.uid||''};await update(projectAwareRef(`${ROOT}/${window.wfActiveWorkId}`),updated);window.wfActiveWorkData=updated;alert(`Main work updated. ${4-updated.editCount} edit(s) remaining.`);}
-    else{const record={title,description,deadline,reference,editCount:0,createdAt:Date.now(),createdBy:currentUser?.uid||'',createdByEmail:currentUser?.email||'',updatedAt:Date.now()};const ref=await push(projectAwareRef(ROOT),record);await window.wfSetActiveWork(ref.key,record);alert('Main work created. Continue to Step 2 to create its teams.');}
+    if(window.wfEditingMainWork){const old=window.wfActiveWorkData||{},count=Number(old.editCount||0);if(count>=4)return alert('This work item has reached its maximum of 4 edits.');const changed=title!==(old.title||'')||description!==(old.description||'')||deadline!==(old.deadline||null)||reference!==(old.reference||'');if(!changed)return alert('No changes detected.');const updated={...old,title,description,deadline,reference,editCount:count+1,updatedAt:Date.now(),updatedBy:window.currentUser?.uid||''};await update(projectAwareRef(`${ROOT}/${window.wfActiveWorkId}`),updated);window.wfActiveWorkData=updated;alert(`Main work updated. ${4-updated.editCount} edit(s) remaining.`);}
+    else{const record={title,description,deadline,reference,editCount:0,createdAt:Date.now(),createdBy:window.currentUser?.uid||'',createdByEmail:window.currentUser?.email||'',updatedAt:Date.now()};const ref=await push(projectAwareRef(ROOT),record);await window.wfSetActiveWork(ref.key,record);alert('Main work created. Continue to Step 2 to create its teams.');}
     window.wfEditingMainWork=false;await window.wfLoadWorkItems();if(window.wfActiveWorkId)window.wfShowWizardStep(2);
   }catch(e){alert('Could not save main work: '+(e.message||e));}};
   window.wfDeleteMainWork=async id=>{if(typeof canManageTeams!=='function'||!canManageTeams())return alert('Only PH/Admin can delete work.');const snap=await get(projectAwareRef(`${ROOT}/${id}`));if(!snap.exists())return alert('Work item not found.');const w=snap.val()||{},title=String(w.title||'Untitled work');if(!confirm(`FIRST CONFIRMATION\n\nPermanently delete "${title}" and ALL associated data: teams, assignments, student tasks, submissions, activity logs, messages and shared resources?\n\nThis cannot be undone. Continue?`))return;if(!confirm(`SECOND CONFIRMATION\n\nConfirm permanent deletion of every record belonging to "${title}".`))return;const typed=prompt(`TYPE THE EXACT WORK TITLE TO DELETE:\n\n${title}`);if(typed!==title)return alert('Work title did not match. Nothing was deleted.');try{await remove(projectAwareRef(`${ROOT}/${id}`));if(window.wfActiveWorkId===id)await window.wfSetActiveWork(null,null);await window.wfLoadWorkItems();window.wfShowWizardStep(1);alert(`"${title}" and all data stored under this work item have been deleted.`);}catch(e){alert('Deletion failed: '+(e.message||e));}};
-  window.wfInitWorkItems=async()=>{if(!(window.currentUser?.uid||currentUser?.uid))return;await window.wfLoadWorkItems();let saved=null;try{saved=localStorage.getItem('mrpsp_active_work_id');}catch(e){}if(saved){const snap=await get(projectAwareRef(`${ROOT}/${saved}`));if(snap.exists())await window.wfSetActiveWork(saved,snap.val());}if(!window.wfActiveWorkId){const all=await get(projectAwareRef(ROOT));if(all.exists()){let first=null;all.forEach(c=>{if(!first)first={id:c.key,data:c.val()||{}};});if(first)await window.wfSetActiveWork(first.id,first.data);}}if(!window.wfActiveWorkId&&typeof canManageTeams==='function'&&canManageTeams())window.wfShowWizardStep(1);};
+  window.wfInitWorkItems=async()=>{if(!window.currentUser?.uid)return;await window.wfLoadWorkItems();let saved=null;try{saved=localStorage.getItem('mrpsp_active_work_id');}catch(e){}if(saved){const snap=await get(projectAwareRef(`${ROOT}/${saved}`));if(snap.exists())await window.wfSetActiveWork(saved,snap.val());}if(!window.wfActiveWorkId){const all=await get(projectAwareRef(ROOT));if(all.exists()){let first=null;all.forEach(c=>{if(!first)first={id:c.key,data:c.val()||{}};});if(first)await window.wfSetActiveWork(first.id,first.data);}}if(!window.wfActiveWorkId&&typeof canManageTeams==='function'&&canManageTeams())window.wfShowWizardStep(1);};
 })();
 </script>
 
@@ -18383,14 +18363,14 @@ window.handleFaceScan=async function(){
     if(tab==='queue'&&typeof window.loadWorkflows==='function')window.loadWorkflows();
   };
   window.wfLoadTeamMemberStatus=async function(){
-    const host=$('wfTeamMemberStatus');if(!host||!currentUser?.uid)return;
+    const host=$('wfTeamMemberStatus');if(!host||!window.currentUser?.uid)return;
     host.innerHTML='<p class="wf-help">Loading team status…</p>';
     try{
       const [teamSnap,taskSnap,userSnap]=await Promise.all([
         get(wfScopedRef('workflow_teams')),get(wfScopedRef('workflows')),get(projectAwareRef('users'))
       ]);
       const teams=teamSnap.exists()?teamSnap.val():{};
-      const myTeamId=Object.keys(teams).find(id=>teams[id]?.inchargeUid===currentUser.uid || (Array.isArray(teams[id]?.memberUids)&&teams[id].memberUids.includes(currentUser.uid)));
+      const myTeamId=Object.keys(teams).find(id=>teams[id]?.inchargeUid===window.currentUser.uid || (Array.isArray(teams[id]?.memberUids)&&teams[id].memberUids.includes(window.currentUser.uid)));
       const team=teams[myTeamId]||{};
       const memberIds=Array.isArray(team.memberUids)?team.memberUids:[];
       const users={};if(userSnap.exists())userSnap.forEach(c=>users[c.key]=c.val()||{});
