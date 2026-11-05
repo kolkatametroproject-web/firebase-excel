@@ -18632,6 +18632,9 @@ window.handleFaceScan=async function(){
   const $=id=>document.getElementById(id);
   const escRole=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const isManager=()=>{
+    // A user explicitly assigned as a team in-charge must receive the in-charge
+    // workspace even if a broad legacy admin flag is also present on the profile.
+    if(window.wfIsTeamIncharge===true) return false;
     try{
       if(typeof window.wfCanManageMainWork==='function') return !!window.wfCanManageMainWork();
       if(typeof window.canManageTeams==='function') return !!window.canManageTeams();
@@ -18642,8 +18645,11 @@ window.handleFaceScan=async function(){
   let originalLoad=window.loadWorkflows;
   let originalTeamSetup=window.wfLoadTeamSetup;
   function roleOfUser(){
+    // Team membership is resolved from workflow_teams by wfLoadTeamSetup.
+    // Give that explicit assignment priority over generic profile/admin flags.
+    if(window.wfIsTeamIncharge===true) return 'incharge';
     if(isManager()) return 'manager';
-    return window.wfIsTeamIncharge===true?'incharge':'student';
+    return 'student';
   }
   function currentWork(){
     const w=window.wfActiveWorkData||{};
@@ -18775,7 +18781,7 @@ window.handleFaceScan=async function(){
     window.wfLoadTeamSetup=async function(){
       const result=await originalTeamSetup.apply(this,arguments);
       const panel=$('wfTeamSetupPanel');
-      if(panel)panel.style.setProperty('display',isManager()&&Number(window.wfActiveStep||1)===2?'block':'none','important');
+      if(panel)panel.style.setProperty('display',isManager()&&window.wfIsTeamIncharge!==true&&Number(window.wfActiveStep||1)===2?'block':'none','important');
       return result;
     };
   }
@@ -18796,9 +18802,14 @@ window.handleFaceScan=async function(){
   if(typeof priorStep==='function'){
     window.wfShowWizardStep=function(step){
       const result=priorStep.apply(this,arguments);
-      if(isManager()){
+      if(isManager() && window.wfIsTeamIncharge!==true){
         const panel=$('wfTeamSetupPanel');
         if(panel)panel.style.setProperty('display',Number(window.wfActiveStep)===2?'block':'none','important');
+      } else if(window.wfIsTeamIncharge===true){
+        const panel=$('wfTeamSetupPanel');if(panel)panel.style.setProperty('display','none','important');
+        const header=$('wfWizardHeader');if(header)header.style.setProperty('display','none','important');
+        const wizard=$('wfWizardView');if(wizard)wizard.style.setProperty('display','none','important');
+        applyRoleView();
       }
       return result;
     };
@@ -18929,5 +18940,31 @@ window.handleFaceScan=async function(){
 })();
 </script>
 
+
+<script id="wf-incharge-screen-guard">
+(function(){
+  'use strict';
+  function enforceInchargeOnlyView(){
+    if(window.wfIsTeamIncharge!==true) return;
+    const hide=id=>{const el=document.getElementById(id);if(el)el.style.setProperty('display','none','important');};
+    hide('wfWizardHeader');hide('wfWizardView');hide('wfTeamSetupPanel');
+    const root=document.getElementById('wfRoleWorkspace');
+    if(root){root.style.setProperty('display','block','important');}
+  }
+  document.addEventListener('DOMContentLoaded',enforceInchargeOnlyView);
+  const originalLoad=window.loadWorkflows;
+  if(typeof originalLoad==='function')window.loadWorkflows=async function(){
+    const result=await originalLoad.apply(this,arguments);
+    enforceInchargeOnlyView();
+    return result;
+  };
+  const originalSet=window.wfSetActiveWork;
+  if(typeof originalSet==='function')window.wfSetActiveWork=async function(){
+    const result=await originalSet.apply(this,arguments);
+    enforceInchargeOnlyView();
+    return result;
+  };
+})();
+</script>
 </body>
 </html>
