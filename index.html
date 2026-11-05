@@ -18720,18 +18720,32 @@ window.swSection=id=>{activeSection=id;render();};
 window.swRefresh=async()=>{await load();render();};
 async function load(){
  if(!uid()||!window.activeProject)return;
- const g=async path=>{const s=await api().get(dbref(path));return s.exists()?s.val():null;};
- const [w,tasks,teams,users,finals]=await Promise.all([
-  g(''),g(`${active()||'__none__'}/simple_tasks`),g(`${active()||'__none__'}/simple_teams`),api().get(api().ref(window.db,'users')),g(`${active()||'__none__'}/simple_final_submissions`)
- ]);
- cache.works=[];const ws=await api().get(dbref(''));if(ws.exists())ws.forEach(c=>cache.works.push({id:c.key,...(c.val()||{})}));
- cache.teams=teams?Object.entries(teams).map(([id,v])=>({id,...v})):[];cache.tasks=tasks?Object.entries(tasks).map(([id,v])=>({id,...v})):[];cache.finals=finals?Object.entries(finals).map(([id,v])=>({id,...v})):[];
- cache.users=[];if(users.exists())users.forEach(c=>{const u=c.val()||{};if(u.email)cache.users.push({uid:c.key,name:u.name||u.fullName||u.email,email:u.email,role:u.role||u.userRole||''});});
+ const snap=await api().get(dbref(''));
+ const all=snap.exists()?snap.val():{};
+ cache.works=Object.entries(all).filter(([id,v])=>v&&typeof v==='object'&&(v.title||v.workTitle)).map(([id,v])=>({id,...v}));
+ const usersSnap=await api().get(api().ref(window.db,'users'));
+ cache.users=[];if(usersSnap.exists())usersSnap.forEach(c=>{const u=c.val()||{};cache.users.push({uid:c.key,name:u.name||u.fullName||u.displayName||u.email||c.key,email:u.email||'',role:u.role||u.userRole||''});});
  cache.users.sort((a,b)=>a.name.localeCompare(b.name));
- if(active()&&!cache.works.some(w=>w.id===active()))window.swWorkId=null;
- if(!active()&&cache.works.length&&role()!=='admin'){const me=uid();const t=cache.teams.find(x=>x.inchargeUid===me||Object.keys(x.members||{}).includes(me));if(t){window.swWorkId=cache.works[0].id;}}
- if(active())setRoleFromTeams();
+ const me=uid();
+ const memberships=[];
+ for(const w of cache.works){
+  const node=all[w.id]||{};
+  const teams=Object.entries(node.simple_teams||{}).map(([id,v])=>({id,...(v||{}),workId:w.id}));
+  const tasks=Object.entries(node.simple_tasks||{}).map(([id,v])=>({id,...(v||{}),workId:w.id}));
+  if(teams.some(t=>t.inchargeUid===me)||tasks.some(t=>t.targetUid===me))memberships.push(w.id);
+ }
+ if(admin())window.swRole='admin';
+ else {
+  const mine=cache.works.find(w=>{const n=all[w.id]||{};return Object.values(n.simple_teams||{}).some(t=>t?.inchargeUid===me);});
+  window.swRole=mine?'incharge':'student';
+  if(!active()||!memberships.includes(active()))window.swWorkId=memberships[0]||null;
+ }
+ const selected=active()&&all[active()]?all[active()]:{};
+ cache.teams=Object.entries(selected.simple_teams||{}).map(([id,v])=>({id,...(v||{}),workId:active()}));
+ cache.tasks=Object.entries(selected.simple_tasks||{}).map(([id,v])=>({id,...(v||{}),workId:active()}));
+ cache.finals=Object.entries(selected.simple_final_submissions||{}).map(([id,v])=>({id,...(v||{})}));
 }
+
 async function audit(action,details,targetUid){
  try{await api().push(r('simple_history'),{action,details,actorUid:uid(),actorEmail:userEmail(),targetUid:targetUid||null,at:stamp()});}catch(e){console.warn('History log failed',e);}
 }
@@ -18772,7 +18786,7 @@ function teamsPanel(){
  return `<section class="sw-panel"><h3>Create and manage teams</h3><p class="sw-muted">Each team has one in-charge. A student can be assigned to only one team for this Main Work.</p><div id="swTeamCards">${teams.map(t=>teamCard(t,people)).join('')||teamCard({id:'team_'+Date.now(),teamName:'Team 1',members:{}},people)}</div><button class="sw-btn grey" onclick="window.swAddTeam()">+ ADD TEAM</button><button class="sw-btn green" onclick="window.swSaveTeams()">SAVE TEAMS</button></section>`;
 }
 function teamCard(t,people){return `<div class="sw-item" data-sw-team="${esc(t.id)}"><div class="sw-grid"><div><label>Team name</label><input data-name value="${esc(t.teamName||'')}"></div><div><label>Team in-charge</label><select data-lead><option value="">Select in-charge</option>${people.map(u=>`<option value="${esc(u.uid)}" ${u.uid===t.inchargeUid?'selected':''}>${esc(u.name)} (${esc(u.email)})</option>`).join('')}</select></div></div><label>Team members</label><div class="sw-checks">${people.filter(u=>u.uid!==t.inchargeUid).map(u=>`<label><input data-member type="checkbox" value="${esc(u.uid)}" ${t.members?.[u.uid]?'checked':''}>${esc(u.name)} <small>${esc(u.email)}</small></label>`).join('')}</div></div>`;}
-window.swAddTeam=()=>{$('swTeamCards').insertAdjacentHTML('beforeend',teamCard({id:'team_'+Date.now(),teamName:'New Team',members:{}},cache.users.filter(u=>u.uid!==uid()));};
+window.swAddTeam=()=>{$('swTeamCards').insertAdjacentHTML('beforeend',teamCard({id:'team_'+Date.now(),teamName:'New Team',members:{}},cache.users.filter(u=>u.uid!==uid())));};
 window.swSaveTeams=saveTeams;
 async function assignTask(){
  if(role()!=='incharge')return notify('Only the assigned Team In-charge can distribute tasks.');
@@ -18862,12 +18876,16 @@ function render(){
  $('swBody').innerHTML=(panel||workPanel)();
  if(activeSection==='history')renderHistory();
 }
-window.wfInitWorkItems=async function(){if(!uid()||!window.activeProject)return;mount();window.swWorkId=null;await load();if(role()==='admin'){activeSection='work';}else{const team=cache.teams.find(t=>t.inchargeUid===uid());const task=cache.tasks.find(t=>t.targetUid===uid());window.swWorkId=team?.workId||task?.workId||cache.works[0]?.id||null;activeSection=role()==='incharge'?'work':'work';}await load();render();};
+window.wfInitWorkItems=async function(){if(!uid()||!window.activeProject)return;mount();if(role()==='admin'){window.swWorkId=window.swWorkId||null;activeSection='work';}else{window.swWorkId=null;}await load();if(role()==='admin'&&!active()){window.swWorkId=cache.works[0]?.id||null;await load();}render();};
 const originalSetActive=window.wfSetActiveWork;
 window.wfSetActiveWork=async function(id,data){window.swWorkId=id||null;mount();await load();render();return typeof originalSetActive==='function'?undefined:undefined;};
 window.wfShowDashboard=function(){mount();load().then(render);};
 window.wfOpenWizard=function(){window.wfShowDashboard();};
 window.swBoot=async()=>{if(!uid()||!window.activeProject)return;await window.wfInitWorkItems();};
+const activateWorkflow=()=>{if(uid()&&window.activeProject){window.swBoot().catch(e=>console.error('Workflow load failed',e));}};
+document.addEventListener('click',e=>{if(e.target.closest('#tab-workflow,[data-tab=\"workflow\"],[onclick*=\"workflow\"]'))setTimeout(activateWorkflow,0);});
+window.addEventListener('wf-firebase-api-ready',activateWorkflow);
+window.addEventListener('load',()=>{if(document.getElementById('tab-workflow')?.offsetParent!==null)activateWorkflow();});
 document.addEventListener('click',e=>{if(e.target.closest('[data-tab="workflow"],[onclick*="workflow"]'))setTimeout(()=>{if(uid()&&window.activeProject&&!$('swBody'))mount();},50);});
 window.addEventListener('wf-firebase-api-ready',()=>{if(uid()&&window.activeProject)window.swBoot();});
 })();
