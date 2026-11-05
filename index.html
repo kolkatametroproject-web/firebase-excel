@@ -3259,8 +3259,8 @@ tr:hover { background: #fcfcfd; }
             
             <!-- Row 1 -->
             <div>
-                <label style="font-size:11px; font-weight:bold; color:#0f172a; display:block; margin-bottom:5px;">Assign To</label>
-                <select id="wfAssignUser" style="margin:0; width:100%; border:2px solid var(--metro-red); border-radius:6px; height:42px; background:white; font-weight:500;"></select>
+                <label style="font-size:11px; font-weight:bold; color:#0f172a; display:block; margin-bottom:5px;">Assign To Team</label>
+                <select id="wfAssignTeam" style="margin:0; width:100%; border:2px solid var(--metro-red); border-radius:6px; height:42px; background:white; font-weight:500;"><option value="ALL">All 3 Teams</option></select>
             </div>
             
             <div>
@@ -3284,6 +3284,16 @@ tr:hover { background: #fcfcfd; }
         </div>
     </div>
 
+    <div class="panel" id="wfTeamSetupPanel" style="display:none; border-top:4px solid #0f766e;">
+        <h3 style="margin-top:0;"><i class="fas fa-people-group"></i> Team Structure Management</h3>
+        <p style="color:#64748b;font-size:12px;">Create exactly three teams. Each team has one in-charge and its assigned students. The in-charge distributes the tasks to selected team members.</p>
+        <div id="wfTeamCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;"></div>
+        <button onclick="window.wfSaveTeams()" class="success" style="margin-top:12px;width:100%;font-weight:900;">SAVE THREE-TEAM STRUCTURE</button>
+    </div>
+    <div class="panel" id="wfTeamAssignmentPanel" style="border-top:4px solid #2563eb;">
+        <h3 style="margin-top:0;"><i class="fas fa-inbox"></i> Team Assignment & Distribution Queue</h3>
+        <div id="wfTeamAssignmentList"><p style="color:#64748b;">Loading team assignments...</p></div>
+    </div>
     <div class="panel">
         <h3><i class="fas fa-clipboard-list"></i> Active Workflows</h3>
         <div class="table-wrapper">
@@ -8814,7 +8824,10 @@ window.printAssetTag = () => {
     win.document.write('<style>body{text-align:center;font-family:sans-serif;padding:20px;} img{max-width:100%;}</style>');
     win.document.write('</head><body>');
     win.document.write(printContent);
-    win.document.write('</body></html>');
+    win.document.write('
+
+
+</body></html>');
     win.document.close();
     win.focus();
     setTimeout(() => { win.print(); win.close(); }, 500);
@@ -17608,6 +17621,298 @@ window.handleFaceScan=async function(){
   }catch(e){updateStatus('❌ '+(e.message||e),'red');alert('Check-out not completed: '+(e.message||e));btn.disabled=false;btn.textContent='📸 IDENTIFY & COMPLETE ISSUE';}
 };
 
+
+
+// THREE-TEAM WORKFLOW EXTENSION (shares the Firebase/auth module scope)
+
+// ==========================================
+// THREE-TEAM WORKFLOW EXTENSION
+// Flow: PH -> Team In-charge -> Student -> In-charge Review -> PH Review -> HOD Review
+// ==========================================
+(() => {
+  const TEAM_IDS = ['TEAM_1','TEAM_2','TEAM_3'];
+  const $ = id => document.getElementById(id);
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const myEmail = () => (currentUser?.email || '').toLowerCase();
+  const isPHUser = () => (window.PH_EMAILS || []).some(e => String(e).toLowerCase() === myEmail());
+  const isHODUser = () => (window.HOD_EMAILS || []).some(e => String(e).toLowerCase() === myEmail());
+  const isWorkflowAdmin = () => (typeof isAdmin !== 'undefined' && isAdmin === true) || (typeof ADMIN_EMAILS !== 'undefined' && ADMIN_EMAILS.some(e => String(e).toLowerCase() === myEmail()));
+  const canManageTeams = () => isWorkflowAdmin() || isPHUser();
+  const getUserEmail = async uid => {
+    const snap = await get(projectAwareRef(`users/${uid}`));
+    const u = snap.exists() ? snap.val() : {};
+    return { email: u.personalEmail1 || u.personalEmail2 || u.email || '', name: u.name || u.email || 'Member' };
+  };
+  const sendRoleMail = async (emails, title, desc, status, remarks) => {
+    const unique = [...new Set((emails || []).map(e => String(e || '').trim()).filter(Boolean))];
+    for (const email of unique) {
+      try { await window.sendStatusEmailNotification(email, 'MRPSP Team', desc, status, remarks || 'Please log in to the MRPSP portal for details.'); }
+      catch (e) { console.warn('Workflow notification failed for', email, e); }
+    }
+  };
+  const loadUsers = async () => {
+    const snap = await get(projectAwareRef('users'));
+    const users = [];
+    if (snap.exists()) snap.forEach(c => {
+      const u = c.val() || {};
+      if (u.email && !(ADMIN_EMAILS || []).some(e => String(e).toLowerCase() === String(u.email).toLowerCase()))
+        users.push({ uid:c.key, name:u.name || u.email, email:u.email });
+    });
+    return users.sort((a,b) => a.name.localeCompare(b.name));
+  };
+  const teamOptionHtml = (users, selected='') => `<option value="">-- Select User --</option>` + users.map(u => `<option value="${esc(u.uid)}" ${u.uid===selected?'selected':''}>${esc(u.name)} (${esc(u.email)})</option>`).join('');
+
+  window.wfLoadTeamSetup = async () => {
+    const panel = $('wfTeamSetupPanel');
+    if (!panel) return;
+    panel.style.display = canManageTeams() ? 'block' : 'none';
+    if (!canManageTeams()) return;
+    try {
+      const [users, teamSnap] = await Promise.all([loadUsers(), get(projectAwareRef('workflow_teams'))]);
+      const saved = teamSnap.exists() ? teamSnap.val() : {};
+      const cards = $('wfTeamCards');
+      cards.innerHTML = TEAM_IDS.map((id, i) => {
+        const t = saved[id] || {};
+        const memberIds = Array.isArray(t.memberUids) ? t.memberUids : [];
+        return `<div style="border:1px solid #cbd5e1;border-radius:9px;padding:12px;background:#f8fafc;">
+          <h4 style="margin:0 0 8px;color:#0f766e;">TEAM ${i+1}</h4>
+          <label style="font-size:11px;font-weight:800;">TEAM IN-CHARGE</label>
+          <select id="wfTeamLead_${id}" style="width:100%;margin:4px 0 10px;">${teamOptionHtml(users,t.inchargeUid||'')}</select>
+          <label style="font-size:11px;font-weight:800;">ASSIGNED STUDENTS (MULTI-SELECT)</label>
+          <select id="wfTeamMembers_${id}" multiple size="6" style="width:100%;margin-top:4px;min-height:120px;">${users.map(u=>`<option value="${esc(u.uid)}" ${memberIds.includes(u.uid)?'selected':''}>${esc(u.name)} (${esc(u.email)})</option>`).join('')}</select>
+          <small style="color:#64748b;">Hold Ctrl (Windows) or Cmd (Mac) to select multiple students.</small>
+        </div>`;
+      }).join('');
+      const assign = $('wfAssignTeam');
+      if (assign) assign.innerHTML = `<option value="ALL">All 3 Teams</option>` + TEAM_IDS.map((id,i)=>`<option value="${id}">Team ${i+1}</option>`).join('');
+    } catch (e) { console.error('Team setup load failed', e); }
+  };
+
+  window.wfSaveTeams = async () => {
+    if (!canManageTeams()) return alert('Only PH/Admin can configure teams.');
+    try {
+      const teams = {};
+      const usedLeads = new Set();
+      const usedMembers = new Set();
+      for (let i=0;i<TEAM_IDS.length;i++) {
+        const id=TEAM_IDS[i], lead=$(`wfTeamLead_${id}`)?.value;
+        const members=[...($(`wfTeamMembers_${id}`)?.selectedOptions || [])].map(o=>o.value);
+        if (!lead) return alert(`Please select an in-charge for Team ${i+1}.`);
+        if (usedLeads.has(lead)) return alert('Each team must have a different in-charge.');
+        usedLeads.add(lead);
+        if (members.includes(lead)) return alert(`Team ${i+1}: the in-charge cannot also be listed as a student member.`);
+        for (const uid of members) {
+          if (usedMembers.has(uid)) return alert('A student can belong to only one team.');
+          if (usedLeads.has(uid)) return alert('A team in-charge cannot also be assigned as a student in another team.');
+          usedMembers.add(uid);
+        }
+        const leadUser=await getUserEmail(lead);
+        teams[id]={ teamId:id, teamName:`Team ${i+1}`, inchargeUid:lead, inchargeName:leadUser.name, memberUids:members, updatedAt:serverTimestamp(), updatedBy:currentUser?.email||'' };
+      }
+      for (const id of TEAM_IDS) if (usedMembers.has(teams[id].inchargeUid)) return alert('An in-charge cannot be assigned as a student in another team.');
+      await set(projectAwareRef('workflow_teams'), teams);
+      alert('Three-team structure saved successfully.');
+      await window.wfLoadTeamSetup();
+      await window.wfLoadTeamAssignments();
+    } catch(e) { alert('Could not save team structure: '+(e.message||e)); }
+  };
+
+  window.wfAssignTask = async () => {
+    if (!canManageTeams()) return alert('Only PH/Admin can issue team tasks.');
+    const teamChoice=$('wfAssignTeam')?.value || 'ALL';
+    const desc=$('wfTaskDesc')?.value.trim();
+    const deadlineVal=$('wfDeadline')?.value;
+    if (!desc || !deadlineVal) return alert('Task description and deadline are mandatory.');
+    const deadline=new Date(deadlineVal).getTime();
+    if (!Number.isFinite(deadline) || deadline<=Date.now()) return alert('Please select a future deadline.');
+    const teamSnap=await get(projectAwareRef('workflow_teams'));
+    if (!teamSnap.exists()) return alert('Please create and save all three teams before issuing tasks.');
+    const allTeams=teamSnap.val();
+    const chosen=teamChoice==='ALL' ? TEAM_IDS : [teamChoice];
+    const missing=chosen.filter(id=>!allTeams[id]?.inchargeUid);
+    if (missing.length) return alert('One or more selected teams do not have an in-charge. Save the team structure first.');
+    const btn=document.activeElement, old=btn?.innerText;
+    if(btn){btn.disabled=true;btn.innerText='DISPATCHING TO IN-CHARGES...';}
+    try {
+      const sent=[];
+      for (const id of chosen) {
+        const t=allTeams[id];
+        const ref=await push(projectAwareRef('workflow_team_assignments'), {
+          teamId:id, teamName:t.teamName || id, inchargeUid:t.inchargeUid, inchargeName:t.inchargeName || 'Team In-charge',
+          desc, deadline, status:'AWAITING_DISTRIBUTION', issuedBy:currentUser?.name||currentUser?.email||'PH', issuedByEmail:currentUser?.email||'', timestamp:serverTimestamp()
+        });
+        const lead=await getUserEmail(t.inchargeUid);
+        if(lead.email) { await window.sendEmailNotification(lead.email, lead.name, `TEAM TASK: ${desc}\n\nYou are responsible for distributing this task to your assigned students and verifying their submissions before forwarding them to the Project Head.`, deadlineVal); sent.push(lead.email); }
+      }
+      $('wfTaskDesc').value=''; $('wfDeadline').value='';
+      alert(`Task issued to ${chosen.length} team(s). Email notification requested for: ${sent.join(', ') || 'No in-charge email available'}.`);
+      await window.wfLoadTeamAssignments();
+    } catch(e) { alert('Task dispatch failed: '+(e.message||e)); }
+    finally { if(btn){btn.disabled=false;btn.innerText=old||'ISSUE BINDING TASK';} }
+  };
+
+  window.wfLoadTeamAssignments = async () => {
+    const host=$('wfTeamAssignmentList'); if(!host || !currentUser?.uid) return;
+    try {
+      const [aSnap,tSnap,uSnap]=await Promise.all([get(projectAwareRef('workflow_team_assignments')),get(projectAwareRef('workflow_teams')),get(projectAwareRef('users'))]);
+      const teams=tSnap.exists()?tSnap.val():{}; const users=[];
+      if(uSnap.exists())uSnap.forEach(c=>{const u=c.val()||{};users.push({uid:c.key,name:u.name||u.email||'Student'});});
+      const isManager=canManageTeams();
+      const rows=[];
+      if(aSnap.exists()) aSnap.forEach(c=>{
+        const a=c.val()||{}; const mine=a.inchargeUid===currentUser.uid;
+        if(!isManager&&!mine) return;
+        const team=teams[a.teamId]||{};
+        const memberIds=Array.isArray(team.memberUids)?team.memberUids:[];
+        const selectId=`wfDistribute_${c.key}`;
+        const options=users.filter(u=>memberIds.includes(u.uid)).map(u=>`<option value="${esc(u.uid)}" selected>${esc(u.name)}</option>`).join('');
+        const distribute=(mine && a.status==='AWAITING_DISTRIBUTION') ? `<div style="margin-top:8px;text-align:left;"><label style="font-size:10px;font-weight:800;">SELECT STUDENTS TO ASSIGN</label><select id="${selectId}" multiple size="4" style="width:100%;margin:4px 0;">${options}</select><button class="info" onclick="window.wfDistributeTeamTask('${c.key}')" style="width:100%;font-weight:800;">DISTRIBUTE TO SELECTED STUDENTS</button></div>` : '';
+        rows.push(`<div style="border:1px solid #cbd5e1;border-radius:8px;padding:12px;margin:8px 0;background:#fff;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><b>${esc(a.teamName||a.teamId)} | ${esc(a.desc)}</b><span style="font-size:11px;font-weight:800;color:${a.status==='DISTRIBUTED'?'#047857':'#b45309'};">${esc(a.status||'')}</span></div><small style="color:#64748b;">In-charge: ${esc(a.inchargeName||'')} | Deadline: ${a.deadline?new Date(a.deadline).toLocaleString('en-IN'):'-'}</small>${distribute}</div>`);
+      });
+      host.innerHTML=rows.join('') || '<p style="color:#64748b;">No team assignments are available for your account.</p>';
+    } catch(e) { host.innerHTML=`<p style="color:#b91c1c;">Could not load team assignments: ${esc(e.message||e)}</p>`; }
+  };
+
+  window.wfDistributeTeamTask = async assignmentKey => {
+    const snap=await get(projectAwareRef(`workflow_team_assignments/${assignmentKey}`));
+    if(!snap.exists()) return alert('Team assignment not found.');
+    const a=snap.val();
+    if(a.inchargeUid!==currentUser.uid && !canManageTeams()) return alert('Only the assigned in-charge can distribute this work.');
+    if(a.status!=='AWAITING_DISTRIBUTION') return alert('This task has already been distributed.');
+    const selected=[...($(`wfDistribute_${assignmentKey}`)?.selectedOptions||[])].map(o=>o.value);
+    if(!selected.length) return alert('Select at least one student.');
+    const teamSnap=await get(projectAwareRef(`workflow_teams/${a.teamId}`));
+    const team=teamSnap.exists()?teamSnap.val():{};
+    const members=Array.isArray(team.memberUids)?team.memberUids:[];
+    if(selected.some(uid=>!members.includes(uid))) return alert('Selected user is not a member of this team.');
+    try {
+      const created=[];
+      for(const uid of selected){
+        const u=await getUserEmail(uid);
+        const ref=await push(projectAwareRef('workflows'),{
+          targetUid:uid,targetName:u.name,desc:a.desc,deadline:a.deadline,status:'ASSIGNED',
+          teamId:a.teamId,teamName:a.teamName,inchargeUid:a.inchargeUid,inchargeName:a.inchargeName,
+          parentAssignmentKey:assignmentKey,issuedBy:a.issuedBy,issuedByEmail:a.issuedByEmail,timestamp:serverTimestamp()
+        });
+        if(u.email) await window.sendEmailNotification(u.email,u.name,a.desc,new Date(a.deadline).toLocaleString('sv-SE').replace(' ','T').slice(0,16));
+        created.push(ref.key);
+      }
+      await update(projectAwareRef(`workflow_team_assignments/${assignmentKey}`),{status:'DISTRIBUTED',assignedStudentUids:selected,distributedAt:serverTimestamp(),distributedBy:currentUser.uid});
+      alert(`Work distributed to ${selected.length} student(s). Email notifications requested for all selected students.`);
+      await window.wfLoadTeamAssignments();
+      if(typeof window.loadWorkflows==='function') window.loadWorkflows();
+    } catch(e){alert('Distribution failed: '+(e.message||e));}
+  };
+
+  // Replace the original table loader so team in-charges see only their own student tasks,
+  // while PH/HOD/Admin retain the existing oversight and disciplinary workflow.
+  window.loadWorkflows = async () => {
+    if(!currentUser?.uid) return;
+    await window.wfLoadTeamSetup();
+    await window.wfLoadTeamAssignments();
+    const tbody=$('wfTableBody'); if(!tbody) return;
+    if(window.__wfTasksUnsub){window.__wfTasksUnsub();window.__wfTasksUnsub=null;}
+    const isPH=isPHUser(), isHOD=isHODUser(), isAdm=isWorkflowAdmin();
+    const adminPanel=$('adminWorkflowPanel'); if(adminPanel) adminPanel.style.display=(isPH||isAdm)?'block':'none';
+    const teamPanel=$('wfTeamAssignmentPanel'); if(teamPanel) teamPanel.style.display=(isPH||isHOD||isAdm||true)?'block':'none';
+    window.__wfTasksUnsub=onValue(projectAwareRef('workflows'),snap=>{
+      tbody.innerHTML='';
+      if(!snap.exists()){tbody.innerHTML="<tr><td colspan='5' style='text-align:center;'>No active workflows.</td></tr>";return;}
+      const rows=[];
+      snap.forEach(c=>{
+        const wf=c.val()||{}; const mine=wf.targetUid===currentUser.uid; const isIncharge=wf.inchargeUid===currentUser.uid;
+        if(!isAdm&&!isPH&&!isHOD&&!mine&&!isIncharge) return;
+        const expired=wf.deadline && Date.now()>wf.deadline && (wf.status==='ASSIGNED'||String(wf.status).includes('REDO'));
+        let color=wf.status==='COMPLETED'?'#059669':String(wf.status).includes('REDO')?'#d97706':String(wf.status).includes('PENDING')?'#7c3aed':'#2563eb';
+        let actions='';
+        if(mine && (wf.status==='ASSIGNED'||String(wf.status).startsWith('REDO_'))){actions+=`<button onclick="openWfAction('${c.key}','STUDENT')" class="info" style="font-size:10px;padding:6px;">SUBMIT WORK</button>`;}
+        if(isIncharge && wf.status==='PENDING_INCHARGE'){actions+=`<button onclick="openWfAction('${c.key}','ADMIN')" class="warning" style="font-size:10px;padding:6px;">IN-CHARGE VERIFY</button>`;}
+        if((isPH||isAdm)&&wf.status==='PENDING_PH'){actions+=`<button onclick="openWfAction('${c.key}','ADMIN')" class="warning" style="font-size:10px;padding:6px;">PH REVIEW</button>`;}
+        if(isHOD&&wf.status==='PENDING_HOD'){actions+=`<button onclick="openWfAction('${c.key}','ADMIN')" class="success" style="font-size:10px;padding:6px;">HOD REVIEW</button>`;}
+        if(expired && (isPH||isAdm)) actions+=`<div style="margin-top:4px;"><button onclick="executeWfFailAction('${c.key}','${wf.targetUid}','${encodeURIComponent(wf.targetName||'Student')}')" class="danger" style="font-size:10px;padding:6px;">OPEN DEADLINE / PIP ACTIONS</button></div>`;
+        if((isAdm||isPH||isHOD)&&!wf.teamId) actions+=`<div style="margin-top:4px;"><button onclick="cancelWorkflow('${c.key}')" class="danger" style="font-size:10px;padding:6px;">DELETE TASK</button></div>`;
+        rows.push(`<tr style="border-bottom:1px solid #e2e8f0;"><td><div style="font-weight:bold;white-space:pre-wrap;">${esc(wf.desc)}</div><small style="color:#64748b;">Issued by: ${esc(wf.issuedBy||'-')} ${wf.teamName?'| '+esc(wf.teamName):''}</small></td><td><b>${esc(wf.targetName||'-')}</b><br><small>${wf.inchargeName?'In-charge: '+esc(wf.inchargeName):''}</small></td><td style="font-size:11px;color:var(--metro-red);">${wf.deadline?new Date(wf.deadline).toLocaleString('en-IN'):'-'}</td><td><span style="background:${color}20;color:${color};padding:4px 8px;border-radius:4px;font-size:10px;font-weight:bold;">${esc(String(wf.status||'').replace(/_/g,' '))}</span>${wf.adminRemarks?`<br><small style="color:#b91c1c;">Notes: ${esc(wf.adminRemarks)}</small>`:''}</td><td style="text-align:center;">${actions||'-'}</td></tr>`);
+      });
+      tbody.innerHTML=rows.join('')||"<tr><td colspan='5' style='text-align:center;'>No tasks assigned to your account.</td></tr>";
+    });
+  };
+
+  // Students submit to their team in-charge first. Existing non-team tasks keep their prior route.
+  window.wfSubmitWork = async () => {
+    const key=$('wfActiveKey').value, work=$('wfStudentRemarks').value.trim(), file=$('wfStudentFile').files[0];
+    if(!work&&!file) return alert('Please provide text remarks or upload a document.');
+    const btn=document.activeElement, old=btn?.innerText; if(btn){btn.disabled=true;btn.innerText='UPLOADING...';}
+    try {
+      const snap=await get(projectAwareRef(`workflows/${key}`)); if(!snap.exists()) throw new Error('Task not found.');
+      const wf=snap.val(); if(wf.targetUid!==currentUser.uid) throw new Error('This task is not assigned to your account.');
+      let nextStatus='PENDING_PH';
+      if(wf.teamId){ nextStatus=wf.status==='REDO_PH'?'PENDING_PH':wf.status==='REDO_HOD'?'PENDING_HOD':'PENDING_INCHARGE'; }
+      else if(wf.status==='REDO_HOD') nextStatus='PENDING_HOD';
+      const save=async(data,name)=>{
+        await update(projectAwareRef(`workflows/${key}`),{studentWork:work,studentFile:data||null,studentFileName:name||null,status:nextStatus,submittedAt:serverTimestamp()});
+        if(wf.inchargeUid){const lead=await getUserEmail(wf.inchargeUid);if(lead.email)await window.sendStatusEmailNotification(lead.email,lead.name,wf.desc,'STUDENT SUBMISSION RECEIVED','Please verify this submission in the MRPSP workflow dashboard.');}
+        alert('Work submitted successfully.'); $('wfActionModal').classList.add('hidden');
+      };
+      if(file){if(file.size>10*1024*1024)throw new Error('File is too large. Maximum allowed size is 10MB.');const reader=new FileReader();reader.onload=e=>save(e.target.result,file.name).catch(err=>alert(err.message));reader.readAsDataURL(file);}else await save(null,null);
+    }catch(e){alert('Submission failed: '+(e.message||e));}
+    finally{if(btn){btn.disabled=false;btn.innerText=old||'SUBMIT TO PROJECT HEAD';}}
+  };
+
+  window.wfReviewTask = async isApproved => {
+    const key=$('wfActiveKey').value, remarks=$('wfAdminRemarks').value.trim();
+    if(!isApproved&&!remarks)return alert('Remarks are mandatory for rejection / redo.');
+    const btn=document.activeElement,old=btn?.innerText;if(btn){btn.disabled=true;btn.innerText='PROCESSING...';}
+    try{
+      const snap=await get(projectAwareRef(`workflows/${key}`));if(!snap.exists())throw new Error('Task not found.');
+      const wf=snap.val(), email=myEmail();
+      const ph=isPHUser(),hod=isHODUser(),adm=isWorkflowAdmin();
+      let next='';
+      if(wf.status==='PENDING_INCHARGE'){
+        if(wf.inchargeUid!==currentUser.uid&&!adm)throw new Error('Only the assigned team in-charge can verify this submission.');
+        next=isApproved?'PENDING_PH':'REDO_INCHARGE';
+      }else if(wf.status==='PENDING_PH'){
+        if(!ph&&!adm)throw new Error('Only the Project Head can review this stage.');
+        next=isApproved?'PENDING_HOD':'REDO_PH';
+      }else if(wf.status==='PENDING_HOD'){
+        if(!hod&&!adm)throw new Error('Only the HOD can review this stage.');
+        next=isApproved?'COMPLETED':'REDO_HOD';
+      }else throw new Error('This task is not awaiting your review.');
+      const payload={status:next,adminRemarks:remarks||null};
+      if(next==='COMPLETED'){payload.studentFile=null;payload.studentFileName=null;payload.completedAt=serverTimestamp();}
+      if(wf.status==='PENDING_INCHARGE') {payload.inchargeReviewedBy=currentUser.name||currentUser.email;payload.inchargeReviewedAt=serverTimestamp();}
+      if(wf.status==='PENDING_PH') {payload.phReviewedBy=currentUser.name||currentUser.email;payload.phReviewedAt=serverTimestamp();}
+      if(wf.status==='PENDING_HOD') {payload.hodReviewedBy=currentUser.name||currentUser.email;payload.hodReviewedAt=serverTimestamp();}
+      await update(projectAwareRef(`workflows/${key}`),payload);
+      const student=await getUserEmail(wf.targetUid);const statusText=isApproved?'APPROVED / FORWARDED':'REJECTED - REDO REQUIRED';
+      if(student.email)await window.sendStatusEmailNotification(student.email,student.name,wf.desc,statusText,remarks);
+      if(wf.inchargeUid && wf.status!=='PENDING_INCHARGE') {
+        const lead=await getUserEmail(wf.inchargeUid);
+        if(lead.email) await window.sendStatusEmailNotification(lead.email,lead.name,wf.desc,`WORKFLOW UPDATE: ${next.replace(/_/g,' ')}`,`Student: ${wf.targetName||''}. ${remarks||'Please review the latest workflow status in the portal.'}`);
+      }
+      if(wf.status==='PENDING_INCHARGE'&&isApproved) await sendRoleMail(window.PH_EMAILS||[],'PH REVIEW REQUIRED',wf.desc,'IN-CHARGE VERIFIED - PH REVIEW REQUIRED',`Team: ${wf.teamName||''}; Student: ${wf.targetName||''}`);
+      if(wf.status==='PENDING_PH'&&isApproved) await sendRoleMail(window.HOD_EMAILS||[],'HOD REVIEW REQUIRED',wf.desc,'PH VERIFIED - HOD REVIEW REQUIRED',`Student: ${wf.targetName||''}`);
+      alert(`Task review saved. New status: ${next.replace(/_/g,' ')}`);$('wfActionModal').classList.add('hidden');
+    }catch(e){alert(e.message||e);}
+    finally{if(btn){btn.disabled=false;btn.innerText=old||'APPROVE';}}
+  };
+
+  // Keep the existing modal's submission viewer and bind team-aware role labels.
+  const oldOpen=window.openWfAction;
+  window.openWfAction=async (key,mode)=>{
+    await oldOpen(key,mode);
+    if(mode==='ADMIN'){
+      const snap=await get(projectAwareRef(`workflows/${key}`));
+      if(snap.exists()){
+        const wf=snap.val();
+        const title=wf.status==='PENDING_INCHARGE'?'Team In-charge Verification':wf.status==='PENDING_PH'?'Project Head Verification':'HOD Verification';
+        $('wfModalTitle').innerText=title;
+        const buttons=$('wfAdminSection')?.querySelectorAll('button');
+        if(buttons?.length>=2){buttons[0].innerText='VERIFY & FORWARD';buttons[1].innerText='REJECT / SEND FOR REDO';}
+      }
+    }
+  };
+})();
+
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
@@ -17666,6 +17971,7 @@ window.handleFaceScan=async function(){
         <div id="triAngleProofContainer"></div>
     </div>
 </div>
+
 
 </body>
 </html>
