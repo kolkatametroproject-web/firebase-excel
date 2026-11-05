@@ -5448,6 +5448,10 @@ onAuthStateChanged(auth, (user) => {
             return;
         }
 
+        // Cache the authenticated user profile for role-based workflow permissions.
+        window.currentUserProfile = u;
+        window.currentUser = user;
+
         // 4. ACTIVE USER -> SHOW APP
         document.getElementById("bannedScreen")?.classList.add("hidden");
         document.querySelector("header").style.display = "flex";
@@ -17817,10 +17821,11 @@ window.handleFaceScan=async function(){
   const TEAM_IDS = ['TEAM_1','TEAM_2','TEAM_3'];
   const $ = id => document.getElementById(id);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-  const myEmail = () => (currentUser?.email || '').toLowerCase();
-  const isPHUser = () => (window.PH_EMAILS || []).some(e => String(e).toLowerCase() === myEmail());
+  const myEmail = () => String(window.currentUser?.email || (typeof currentUser !== 'undefined' ? currentUser?.email : '') || auth?.currentUser?.email || '').trim().toLowerCase();
+  const roleTokens = () => { const p=window.currentUserProfile||{}; return [p.role,p.userRole,p.designation,p.position,p.accountType,...(Array.isArray(p.roles)?p.roles:[])].map(v=>String(v||'').trim().toUpperCase().replace(/[ _-]+/g,'')); };
+  const isPHUser = () => { const roles=roleTokens(); return roles.some(r=>['PH','PROJECTHEAD','PROJECTHEADS','PROJECTLEAD'].includes(r)) || (window.PH_EMAILS || []).some(e => String(e).trim().toLowerCase() === myEmail()); };
   const isHODUser = () => (window.HOD_EMAILS || []).some(e => String(e).toLowerCase() === myEmail());
-  const isWorkflowAdmin = () => (typeof isAdmin !== 'undefined' && isAdmin === true) || (typeof ADMIN_EMAILS !== 'undefined' && ADMIN_EMAILS.some(e => String(e).toLowerCase() === myEmail()));
+  const isWorkflowAdmin = () => (typeof isAdmin !== 'undefined' && isAdmin === true) || (window.currentUserProfile?.isAdmin === true) || (typeof ADMIN_EMAILS !== 'undefined' && ADMIN_EMAILS.some(e => String(e).trim().toLowerCase() === myEmail()));
   const canManageTeams = () => isWorkflowAdmin() || isPHUser();
   const getUserEmail = async uid => {
     const snap = await get(projectAwareRef(`users/${uid}`));
