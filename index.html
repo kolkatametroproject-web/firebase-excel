@@ -3451,7 +3451,7 @@ tr:hover { background: #fcfcfd; }
         <div id="wfTeamStatusView" style="display:none;"><div id="wfTeamMemberStatus"><p class="wf-help">Loading team member status...</p></div></div>
     </div>
     <div class="panel wf-wizard-stage" data-wf-step="5" id="wfTrackingPanel">
-        <div class="wf-stage-heading"><span class="wf-stage-no">03</span><div><h3 style="margin:0;">Live Activity & Progress Tracking</h3><p class="wf-help" style="margin:4px 0 0;">A time-stamped audit trail of team formation, task assignment, distribution, submissions and reviews.</p></div></div>
+        <div class="wf-stage-heading"><span class="wf-stage-no">03</span><div><h3 style="margin:0;">My Work, Submissions & Verification</h3><p class="wf-help" style="margin:4px 0 0;">Students: view your own allocated tasks and submit to your team in-charge. In-charges: distribute team work, verify submissions and forward the final presentation. PH/Admin: oversee all teams and activity.</p></div></div>
         <div class="wf-subtabs wf-oversight-tabs">
           <button type="button" class="wf-subtab active" data-oversight-tab="status" onclick="window.wfShowOversightTab('status')">Status & Activity</button>
           <button type="button" class="wf-subtab" data-oversight-tab="communication" onclick="window.wfShowOversightTab('communication')">Communication</button>
@@ -3520,7 +3520,7 @@ tr:hover { background: #fcfcfd; }
             <label style="font-size:11px; font-weight:bold; margin-top:15px; display:block; color:var(--metro-blue);">Attach Document (PDF, PPT, PPTX) - Optional</label>
             <input type="file" id="wfStudentFile" accept=".pdf, .ppt, .pptx, application/pdf, application/vnd.ms-powerpoint, application/vnd.openxmlformats-officedocument.presentationml.presentation" style="margin-bottom:10px; width:100%; border:2px dashed #cbd5e1; padding:10px; background:#f8fafc;">
             
-            <button onclick="wfSubmitWork()" class="success" style="width:100%; margin-top:10px; font-weight:900;">SUBMIT TO PROJECT HEAD</button>
+            <button onclick="wfSubmitWork()" class="success" style="width:100%; margin-top:10px; font-weight:900;">SUBMIT TO TEAM IN-CHARGE</button>
         </div>
         
         <div id="wfAdminSection" class="hidden">
@@ -17889,13 +17889,13 @@ window.handleFaceScan=async function(){
   window.wfLoadTeamSetup = async () => {
     const panel = $('wfTeamSetupPanel');
     if (!panel) return;
-    panel.style.display = canManageTeams() ? 'block' : 'none';
+    panel.style.display = (canManageTeams() && Number(window.wfActiveStep||1)===2) ? 'block' : 'none';
     if (!canManageTeams()) {
       try {
         const publicTeamSnap=await get(wfScopedRef('workflow_teams'));
         const publicTeams=publicTeamSnap.exists()?publicTeamSnap.val():{};
         const myTeam=TEAM_IDS.find(id=>publicTeams[id] && (publicTeams[id].inchargeUid===currentUser?.uid || teamMembersFrom(publicTeams[id]).includes(currentUser?.uid)));
-        window.wfMyTeamId=myTeam||null;window.wfMyTeamName=myTeam?(publicTeams[myTeam].teamName||myTeam):'Project-wide';
+        window.wfMyTeamId=myTeam||null;window.wfMyTeamName=myTeam?(publicTeams[myTeam].teamName||myTeam):'Project-wide';window.wfIsTeamIncharge=!!(myTeam&&publicTeams[myTeam].inchargeUid===currentUser?.uid);
       } catch(e) { console.warn('Could not resolve team identity',e); }
       return;
     }
@@ -17903,7 +17903,7 @@ window.handleFaceScan=async function(){
       const [users, teamSnap] = await Promise.all([loadUsers(), get(wfScopedRef('workflow_teams'))]);
       wfTeamUsersCache=users; wfSavedTeamsCache=teamSnap.exists()?teamSnap.val():{};
       const mine=TEAM_IDS.find(id=>wfSavedTeamsCache[id] && (wfSavedTeamsCache[id].inchargeUid===currentUser?.uid || teamMembersFrom(wfSavedTeamsCache[id]).includes(currentUser?.uid)));
-      window.wfMyTeamId=mine||null;window.wfMyTeamName=mine?(wfSavedTeamsCache[mine].teamName||mine):'Project-wide';
+      window.wfMyTeamId=mine||null;window.wfMyTeamName=mine?(wfSavedTeamsCache[mine].teamName||mine):'Project-wide';window.wfIsTeamIncharge=!!(mine&&wfSavedTeamsCache[mine].inchargeUid===currentUser?.uid);
       const cards = $('wfTeamCards');
       cards.innerHTML = TEAM_IDS.map((id, i) => {
         const t = wfSavedTeamsCache[id] || {};
@@ -18130,7 +18130,7 @@ window.handleFaceScan=async function(){
     if(window.__wfTasksUnsub){window.__wfTasksUnsub();window.__wfTasksUnsub=null;}
     const isPH=isPHUser(), isHOD=isHODUser(), isAdm=isWorkflowAdmin();
     const adminPanel=$('adminWorkflowPanel'); if(adminPanel) adminPanel.style.display=(isPH||isAdm)?'block':'none';
-    const teamPanel=$('wfTeamAssignmentPanel'); if(teamPanel) teamPanel.style.display='block';
+    const teamPanel=$('wfTeamAssignmentPanel'); if(teamPanel) teamPanel.style.display=(Number(window.wfActiveStep||4)===4)?'block':'none';
     window.__wfTasksUnsub=onValue(wfScopedRef('workflows'),snap=>{
       tbody.innerHTML='';
       if(!snap.exists()){tbody.innerHTML="<tr><td colspan='5' style='text-align:center;'>No active workflows.</td></tr>";return;}
@@ -18142,7 +18142,7 @@ window.handleFaceScan=async function(){
         let color=wf.status==='COMPLETED'?'#059669':String(wf.status).includes('REDO')?'#d97706':String(wf.status).includes('PENDING')?'#7c3aed':'#2563eb';
         let actions='';
         if(mine && (wf.status==='ASSIGNED'||String(wf.status).startsWith('REDO_'))){actions+=`<button onclick="openWfAction('${c.key}','STUDENT')" class="info" style="font-size:10px;padding:6px;">SUBMIT WORK</button>`;}
-        if(isIncharge && wf.status==='PENDING_INCHARGE'){actions+=`<button onclick="openWfAction('${c.key}','ADMIN')" class="warning" style="font-size:10px;padding:6px;">IN-CHARGE VERIFY</button>`;}
+        if(isIncharge && wf.status==='PENDING_INCHARGE'){actions+=`<button onclick="openWfAction('${c.key}','ADMIN')" class="warning" style="font-size:10px;padding:6px;">VERIFY STUDENT SUBMISSION</button>`;}
         if((isPH||isAdm)&&wf.status==='PENDING_PH'){actions+=`<button onclick="openWfAction('${c.key}','ADMIN')" class="warning" style="font-size:10px;padding:6px;">PH REVIEW</button>`;}
         if(isHOD&&wf.status==='PENDING_HOD'){actions+=`<button onclick="openWfAction('${c.key}','ADMIN')" class="success" style="font-size:10px;padding:6px;">HOD REVIEW</button>`;}
         if(expired && (isPH||isAdm)) actions+=`<div style="margin-top:4px;"><button onclick="executeWfFailAction('${c.key}','${wf.targetUid}','${encodeURIComponent(wf.targetName||'Student')}')" class="danger" style="font-size:10px;padding:6px;">OPEN DEADLINE / PIP ACTIONS</button></div>`;
@@ -18489,8 +18489,8 @@ window.handleFaceScan=async function(){
  const hints={1:'Create the main work item first. Main work can be edited whenever required by PH/Admin.',2:'Create the three teams under the selected work item.',3:'Choose a team, describe the task and set its deadline.',4:'The team in-charge distributes assigned work to selected members.',5:'Review progress, timestamps, submissions, messages and shared resources.'};
  function manager(){try{return typeof canManageTeams==='function'&&canManageTeams();}catch(e){return false;}}
  function initialStep(){return manager()?1:4;}
- window.wfShowWizardStep=function(step){step=Math.max(1,Math.min(5,Number(step)||1));if(!manager()&&step<4)step=4;if(step>1&&!window.wfActiveWorkId){step=manager()?1:4;}activeStep=step;
- const eb=$('wfEditTeamFormation');if(eb)eb.style.display=manager()&&activeStep!==1&&activeStep!==2?'inline-flex':'none';
+ window.wfShowWizardStep=function(step){step=Math.max(1,Math.min(5,Number(step)||1));if(!manager()&&step<4)step=window.wfIsTeamIncharge?4:5;if(step>1&&!window.wfActiveWorkId){step=manager()?1:4;}activeStep=step;
+ window.wfActiveStep=activeStep;const eb=$('wfEditTeamFormation');if(eb)eb.style.display=manager()&&activeStep!==1&&activeStep!==2?'inline-flex':'none';
  const ew=$('wfEditMainWork');if(ew)ew.style.display=manager()&&window.wfActiveWorkId&&activeStep!==1?'inline-flex':'none';
  document.querySelectorAll('#tab-workflow .wf-wizard-stage').forEach(el=>el.classList.toggle('wf-stage-active',Number(el.dataset.wfStep)===activeStep));
  document.querySelectorAll('.wf-step-dot').forEach(el=>{const n=Number(el.dataset.dot);el.classList.toggle('active',n===activeStep);el.classList.toggle('done',n<activeStep);});
