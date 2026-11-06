@@ -16278,20 +16278,18 @@ formData.append("subject", mail.subject);
 formData.append("body", mail.body);
 
     try {
-        fetch(scriptUrl, {
+        // Wait for the browser to complete the POST request before reporting success.
+        // With no-cors, the response body/status remains opaque; this confirms only
+        // that the request was handed off, not that the recipient received the email.
+        await fetch(scriptUrl, {
             method: 'POST',
             body: formData,
-            mode: 'no-cors' 
-        }).then(() => {
-            console.log("✅ Email push requested to Google Servers.");
-        }).catch((e) => {
-            console.log("⚠️ Background fetch completed with standard opaque redirect.");
+            mode: 'no-cors'
         });
-        
+        console.log("Email request handed off to Google Apps Script.");
         return true;
-        
     } catch (error) {
-        console.error("❌ Email Dispatch Failed:", error);
+        console.error("Email dispatch request failed:", error);
         return false;
     }
 };
@@ -17675,6 +17673,37 @@ async function wfNotifyUid(uid, subject, message){
     return true;
   } catch(e){ console.error('Workflow email failed',uid,e); return false; }
 }
+// Dedicated dispatcher for Admin Work Distribution emails.
+// Uses the portal's existing task-assignment email template and recipient email fields.
+async function wfSendWorkDistributionEmail(uid, workId, teamId){
+  try {
+    const u = WF.users[uid] || await wfRead(`users/${uid}`);
+    const to = wfEmail(u);
+    if(!to) return {ok:false, email:'', reason:'No email address saved'};
+    if(typeof window.sendEmailNotification !== 'function')
+      return {ok:false, email:to, reason:'Task-assignment email dispatcher is unavailable'};
+    const team = wfAllTeams(workId)[teamId];
+    const work = WF.works[workId] || {};
+    const details = [
+      `Work: ${work.title || 'MRPSP Work'}`,
+      `Team: ${team?.teamName || teamId}`,
+      `Team responsibility: ${team?.mainTask || ''}`,
+      `Please log in to the MRPSP portal to review the assigned work and instructions.`
+    ].join('\n');
+    const result = await window.sendEmailNotification(to, wfName(u,uid), details, Number(team?.deadline) || Date.now());
+    if(result === false) return {ok:false, email:to, reason:'Email dispatcher reported failure'};
+    return {ok:true, email:to};
+  } catch(e) {
+    console.error('Work Distribution email failed for UID:', uid, e);
+    return {ok:false, email:'', reason:e?.message || String(e)};
+  }
+}
+async function wfSendWorkDistributionEmails(workId, teamId, uids){
+  const results = [];
+  for(const uid of [...new Set((uids || []).filter(Boolean))])
+    results.push(await wfSendWorkDistributionEmail(uid, workId, teamId));
+  return results;
+}
 async function wfNotifyMany(uids, subject, message){ for(const uid of [...new Set((uids||[]).filter(Boolean))]) await wfNotifyUid(uid,subject,message); }
 async function wfNotifyAdmins(subject,message){
   for(const email of ADMIN_EMAILS){
@@ -17793,18 +17822,28 @@ window.wfResendInchargeEmail=async(workId,teamId)=>{
   const email=wfEmail(incharge);
   if(!email)return alert('No email address is saved for the assigned incharge. Update the user profile email first.');
   if(!confirm(`Resend the work assignment email to ${wfName(incharge,t.inchargeUid)} (${email})?`))return;
-  const sent=await wfNotifyUid(t.inchargeUid,`Work assigned to ${t.teamName}`,`Work: ${WF.works[workId]?.title||'MRPSP Work'}\nTeam responsibility: ${t.mainTask||''}\nTeam final deadline: ${wfDate(t.deadline)}`);
-  if(sent)alert(`Email resend request submitted for ${email}. Check the recipient's inbox and spam folder.`);
-  else alert('Email could not be submitted. Check the email dispatcher and recipient address.');
+  const result=await wfSendWorkDistributionEmail(t.inchargeUid,workId,teamId);
+  if(result.ok)alert(`Work assignment email request submitted for ${email}. Check the recipient's inbox and spam folder.`);
+  else alert(`Email could not be submitted for ${email}. ${result.reason || 'Check the email dispatcher.'}`);
 };
 
 window.wfDistributeTeam=async(workId,teamId)=>{
   if(!wfIsAdmin())return alert('Admin access required.');const t=wfAllTeams(workId)[teamId];if(!t?.locked)return alert('Team is not locked.');
   const mainTask=document.getElementById(`${teamId}_mainTask`).value.trim(),deadlineVal=document.getElementById(`${teamId}_teamDeadline`).value,deadline=new Date(deadlineVal).getTime();
   if(!mainTask||!deadlineVal)return alert('Enter team responsibility and deadline.');if(deadline>Date.now()&&deadline>WF.works[workId].deadline)return alert('Team deadline cannot exceed the overall work deadline.');if(deadline<=Date.now())return alert('Choose a future deadline.');
-  try{await update(projectAwareRef(wfTeamPath(workId,teamId)),{mainTask,deadline,distributionStatus:'DISTRIBUTED',distributedAt:serverTimestamp(),distributedBy:currentUser.uid});
-    await wfNotifyMany(wfAllMemberIds(t),`Work assigned to ${t.teamName}`,`Work: ${WF.works[workId].title}\nTeam responsibility: ${mainTask}\nTeam final deadline: ${wfDate(deadline)}`);
-    await update(projectAwareRef(`workProjects/${workId}`),{status:'IN_PROGRESS'});await window.loadWorkflows();document.getElementById('wfDistributionWork').value=workId;wfRenderDistribution();alert('Work distributed and team members notified by email.');
+  try{
+    await update(projectAwareRef(wfTeamPath(workId,teamId)),{mainTask,deadline,distributionStatus:'DISTRIBUTED',distributedAt:serverTimestamp(),distributedBy:currentUser.uid});
+    WF.teams[workId]=WF.teams[workId]||{};
+    WF.teams[workId][teamId]={...t,mainTask,deadline,distributionStatus:'DISTRIBUTED'};
+    const emailResults=await wfSendWorkDistributionEmails(workId,teamId,wfAllMemberIds(t));
+    await update(projectAwareRef(`workProjects/${workId}`),{status:'IN_PROGRESS'});
+    await window.loadWorkflows();document.getElementById('wfDistributionWork').value=workId;wfRenderDistribution();
+    const sent=emailResults.filter(x=>x.ok).map(x=>x.email),failed=emailResults.filter(x=>!x.ok);
+    let message=`Work distributed successfully.\nEmail requests submitted: ${sent.length}/${emailResults.length}.`;
+    if(sent.length)message+=`\n\nSubmitted for:\n${sent.join('\n')}`;
+    if(failed.length)message+=`\n\nNot submitted:\n${failed.map(x=>x.email ? `${x.email}: ${x.reason}` : x.reason).join('\n')}`;
+    message+='\n\nInbox delivery is not confirmed by the browser. Check the recipient inbox and spam folder.';
+    alert(message);
   }catch(e){alert('Distribution failed: '+e.message);}
 };
 function wfRenderMemberWorkspace(){
