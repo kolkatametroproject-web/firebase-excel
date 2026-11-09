@@ -5584,7 +5584,7 @@ onAuthStateChanged(auth, (user) => {
 
         // Set Admin Privileges
         isAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === user.email.toLowerCase());
-        if (window.mrpspInitPaymentFeatures) window.mrpspInitPaymentFeatures();
+        // Project-specific payment listeners start only after the user selects a project.
         if (isAdmin) {
             document.getElementById("adminBadge")?.classList.remove("hidden");
             document.getElementById("btnAdmin")?.classList.remove("hidden");
@@ -9819,6 +9819,10 @@ function loadAssignments() {
 }
 window.completeTask = (k) => update(projectAwareRef( `assignments/${currentUser.uid}/${k}`), { status: "Done" });
 window.debugConnection = async () => {
+    if (!activeProject) {
+        console.log("ℹ️ Login complete. Waiting for project selection before testing project database access.");
+        return;
+    }
     console.log("📡 Testing Network Connection...");
 
     try {
@@ -9846,14 +9850,7 @@ window.debugConnection = async () => {
     }
 };
 
-// Run automatically on load
-setTimeout(debugConnection, 3000);
-
-// Run automatically on load
-setTimeout(debugConnection, 3000);
-// Run automatically on load
-setTimeout(debugConnection, 3000);
-// Run automatically on load
+// Run once after initial page load; it safely waits for project selection.
 setTimeout(debugConnection, 3000);
   // --- ADMIN BYPASS LOGIC FOR SOHAM PAL / TERMINAL PCS ---
 window.triggerAdminBypass = () => {
@@ -16798,6 +16795,8 @@ window.selectProject = async function (projectId) {
         if (!hasProjectAccess(projectId)) return alert("You do not have access to this project.");
 
         activeProject = projectId;
+        // Start project-scoped payment listeners only after a valid project is selected.
+        if (typeof window.mrpspInitPaymentFeatures === "function") window.mrpspInitPaymentFeatures();
         document.getElementById("projectPicker")?.classList.add("hidden");
         document.getElementById("ccrasScreen")?.classList.add("hidden");
 
@@ -18308,7 +18307,7 @@ window.mrpspLoadMemberPaymentDashboard = async function(mode){
   if(!auth.currentUser)return;
   try{
     const [u,f,r,e,p,rf,q] = await Promise.all([
-      get(projectAwareRef("users")),get(projectAwareRef("finance")),get(ref(db,"eoffice_requests")),
+      get(projectAwareRef("users")),get(projectAwareRef("finance")),get(projectAwareRef("eoffice_requests")),
       get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/exemptions`)),get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundPools`)),
       get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`)),get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundQr`))
     ]);
@@ -18441,7 +18440,7 @@ window.mrpspRenderSelectedDues=function(){
   // Only Admin-verified payments are displayed as payment history or made eligible for receipts.
   // Pending, rejected, unverified and legacy unapproved requests are deliberately excluded.
   const payments=Object.entries(mrpspPaymentCache.requests||{}).map(([key,v])=>({key,...v}))
-    .filter(p=>(p.createdBy===uid||p.studentUid===uid) && p.type==="PROJECT_PAYMENT_VERIFICATION" && p.status==="VERIFIED" && p.verified===true)
+    .filter(p=>(p.createdBy===uid||p.studentUid===uid) && p.type==="PROJECT_PAYMENT_VERIFICATION" && p.project===activeProject && p.status==="VERIFIED" && p.verified===true)
     .sort((a,b)=>(b.verifiedAt||b.createdAt||0)-(a.verifiedAt||a.createdAt||0));
   const receiptData={studentName:mrpspName(student),email:mrpspUserEmail(student),uid:student.uid,due:student.due,paid:student.paid,balance:student.balance,exempt:student.exempt,assetTotal:model.assetTotal,exemptionTotal:model.exemptionTotal,perStudent:model.perStudent,payments};
   window.mrpspCurrentReceipt=receiptData;
