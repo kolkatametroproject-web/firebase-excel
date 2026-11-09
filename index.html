@@ -1913,7 +1913,7 @@ tr:hover { background: #fcfcfd; }
     <div class="pay-nav">
       <button type="button" id="btnPaymentStudent" onclick="window.togglePaymentMode('student')"><i class="fas fa-wallet"></i> Make Payment</button>
       <button type="button" id="btnPaymentStudentWise" class="hidden" onclick="window.togglePaymentMode('studentwise')"><i class="fas fa-users"></i> Student-wise View</button>
-      <button type="button" id="btnPaymentPrevious" class="hidden" onclick="window.togglePaymentMode('previous')"><i class="fas fa-clock-rotate-left"></i> Previous Payments</button>
+      <button type="button" id="btnPaymentPrevious" class="hidden" onclick="window.togglePaymentMode('previous')"><i class="fas fa-clock-rotate-left"></i> Previous Balance Sheet Credits</button>
       <button type="button" id="btnPaymentDues" onclick="window.togglePaymentMode('dues')"><i class="fas fa-file-invoice-dollar"></i> Dues & Receipts</button>
       <button type="button" id="btnPaymentBreakup" class="hidden" onclick="window.togglePaymentMode('breakup')"><i class="fas fa-calculator"></i> Due Breakup</button>
       <button type="button" id="btnPaymentRefund" onclick="window.togglePaymentMode('refund')"><i class="fas fa-money-bill-transfer"></i> Student Refund</button>
@@ -1974,7 +1974,7 @@ tr:hover { background: #fcfcfd; }
     <div id="paymentMode-previous" class="hidden">
       <section class="pay-panel" style="border-top:4px solid #2563eb">
         <h3><i class="fas fa-clock-rotate-left"></i> Previous Payments from Master Balance Sheet</h3>
-        <p class="pay-muted">Admin-only: select an existing approved CREDIT entry from the master balance sheet and assign it to the student who made that payment before the Member Payment feature was introduced. This links the existing ledger entry to the student's account. It does not create another credit or change the original amount.</p>
+        <p class="pay-muted">Admin-only: select a student, then select an existing approved CREDIT entry already recorded in the Master Balance Sheet. This links that earlier credit to the student's payment record without creating a second credit or changing its original category, description or amount. Project Head is included as a payable member even though Project Head also has Admin access.</p>
         <div class="pay-grid" style="margin:16px 0">
           <div><label for="mrpspPreviousStudent">Select student</label><select id="mrpspPreviousStudent"><option value="">Select student</option></select></div>
           <div><label for="mrpspPreviousFinanceEntry">Select previous payment from Master Balance Sheet</label><select id="mrpspPreviousFinanceEntry"><option value="">Loading approved credit entries…</option></select></div>
@@ -18173,7 +18173,23 @@ let mrpspPaymentCache = { users:{}, finance:{}, requests:{}, exemptions:{}, refu
 const mrpspMoney = n => "₹" + (Number(n)||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
 const mrpspSafe = s => String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const mrpspUserEmail = u => u?.personalEmail1 || u?.personalEmail2 || u?.email || "";
-const mrpspStudentUsers = () => Object.entries(mrpspPaymentCache.users||{}).filter(([uid,u]) => u && u.email && !ADMIN_EMAILS.includes(String(u.email).toLowerCase()) && u.banned !== true).map(([uid,u])=>({uid,...u})).sort((a,b)=>String(a.name||a.email).localeCompare(String(b.name||b.email)));
+const mrpspIsProjectHeadPayable = u => {
+  if(!u) return false;
+  // Project Head account remains payable even though it is also in the Admin allowlist.
+  if(String(u.email||"").toLowerCase() === "soham@metro.project") return true;
+  if(u.isProjectHead === true || u.projectHead === true) return true;
+  const roleText = [u.role,u.userRole,u.designation,u.position,u.title,u.projectRole,u.departmentRole]
+    .filter(Boolean).join(" ").toLowerCase().replace(/[_-]+/g," ");
+  return /(^|\b)(ph|project head)(\b|$)/i.test(roleText);
+};
+const mrpspStudentUsers = () => Object.entries(mrpspPaymentCache.users||{})
+  .filter(([uid,u]) => {
+    if(!u || u.banned === true || !(u.email || u.personalEmail1 || u.personalEmail2)) return false;
+    const email=String(u.email||"").toLowerCase();
+    return !ADMIN_EMAILS.some(e=>e.toLowerCase()===email) || mrpspIsProjectHeadPayable(u);
+  })
+  .map(([uid,u])=>({uid,...u}))
+  .sort((a,b)=>String(a.name||a.email).localeCompare(String(b.name||b.email)));
 const mrpspName = u => u?.name || u?.fullName || u?.email || "Student";
 const mrpspDate = ts => ts ? new Date(Number(ts)).toLocaleString("en-IN") : "—";
 
@@ -18256,6 +18272,7 @@ function mrpspRenderPaymentViews(mode){
   const model=mrpspBuildDues();
   const admin=isAdmin===true;
   document.getElementById("btnPaymentStudentWise")?.classList.toggle("hidden",!admin);
+  document.getElementById("btnPaymentPrevious")?.classList.toggle("hidden",!admin);
   document.getElementById("btnPaymentBreakup")?.classList.toggle("hidden",!admin);
   document.getElementById("mrpspRefundAdminPanel")?.classList.toggle("hidden",!admin);
   document.getElementById("mrpspRefundStudentQrPanel")?.classList.toggle("hidden",admin);
@@ -18900,7 +18917,7 @@ window.mrpspLoadPaymentReviewQueue = async function(){
   const baseBuildDues = mrpspBuildDues;
   mrpspBuildDues = function(){
     const model=baseBuildDues();
-    model.finance.filter(x=>x.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT"&&x.status==="Approved"&&x.studentUid)
+    model.finance.filter(x=>(x.legacyPaymentLinked===true || x.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT")&&x.status==="Approved"&&x.studentUid)
       .forEach(x=>{
         const student=model.rows.find(st=>st.uid===x.studentUid);
         if(student)student.paid += Number(x.amount)||0;
@@ -18914,10 +18931,15 @@ window.mrpspLoadPaymentReviewQueue = async function(){
 })();
 
 function mrpspPreviousPaymentCandidates(){
+  // Existing approved CREDIT rows from the Master Balance Sheet only.
+  // Exclude rows already linked to a student, payment request or refund.
   return Object.entries(mrpspPaymentCache.finance||{}).map(([key,v])=>({key,...v})).filter(x=>
-    x.type==="CREDIT" && x.status==="Approved" && !x.studentUid &&
-    x.source!=="VERIFIED_MEMBER_PAYMENT" && x.source!=="PRE_FEATURE_MASTER_LEDGER_PAYMENT" &&
-    !x.paymentRequestKey && !x.refundPoolKey
+    String(x.type||"").toUpperCase()==="CREDIT" &&
+    String(x.status||"").toLowerCase()==="approved" &&
+    !x.studentUid && !x.paymentRequestKey && !x.refundPoolKey &&
+    x.source!=="VERIFIED_MEMBER_PAYMENT" &&
+    x.source!=="MEMBER_DUE_EXEMPTION" &&
+    x.source!=="STUDENT_REFUND_SOURCE"
   ).sort((a,b)=>Number(b.timestamp||b.date||0)-Number(a.timestamp||a.date||0));
 }
 
@@ -18948,7 +18970,7 @@ window.mrpspRenderPreviousPayments=function(){
   entrySelect.onchange=previewEntry;previewEntry();
   if(assignedHost){
     const assigned=Object.entries(mrpspPaymentCache.finance||{}).map(([key,v])=>({key,...v}))
-      .filter(x=>x.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT"&&x.studentUid);
+      .filter(x=>(x.legacyPaymentLinked===true||x.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT")&&x.studentUid);
     assignedHost.innerHTML=assigned.length
       ? `<table><thead><tr><th>Student</th><th>Amount</th><th>Description</th><th>Original date</th><th>Assigned on</th><th>Ledger ID</th></tr></thead><tbody>${assigned.map(x=>{
           const st=students.find(u=>u.uid===x.studentUid);
@@ -18978,7 +19000,7 @@ window.mrpspAssignPreviousPayment=async function(){
     const assignedAt=Date.now();
     await update(financeRef,{
       studentUid:uid,studentName:mrpspName(student),studentEmail:mrpspUserEmail(student),
-      source:"PRE_FEATURE_MASTER_LEDGER_PAYMENT",
+      legacyPaymentLinked:true,
       legacyOriginalSource:current.source||current.mode||"MASTER_BALANCE_SHEET",
       legacyAssignedAt:assignedAt,legacyAssignedBy:auth.currentUser.email||auth.currentUser.uid
     });
@@ -19005,7 +19027,7 @@ window.mrpspRenderSelectedDues=function(){
   if(!host||!d)return;
   const uid=isAdmin?(document.getElementById("mrpspDuesStudentPicker")?.value||""):auth.currentUser?.uid;
   const legacy=Object.entries(mrpspPaymentCache.finance||{}).map(([key,v])=>({key,...v}))
-    .filter(x=>x.studentUid===uid&&x.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT"&&x.status==="Approved")
+    .filter(x=>x.studentUid===uid&&(x.legacyPaymentLinked===true||x.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT")&&x.status==="Approved")
     .map(x=>({
       key:`LEGACY-${x.key}`,legacyFinanceKey:x.key,legacyImported:true,status:"VERIFIED",verified:true,
       amount:Number(x.amount)||0,payerName:x.studentName||d.studentName,
