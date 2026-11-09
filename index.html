@@ -1913,6 +1913,7 @@ tr:hover { background: #fcfcfd; }
     <div class="pay-nav">
       <button type="button" id="btnPaymentStudent" onclick="window.togglePaymentMode('student')"><i class="fas fa-wallet"></i> Make Payment</button>
       <button type="button" id="btnPaymentStudentWise" class="hidden" onclick="window.togglePaymentMode('studentwise')"><i class="fas fa-users"></i> Student-wise View</button>
+      <button type="button" id="btnPaymentPrevious" class="hidden" onclick="window.togglePaymentMode('previous')"><i class="fas fa-clock-rotate-left"></i> Previous Payments</button>
       <button type="button" id="btnPaymentDues" onclick="window.togglePaymentMode('dues')"><i class="fas fa-file-invoice-dollar"></i> Dues & Receipts</button>
       <button type="button" id="btnPaymentBreakup" class="hidden" onclick="window.togglePaymentMode('breakup')"><i class="fas fa-calculator"></i> Due Breakup</button>
       <button type="button" id="btnPaymentRefund" onclick="window.togglePaymentMode('refund')"><i class="fas fa-money-bill-transfer"></i> Student Refund</button>
@@ -1967,6 +1968,22 @@ tr:hover { background: #fcfcfd; }
         <p class="pay-muted">Administrator-only consolidated view of each student's calculated dues, verified payments and outstanding balance.</p>
         <div id="mrpspStudentWiseSummary" class="pay-grid"></div>
         <div id="mrpspStudentWiseTable" class="pay-table-wrap" style="margin-top:16px;">Loading student payment data…</div>
+      </section>
+    </div>
+
+    <div id="paymentMode-previous" class="hidden">
+      <section class="pay-panel" style="border-top:4px solid #2563eb">
+        <h3><i class="fas fa-clock-rotate-left"></i> Previous Payments from Master Balance Sheet</h3>
+        <p class="pay-muted">Admin-only: select an existing approved CREDIT entry from the master balance sheet and assign it to the student who made that payment before the Member Payment feature was introduced. This links the existing ledger entry to the student's account. It does not create another credit or change the original amount.</p>
+        <div class="pay-grid" style="margin:16px 0">
+          <div><label for="mrpspPreviousStudent">Select student</label><select id="mrpspPreviousStudent"><option value="">Select student</option></select></div>
+          <div><label for="mrpspPreviousFinanceEntry">Select previous payment from Master Balance Sheet</label><select id="mrpspPreviousFinanceEntry"><option value="">Loading approved credit entries…</option></select></div>
+        </div>
+        <div id="mrpspPreviousPaymentPreview" class="pay-stat" style="margin:12px 0">Select a ledger entry to review its details.</div>
+        <button type="button" class="success" onclick="window.mrpspAssignPreviousPayment()"><i class="fas fa-link"></i> ASSIGN EXISTING PAYMENT TO STUDENT</button>
+        <div id="mrpspPreviousPaymentStatus" class="pay-muted" style="margin-top:10px"></div>
+        <h4 style="margin-top:22px">Previously assigned payments</h4>
+        <div id="mrpspPreviousPaymentAssigned" class="pay-table-wrap">Loading assignments…</div>
       </section>
     </div>
 
@@ -3774,9 +3791,9 @@ window.openMemberPaymentTab = function () {
 
 // Payment sub-navigation styled to match Asset Tracking controls.
 window.togglePaymentMode = function (mode) {
-  const allowed = ['student', 'studentwise', 'dues', 'breakup', 'refund', 'verify', 'qr'];
+  const allowed = ['student', 'studentwise', 'previous', 'dues', 'breakup', 'refund', 'verify', 'qr'];
   if (!allowed.includes(mode)) mode = 'student';
-  if (['verify', 'qr', 'studentwise', 'breakup'].includes(mode) && !isAdmin) {
+  if (['verify', 'qr', 'studentwise', 'previous', 'breakup'].includes(mode) && !isAdmin) {
     alert('Administrator access required.');
     mode = 'dues';
   }
@@ -3784,7 +3801,7 @@ window.togglePaymentMode = function (mode) {
     const panel = document.getElementById(`paymentMode-${name}`);
     if (panel) panel.classList.toggle('hidden', name !== mode);
   });
-  const buttons = { student: 'btnPaymentStudent', studentwise: 'btnPaymentStudentWise', dues: 'btnPaymentDues', breakup: 'btnPaymentBreakup', refund: 'btnPaymentRefund', verify: 'btnPaymentVerify', qr: 'btnPaymentQr' };
+  const buttons = { student: 'btnPaymentStudent', studentwise: 'btnPaymentStudentWise', previous: 'btnPaymentPrevious', dues: 'btnPaymentDues', breakup: 'btnPaymentBreakup', refund: 'btnPaymentRefund', verify: 'btnPaymentVerify', qr: 'btnPaymentQr' };
   Object.entries(buttons).forEach(([name, id]) => {
     const button = document.getElementById(id);
     if (!button) return;
@@ -3793,7 +3810,7 @@ window.togglePaymentMode = function (mode) {
     else { button.style.outline = ''; }
   });
   if (mode === 'verify') window.mrpspLoadPaymentReviewQueue?.();
-  if (['studentwise','dues','breakup','refund'].includes(mode)) window.mrpspLoadMemberPaymentDashboard?.(mode);
+  if (['studentwise','previous','dues','breakup','refund'].includes(mode)) window.mrpspLoadMemberPaymentDashboard?.(mode);
 };
 window.mrpspSubmitPaymentForVerification = async function () {
   const amount = Number(document.getElementById("mrpspPayAmount")?.value);
@@ -18553,6 +18570,440 @@ window.mrpspLoadMemberPaymentDashboard=async function(mode){
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded',start,{once:true});
   else start();
 })();
+
+
+
+// ================================================================
+// PAYMENT RECEIPT + 24-HOUR ADMIN REVERSAL
+// Receipt is generated only for a payment verified by an Admin.
+// ================================================================
+window.mrpspDownloadPaidReceipt = function(requestKey){
+  const d = window.mrpspCurrentReceipt;
+  const p = (d?.payments || []).find(x => x.key === requestKey);
+  if(!p || p.status !== "VERIFIED" || p.verified !== true){
+    return alert("A paid receipt is available only after Admin verification.");
+  }
+  const JsPDF = window.jspdf?.jsPDF;
+  if(!JsPDF) return alert("PDF library is unavailable. Refresh and try again.");
+
+  const doc = new JsPDF();
+  const pageW = doc.internal.pageSize.getWidth();
+  const left = 16, right = pageW - 16;
+  const verifiedAt = Number(p.verifiedAt || 0);
+  const receiptNo = `MRPSP-${String(p.key || "").slice(-10).toUpperCase()}`;
+  const lines = [
+    ["Receipt number", receiptNo],
+    ["Student name", d.studentName || p.studentName || p.payerName || "—"],
+    ["Student ID", d.uid || p.studentUid || p.createdBy || "—"],
+    ["Email", d.email || p.createdByEmail || "—"],
+    ["Project", p.project || activeProject || "MRPSP"],
+    ["Payment purpose", p.purpose || "Project contribution"],
+    ["Payer name", p.payerName || "—"],
+    ["Amount received", mrpspMoney(p.amount)],
+    ["Payment mode", "UPI"],
+    ["UPI transaction / UTR ID", p.utr || p.transactionUtr || "Not recorded"],
+    ["Reference last 4 digits", p.transactionLast4 || "—"],
+    ["Date submitted", p.createdAt ? new Date(p.createdAt).toLocaleString("en-IN") : "—"],
+    ["Date approved", verifiedAt ? new Date(verifiedAt).toLocaleString("en-IN") : "—"],
+    ["Approved by", p.verifiedBy || "Administrator"],
+    ["Verification note", p.verificationNote || "Verified against receiving account"]
+  ];
+
+  doc.setFillColor(15, 42, 78);
+  doc.rect(0, 0, pageW, 34, "F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold"); doc.setFontSize(16);
+  doc.text("METRO RAILWAY PLATFORM SAFETY PROJECT", left, 14);
+  doc.setFontSize(11); doc.text("OFFICIAL PAYMENT RECEIPT", left, 24);
+  doc.setTextColor(25,35,50);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  let y = 46;
+  lines.forEach(([label,value]) => {
+    const wrapped = doc.splitTextToSize(String(value || "—"), 105);
+    doc.setFont("helvetica","bold"); doc.text(label + ":", left, y);
+    doc.setFont("helvetica","normal"); doc.text(wrapped, 77, y);
+    y += Math.max(7, wrapped.length * 5) + 2;
+    if(y > 238){ doc.addPage(); y = 20; }
+  });
+
+  // Official-style paid stamp at the bottom of the receipt.
+  const stampY = Math.min(Math.max(y + 8, 250), 265);
+  doc.setDrawColor(22,128,75); doc.setTextColor(22,128,75);
+  doc.setLineWidth(1.2); doc.roundedRect(pageW-66, stampY-13, 48, 22, 2, 2, "S");
+  doc.setFont("helvetica","bold"); doc.setFontSize(17);
+  doc.text("PAID", pageW-42, stampY+1, {align:"center",angle:-8});
+  doc.setFontSize(8); doc.setTextColor(80,90,100);
+  doc.text("This receipt confirms that the amount stated above was received and verified by the project administrator.", left, 282, {maxWidth:pageW-32});
+  doc.text("Computer-generated receipt. Keep this document for your records.", left, 289);
+  doc.save(`MRPSP_PAID_Receipt_${receiptNo}.pdf`);
+};
+
+(function addIndividualPaidReceiptButtons(){
+  const original = window.mrpspRenderSelectedDues;
+  if(typeof original !== "function" || original.__receiptEnhanced) return;
+  const wrapped = function(){
+    original.apply(this, arguments);
+    const host = document.getElementById("mrpspDuesStatement");
+    const table = host?.querySelector("table");
+    if(!table || !window.mrpspCurrentReceipt) return;
+    const head = table.querySelector("thead tr");
+    if(head && !head.querySelector('[data-receipt-column="1"]')){
+      const th = document.createElement("th"); th.textContent = "Receipt";
+      th.dataset.receiptColumn = "1"; head.appendChild(th);
+    }
+    const payments = window.mrpspCurrentReceipt.payments || [];
+    const bodyRows = table.querySelectorAll("tbody tr");
+    bodyRows.forEach((tr,index)=>{
+      if(tr.cells.length === 1 || tr.dataset.receiptAdded) return;
+      const p = payments[index];
+      const td = document.createElement("td");
+      if(p?.status === "VERIFIED" && p?.verified === true){
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "success";
+        btn.textContent = "Download Paid Receipt";
+        btn.style.cssText = "font-size:12px;padding:7px 10px;white-space:nowrap";
+        btn.addEventListener("click",()=>window.mrpspDownloadPaidReceipt(p.key));
+        td.appendChild(btn);
+      } else {
+        td.textContent = "Available after approval";
+        td.style.cssText = "font-size:11px;color:#64748b";
+      }
+      tr.appendChild(td); tr.dataset.receiptAdded = "1";
+    });
+  };
+  wrapped.__receiptEnhanced = true;
+  window.mrpspRenderSelectedDues = wrapped;
+})();
+
+// Admin approves only after entering the complete UTR/reference ID.
+// The approval timestamp starts the 24-hour cancellation window.
+window.mrpspVerifyAndCreditPayment = async function(requestKey){
+  if(!isAdmin || !auth.currentUser) return alert("Only an administrator can verify and credit a payment.");
+  try{
+    const reqRef = ref(db,`eoffice_requests/${requestKey}`);
+    const snap = await get(reqRef);
+    if(!snap.exists()) return alert("Payment request not found.");
+    const payment = snap.val();
+    if(payment.type !== "PROJECT_PAYMENT_VERIFICATION") return alert("This is not a project payment request.");
+    if(payment.status !== "PAYMENT PENDING" || payment.verified === true || payment.creditEntryKey) return alert("Only pending, unprocessed payments can be approved.");
+
+    const utr = prompt("Enter the COMPLETE UPI transaction ID / UTR from the receiving bank account. This will appear on the paid receipt:");
+    if(utr === null) return;
+    if(!utr.trim() || utr.trim().length < 6) return alert("Enter the complete valid UTR / transaction ID.");
+    const note = prompt("Enter verification note after checking the actual credit in the receiving account:", "Verified against bank/UPI statement");
+    if(note === null) return;
+    if(!note.trim()) return alert("Verification note is required.");
+
+    const verifiedAt = Date.now();
+    const financeRef = await push(projectAwareRef("finance"),{
+      type:"CREDIT",amount:Number(payment.amount),
+      desc:`UPI payment — ${payment.payerName} — ${payment.purpose}`,
+      mode:"UPI",status:"Approved",by:auth.currentUser.email||"Admin",timestamp:verifiedAt,
+      source:"VERIFIED_MEMBER_PAYMENT",paymentRequestKey:requestKey,
+      studentUid:payment.createdBy||payment.studentUid||"",
+      studentEmail:payment.createdByEmail||"",
+      studentName:payment.studentName||payment.payerName||"",
+      transactionLast4:payment.transactionLast4,utr:utr.trim(),transactionUtr:utr.trim(),
+      verifiedBy:auth.currentUser.email||"",verifiedAt,verificationNote:note.trim(),
+      cancellationDeadline:verifiedAt+24*60*60*1000
+    });
+    try{
+      await update(reqRef,{
+        status:"VERIFIED",verified:true,verifiedBy:auth.currentUser.email||"",
+        verifiedAt,verificationNote:note.trim(),utr:utr.trim(),transactionUtr:utr.trim(),
+        creditEntryKey:financeRef.key,cancellationDeadline:verifiedAt+24*60*60*1000
+      });
+    }catch(updateErr){
+      try{await remove(financeRef);}catch(rollbackErr){console.error("CRITICAL: credit rollback failed",rollbackErr);}
+      throw updateErr;
+    }
+
+    try{
+      const userSnap=await get(projectAwareRef(`users/${payment.createdBy||payment.studentUid}`));
+      const user=userSnap.exists()?userSnap.val():{};
+      const recipient=user.personalEmail1||user.personalEmail2||user.email||payment.createdByEmail;
+      if(recipient){
+        const approvedPayment={...payment,utr:utr.trim(),transactionUtr:utr.trim(),verifiedAt,verifiedBy:auth.currentUser.email||"",verificationNote:note.trim()};
+        await window.mrpspSendPaymentEmail(recipient,user.name||payment.studentName||payment.payerName,"PAYMENT APPROVED",approvedPayment,
+          `Payment approved and credited. Full UTR: ${utr.trim()}. Approved by: ${auth.currentUser.email||"Administrator"}. Approved at: ${new Date(verifiedAt).toLocaleString("en-IN")}. Admin cancellation is available for 24 hours.`);
+      }
+    }catch(mailErr){console.warn("Payment approval email could not be sent",mailErr);}
+    alert("Payment verified and credited. The paid receipt now includes the complete UTR and approval details. Admin cancellation is available for 24 hours.");
+    window.mrpspLoadPaymentReviewQueue();
+    window.mrpspLoadMemberPaymentDashboard?.("dues");
+  }catch(err){
+    console.error("Payment verification failed",err);
+    alert("Could not verify/credit payment: "+(err?.message||err));
+  }
+};
+
+// Admin can reverse a verified credit only during the first 24 hours.
+window.mrpspCancelApprovedPayment = async function(requestKey){
+  if(!isAdmin || !auth.currentUser) return alert("Only an administrator can cancel an approved payment.");
+  const reason=prompt("Enter the reason for cancelling this approved payment. This action is allowed only within 24 hours of approval:");
+  if(reason===null)return;
+  if(!reason.trim())return alert("Cancellation reason is required.");
+  try{
+    const reqRef=ref(db,`eoffice_requests/${requestKey}`);
+    const snap=await get(reqRef);
+    if(!snap.exists())return alert("Payment record not found.");
+    const payment=snap.val();
+    if(payment.type!=="PROJECT_PAYMENT_VERIFICATION" || payment.status!=="VERIFIED" || !payment.creditEntryKey) return alert("Only an approved and credited payment can be cancelled.");
+    const deadline=Number(payment.cancellationDeadline || (Number(payment.verifiedAt||0)+24*60*60*1000));
+    const now=Date.now();
+    if(!payment.verifiedAt || now>deadline) return alert("The 24-hour cancellation window has expired. No changes are permitted.");
+    const financeRef=projectAwareRef(`finance/${payment.creditEntryKey}`);
+    const financeSnap=await get(financeRef);
+    if(!financeSnap.exists())return alert("Linked Project Funds credit was not found. Nothing was changed.");
+    const finance=financeSnap.val();
+    if(finance.status!=="Approved" || finance.paymentRequestKey!==requestKey) return alert("The linked finance entry is no longer an active approved credit.");
+    await update(financeRef,{
+      status:"Cancelled",cancelledAt:now,cancelledBy:auth.currentUser.email||auth.currentUser.uid,
+      cancellationReason:reason.trim(),originalStatus:"Approved"
+    });
+    try{
+      await update(reqRef,{
+        status:"CANCELLED",verified:false,cancelledAt:now,
+        cancelledBy:auth.currentUser.email||auth.currentUser.uid,
+        cancellationReason:reason.trim()
+      });
+    }catch(updateErr){
+      try{await update(financeRef,{status:"Approved",cancelledAt:null,cancelledBy:null,cancellationReason:null,originalStatus:null});}
+      catch(rollbackErr){console.error("CRITICAL: payment cancellation rollback failed",rollbackErr);}
+      throw updateErr;
+    }
+    try{
+      const userSnap=await get(projectAwareRef(`users/${payment.createdBy||payment.studentUid}`));
+      const user=userSnap.exists()?userSnap.val():{};
+      const recipient=user.personalEmail1||user.personalEmail2||user.email||payment.createdByEmail;
+      if(recipient) await window.mrpspSendPaymentEmail(recipient,user.name||payment.studentName||payment.payerName,
+        "PAYMENT APPROVAL CANCELLED",payment,`The payment approval has been cancelled by Admin. Amount: ${mrpspMoney(payment.amount)}. UTR: ${payment.utr||"—"}. Reason: ${reason.trim()}. The payment is no longer counted as received.`);
+    }catch(mailErr){console.warn("Cancellation email could not be sent",mailErr);}
+    alert("Payment approval cancelled. The linked Project Funds credit is now marked Cancelled.");
+    window.mrpspLoadPaymentReviewQueue();
+    window.mrpspLoadMemberPaymentDashboard?.("dues");
+  }catch(err){
+    console.error("Payment cancellation failed",err);
+    alert("Could not cancel payment: "+(err?.message||err));
+  }
+};
+
+// Admin review queue: pending requests plus approvals still inside their 24-hour reversal period.
+window.mrpspLoadPaymentReviewQueue = async function(){
+  const panel=document.getElementById("mrpspAdminPaymentReviewPanel");
+  const list=document.getElementById("mrpspAdminPaymentReviewList");
+  if(!panel||!list)return;
+  panel.classList.toggle("hidden",!isAdmin);
+  const qrPanel=document.getElementById("mrpspAdminQrUploadPanel");
+  if(qrPanel)qrPanel.classList.toggle("hidden",!isAdmin);
+  if(!isAdmin)return;
+  try{
+    const snap=await get(ref(db,"eoffice_requests"));
+    const items=[];
+    if(snap.exists())snap.forEach(child=>{
+      const v=child.val();
+      if(v?.type==="PROJECT_PAYMENT_VERIFICATION" &&
+        (v.status==="PAYMENT PENDING" || (v.status==="VERIFIED" && v.verifiedAt && Date.now()<=Number(v.cancellationDeadline||v.verifiedAt+24*60*60*1000))))
+        items.push({key:child.key,...v});
+    });
+    items.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+    if(!items.length){list.innerHTML='<p style="color:#64748b;">No pending payments or recently approved payments within the 24-hour cancellation window.</p>';return;}
+    list.innerHTML=items.map(p=>{
+      const safe=x=>String(x??"—").replace(/[<>]/g,"");
+      if(p.status==="PAYMENT PENDING")return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;margin:10px 0;background:#fff">
+        <b>${safe(p.payerName||"Member")}</b> · <b>${mrpspMoney(p.amount)}</b>
+        <div style="font-size:12px;color:#64748b;margin:6px 0">Purpose: ${safe(p.purpose)} | Last 4: ${safe(p.transactionLast4)} | Project: ${safe(p.project)}<br>Submitted: ${p.createdAt?new Date(p.createdAt).toLocaleString("en-IN"):"—"} | Request: ${safe(p.key)}</div>
+        <button class="success" onclick="window.mrpspVerifyAndCreditPayment('${p.key}')">VERIFY & APPROVE</button>
+        <button class="danger" onclick="window.mrpspRejectPayment('${p.key}')">REJECT</button></div>`;
+      const left=Math.max(0,Number(p.cancellationDeadline||p.verifiedAt+24*60*60*1000)-Date.now());
+      return `<div style="border:1px solid #bbf7d0;border-radius:10px;padding:14px;margin:10px 0;background:#f0fdf4">
+        <b>${safe(p.studentName||p.payerName)} · ${mrpspMoney(p.amount)}</b>
+        <div style="font-size:12px;color:#475569;margin:6px 0">Approved: ${new Date(p.verifiedAt).toLocaleString("en-IN")} | UTR: <b>${safe(p.utr||"—")}</b><br>Approved by: ${safe(p.verifiedBy)} | Cancellation closes: ${new Date(Number(p.cancellationDeadline||p.verifiedAt+24*60*60*1000)).toLocaleString("en-IN")} | Time remaining: ${Math.floor(left/3600000)}h ${Math.floor((left%3600000)/60000)}m</div>
+        <button class="danger" onclick="window.mrpspCancelApprovedPayment('${p.key}')">CANCEL APPROVAL</button></div>`;
+    }).join("");
+  }catch(err){
+    list.innerHTML=`<p style="color:#b91c1c;">Could not load payment requests: ${String(err?.message||err).replace(/[<>]/g,"")}</p>`;
+    console.error(err);
+  }
+};
+
+
+
+// ADMIN SUBTAB: assign pre-feature payments from existing master-ledger credits.
+(function(){
+  const baseBuildDues = mrpspBuildDues;
+  mrpspBuildDues = function(){
+    const model=baseBuildDues();
+    model.finance.filter(x=>x.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT"&&x.status==="Approved"&&x.studentUid)
+      .forEach(x=>{
+        const student=model.rows.find(st=>st.uid===x.studentUid);
+        if(student)student.paid += Number(x.amount)||0;
+      });
+    model.rows.forEach(st=>{
+      st.balance=Math.max(0,st.due-st.paid);
+      st.overpaid=Math.max(0,st.paid-st.due);
+    });
+    return model;
+  };
+})();
+
+function mrpspPreviousPaymentCandidates(){
+  return Object.entries(mrpspPaymentCache.finance||{}).map(([key,v])=>({key,...v})).filter(x=>
+    x.type==="CREDIT" && x.status==="Approved" && !x.studentUid &&
+    x.source!=="VERIFIED_MEMBER_PAYMENT" && x.source!=="PRE_FEATURE_MASTER_LEDGER_PAYMENT" &&
+    !x.paymentRequestKey && !x.refundPoolKey
+  ).sort((a,b)=>Number(b.timestamp||b.date||0)-Number(a.timestamp||a.date||0));
+}
+
+window.mrpspRenderPreviousPayments=function(){
+  if(!isAdmin)return;
+  const students=mrpspStudentUsers();
+  const studentSelect=document.getElementById("mrpspPreviousStudent");
+  const entrySelect=document.getElementById("mrpspPreviousFinanceEntry");
+  const preview=document.getElementById("mrpspPreviousPaymentPreview");
+  const assignedHost=document.getElementById("mrpspPreviousPaymentAssigned");
+  if(!studentSelect||!entrySelect)return;
+  const oldStudent=studentSelect.value,oldEntry=entrySelect.value;
+  studentSelect.innerHTML='<option value="">Select student</option>'+students.map(st=>
+    `<option value="${mrpspSafe(st.uid)}">${mrpspSafe(mrpspName(st))} (${mrpspSafe(st.email||"")})</option>`).join("");
+  const candidates=mrpspPreviousPaymentCandidates();
+  entrySelect.innerHTML='<option value="">Select an unassigned approved CREDIT entry</option>'+candidates.map(x=>{
+    const dt=x.timestamp||x.date;
+    return `<option value="${mrpspSafe(x.key)}">${mrpspSafe(`${mrpspMoney(x.amount)} | ${x.desc||x.description||x.source||"Credit"} | ${dt?mrpspDate(dt):"Date not recorded"} | ID ${x.key}`)}</option>`;
+  }).join("");
+  if(students.some(x=>x.uid===oldStudent))studentSelect.value=oldStudent;
+  if(candidates.some(x=>x.key===oldEntry))entrySelect.value=oldEntry;
+  const previewEntry=()=>{
+    const x=candidates.find(v=>v.key===entrySelect.value);
+    if(preview)preview.innerHTML=x
+      ? `<b>Review selected ledger entry</b><br>Amount: ${mrpspMoney(x.amount)}<br>Description: ${mrpspSafe(x.desc||x.description||"—")}<br>Source: ${mrpspSafe(x.source||x.mode||"—")}<br>Date: ${x.timestamp||x.date?mrpspDate(x.timestamp||x.date):"Not recorded"}<br>Ledger ID: ${mrpspSafe(x.key)}`
+      : "Select a ledger entry to review its details.";
+  };
+  entrySelect.onchange=previewEntry;previewEntry();
+  if(assignedHost){
+    const assigned=Object.entries(mrpspPaymentCache.finance||{}).map(([key,v])=>({key,...v}))
+      .filter(x=>x.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT"&&x.studentUid);
+    assignedHost.innerHTML=assigned.length
+      ? `<table><thead><tr><th>Student</th><th>Amount</th><th>Description</th><th>Original date</th><th>Assigned on</th><th>Ledger ID</th></tr></thead><tbody>${assigned.map(x=>{
+          const st=students.find(u=>u.uid===x.studentUid);
+          return `<tr><td>${mrpspSafe(mrpspName(st)||x.studentName||"Student")}</td><td>${mrpspMoney(x.amount)}</td><td>${mrpspSafe(x.desc||x.description||"—")}</td><td>${x.timestamp||x.date?mrpspDate(x.timestamp||x.date):"—"}</td><td>${x.legacyAssignedAt?mrpspDate(x.legacyAssignedAt):"—"}</td><td>${mrpspSafe(x.key)}</td></tr>`;
+        }).join("")}</tbody></table>`
+      : '<p class="pay-muted">No historical ledger payments have been assigned yet.</p>';
+  }
+};
+
+window.mrpspAssignPreviousPayment=async function(){
+  if(!isAdmin||!auth.currentUser)return alert("Administrator access required.");
+  const uid=document.getElementById("mrpspPreviousStudent")?.value;
+  const key=document.getElementById("mrpspPreviousFinanceEntry")?.value;
+  if(!uid)return alert("Select the student who made this previous payment.");
+  if(!key)return alert("Select an existing approved CREDIT entry from the master balance sheet.");
+  const student=mrpspStudentUsers().find(x=>x.uid===uid);
+  const entry=mrpspPreviousPaymentCandidates().find(x=>x.key===key);
+  if(!student||!entry)return alert("Student or eligible ledger entry not found. Refresh the subtab.");
+  if(!confirm(`Assign this existing credit to ${mrpspName(student)}?\nAmount: ${mrpspMoney(entry.amount)}\nEntry: ${entry.desc||entry.description||entry.key}\n\nNo new credit will be created.`))return;
+  try{
+    const financeRef=projectAwareRef(`finance/${key}`);
+    const snap=await get(financeRef);
+    if(!snap.exists())return alert("This ledger entry no longer exists.");
+    const current=snap.val();
+    if(current.type!=="CREDIT"||current.status!=="Approved"||current.studentUid||current.paymentRequestKey)
+      return alert("This entry is no longer eligible. It may already be assigned or linked.");
+    const assignedAt=Date.now();
+    await update(financeRef,{
+      studentUid:uid,studentName:mrpspName(student),studentEmail:mrpspUserEmail(student),
+      source:"PRE_FEATURE_MASTER_LEDGER_PAYMENT",
+      legacyOriginalSource:current.source||current.mode||"MASTER_BALANCE_SHEET",
+      legacyAssignedAt:assignedAt,legacyAssignedBy:auth.currentUser.email||auth.currentUser.uid
+    });
+    const status=document.getElementById("mrpspPreviousPaymentStatus");
+    if(status)status.textContent=`Assigned ${mrpspMoney(current.amount)} to ${mrpspName(student)}. Existing ledger credit retained, no duplicate credit created.`;
+    await window.mrpspLoadMemberPaymentDashboard("previous");
+    alert("Previous payment successfully linked to the student's account.");
+  }catch(err){
+    console.error("Previous payment assignment failed",err);
+    alert("Could not assign previous payment: "+(err?.message||err));
+  }
+};
+
+const _mrpspRenderViewsPrevious = mrpspRenderPaymentViews;
+mrpspRenderPaymentViews=function(mode){
+  _mrpspRenderViewsPrevious(mode);
+  if(mode==="previous")window.mrpspRenderPreviousPayments();
+};
+
+const _mrpspRenderDuesPrevious = window.mrpspRenderSelectedDues;
+window.mrpspRenderSelectedDues=function(){
+  _mrpspRenderDuesPrevious();
+  const host=document.getElementById("mrpspDuesStatement"),d=window.mrpspCurrentReceipt;
+  if(!host||!d)return;
+  const uid=isAdmin?(document.getElementById("mrpspDuesStudentPicker")?.value||""):auth.currentUser?.uid;
+  const legacy=Object.entries(mrpspPaymentCache.finance||{}).map(([key,v])=>({key,...v}))
+    .filter(x=>x.studentUid===uid&&x.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT"&&x.status==="Approved")
+    .map(x=>({
+      key:`LEGACY-${x.key}`,legacyFinanceKey:x.key,legacyImported:true,status:"VERIFIED",verified:true,
+      amount:Number(x.amount)||0,payerName:x.studentName||d.studentName,
+      purpose:x.desc||x.description||"Previous payment from Master Balance Sheet",
+      createdAt:Number(x.timestamp||x.date||x.legacyAssignedAt||0),
+      verifiedAt:Number(x.legacyAssignedAt||0),verifiedBy:x.legacyAssignedBy||"Administrator",
+      utr:x.utr||x.transactionUtr||"",transactionLast4:x.transactionLast4||""
+    }));
+  if(!legacy.length)return;
+  const combined=[...(d.payments||[]),...legacy].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  d.payments=combined;
+  const table=host.querySelector("table");
+  if(table){
+    const header=table.querySelector("thead tr");
+    if(header&&!header.querySelector('[data-receipt-column="1"]')){
+      const th=document.createElement("th");th.textContent="Receipt";th.dataset.receiptColumn="1";header.appendChild(th);
+    }
+    const tbody=table.querySelector("tbody");
+    if(tbody)tbody.innerHTML=combined.map(p=>`<tr>
+      <td>${mrpspDate(p.createdAt)}</td><td>${mrpspMoney(p.amount)}</td><td>${mrpspSafe(p.purpose||"—")}</td>
+      <td><span class="pay-chip ok">${p.legacyImported?"HISTORICAL PAYMENT":"VERIFIED"}</span></td>
+      <td>${mrpspSafe(p.legacyImported?"Imported from Master Balance Sheet. UTR shown only if present in original ledger.":p.verificationNote||"—")}</td>
+      <td><button class="success" onclick="window.mrpspDownloadPaidReceipt('${mrpspSafe(p.key)}')">Download Paid Receipt</button></td>
+    </tr>`).join("");
+  }
+};
+
+const _mrpspDownloadReceiptPrevious = window.mrpspDownloadPaidReceipt;
+window.mrpspDownloadPaidReceipt=function(requestKey){
+  const d=window.mrpspCurrentReceipt,p=(d?.payments||[]).find(x=>x.key===requestKey);
+  if(p?.legacyImported){
+    const JsPDF=window.jspdf?.jsPDF;
+    if(!JsPDF)return alert("PDF library is unavailable. Refresh and try again.");
+    const doc=new JsPDF(),w=doc.internal.pageSize.getWidth(),left=16;
+    const receiptNo=`MRPSP-HIST-${String(p.legacyFinanceKey).slice(-10).toUpperCase()}`;
+    doc.setFillColor(15,42,78);doc.rect(0,0,w,34,"F");
+    doc.setTextColor(255,255,255);doc.setFont("helvetica","bold");doc.setFontSize(15);
+    doc.text("METRO RAILWAY PLATFORM SAFETY PROJECT",left,14);
+    doc.setFontSize(11);doc.text("HISTORICAL PAYMENT RECEIPT",left,24);
+    doc.setTextColor(25,35,50);doc.setFont("helvetica","normal");doc.setFontSize(10);
+    const lines=[
+      ["Receipt number",receiptNo],["Student name",d.studentName],["Student ID",d.uid],
+      ["Student email",d.email],["Amount recorded",mrpspMoney(p.amount)],
+      ["Original ledger description",p.purpose],["Original ledger date",p.createdAt?mrpspDate(p.createdAt):"Not recorded"],
+      ["Linked to student account",p.verifiedAt?mrpspDate(p.verifiedAt):"Not recorded"],
+      ["Linked by",p.verifiedBy||"Administrator"],["UTR / transaction ID",p.utr||"Not present in original ledger"],
+      ["Source","Existing Master Balance Sheet entry"],["Ledger reference",p.legacyFinanceKey]
+    ];
+    let y=48;
+    lines.forEach(([a,b])=>{
+      doc.setFont("helvetica","bold");doc.text(a+":",left,y);
+      doc.setFont("helvetica","normal");const wrap=doc.splitTextToSize(String(b||"—"),110);doc.text(wrap,78,y);
+      y+=Math.max(7,wrap.length*5)+2;
+    });
+    doc.setDrawColor(22,128,75);doc.setTextColor(22,128,75);doc.setLineWidth(1.2);
+    doc.roundedRect(w-65,258,48,22,2,2,"S");doc.setFont("helvetica","bold");doc.setFontSize(17);
+    doc.text("PAID",w-41,272,{align:"center",angle:-8});
+    doc.setFontSize(8);doc.setTextColor(80,90,100);
+    doc.text("Historical payment linked from the existing master balance sheet. No new credit was created.",left,286,{maxWidth:w-32});
+    doc.save(`MRPSP_Historical_Paid_Receipt_${receiptNo}.pdf`);
+    return;
+  }
+  return _mrpspDownloadReceiptPrevious(requestKey);
+};
 
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
