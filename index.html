@@ -2003,14 +2003,14 @@ tr:hover { background: #fcfcfd; }
     <div id="paymentMode-breakup" class="hidden">
       <section class="pay-panel">
         <h3><i class="fas fa-calculator"></i> Student-wise Due Breakup</h3>
-        <p class="pay-muted">The per-student due is calculated as (approved asset purchase total − exempt-student contributions) ÷ (total students − distinct exempt students). Each exemption requires an amount and reason and is recorded in the master balance sheet.</p>
+        <p class="pay-muted">Admin can waive a specific amount from the payable asset cost for a selected student. A waiver is NOT a payment made by that student and must never be added as income or a credit to the master balance sheet. The remaining payable amount is divided among students who are not exempt.</p>
         <div id="mrpspDueCalculationSummary" class="pay-grid"></div>
         <div class="pay-grid" style="margin-top:16px">
-          <div><label for="mrpspExemptStudent">Exempt / contributing student</label><select id="mrpspExemptStudent"><option value="">Select student</option></select></div>
-          <div><label for="mrpspExemptAmount">Contribution amount (₹)</label><input id="mrpspExemptAmount" type="number" min="0.01" step="0.01" placeholder="Enter contribution"></div>
-          <div style="grid-column:1/-1"><label for="mrpspExemptReason">Reason for exemption / contribution</label><textarea id="mrpspExemptReason" rows="2" placeholder="Explain why this student is exempt and how this contribution is applied."></textarea></div>
+          <div><label for="mrpspExemptStudent">Student receiving a dues exemption</label><select id="mrpspExemptStudent"><option value="">Select student</option></select></div>
+          <div><label for="mrpspExemptAmount">Amount exempted from dues (₹)</label><input id="mrpspExemptAmount" type="number" min="0.01" step="0.01" placeholder="Enter contribution"></div>
+          <div style="grid-column:1/-1"><label for="mrpspExemptReason">Reason for dues exemption</label><textarea id="mrpspExemptReason" rows="2" placeholder="Explain why this amount is waived from the student's dues."></textarea></div>
         </div>
-        <button class="success" style="margin-top:12px" onclick="window.mrpspAddExemptContribution()"><i class="fas fa-save"></i> RECORD CONTRIBUTION & EXEMPTION</button>
+        <button class="success" style="margin-top:12px" onclick="window.mrpspAddExemptContribution()"><i class="fas fa-save"></i> APPLY DUES EXEMPTION</button>
         <div id="mrpspExemptContributionList" style="margin-top:18px"></div>
         <div id="mrpspDueBreakupTable" class="pay-table-wrap" style="margin-top:18px">Loading due breakup…</div>
       </section>
@@ -18225,7 +18225,8 @@ function mrpspBuildDues(){
   const students=mrpspStudentUsers();
   const finance=Object.entries(mrpspPaymentCache.finance||{}).map(([key,v])=>({key,...v}));
   const assetTotal=finance.filter(x=>x.type==="DEBIT"&&x.status==="Approved"&&(x.productName||String(x.desc||"").startsWith("Purchase:"))).reduce((s,x)=>s+(Number(x.amount)||0),0);
-  const exemptions=Object.entries(mrpspPaymentCache.exemptions||{}).map(([key,v])=>({key,...v}));
+  const allExemptions=Object.entries(mrpspPaymentCache.exemptions||{}).map(([key,v])=>({key,...v}));
+  const exemptions=allExemptions.filter(x=>x.status!=="CANCELLED" && x.cancelled!==true);
   const exemptSet=new Set(exemptions.map(x=>x.studentUid).filter(Boolean));
   const exemptionTotal=exemptions.reduce((s,x)=>s+(Number(x.amount)||0),0);
   const liableCount=Math.max(0,students.length-exemptSet.size);
@@ -18248,7 +18249,7 @@ function mrpspBuildDues(){
     const due=exempt?0:perStudent;
     return {...st,exempt,due,paid,balance:Math.max(0,due-paid),overpaid:Math.max(0,paid-due)};
   });
-  return {students,rows,assetTotal,exemptionTotal,exemptCount:exemptSet.size,liableCount,perStudent,exemptions,finance};
+  return {students,rows,assetTotal,exemptionTotal,exemptCount:exemptSet.size,liableCount,perStudent,exemptions,allExemptions,finance};
 }
 
 function mrpspRenderPaymentViews(mode){
@@ -18279,7 +18280,7 @@ function mrpspRenderStudentWise(model){
   if(!isAdmin){host.innerHTML="Administrator access required.";return;}
   summary.innerHTML=[
     ["Approved asset purchases",mrpspMoney(model.assetTotal)],
-    ["Exempt contributions",mrpspMoney(model.exemptionTotal)],
+    ["Active dues waivers",mrpspMoney(model.exemptionTotal)],
     ["Per-student due",mrpspMoney(model.perStudent)],
     ["Students liable",model.liableCount]
   ].map(x=>`<div class="pay-stat"><span class="pay-muted">${x[0]}</span><b>${x[1]}</b></div>`).join("");
@@ -18323,7 +18324,7 @@ window.mrpspDownloadStudentReceipt=function(){
   doc.setFontSize(16);doc.text("MRPSP STUDENT PAYMENT STATEMENT",14,18);
   doc.setFontSize(10);doc.text(`Student: ${d.studentName}`,14,30);doc.text(`Email: ${d.email}`,14,37);doc.text(`Student ID: ${d.uid}`,14,44);
   doc.text(`Calculated dues: ${mrpspMoney(d.due)}`,14,56);doc.text(`Verified paid: ${mrpspMoney(d.paid)}`,14,63);doc.text(`Outstanding: ${mrpspMoney(d.balance)}`,14,70);
-  doc.text(`Asset purchase total: ${mrpspMoney(d.assetTotal)}`,14,82);doc.text(`Exempt contributions: ${mrpspMoney(d.exemptionTotal)}`,14,89);doc.text(`Per-student share: ${mrpspMoney(d.perStudent)}`,14,96);
+  doc.text(`Asset purchase total: ${mrpspMoney(d.assetTotal)}`,14,82);doc.text(`Dues waivers: ${mrpspMoney(d.exemptionTotal)}`,14,89);doc.text(`Per-student share: ${mrpspMoney(d.perStudent)}`,14,96);
   let y=110;doc.setFontSize(12);doc.text("Payment History",14,y);y+=8;doc.setFontSize(9);
   d.payments.forEach(p=>{const line=`${mrpspDate(p.createdAt)} | ${mrpspMoney(p.amount)} | ${p.status||"PENDING"} | ${p.purpose||""}`;const lines=doc.splitTextToSize(line,180);if(y+lines.length*5>280){doc.addPage();y=18;}doc.text(lines,14,y);y+=lines.length*5+2;});
   doc.save(`MRPSP_Payment_Statement_${String(d.studentName).replace(/[^a-z0-9]+/gi,"_")}.pdf`);
@@ -18336,7 +18337,7 @@ window.mrpspEmailStudentStatement=async function(){
   if(!email)return alert("No email address is saved for this student.");
   const body=[
     `Student: ${d.studentName}`,`Email: ${d.email}`,`Total approved asset purchases: ${mrpspMoney(d.assetTotal)}`,
-    `Exempt-student contributions: ${mrpspMoney(d.exemptionTotal)}`,`Calculated student dues: ${mrpspMoney(d.due)}`,
+    `Dues waiver amounts: ${mrpspMoney(d.exemptionTotal)}`,`Calculated student dues: ${mrpspMoney(d.due)}`,
     `Admin-verified payments received: ${mrpspMoney(d.paid)}`,`Outstanding dues: ${mrpspMoney(d.balance)}`,
     "", "Payment history:",...d.payments.map(p=>`${mrpspDate(p.createdAt)} | ${mrpspMoney(p.amount)} | ${p.status||"PENDING"} | ${p.purpose||""}`),
     "", "Only payments marked VERIFIED by the administrator are counted as received."
@@ -18350,28 +18351,93 @@ function mrpspRenderDueBreakup(model){
   const summary=document.getElementById("mrpspDueCalculationSummary"),table=document.getElementById("mrpspDueBreakupTable"),list=document.getElementById("mrpspExemptContributionList");
   if(!summary||!table||!list)return;
   if(!isAdmin){table.innerHTML="Administrator access required.";return;}
-  summary.innerHTML=[["Total approved asset purchases",mrpspMoney(model.assetTotal)],["Exempt-student contributions",mrpspMoney(model.exemptionTotal)],["Distinct exempt students",model.exemptCount],["Students sharing balance",model.liableCount],["Per-student due",mrpspMoney(model.perStudent)]].map(x=>`<div class="pay-stat"><span class="pay-muted">${x[0]}</span><b>${x[1]}</b></div>`).join("");
-  list.innerHTML=`<h4>Recorded exempt contributions</h4><div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Contribution</th><th>Reason</th><th>Date</th></tr></thead><tbody>${model.exemptions.map(x=>`<tr><td>${mrpspSafe(mrpspName(model.students.find(s=>s.uid===x.studentUid)))}</td><td>${mrpspMoney(x.amount)}</td><td>${mrpspSafe(x.reason)}</td><td>${mrpspDate(x.createdAt)}</td></tr>`).join("")||'<tr><td colspan="4">No exempt contributions recorded.</td></tr>'}</tbody></table></div>`;
+  summary.innerHTML=[
+    ["Approved asset purchase total",mrpspMoney(model.assetTotal)],
+    ["Total active dues waivers",mrpspMoney(model.exemptionTotal)],
+    ["Students with active exemption",model.exemptCount],
+    ["Students sharing remaining payable cost",model.liableCount],
+    ["Due per non-exempt student",mrpspMoney(model.perStudent)]
+  ].map(x=>`<div class="pay-stat"><span class="pay-muted">${x[0]}</span><b>${x[1]}</b></div>`).join("");
+
+  const records=model.allExemptions||model.exemptions||[];
+  list.innerHTML=`<h4>Student dues exemptions</h4><p class="pay-muted">An exemption reduces the payable amount. It is not a payment and does not create a Master Balance Sheet credit. Admin can cancel an active exemption at any time.</p>
+    <div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Amount waived</th><th>Reason</th><th>Created</th><th>Status</th><th>Action</th></tr></thead><tbody>
+    ${records.map(x=>{
+      const active=x.status!=="CANCELLED"&&x.cancelled!==true;
+      return `<tr>
+        <td>${mrpspSafe(x.studentName||mrpspName(model.students.find(s=>s.uid===x.studentUid)))}</td>
+        <td>${mrpspMoney(x.amount)}</td><td>${mrpspSafe(x.reason)}</td><td>${mrpspDate(x.createdAt)}</td>
+        <td>${active?'<span class="pay-chip ok">ACTIVE</span>':'<span class="pay-chip bad">CANCELLED</span>'}</td>
+        <td>${active?`<button class="danger" type="button" onclick="window.mrpspCancelDuesExemption('${mrpspSafe(x.key)}')">CANCEL EXEMPTION</button>`:'—'}</td>
+      </tr>`;
+    }).join("")||'<tr><td colspan="6">No dues exemptions recorded.</td></tr>'}
+    </tbody></table></div>`;
+
   table.innerHTML=`<table><thead><tr><th>Student</th><th>Due share</th><th>Verified paid</th><th>Outstanding</th><th>Status</th></tr></thead><tbody>${model.rows.map(s=>`<tr><td>${mrpspSafe(mrpspName(s))}</td><td>${mrpspMoney(s.due)}</td><td>${mrpspMoney(s.paid)}</td><td>${mrpspMoney(s.balance)}</td><td>${s.exempt?'<span class="pay-chip ok">EXEMPT</span>':'<span class="pay-chip">PAYABLE</span>'}</td></tr>`).join("")}</tbody></table>`;
 }
 
 window.mrpspAddExemptContribution=async function(){
-  if(!isAdmin)return alert("Administrator access required.");
+  if(!isAdmin||!auth.currentUser)return alert("Administrator access required.");
   const uid=document.getElementById("mrpspExemptStudent")?.value;
   const amount=Number(document.getElementById("mrpspExemptAmount")?.value);
   const reason=(document.getElementById("mrpspExemptReason")?.value||"").trim();
   const student=mrpspStudentUsers().find(s=>s.uid===uid);
   if(!student)return alert("Select a student.");
-  if(!Number.isFinite(amount)||amount<=0)return alert("Enter a contribution amount greater than zero.");
-  if(!reason)return alert("Reason is mandatory for every exemption.");
+  if(!Number.isFinite(amount)||amount<=0)return alert("Enter an amount greater than zero.");
+  if(!reason)return alert("Reason is mandatory for every dues exemption.");
   try{
-    const exemption=await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/exemptions`),{studentUid:uid,studentName:mrpspName(student),amount,reason,createdAt:Date.now(),createdBy:auth.currentUser.uid,createdByEmail:auth.currentUser.email||""});
-    const finance=await push(projectAwareRef("finance"),{type:"CREDIT",amount,desc:`Exempt student contribution — ${mrpspName(student)} — ${reason}`,mode:"Member contribution",status:"Approved",by:auth.currentUser.email||"Admin",timestamp:Date.now(),source:"MEMBER_DUE_EXEMPTION",studentUid:uid,exemptionKey:exemption.key});
-    await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/exemptions/${exemption.key}`),{financeEntryKey:finance.key});
-    document.getElementById("mrpspExemptAmount").value="";document.getElementById("mrpspExemptReason").value="";
-    alert("Contribution recorded, student marked exempt, and credit added to the master balance sheet.");
+    await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/exemptions`),{
+      studentUid:uid,studentName:mrpspName(student),amount,reason,
+      status:"ACTIVE",createdAt:Date.now(),createdBy:auth.currentUser.uid,
+      createdByEmail:auth.currentUser.email||""
+    });
+    document.getElementById("mrpspExemptAmount").value="";
+    document.getElementById("mrpspExemptReason").value="";
+    alert("Dues exemption applied. This is a waiver only, not a student payment. No credit was added to the Master Balance Sheet.");
     await window.mrpspLoadMemberPaymentDashboard("breakup");
-  }catch(e){alert("Could not record contribution: "+(e.message||e));}
+  }catch(e){alert("Could not apply dues exemption: "+(e.message||e));}
+};
+
+window.mrpspCancelDuesExemption=async function(exemptionKey){
+  if(!isAdmin||!auth.currentUser)return alert("Administrator access required.");
+  const item=mrpspPaymentCache.exemptions?.[exemptionKey];
+  if(!item)return alert("Exemption record not found. Refresh the page.");
+  if(item.status==="CANCELLED"||item.cancelled===true)return alert("This exemption is already cancelled.");
+  const reason=prompt(`Cancel the ${mrpspMoney(item.amount)} dues exemption for ${item.studentName||"this student"}?\nEnter cancellation reason:`);
+  if(reason===null)return;
+  if(!reason.trim())return alert("Cancellation reason is required.");
+  if(!confirm("This will remove the waiver from the dues calculation and recalculate the student's dues. Continue?"))return;
+  try{
+    const now=Date.now();
+    await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/exemptions/${exemptionKey}`),{
+      status:"CANCELLED",cancelled:true,cancelledAt:now,
+      cancelledBy:auth.currentUser.uid,cancelledByEmail:auth.currentUser.email||"",
+      cancellationReason:reason.trim()
+    });
+    // Older versions incorrectly posted the waiver as a finance credit.
+    // Reverse that erroneous credit so it is no longer counted as money received.
+    let financeKey=item.financeEntryKey||"";
+    if(!financeKey){
+      const match=Object.entries(mrpspPaymentCache.finance||{}).find(([k,v])=>v?.exemptionKey===exemptionKey);
+      if(match)financeKey=match[0];
+    }
+    if(financeKey){
+      const financeRef=projectAwareRef(`finance/${financeKey}`);
+      const fs=await get(financeRef);
+      if(fs.exists()&&fs.val()?.source==="MEMBER_DUE_EXEMPTION"){
+        await update(financeRef,{
+          status:"Cancelled",cancelledAt:now,
+          cancelledBy:auth.currentUser.email||auth.currentUser.uid,
+          cancellationReason:`Dues exemption cancelled: ${reason.trim()}`
+        });
+      }
+    }
+    alert("Exemption cancelled. The waiver has been removed from the dues calculation and the dues have been recalculated.");
+    await window.mrpspLoadMemberPaymentDashboard("breakup");
+  }catch(e){
+    console.error("Dues exemption cancellation failed",e);
+    alert("Could not cancel exemption: "+(e.message||e));
+  }
 };
 
 window.mrpspSaveRefundQr=async function(){
