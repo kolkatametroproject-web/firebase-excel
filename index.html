@@ -1919,6 +1919,7 @@ tr:hover { background: #fcfcfd; }
       <button type="button" id="btnPaymentBreakup" class="hidden" onclick="window.togglePaymentMode('breakup')"><i class="fas fa-calculator"></i> Due Breakup</button>
       <button type="button" id="btnPaymentRefund" onclick="window.togglePaymentMode('refund')"><i class="fas fa-money-bill-transfer"></i> Student Refund</button>
       <button type="button" id="btnPaymentVerify" class="warning hidden" onclick="window.togglePaymentMode('verify')"><i class="fas fa-clipboard-check"></i> Payment Verification</button>
+      <button type="button" id="btnPaymentCancelCredits" class="danger hidden" onclick="window.togglePaymentMode('cancelcredits')"><i class="fas fa-trash-alt"></i> Cancel Payment Credits</button>
       <button type="button" id="btnPaymentQr" class="secondary hidden" onclick="window.togglePaymentMode('qr')"><i class="fas fa-qrcode"></i> Payment QR Setup</button>
       <button type="button" id="btnPaymentRequestAll" class="warning hidden" onclick="window.togglePaymentMode('requestall')"><i class="fas fa-envelope"></i> Request for Payment</button>
     </div>
@@ -1961,6 +1962,13 @@ tr:hover { background: #fcfcfd; }
         </div>
       </div>
     </div>
+    </div>
+    <div id="paymentMode-cancelcredits" class="hidden">
+      <div class="pay-panel" style="border-top:4px solid #dc2626;">
+        <h3 style="margin-top:0;color:#991b1b;"><i class="fas fa-clock"></i> Payment Credits: 24-Hour Cancellation Window</h3>
+        <p class="pay-muted">All member payment credits are listed below. Admin can cancel a credit only within 24 hours of its original credit/approval timestamp. Credits older than 24 hours are locked. This also applies to credits created before this update.</p>
+        <div id="mrpspCancelCreditsList"><p class="pay-muted">Loading payment credits...</p></div>
+      </div>
     </div>
     <div id="paymentMode-verify" class="hidden">
     <div id="mrpspAdminPaymentReviewPanel" class="panel hidden" style="border-top:4px solid #b45309;margin-bottom:18px;">
@@ -3828,9 +3836,9 @@ window.openMemberPaymentTab = function () {
 
 // Payment sub-navigation styled to match Asset Tracking controls.
 window.togglePaymentMode = function (mode) {
-  const allowed = ['student', 'studentwise', 'previous', 'dues', 'bill', 'breakup', 'refund', 'verify', 'qr', 'requestall'];
+  const allowed = ['student', 'studentwise', 'previous', 'dues', 'bill', 'breakup', 'refund', 'verify', 'qr', 'requestall', 'cancelcredits'];
   if (!allowed.includes(mode)) mode = 'student';
-  if (['verify', 'qr', 'studentwise', 'previous', 'breakup', 'requestall'].includes(mode) && !isAdmin) {
+  if (['verify', 'qr', 'studentwise', 'previous', 'breakup', 'requestall', 'cancelcredits'].includes(mode) && !isAdmin) {
     alert('Administrator access required.');
     mode = 'dues';
   }
@@ -3838,7 +3846,7 @@ window.togglePaymentMode = function (mode) {
     const panel = document.getElementById(`paymentMode-${name}`);
     if (panel) panel.classList.toggle('hidden', name !== mode);
   });
-  const buttons = { student: 'btnPaymentStudent', studentwise: 'btnPaymentStudentWise', previous: 'btnPaymentPrevious', dues: 'btnPaymentDues', bill: 'btnPaymentBill', breakup: 'btnPaymentBreakup', refund: 'btnPaymentRefund', verify: 'btnPaymentVerify', qr: 'btnPaymentQr', requestall: 'btnPaymentRequestAll' };
+  const buttons = { student: 'btnPaymentStudent', studentwise: 'btnPaymentStudentWise', previous: 'btnPaymentPrevious', dues: 'btnPaymentDues', bill: 'btnPaymentBill', breakup: 'btnPaymentBreakup', refund: 'btnPaymentRefund', verify: 'btnPaymentVerify', qr: 'btnPaymentQr', requestall: 'btnPaymentRequestAll', cancelcredits: 'btnPaymentCancelCredits' };
   Object.entries(buttons).forEach(([name, id]) => {
     const button = document.getElementById(id);
     if (!button) return;
@@ -3847,6 +3855,7 @@ window.togglePaymentMode = function (mode) {
     else { button.style.outline = ''; }
   });
   if (mode === 'verify') window.mrpspLoadPaymentReviewQueue?.();
+  if (mode === 'cancelcredits') window.mrpspLoadCancelablePaymentCredits?.();
   if (['studentwise','previous','dues','bill','breakup','refund'].includes(mode)) window.mrpspLoadMemberPaymentDashboard?.(mode);
 };
 window.mrpspSubmitPaymentForVerification = async function () {
@@ -3872,7 +3881,10 @@ window.mrpspSubmitPaymentForVerification = async function () {
     note: "Pending until administrator verifies the actual transaction in the receiving account."
   };
   try {
-    const reqRef = await push(ref(db, "eoffice_requests"), request);
+    // Generate the Firebase key first, then store it as the permanent payment ID in the same write.
+    const reqRef = push(ref(db, "eoffice_requests"));
+    request.paymentId = reqRef.key;
+    await set(reqRef, request);
     const msg = document.getElementById("mrpspPaymentPendingMessage");
     if (msg) msg.innerHTML = `<div style="padding:10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;color:#92400e;"><b>Payment submitted — PENDING VERIFICATION.</b><br>Request ID: <code>${reqRef.key}</code><br>Fund credit will happen only after an administrator verifies the payment.</div>`;
     document.getElementById("mrpspPayAmount").value = "";
@@ -3936,7 +3948,7 @@ Optional verification note (or Cancel):`, "Verified against bank/UPI statement")
     const financeRef = await push(projectAwareRef("finance"), {
       type: "CREDIT", amount: Number(payment.amount), desc: `UPI payment — ${payment.payerName} — ${payment.purpose}`,
       mode: "UPI", status: "Approved", by: auth.currentUser.email || "Admin", timestamp: Date.now(),
-      source: "VERIFIED_MEMBER_PAYMENT", paymentRequestKey: requestKey, studentUid: payment.createdBy || payment.studentUid || "",
+      source: "VERIFIED_MEMBER_PAYMENT", paymentRequestKey: requestKey, paymentId: payment.paymentId || requestKey, studentUid: payment.createdBy || payment.studentUid || "",
       studentEmail: payment.createdByEmail || "", studentName: payment.studentName || payment.payerName || "",
       transactionLast4: payment.transactionLast4, verifiedBy: auth.currentUser.email || "", verifiedAt: Date.now(), verificationNote: note.trim()
     });
@@ -4016,6 +4028,7 @@ window.mrpspInitPaymentFeatures = function () {
   if (qrPanel) qrPanel.classList.toggle("hidden", !isAdmin);
   if (reviewPanel) reviewPanel.classList.toggle("hidden", !isAdmin);
   document.getElementById("btnPaymentVerify")?.classList.toggle("hidden", !isAdmin);
+  document.getElementById("btnPaymentCancelCredits")?.classList.toggle("hidden", !isAdmin);
   document.getElementById("btnPaymentQr")?.classList.toggle("hidden", !isAdmin);
   document.getElementById("btnPaymentStudentWise")?.classList.toggle("hidden", !isAdmin);
   document.getElementById("btnPaymentBreakup")?.classList.toggle("hidden", !isAdmin);
@@ -9097,7 +9110,9 @@ window.printAssetTag = () => {
     win.document.write('<style>body{text-align:center;font-family:sans-serif;padding:20px;} img{max-width:100%;}</style>');
     win.document.write('</head><body>');
     win.document.write(printContent);
-    win.document.write('</body></html>');
+    win.document.write('
+
+</body></html>');
     win.document.close();
     win.focus();
     setTimeout(() => { win.print(); win.close(); }, 500);
@@ -12962,7 +12977,9 @@ window.executeScadaLocalPrint = () => {
                 </table>
                 <div class="footer-sig">${userName}<br>ISSUING OFFICER</div>
             </div>
-        </body>
+        
+
+</body>
         </html>
     `);
     doc.close();
@@ -14365,7 +14382,9 @@ window.pipSaveStandaloneAssessment = async (generateLetter) => {
       const fmtDate = v => v ? new Date(v).toLocaleString('en-IN') : 'Not scheduled';
       const w = window.open('', '_blank');
       if (!w) return alert('Assignment saved, but the letter window was blocked. Allow pop-ups and generate the letter again.');
-      w.document.write(`<!doctype html><html><head><title>${letterTitles[letterType]}</title><style>body{font-family:Arial,sans-serif;margin:50px;color:#111}h1{text-align:center;font-size:22px;border-bottom:2px solid;padding-bottom:15px}p{line-height:1.7}.meta{margin-top:35px}button{padding:10px 18px}@media print{button{display:none}}</style></head><body><h1>METRO RAILWAY PLATFORM SAFETY PROJECT<br>${letterTitles[letterType]}</h1><p><b>Letter Issue Date:</b> ${fmtDate(letterDate)}</p><p>To,<br><b>${name}</b></p><p>This letter is issued regarding your assessment. Please refer to the details below.</p><div class="meta"><p><b>Assessment status:</b> ${status.replaceAll('_',' ')}</p><p><b>Assessment date & time:</b> ${fmtDate(dateTime)}</p><p><b>Venue:</b> ${venue || 'To be announced'}</p><p><b>Instructions:</b> ${notes || 'Please report on time and bring your valid identification and relevant documents.'}</p></div><p style="margin-top:60px">Authorized Signatory<br>MRPSP Administration</p><button onclick="window.print()">Print / Save as PDF</button></body></html>`);
+      w.document.write(`<!doctype html><html><head><title>${letterTitles[letterType]}</title><style>body{font-family:Arial,sans-serif;margin:50px;color:#111}h1{text-align:center;font-size:22px;border-bottom:2px solid;padding-bottom:15px}p{line-height:1.7}.meta{margin-top:35px}button{padding:10px 18px}@media print{button{display:none}}</style></head><body><h1>METRO RAILWAY PLATFORM SAFETY PROJECT<br>${letterTitles[letterType]}</h1><p><b>Letter Issue Date:</b> ${fmtDate(letterDate)}</p><p>To,<br><b>${name}</b></p><p>This letter is issued regarding your assessment. Please refer to the details below.</p><div class="meta"><p><b>Assessment status:</b> ${status.replaceAll('_',' ')}</p><p><b>Assessment date & time:</b> ${fmtDate(dateTime)}</p><p><b>Venue:</b> ${venue || 'To be announced'}</p><p><b>Instructions:</b> ${notes || 'Please report on time and bring your valid identification and relevant documents.'}</p></div><p style="margin-top:60px">Authorized Signatory<br>MRPSP Administration</p><button onclick="window.print()">Print / Save as PDF</button>
+
+</body></html>`);
       w.document.close();
     }
     alert('Assessment / letter assignment saved. No PIP was issued or changed.');
@@ -15695,7 +15714,9 @@ window.pipGenerateResultPDF = async (uid, isPass, result) => {
             <div style="text-align:center; font-size:25pt; margin-top:80px; color:#555; border-top: 4pt dashed black; padding-top: 20px;">[ RECORD WILL BE PURGED AUTOMATICALLY IN 10 DAYS ]</div>
         </div>
         <script>window.onload = () => { setTimeout(() => window.print(), 500); };<\/script>
-        </body></html>
+        
+
+</body></html>
     `);
     printWin.document.close();
 };
@@ -15767,7 +15788,9 @@ window.pipGenerateFinalActionPDF = async (uid) => {
             <div style="text-align:center; font-size:25pt; margin-top:80px; color:#555; border-top: 4pt dashed black; padding-top: 20px;">[ RECORD WILL BE PURGED AUTOMATICALLY IN 10 DAYS ]</div>
         </div>
         <script>window.onload = () => { setTimeout(() => window.print(), 500); };<\/script>
-        </body></html>
+        
+
+</body></html>
     `);
     printWin.document.close();
 };
@@ -17658,7 +17681,9 @@ window.registerMrpspShelf = async () => {
 window.printShelfQr = () => {
   const node=document.getElementById('shelfQrOutput'); if(!node || node.style.display==='none') return;
   const w=window.open('','_blank','width=600,height=700'); if(!w) return alert('Allow pop-ups to print the shelf QR.');
-  w.document.write(`<html><head><title>MRPSP Shelf QR</title></head><body style="font-family:Arial;text-align:center;padding:30px">${node.innerHTML}</body></html>`);w.document.close();w.focus();w.print();
+  w.document.write(`<html><head><title>MRPSP Shelf QR</title></head><body style="font-family:Arial;text-align:center;padding:30px">${node.innerHTML}
+
+</body></html>`);w.document.close();w.focus();w.print();
 };
 window.loadMrpspShelves = async () => {
   const out=document.getElementById('shelfListOutput'); if(!out) return;
@@ -18426,7 +18451,9 @@ window.mrpspDownloadStudentReceipt=function(){
   <div class="summary"><div>Calculated dues<br><b>${mrpspBillEscape(mrpspMoney(d.due))}</b></div><div>Verified payments<br><b>${mrpspBillEscape(mrpspMoney(d.paid))}</b></div><div>${mrpspBillEscape(balanceLabel)}<br><b>${d.balance<0?"-":""}${mrpspBillEscape(mrpspMoney(Math.abs(d.balance)))}</b></div><div>Asset purchase total<br><b>${mrpspBillEscape(mrpspMoney(d.assetTotal))}</b></div></div>
   <h3>Payment History</h3><table><thead><tr><th>Date</th><th>Amount</th><th>Purpose</th><th>Status</th></tr></thead><tbody>${rows||"<tr><td colspan='4'>No payments</td></tr>"}</tbody></table>
   <p style="margin-top:30px;font-size:11px;color:#64748b">Computer-generated account statement. Individual paid receipts can be printed from the Print Payment Bill tab.</p>
-  <script>window.onload=function(){setTimeout(function(){window.print()},300)};<\/script></body></html>`);
+  <script>window.onload=function(){setTimeout(function(){window.print()},300)};<\/script>
+
+</body></html>`);
   w.document.close();
 };
 
@@ -18756,7 +18783,7 @@ window.mrpspDownloadPaidReceipt = function(requestKey){
   const pageW = doc.internal.pageSize.getWidth();
   const left = 16, right = pageW - 16;
   const verifiedAt = Number(p.verifiedAt || 0);
-  const receiptNo = `MRPSP-${String(p.key || "").slice(-10).toUpperCase()}`;
+  const receiptNo = `MRPSP-${String(p.paymentId || p.key || "").slice(-10).toUpperCase()}`;
   const lines = [
     ["Receipt number", receiptNo],
     ["Student name", d.studentName || p.studentName || p.payerName || "—"],
@@ -18865,7 +18892,7 @@ window.mrpspVerifyAndCreditPayment = async function(requestKey){
       type:"CREDIT",amount:Number(payment.amount),
       desc:`UPI payment — ${payment.payerName} — ${payment.purpose}`,
       mode:"UPI",status:"Approved",by:auth.currentUser.email||"Admin",timestamp:verifiedAt,
-      source:"VERIFIED_MEMBER_PAYMENT",paymentRequestKey:requestKey,
+      source:"VERIFIED_MEMBER_PAYMENT",paymentRequestKey:requestKey,paymentId:payment.paymentId||requestKey,
       studentUid:payment.createdBy||payment.studentUid||"",
       studentEmail:payment.createdByEmail||"",
       studentName:payment.studentName||payment.payerName||"",
@@ -18875,7 +18902,7 @@ window.mrpspVerifyAndCreditPayment = async function(requestKey){
     });
     try{
       await update(reqRef,{
-        status:"VERIFIED",verified:true,verifiedBy:auth.currentUser.email||"",
+        status:"VERIFIED",verified:true,paymentId:payment.paymentId||requestKey,verifiedBy:auth.currentUser.email||"",
         verifiedAt,verificationNote:note.trim(),utr:utr.trim(),transactionUtr:utr.trim(),
         creditEntryKey:financeRef.key,cancellationDeadline:verifiedAt+24*60*60*1000
       });
@@ -18903,55 +18930,92 @@ window.mrpspVerifyAndCreditPayment = async function(requestKey){
   }
 };
 
-// Admin can reverse a verified credit only during the first 24 hours.
-window.mrpspCancelApprovedPayment = async function(requestKey){
-  if(!isAdmin || !auth.currentUser) return alert("Only an administrator can cancel an approved payment.");
-  const reason=prompt("Enter the reason for cancelling this approved payment. This action is allowed only within 24 hours of approval:");
+// Admin can cancel any student's payment at any time. A single paymentId links the request, receipt and finance credit.
+window.mrpspPaymentCreditTimestamp = function(payment, finance){
+  const candidates=[finance?.timestamp,finance?.createdAt,finance?.verifiedAt,payment?.verifiedAt,payment?.createdAt,payment?.timestamp];
+  for(const value of candidates){
+    if(value===undefined||value===null||value==="")continue;
+    const n=typeof value==="number"?value:Date.parse(value);
+    if(Number.isFinite(n)&&n>0)return n;
+  }
+  return null;
+};
+window.mrpspPaymentCancellationState = function(payment,finance){
+  const stamp=window.mrpspPaymentCreditTimestamp(payment,finance);
+  if(!stamp)return {allowed:false,stamp:null,remaining:0,reason:"Original credit timestamp is missing. This record is locked for safety."};
+  const elapsed=Date.now()-stamp, remaining=24*60*60*1000-elapsed;
+  if(elapsed<0)return {allowed:false,stamp,remaining:0,reason:"Credit timestamp is in the future. This record is locked."};
+  return {allowed:remaining>=0,stamp,remaining:Math.max(0,remaining),reason:remaining>=0?"Within 24-hour cancellation window":"24-hour cancellation window has expired"};
+};
+
+// Admin cancellation is strictly limited to the first 24 hours from the original credit timestamp.
+window.mrpspCancelApprovedPayment = async function(requestKey, financeKeyOverride){
+  if(!isAdmin || !auth.currentUser) return alert("Only an administrator can cancel a payment.");
+  const reason=prompt("Enter the mandatory reason for cancelling this payment. Cancellation is allowed only within 24 hours of the original credit timestamp:");
   if(reason===null)return;
   if(!reason.trim())return alert("Cancellation reason is required.");
   try{
-    const reqRef=ref(db,`eoffice_requests/${requestKey}`);
-    const snap=await get(reqRef);
-    if(!snap.exists())return alert("Payment record not found.");
-    const payment=snap.val();
-    if(payment.type!=="PROJECT_PAYMENT_VERIFICATION" || payment.status!=="VERIFIED" || !payment.creditEntryKey) return alert("Only an approved and credited payment can be cancelled.");
-    const deadline=Number(payment.cancellationDeadline || (Number(payment.verifiedAt||0)+24*60*60*1000));
-    const now=Date.now();
-    if(!payment.verifiedAt || now>deadline) return alert("The 24-hour cancellation window has expired. No changes are permitted.");
-    const financeRef=projectAwareRef(`finance/${payment.creditEntryKey}`);
-    const financeSnap=await get(financeRef);
-    if(!financeSnap.exists())return alert("Linked Project Funds credit was not found. Nothing was changed.");
+    const reqRef=requestKey?ref(db,`eoffice_requests/${requestKey}`):null;
+    const snap=reqRef?await get(reqRef):null;
+    const payment=snap?.exists()?snap.val():{};
+    let financeKey=financeKeyOverride||payment.creditEntryKey||"";
+    if(!financeKey&&requestKey){
+      const allFinance=await get(projectAwareRef("finance"));
+      if(allFinance.exists())allFinance.forEach(ch=>{const v=ch.val();if(v?.paymentRequestKey===requestKey)financeKey=ch.key;});
+    }
+    if(!financeKey)return alert("Linked payment credit was not found. Nothing was changed.");
+    const financeRef=projectAwareRef(`finance/${financeKey}`),financeSnap=await get(financeRef);
+    if(!financeSnap.exists())return alert("Project Funds credit was not found. Nothing was changed.");
     const finance=financeSnap.val();
-    if(finance.status!=="Approved" || finance.paymentRequestKey!==requestKey) return alert("The linked finance entry is no longer an active approved credit.");
-    await update(financeRef,{
-      status:"Cancelled",cancelledAt:now,cancelledBy:auth.currentUser.email||auth.currentUser.uid,
-      cancellationReason:reason.trim(),originalStatus:"Approved"
-    });
+    if(finance.type!=="CREDIT" || !(finance.source==="VERIFIED_MEMBER_PAYMENT" || finance.legacyPaymentLinked===true || finance.source==="PRE_FEATURE_MASTER_LEDGER_PAYMENT" || finance.paymentRequestKey))return alert("This is not a recognised member payment credit.");
+    if(finance.status==="Cancelled"||payment.status==="CANCELLED")return alert("This payment is already cancelled.");
+    if(finance.status!=="Approved")return alert("Only an approved credit can be cancelled.");
+    const windowState=window.mrpspPaymentCancellationState(payment,finance);
+    if(!windowState.allowed)return alert(`Cannot cancel this payment. ${windowState.reason}. Only credits within 24 hours can be changed.`);
+    const paymentId=finance.paymentId||payment.paymentId||finance.paymentRequestKey||financeKey;
+    const now=Date.now();
+    await update(financeRef,{status:"Cancelled",paymentId,paymentRequestKey:finance.paymentRequestKey||requestKey||null,cancelledAt:now,cancelledBy:auth.currentUser.email||auth.currentUser.uid,cancellationReason:reason.trim(),originalStatus:"Approved"});
     try{
-      await update(reqRef,{
-        status:"CANCELLED",verified:false,cancelledAt:now,
-        cancelledBy:auth.currentUser.email||auth.currentUser.uid,
-        cancellationReason:reason.trim()
-      });
+      if(reqRef&&snap?.exists())await update(reqRef,{status:"CANCELLED",verified:false,paymentId,cancelledAt:now,cancelledBy:auth.currentUser.email||auth.currentUser.uid,cancellationReason:reason.trim()});
     }catch(updateErr){
-      try{await update(financeRef,{status:"Approved",cancelledAt:null,cancelledBy:null,cancellationReason:null,originalStatus:null});}
-      catch(rollbackErr){console.error("CRITICAL: payment cancellation rollback failed",rollbackErr);}
+      try{await update(financeRef,{status:"Approved",cancelledAt:null,cancelledBy:null,cancellationReason:null,originalStatus:null});}catch(rollbackErr){console.error("CRITICAL: payment cancellation rollback failed",rollbackErr);}
       throw updateErr;
     }
     try{
-      const userSnap=await get(projectAwareRef(`users/${payment.createdBy||payment.studentUid}`));
-      const user=userSnap.exists()?userSnap.val():{};
-      const recipient=user.personalEmail1||user.personalEmail2||user.email||payment.createdByEmail;
-      if(recipient) await window.mrpspSendPaymentEmail(recipient,user.name||payment.studentName||payment.payerName,
-        "PAYMENT APPROVAL CANCELLED",payment,`The payment approval has been cancelled by Admin. Amount: ${mrpspMoney(payment.amount)}. UTR: ${payment.utr||"—"}. Reason: ${reason.trim()}. The payment is no longer counted as received.`);
+      const uid=finance.studentUid||payment.createdBy||payment.studentUid;
+      if(uid){const userSnap=await get(projectAwareRef(`users/${uid}`));const user=userSnap.exists()?userSnap.val():{};const recipient=user.personalEmail1||user.personalEmail2||user.email||finance.studentEmail||payment.createdByEmail;
+        if(recipient)await window.mrpspSendPaymentEmail(recipient,user.name||finance.studentName||payment.studentName||payment.payerName,"PAYMENT APPROVAL CANCELLED",{...payment,...finance,paymentId},`Payment ID: ${paymentId}. Amount: ${mrpspMoney(finance.amount)}. Reason: ${reason.trim()}. This payment credit has been cancelled by Admin and is no longer counted.`);
+      }
     }catch(mailErr){console.warn("Cancellation email could not be sent",mailErr);}
-    alert("Payment approval cancelled. The linked Project Funds credit is now marked Cancelled.");
-    window.mrpspLoadPaymentReviewQueue();
-    window.mrpspLoadMemberPaymentDashboard?.("dues");
-  }catch(err){
-    console.error("Payment cancellation failed",err);
-    alert("Could not cancel payment: "+(err?.message||err));
-  }
+    alert(`Payment credit cancelled. Payment ID: ${paymentId}. The Project Funds credit is marked Cancelled and excluded from dues and payment totals.`);
+    await window.mrpspLoadCancelablePaymentCredits?.();
+    await window.mrpspLoadPaymentReviewQueue?.();
+    await window.mrpspLoadMemberPaymentDashboard?.("dues");
+  }catch(err){console.error("Payment cancellation failed",err);alert("Could not cancel payment: "+(err?.message||err));}
+};
+
+// Admin-only list of every verified member payment credit, including pre-update records.
+window.mrpspLoadCancelablePaymentCredits = async function(){
+  const host=document.getElementById("mrpspCancelCreditsList");if(!host)return;
+  if(!isAdmin){host.innerHTML="<p>Administrator access required.</p>";return;}
+  host.innerHTML="<p class='pay-muted'>Loading all payment credits...</p>";
+  try{
+    const [financeSnap,requestSnap]=await Promise.all([get(projectAwareRef("finance")),get(ref(db,"eoffice_requests"))]);
+    const requests={};if(requestSnap.exists())requestSnap.forEach(ch=>{const v=ch.val();if(v?.type==="PROJECT_PAYMENT_VERIFICATION")requests[ch.key]={key:ch.key,...v};});
+    const rows=[];if(financeSnap.exists())financeSnap.forEach(ch=>{const f=ch.val();if(f?.type==="CREDIT"&&f?.source==="VERIFIED_MEMBER_PAYMENT"){
+      const reqKey=f.paymentRequestKey||"",req=requests[reqKey]||{},state=window.mrpspPaymentCancellationState(req,f);
+      rows.push({financeKey:ch.key,finance:f,request:req,requestKey:reqKey,state,paymentId:f.paymentId||req.paymentId||reqKey||ch.key});
+    }});
+    rows.sort((a,b)=>(b.state.stamp||0)-(a.state.stamp||0));
+    if(!rows.length){host.innerHTML="<p class='pay-muted'>No member payment credits found.</p>";return;}
+    const esc=x=>String(x??"—").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    host.innerHTML=`<div class="pay-table-wrap"><table><thead><tr><th>Member</th><th>Amount</th><th>Credit / Approval Date</th><th>Payment ID</th><th>Status</th><th>Admin Action</th></tr></thead><tbody>${rows.map(r=>{
+      const f=r.finance,stamp=r.state.stamp,active=f.status==="Approved",can=active&&r.state.allowed;
+      const status=f.status==="Cancelled"?"CANCELLED":active?(can?"CANCELLATION AVAILABLE":"LOCKED AFTER 24 HOURS"):String(f.status||"UNKNOWN");
+      const action=can?`<button class="danger" type="button" onclick="window.mrpspCancelApprovedPayment('${esc(r.requestKey)}','${esc(r.financeKey)}')">DELETE / CANCEL CREDIT</button>`:`<span class="pay-chip ${f.status==="Cancelled"?"bad":"warn"}">${esc(status)}</span>`;
+      return `<tr><td>${esc(f.studentName||r.request.studentName||r.request.payerName||"Member")}<br><small>${esc(f.studentEmail||r.request.createdByEmail||"")}</small></td><td>${mrpspMoney(f.amount)}</td><td>${stamp?new Date(stamp).toLocaleString("en-IN"):"Timestamp unavailable"}</td><td style="word-break:break-all">${esc(r.paymentId)}</td><td>${esc(status)}${f.cancellationReason?`<br><small>${esc(f.cancellationReason)}</small>`:""}</td><td>${action}${can?`<br><small>${Math.floor(r.state.remaining/3600000)}h ${Math.floor((r.state.remaining%3600000)/60000)}m remaining</small>`:""}</td></tr>`;
+    }).join("")}</tbody></table></div>`;
+  }catch(err){console.error(err);host.innerHTML=`<p style="color:#b91c1c">Could not load payment credits: ${String(err?.message||err).replace(/[<>]/g,"")}</p>`;}
 };
 
 // Admin review queue: pending requests plus approvals still inside their 24-hour reversal period.
@@ -18969,11 +19033,11 @@ window.mrpspLoadPaymentReviewQueue = async function(){
     if(snap.exists())snap.forEach(child=>{
       const v=child.val();
       if(v?.type==="PROJECT_PAYMENT_VERIFICATION" &&
-        (v.status==="PAYMENT PENDING" || (v.status==="VERIFIED" && v.verifiedAt && Date.now()<=Number(v.cancellationDeadline||v.verifiedAt+24*60*60*1000))))
+        (v.status==="PAYMENT PENDING" || v.status==="VERIFIED" || v.verified===true))
         items.push({key:child.key,...v});
     });
     items.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    if(!items.length){list.innerHTML='<p style="color:#64748b;">No pending payments or recently approved payments within the 24-hour cancellation window.</p>';return;}
+    if(!items.length){list.innerHTML='<p style="color:#64748b;">No pending or approved payments available for review/cancellation.</p>';return;}
     list.innerHTML=items.map(p=>{
       const safe=x=>String(x??"—").replace(/[<>]/g,"");
       if(p.status==="PAYMENT PENDING")return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;margin:10px 0;background:#fff">
@@ -18981,11 +19045,11 @@ window.mrpspLoadPaymentReviewQueue = async function(){
         <div style="font-size:12px;color:#64748b;margin:6px 0">Purpose: ${safe(p.purpose)} | Last 4: ${safe(p.transactionLast4)} | Project: ${safe(p.project)}<br>Submitted: ${p.createdAt?new Date(p.createdAt).toLocaleString("en-IN"):"—"} | Request: ${safe(p.key)}</div>
         <button class="success" onclick="window.mrpspVerifyAndCreditPayment('${p.key}')">VERIFY & APPROVE</button>
         <button class="danger" onclick="window.mrpspRejectPayment('${p.key}')">REJECT</button></div>`;
-      const left=Math.max(0,Number(p.cancellationDeadline||p.verifiedAt+24*60*60*1000)-Date.now());
+      const paymentId=p.paymentId||p.key;
       return `<div style="border:1px solid #bbf7d0;border-radius:10px;padding:14px;margin:10px 0;background:#f0fdf4">
         <b>${safe(p.studentName||p.payerName)} · ${mrpspMoney(p.amount)}</b>
-        <div style="font-size:12px;color:#475569;margin:6px 0">Approved: ${new Date(p.verifiedAt).toLocaleString("en-IN")} | UTR: <b>${safe(p.utr||"—")}</b><br>Approved by: ${safe(p.verifiedBy)} | Cancellation closes: ${new Date(Number(p.cancellationDeadline||p.verifiedAt+24*60*60*1000)).toLocaleString("en-IN")} | Time remaining: ${Math.floor(left/3600000)}h ${Math.floor((left%3600000)/60000)}m</div>
-        <button class="danger" onclick="window.mrpspCancelApprovedPayment('${p.key}')">CANCEL APPROVAL</button></div>`;
+        <div style="font-size:12px;color:#475569;margin:6px 0">Approved: ${new Date(p.verifiedAt).toLocaleString("en-IN")} | UTR: <b>${safe(p.utr||"—")}</b><br>Approved by: ${safe(p.verifiedBy)} <br>Payment ID: ${safe(paymentId)} | Admin cancellation: within 24 hours only</div>
+        <button class="danger" onclick="window.mrpspCancelApprovedPayment('${p.key}')">CANCEL PAYMENT</button></div>`;
     }).join("");
   }catch(err){
     list.innerHTML=`<p style="color:#b91c1c;">Could not load payment requests: ${String(err?.message||err).replace(/[<>]/g,"")}</p>`;
@@ -19507,7 +19571,9 @@ window.mrpspPrintSelectedBill=function(){
   const w=window.open("","_blank","width=900,height=750");
   if(!w)return alert("Your browser blocked the print window. Allow pop-ups for this site and try again.");
   w.document.open();
-  w.document.write(`<!doctype html><html><head><title>${mrpspBillEscape(bill.billNo)}</title><meta charset="utf-8"><style>@page{size:A4;margin:14mm}body{margin:0;background:#fff}#mrpspPrintableBill{max-width:none!important;border:0!important;padding:0!important}@media print{button{display:none}}</style></head><body>${source.outerHTML}<script>window.onload=function(){setTimeout(function(){window.print()},300)};<\/script></body></html>`);
+  w.document.write(`<!doctype html><html><head><title>${mrpspBillEscape(bill.billNo)}</title><meta charset="utf-8"><style>@page{size:A4;margin:14mm}body{margin:0;background:#fff}#mrpspPrintableBill{max-width:none!important;border:0!important;padding:0!important}@media print{button{display:none}}</style></head><body>${source.outerHTML}<script>window.onload=function(){setTimeout(function(){window.print()},300)};<\/script>
+
+</body></html>`);
   w.document.close();
 };
 
@@ -19559,7 +19625,9 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
   <div class="meta"><div><b>Receipt No:</b> ${esc(receiptNo)}<br><b>Receipt / Approval Date:</b> ${esc(dateTime(p.verifiedAt))}</div><div class="paid">PAID</div></div>
   <table>${body}</table><div class="foot">This receipt records the payment information available in the project account. Historical fields not present in the original ledger are marked as not recorded.<br>Computer-generated receipt. Keep this document for your records.</div>
   <div class="actions"><button onclick="window.print()">PRINT / SAVE AS PDF</button></div>
-  <script>window.onload=function(){setTimeout(function(){window.print()},350)};<\/script></body></html>`);
+  <script>window.onload=function(){setTimeout(function(){window.print()},350)};<\/script>
+
+</body></html>`);
   w.document.close();
 };
 </script>
@@ -19621,5 +19689,50 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
     </div>
 </div>
 
+
+
+
+<script>
+// Individual Dues: show a cancel control for every pending or verified payment to Admin.
+(function installIndividualDuesPaymentCancellation(){
+  const original=window.mrpspRenderSelectedDues;
+  if(typeof original!=="function" || original.__adminCancelEnhanced)return;
+  const wrapped=function(){
+    original.apply(this,arguments);
+    if(!isAdmin)return;
+    const host=document.getElementById("mrpspDuesStatement");
+    const table=host?.querySelector("table");
+    const data=window.mrpspCurrentReceipt;
+    if(!table||!data)return;
+    const head=table.querySelector("thead tr");
+    if(head&&!head.querySelector('[data-payment-action-column="1"]')){
+      const th=document.createElement("th");th.textContent="Admin Action";th.dataset.paymentActionColumn="1";head.appendChild(th);
+    }
+    const payments=data.payments||[];
+    table.querySelectorAll("tbody tr").forEach((tr,index)=>{
+      if(tr.cells.length===1||tr.dataset.adminPaymentActionAdded)return;
+      const payment=payments[index],td=document.createElement("td");
+      if(payment && payment.type==="PROJECT_PAYMENT_VERIFICATION" && payment.status!=="CANCELLED" && payment.status!=="REJECTED"){
+        const id=payment.paymentId||payment.key;
+        const finance=(window.mrpspPaymentCache?.finance||{});
+        const linked=Object.entries(finance).find(([k,v])=>v?.paymentRequestKey===payment.key || v?.paymentId===id);
+        const state=window.mrpspPaymentCancellationState(payment,linked?.[1]);
+        if(!state.allowed){const locked=document.createElement("span");locked.textContent=state.reason.includes("expired")?"LOCKED (24H PASSED)":"LOCKED";locked.style.cssText="font-size:10px;font-weight:700;color:#64748b";td.appendChild(locked);tr.appendChild(td);tr.dataset.adminPaymentActionAdded="1";return;}
+        const button=document.createElement("button");button.type="button";button.className="danger";button.textContent="CANCEL PAYMENT";
+        button.style.cssText="font-size:11px;padding:7px 9px;white-space:nowrap";
+        button.title=`Unique Payment ID: ${id}`;
+        button.addEventListener("click",()=>window.mrpspCancelApprovedPayment(payment.key));
+        const idLabel=document.createElement("div");idLabel.textContent=`ID: ${id}`;idLabel.style.cssText="font-size:10px;color:#64748b;margin-top:4px;word-break:break-all";
+        td.append(button,idLabel);
+      }else if(payment?.status==="CANCELLED"){
+        td.textContent="CANCELLED";td.style.cssText="font-size:11px;font-weight:700;color:#b91c1c";
+      }else{td.textContent="—";}
+      tr.appendChild(td);tr.dataset.adminPaymentActionAdded="1";
+    });
+  };
+  wrapped.__adminCancelEnhanced=true;
+  window.mrpspRenderSelectedDues=wrapped;
+})();
+</script>
 </body>
 </html>
