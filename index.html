@@ -18588,22 +18588,8 @@ window.mrpspSaveRefundQr=async function(){
 function mrpspRenderOwnRefundQr(){
   const host=document.getElementById("mrpspRefundQrPreview");if(!host)return;
   const qr=mrpspPaymentCache.qr?.[auth.currentUser?.uid];
-  host.innerHTML=qr?.dataUrl?`<div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap"><img src="${qr.dataUrl}" alt="Your saved refund QR" style="max-width:180px;max-height:180px;object-fit:contain;border:1px solid #e2e8f0;border-radius:9px;padding:6px;cursor:zoom-in" onclick="window.mrpspOpenRefundQr(auth.currentUser.uid,'My')"><div><p class="pay-muted">Updated ${mrpspDate(qr.updatedAt)}</p><button type="button" class="danger" onclick="window.mrpspDeleteOwnRefundQr()">DELETE MY QR</button></div></div>`:"No QR uploaded yet.";
+  host.innerHTML=qr?.dataUrl?`<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap"><img src="${qr.dataUrl}" alt="Your saved refund QR" style="max-width:180px;max-height:180px;object-fit:contain;border:1px solid #e2e8f0;border-radius:9px;padding:6px"><div><p class="pay-muted">Updated ${mrpspDate(qr.updatedAt)}</p><button type="button" class="danger" onclick="window.mrpspDeleteOwnRefundQr()">DELETE MY QR</button></div></div>`:"No QR uploaded yet.";
 }
-
-window.mrpspDeleteOwnRefundQr=async function(){
-  if(!auth.currentUser)return alert("Sign in first.");
-  const uid=auth.currentUser.uid;
-  const ownRefunds=Object.values(mrpspPaymentCache.refunds||{}).filter(r=>r.studentUid===uid);
-  const active=ownRefunds.some(r=>['AWAITING_STUDENT_CONFIRMATION','NOT_RECEIVED'].includes(r.status));
-  if(active)return alert("Your QR cannot be deleted while a refund payout is awaiting confirmation or marked not received. Contact Admin first.");
-  if(!confirm("Delete your saved refund QR? You can upload a new one later."))return;
-  try{
-    await remove(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundQr/${uid}`));
-    alert("Your refund QR has been deleted.");
-    await window.mrpspLoadMemberPaymentDashboard("refund");
-  }catch(e){console.error("Refund QR deletion failed",e);alert("Could not delete QR: "+(e.message||e));}
-};
 
 function mrpspBuildPaymentBasedRefundAllocation(){
   const students=mrpspStudentUsers();
@@ -19779,31 +19765,47 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
 </script>
 
 <script>
-// Refund queue enhancements: QR lightbox and administrator cancellation.
+// Refund queue enhancements: large QR lightbox, per-member refund cancellation, and student QR deletion.
 (function(){
   function ensureQrModal(){
     if(document.getElementById('mrpspRefundQrModal')) return;
     const m=document.createElement('div');m.id='mrpspRefundQrModal';
-    m.style.cssText='display:none;position:fixed;inset:0;z-index:99999;background:rgba(10,20,35,.78);align-items:center;justify-content:center;padding:20px;';
-    m.innerHTML=`<div style="position:relative;background:#fff;border-radius:14px;padding:18px;max-width:min(92vw,620px);max-height:92vh;box-shadow:0 20px 60px #0006;text-align:center"><button type="button" onclick="window.mrpspCloseRefundQr()" aria-label="Close" style="position:absolute;right:10px;top:10px;border:0;border-radius:50%;width:38px;height:38px;font-size:24px;background:#fee2e2;color:#991b1b;cursor:pointer">×</button><h3 id="mrpspRefundQrTitle" style="margin:8px 48px 16px">Refund QR</h3><img id="mrpspRefundQrLarge" alt="Student refund QR" style="display:block;max-width:78vw;max-height:72vh;width:auto;height:auto;object-fit:contain;margin:auto"></div>`;
+    m.style.cssText='display:none;position:fixed;inset:0;z-index:99999;background:rgba(10,20,35,.82);align-items:center;justify-content:center;padding:16px;';
+    m.innerHTML=`<div style="position:relative;background:#fff;border-radius:14px;padding:22px;max-width:min(96vw,850px);max-height:96vh;box-shadow:0 20px 60px #0008;text-align:center"><button type="button" onclick="window.mrpspCloseRefundQr()" aria-label="Close QR preview" style="position:absolute;right:10px;top:10px;border:0;border-radius:50%;width:42px;height:42px;font-size:27px;background:#fee2e2;color:#991b1b;cursor:pointer">×</button><h3 id="mrpspRefundQrTitle" style="margin:8px 54px 16px">Refund QR</h3><img id="mrpspRefundQrLarge" alt="Student refund QR" style="display:block;max-width:88vw;max-height:82vh;width:auto;height:auto;object-fit:contain;margin:auto"></div>`;
     m.addEventListener('click',e=>{if(e.target===m)window.mrpspCloseRefundQr();});document.body.appendChild(m);
     document.addEventListener('keydown',e=>{if(e.key==='Escape')window.mrpspCloseRefundQr();});
   }
   window.mrpspOpenRefundQr=function(uid,name){const q=mrpspPaymentCache.qr?.[uid];if(!q?.dataUrl)return alert('Student has not uploaded a refund QR.');ensureQrModal();document.getElementById('mrpspRefundQrTitle').textContent=(name||'Student')+' · Refund QR';document.getElementById('mrpspRefundQrLarge').src=q.dataUrl;document.getElementById('mrpspRefundQrModal').style.display='flex';};
   window.mrpspCloseRefundQr=function(){const m=document.getElementById('mrpspRefundQrModal');if(m)m.style.display='none';const im=document.getElementById('mrpspRefundQrLarge');if(im)im.removeAttribute('src');};
-  window.mrpspCancelRefundPayout=async function(key){
+  window.mrpspDeleteOwnRefundQr=async function(){
+    if(!auth.currentUser)return alert('Sign in first.');
+    const uid=auth.currentUser.uid;const qr=mrpspPaymentCache.qr?.[uid];if(!qr)return alert('You have no saved refund QR.');
+    const active=Object.values(mrpspPaymentCache.refunds||{}).some(r=>r.studentUid===uid&&['AWAITING_STUDENT_CONFIRMATION','NOT_RECEIVED'].includes(r.status));
+    if(active)return alert('Your QR cannot be deleted while a refund is awaiting confirmation or has been reported as not received. Contact Admin.');
+    if(!confirm('Delete your uploaded refund QR? You can upload a new one later.'))return;
+    try{await remove(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundQr/${uid}`));alert('Your refund QR has been deleted.');await window.mrpspLoadMemberPaymentDashboard('refund');}
+    catch(e){console.error('Refund QR deletion failed',e);alert('Could not delete QR: '+(e.message||e));}
+  };
+  window.mrpspCancelRefundPayout=async function(poolKey,uid){
     if(!isAdmin)return alert('Administrator access required.');
-    const r=mrpspPaymentCache.refunds?.[key];if(!r)return alert('Refund record not found.');
-    if(r.status==='CANCELLED')return alert('This refund is already cancelled.');
-    if(r.status==='RECEIVED')return alert('A refund confirmed as received cannot be cancelled here.');
-    const reason=prompt('Enter the reason for cancelling this refund payout:');if(reason===null)return;if(!reason.trim())return alert('Cancellation reason is required.');
-    if(!confirm('Cancel this refund payout? Its finance debit will also be marked cancelled.'))return;
+    const pool=mrpspPaymentCache.refundPools?.[poolKey];if(!pool)return alert('Refund source not found.');
+    const allocation=(pool.allocation||[]).find(a=>a.uid===uid);if(!allocation)return alert('Student allocation not found.');
+    const existing=Object.entries(mrpspPaymentCache.refunds||{}).find(([,r])=>r.poolKey===poolKey&&r.studentUid===uid);
+    const key=existing?.[0],r=existing?.[1];
+    if(r?.status==='CANCELLED')return alert('This refund allocation is already cancelled.');
+    if(r?.status==='RECEIVED')return alert('A refund confirmed as received cannot be cancelled.');
+    const reason=prompt('Enter the reason for cancelling this student refund allocation:');if(reason===null)return;if(!reason.trim())return alert('Cancellation reason is required.');
+    if(!confirm(`Cancel ${allocation.name}'s refund allocation of ${mrpspMoney(Number(pool.amount)*Number(allocation.percent)/100)}?`))return;
     try{
       const now=Date.now();
-      await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${key}`),{status:'CANCELLED',cancelledAt:now,cancelledBy:auth.currentUser.uid,cancellationReason:reason.trim()});
-      if(r.financeEntryKey){await update(projectAwareRef(`finance/${r.financeEntryKey}`),{status:'Cancelled',cancelledAt:now,cancelledBy:auth.currentUser.email||auth.currentUser.uid,cancellationReason:`Refund payout cancelled: ${reason.trim()}`});}
-      alert('Refund payout cancelled. The linked finance debit was marked cancelled.');
-      await window.mrpspLoadMemberPaymentDashboard('refund');
+      if(r){
+        await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${key}`),{status:'CANCELLED',cancelledAt:now,cancelledBy:auth.currentUser.uid,cancellationReason:reason.trim()});
+        if(r.financeEntryKey)await update(projectAwareRef(`finance/${r.financeEntryKey}`),{status:'Cancelled',cancelledAt:now,cancelledBy:auth.currentUser.email||auth.currentUser.uid,cancellationReason:`Refund payout cancelled: ${reason.trim()}`});
+      }else{
+        const amount=Number(pool.amount)*Number(allocation.percent)/100;
+        await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`),{poolKey,sourceName:pool.source,studentUid:uid,studentName:allocation.name,studentEmail:allocation.email||'',amount,percentage:allocation.percent,status:'CANCELLED',createdAt:now,cancelledAt:now,cancelledBy:auth.currentUser.uid,cancellationReason:reason.trim(),recordedBy:auth.currentUser.uid});
+      }
+      alert('Student refund allocation cancelled.');await window.mrpspLoadMemberPaymentDashboard('refund');
     }catch(e){console.error('Refund cancellation failed',e);alert('Could not cancel refund: '+(e.message||e));}
   };
   window.mrpspRenderRefunds=function(){
@@ -19811,7 +19813,7 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
     const pools=Object.entries(mrpspPaymentCache.refundPools||{}).map(([key,v])=>({key,...v}));
     const refunds=Object.entries(mrpspPaymentCache.refunds||{}).map(([key,v])=>({key,...v}));
     if(isAdmin&&adminHost){
-      adminHost.innerHTML=`<h4>Refund Sources & Disbursement Queue</h4>${pools.map(pool=>`<div class="pay-panel" style="padding:14px;margin:10px 0"><b>${mrpspSafe(pool.source)}</b> · ${mrpspMoney(pool.amount)}<p class="pay-muted">${mrpspSafe(pool.reason)} · Created ${mrpspDate(pool.createdAt)}</p><div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Share</th><th>QR</th><th>UTR / Action</th></tr></thead><tbody>${(pool.allocation||[]).map(a=>{const qr=mrpspPaymentCache.qr?.[a.uid];const refund=refunds.find(x=>x.poolKey===pool.key&&x.studentUid===a.uid);const qrCell=qr?.dataUrl?`<button type="button" class="secondary" onclick="window.mrpspOpenRefundQr('${a.uid}','${String(a.name||'Student').replace(/'/g,"\\'")}')">VIEW QR</button>`:'<span class="pay-chip warn">QR not uploaded</span>';const hasRefund=!!refund;const closed=refund&&['CANCELLED','RECEIVED','WINDOW_EXPIRED'].includes(refund.status);const action=hasRefund?`<span class="pay-chip ${refund.status==='RECEIVED'?'ok':refund.status==='CANCELLED'?'bad':'warn'}">${mrpspSafe(refund.status)}</span><br>UTR: ${mrpspSafe(refund.utr||'—')}${!closed?`<br><button type="button" class="danger" style="margin-top:6px" onclick="window.mrpspCancelRefundPayout('${refund.key}')">CANCEL REFUND</button>`:''}`:`<input id="mrpspUtr_${pool.key}_${a.uid}" placeholder="Enter UTR / bank reference"><button class="success" style="margin-top:5px" ${qr?.dataUrl?'':'disabled'} onclick="window.mrpspMarkRefundSent('${pool.key}','${a.uid}')">MARK SENT</button>`;return `<tr><td>${mrpspSafe(a.name)}</td><td>${Number(a.percent||0).toFixed(2)}% · ${mrpspMoney(Number(pool.amount)*Number(a.percent)/100)}</td><td>${qrCell}</td><td>${action}</td></tr>`;}).join('')}</tbody></table></div></div>`).join('')||'<p class="pay-muted">No refund sources recorded.</p>'}`;
+      adminHost.innerHTML=`<h4>Refund Sources & Disbursement Queue</h4>${pools.map(pool=>`<div class="pay-panel" style="padding:14px;margin:10px 0"><b>${mrpspSafe(pool.source)}</b> · ${mrpspMoney(pool.amount)}<p class="pay-muted">${mrpspSafe(pool.reason)} · Created ${mrpspDate(pool.createdAt)}</p><div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Share</th><th>QR</th><th>UTR / Action</th></tr></thead><tbody>${(pool.allocation||[]).map(a=>{const qr=mrpspPaymentCache.qr?.[a.uid];const refund=refunds.find(x=>x.poolKey===pool.key&&x.studentUid===a.uid);const qrCell=qr?.dataUrl?`<button type="button" class="secondary" onclick="window.mrpspOpenRefundQr('${a.uid}','${String(a.name||'Student').replace(/'/g,"\\'")}')">VIEW QR</button>`:'<span class="pay-chip warn">QR not uploaded</span>';const closed=refund&&['CANCELLED','RECEIVED','WINDOW_EXPIRED'].includes(refund.status);let action='';if(refund){action=`<span class="pay-chip ${refund.status==='RECEIVED'?'ok':refund.status==='CANCELLED'?'bad':'warn'}">${mrpspSafe(refund.status)}</span><br>UTR: ${mrpspSafe(refund.utr||'—')}`;if(!closed)action+=`<br><button type="button" class="danger" style="margin-top:6px" onclick="window.mrpspCancelRefundPayout('${pool.key}','${a.uid}')">CANCEL REFUND</button>`;}else{action=`<input id="mrpspUtr_${pool.key}_${a.uid}" placeholder="Enter UTR / bank reference"><button class="success" style="margin-top:5px" ${qr?.dataUrl?'':'disabled'} onclick="window.mrpspMarkRefundSent('${pool.key}','${a.uid}')">MARK SENT</button><br><button type="button" class="danger" style="margin-top:6px" onclick="window.mrpspCancelRefundPayout('${pool.key}','${a.uid}')">CANCEL ALLOCATION</button>`;}return `<tr><td>${mrpspSafe(a.name)}</td><td>${Number(a.percent||0).toFixed(2)}% · ${mrpspMoney(Number(pool.amount)*Number(a.percent)/100)}</td><td>${qrCell}</td><td>${action}</td></tr>`;}).join('')}</tbody></table></div></div>`).join('')||'<p class="pay-muted">No refund sources recorded.</p>'}`;
     }
     if(studentHost){const own=refunds.filter(x=>x.studentUid===auth.currentUser?.uid);studentHost.innerHTML=`<h4>My Refund Status</h4><div class="pay-table-wrap"><table><thead><tr><th>Source</th><th>Amount</th><th>UTR</th><th>Confirmation deadline</th><th>Action / Status</th></tr></thead><tbody>${own.map(r=>`<tr><td>${mrpspSafe(r.sourceName)}</td><td>${mrpspMoney(r.amount)}</td><td>${mrpspSafe(r.utr||'—')}</td><td>${r.ackDeadline?mrpspDate(r.ackDeadline):'—'}</td><td>${r.status==='AWAITING_STUDENT_CONFIRMATION'&&Date.now()<=Number(r.ackDeadline)?`<button class="success" onclick="window.mrpspConfirmRefund('${r.key}')">RECEIVED</button> <button class="danger" onclick="window.mrpspReportRefundNotReceived('${r.key}')">NOT RECEIVED</button>`:`<span class="pay-chip ${r.status==='RECEIVED'?'ok':r.status==='NOT_RECEIVED'||r.status==='CANCELLED'?'bad':'warn'}">${mrpspSafe(r.status==='AWAITING_STUDENT_CONFIRMATION'?'CONFIRMATION WINDOW CLOSED':r.status)}</span>`}</td></tr>`).join('')||'<tr><td colspan="5">No refund allocated to you yet.</td></tr>'}</tbody></table></div>`;}
   };
