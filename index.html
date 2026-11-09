@@ -18932,7 +18932,8 @@ window.mrpspVerifyAndCreditPayment = async function(requestKey){
 
 // Admin can cancel any student's payment at any time. A single paymentId links the request, receipt and finance credit.
 window.mrpspPaymentCreditTimestamp = function(payment, finance){
-  const candidates=[finance?.timestamp,finance?.createdAt,finance?.verifiedAt,payment?.verifiedAt,payment?.createdAt,payment?.timestamp];
+  // The cancellation clock starts at verification/approval, never submission or ledger creation.
+  const candidates=[payment?.verifiedAt,finance?.verifiedAt,payment?.approvedAt,finance?.approvedAt];
   for(const value of candidates){
     if(value===undefined||value===null||value==="")continue;
     const n=typeof value==="number"?value:Date.parse(value);
@@ -19238,12 +19239,25 @@ window.mrpspRenderSelectedDues=function(){
       const th=document.createElement("th");th.textContent="Receipt";th.dataset.receiptColumn="1";header.appendChild(th);
     }
     const tbody=table.querySelector("tbody");
-    if(tbody)tbody.innerHTML=combined.map(p=>`<tr>
-      <td>${mrpspDate(p.createdAt)}</td><td>${mrpspMoney(p.amount)}</td><td>${mrpspSafe(p.purpose||"—")}</td>
-      <td><span class="pay-chip ok">${p.legacyImported?"HISTORICAL PAYMENT":"VERIFIED"}</span></td>
-      <td>${mrpspSafe(p.legacyImported?"Imported from Master Balance Sheet. UTR shown only if present in original ledger.":p.verificationNote||"—")}</td>
-      <td><button class="success" onclick="window.mrpspDownloadPaidReceipt('${mrpspSafe(p.key)}')">Download Paid Receipt</button></td>
-    </tr>`).join("");
+    if(tbody)tbody.innerHTML=combined.map(p=>{
+      const financeEntries=Object.entries(mrpspPaymentCache.finance||{});
+      const linked=financeEntries.find(([k,v])=>v?.paymentRequestKey===p.key || v?.paymentId===(p.paymentId||p.key) || k===p.financeKey || k===p.creditEntryKey);
+      const finance=linked?.[1]||null;
+      const state=window.mrpspPaymentCancellationState(p,finance);
+      const isVerified=!p.legacyImported && (p.status==="VERIFIED" || p.verified===true);
+      let action="";
+      if(p.status==="CANCELLED" || finance?.status==="Cancelled") action='<span style="font-weight:800;color:#b91c1c">CANCELLED</span>';
+      else if(isAdmin && isVerified && state.allowed && finance?.status==="Approved") action=`<button class="danger" style="padding:9px 16px;white-space:nowrap" onclick="window.mrpspCancelApprovedPayment('${mrpspSafe(p.key)}','${mrpspSafe(linked[0])}')">CANCEL PAYMENT</button><div style="font-size:10px;color:#64748b;margin-top:4px">Available for 24 hours after verification</div>`;
+      else if(isAdmin && isVerified) action=`<span title="${mrpspSafe(state.reason)}" style="font-size:11px;font-weight:700;color:#64748b">${state.reason.includes("expired")?"EXPIRED (24H)":"NOT CANCELLABLE"}</span>`;
+      return `<tr>
+        <td>${mrpspDate(p.createdAt)}</td><td>${mrpspMoney(p.amount)}</td><td>${mrpspSafe(p.purpose||"—")}</td>
+        <td><span class="pay-chip ${p.status==="CANCELLED"?"bad":"ok"}">${p.legacyImported?"HISTORICAL PAYMENT":mrpspSafe(p.status||"VERIFIED")}</span></td>
+        <td>${mrpspSafe(p.legacyImported?"Imported from Master Balance Sheet. UTR shown only if present in original ledger.":p.verificationNote||"—")}</td>
+        <td><button class="success" onclick="window.mrpspDownloadPaidReceipt('${mrpspSafe(p.key)}')">Download Paid Receipt</button></td>
+        ${isAdmin?`<td>${action||"—"}</td>`:""}
+      </tr>`;
+    }).join("");
+    if(isAdmin && header && !header.querySelector('[data-cancel-column="1"]')){const th=document.createElement("th");th.textContent="CANCELLATION";th.dataset.cancelColumn="1";header.appendChild(th);}
   }
 };
 
