@@ -1915,10 +1915,27 @@ tr:hover { background: #fcfcfd; }
       <button type="button" id="btnPaymentStudentWise" class="hidden" onclick="window.togglePaymentMode('studentwise')"><i class="fas fa-users"></i> Student-wise View</button>
       <button type="button" id="btnPaymentPrevious" class="hidden" onclick="window.togglePaymentMode('previous')"><i class="fas fa-clock-rotate-left"></i> Previous Balance Sheet Credits</button>
       <button type="button" id="btnPaymentDues" onclick="window.togglePaymentMode('dues')"><i class="fas fa-file-invoice-dollar"></i> Dues & Receipts</button>
+      <button type="button" id="btnPaymentBill" onclick="window.togglePaymentMode('bill')"><i class="fas fa-receipt"></i> Print Payment Bill</button>
       <button type="button" id="btnPaymentBreakup" class="hidden" onclick="window.togglePaymentMode('breakup')"><i class="fas fa-calculator"></i> Due Breakup</button>
       <button type="button" id="btnPaymentRefund" onclick="window.togglePaymentMode('refund')"><i class="fas fa-money-bill-transfer"></i> Student Refund</button>
       <button type="button" id="btnPaymentVerify" class="warning hidden" onclick="window.togglePaymentMode('verify')"><i class="fas fa-clipboard-check"></i> Payment Verification</button>
       <button type="button" id="btnPaymentQr" class="secondary hidden" onclick="window.togglePaymentMode('qr')"><i class="fas fa-qrcode"></i> Payment QR Setup</button>
+      <button type="button" id="btnPaymentRequestAll" class="warning hidden" onclick="window.togglePaymentMode('requestall')"><i class="fas fa-envelope"></i> Request for Payment</button>
+    </div>
+    <div id="paymentMode-requestall" class="hidden">
+      <div class="pay-panel" style="border-top:4px solid #d97706;">
+        <h3 style="margin-top:0;color:#92400e;"><i class="fas fa-envelope-open-text"></i> Send Payment Request to All Members</h3>
+        <p class="pay-muted">Send a personalised payment request email to every eligible member. Each email will contain that member's current outstanding balance calculated from approved payments and current dues.</p>
+        <label for="mrpspPaymentRequestDueDate">Payment due date (optional)</label>
+        <input id="mrpspPaymentRequestDueDate" type="date">
+        <label for="mrpspPaymentRequestMessage">Message to all members</label>
+        <textarea id="mrpspPaymentRequestMessage" rows="4" placeholder="Please clear your outstanding project payment at the earliest."></textarea>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;align-items:center;">
+          <button type="button" class="warning" id="mrpspSendPaymentRequestAllBtn" onclick="window.mrpspSendPaymentRequestToAll()"><i class="fas fa-paper-plane"></i> SEND REQUEST EMAIL TO ALL</button>
+          <span id="mrpspPaymentRequestCount" class="pay-muted"></span>
+        </div>
+        <div id="mrpspPaymentRequestResult" style="margin-top:12px;"></div>
+      </div>
     </div>
     <div id="paymentMode-student">
     <div class="panel" style="border-top:4px solid #15803d; margin-bottom:18px;">
@@ -2001,6 +2018,19 @@ tr:hover { background: #fcfcfd; }
           <label for="mrpspDuesStudentPicker">Select student</label><select id="mrpspDuesStudentPicker" onchange="window.mrpspRenderSelectedDues()"><option value="">Select student</option></select>
         </div>
         <div id="mrpspDuesStatement">Loading your payment statement…</div>
+      </section>
+    </div>
+
+    <div id="paymentMode-bill" class="hidden">
+      <section class="pay-panel">
+        <h3><i class="fas fa-receipt"></i> Payment Receipt / Customer Bill</h3>
+        <p class="pay-muted">Select an Admin-approved payment to prepare a printable receipt. The receipt includes the full amount, UTR, approval details and a PAID stamp. Use your browser's Print dialog to print or choose Save as PDF. No external PDF library is required.</p>
+        <div id="mrpspBillStudentWrap" class="pay-grid">
+          <div><label for="mrpspBillStudent">Student</label><select id="mrpspBillStudent"><option value="">Select student</option></select></div>
+          <div><label for="mrpspBillPayment">Approved payment</label><select id="mrpspBillPayment"><option value="">Select an approved payment</option></select></div>
+        </div>
+        <div id="mrpspBillPreview" style="margin-top:18px">Select a student and an approved payment to preview the bill.</div>
+        <button type="button" class="success" style="margin-top:14px" onclick="window.mrpspPrintSelectedBill()"><i class="fas fa-print"></i> PRINT / SAVE BILL AS PDF</button>
       </section>
     </div>
 
@@ -3797,9 +3827,9 @@ window.openMemberPaymentTab = function () {
 
 // Payment sub-navigation styled to match Asset Tracking controls.
 window.togglePaymentMode = function (mode) {
-  const allowed = ['student', 'studentwise', 'previous', 'dues', 'breakup', 'refund', 'verify', 'qr'];
+  const allowed = ['student', 'studentwise', 'previous', 'dues', 'bill', 'breakup', 'refund', 'verify', 'qr', 'requestall'];
   if (!allowed.includes(mode)) mode = 'student';
-  if (['verify', 'qr', 'studentwise', 'previous', 'breakup'].includes(mode) && !isAdmin) {
+  if (['verify', 'qr', 'studentwise', 'previous', 'breakup', 'requestall'].includes(mode) && !isAdmin) {
     alert('Administrator access required.');
     mode = 'dues';
   }
@@ -3807,7 +3837,7 @@ window.togglePaymentMode = function (mode) {
     const panel = document.getElementById(`paymentMode-${name}`);
     if (panel) panel.classList.toggle('hidden', name !== mode);
   });
-  const buttons = { student: 'btnPaymentStudent', studentwise: 'btnPaymentStudentWise', previous: 'btnPaymentPrevious', dues: 'btnPaymentDues', breakup: 'btnPaymentBreakup', refund: 'btnPaymentRefund', verify: 'btnPaymentVerify', qr: 'btnPaymentQr' };
+  const buttons = { student: 'btnPaymentStudent', studentwise: 'btnPaymentStudentWise', previous: 'btnPaymentPrevious', dues: 'btnPaymentDues', bill: 'btnPaymentBill', breakup: 'btnPaymentBreakup', refund: 'btnPaymentRefund', verify: 'btnPaymentVerify', qr: 'btnPaymentQr', requestall: 'btnPaymentRequestAll' };
   Object.entries(buttons).forEach(([name, id]) => {
     const button = document.getElementById(id);
     if (!button) return;
@@ -3816,7 +3846,7 @@ window.togglePaymentMode = function (mode) {
     else { button.style.outline = ''; }
   });
   if (mode === 'verify') window.mrpspLoadPaymentReviewQueue?.();
-  if (['studentwise','previous','dues','breakup','refund'].includes(mode)) window.mrpspLoadMemberPaymentDashboard?.(mode);
+  if (['studentwise','previous','dues','bill','breakup','refund'].includes(mode)) window.mrpspLoadMemberPaymentDashboard?.(mode);
 };
 window.mrpspSubmitPaymentForVerification = async function () {
   const amount = Number(document.getElementById("mrpspPayAmount")?.value);
@@ -18280,6 +18310,7 @@ function mrpspRenderPaymentViews(mode){
   document.getElementById("btnPaymentStudentWise")?.classList.toggle("hidden",!admin);
   document.getElementById("btnPaymentPrevious")?.classList.toggle("hidden",!admin);
   document.getElementById("btnPaymentBreakup")?.classList.toggle("hidden",!admin);
+  document.getElementById("btnPaymentRequestAll")?.classList.toggle("hidden",!admin);
   document.getElementById("mrpspRefundAdminPanel")?.classList.toggle("hidden",!admin);
   document.getElementById("mrpspRefundStudentQrPanel")?.classList.toggle("hidden",admin);
   if(admin){
@@ -18296,6 +18327,42 @@ function mrpspRenderPaymentViews(mode){
   mrpspRenderRefunds();
   if(mode==="refund")mrpspRenderOwnRefundQr();
 }
+
+window.mrpspSendPaymentRequestToAll = async function(){
+  if(!isAdmin) return alert("Administrator access required.");
+  const button=document.getElementById("mrpspSendPaymentRequestAllBtn");
+  const result=document.getElementById("mrpspPaymentRequestResult");
+  const dueDate=(document.getElementById("mrpspPaymentRequestDueDate")?.value||"").trim();
+  const message=(document.getElementById("mrpspPaymentRequestMessage")?.value||"Please clear your outstanding project payment at the earliest.").trim();
+  const recipients=mrpspStudentUsers().map(student=>({student,email:mrpspUserEmail(student)})).filter(x=>x.email);
+  if(!recipients.length) return alert("No eligible member email addresses were found.");
+  if(!confirm(`Send a personalised payment request email to ${recipients.length} eligible members?`)) return;
+  if(button){button.disabled=true;button.innerHTML='<i class="fas fa-spinner fa-spin"></i> SENDING...';}
+  if(result)result.innerHTML='<span style="color:#92400e;font-weight:700;">Sending email requests. Please keep this page open.</span>';
+  let sent=0,failed=0;
+  try{
+    const model=mrpspBuildDues();
+    for(const item of recipients){
+      const row=model.rows.find(x=>x.uid===item.student.uid);
+      const balance=Math.max(0,Number(row?.balance)||0);
+      const personalised=[
+        `Your current outstanding project payment is ${mrpspMoney(balance)}.`,
+        dueDate?`Requested payment due date: ${dueDate}.`:"",
+        message,
+        "Please make the payment using the permanent UPI QR available in the MRPSP Member Payment section, then submit the transaction details for Admin verification.",
+        "Payment is credited to the project ledger only after Admin verification."
+      ].filter(Boolean).join("\n\n");
+      try{
+        await window.mrpspSendPaymentEmail(item.email,mrpspName(item.student),"PAYMENT REQUEST",{amount:balance,payerName:mrpspName(item.student),purpose:"MRPSP project payment dues",createdAt:Date.now()},personalised);
+        sent++;
+      }catch(err){failed++;console.warn("Payment request email failed for",item.email,err);}
+      if(result)result.innerHTML=`<span style="color:#475569;">Processed ${sent+failed} of ${recipients.length} members...</span>`;
+    }
+    if(result)result.innerHTML=`<div style="padding:12px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;"><b>Request dispatch completed.</b><br>Submitted to email service: ${sent}<br>Failed to submit: ${failed}<br><small>The app uses a no-cors email endpoint, so actual inbox delivery cannot be confirmed here.</small></div>`;
+  }finally{
+    if(button){button.disabled=false;button.innerHTML='<i class="fas fa-paper-plane"></i> SEND REQUEST EMAIL TO ALL';}
+  }
+};
 
 function mrpspRenderStudentWise(model){
   const host=document.getElementById("mrpspStudentWiseTable"),summary=document.getElementById("mrpspStudentWiseSummary");
@@ -18341,16 +18408,21 @@ window.mrpspRenderSelectedDues=function(){
 };
 
 window.mrpspDownloadStudentReceipt=function(){
-  const d=window.mrpspCurrentReceipt;if(!d)return alert("Select a student statement first.");
-  const JsPDF=window.jspdf?.jsPDF;if(!JsPDF)return alert("PDF library is unavailable. Refresh and try again.");
-  const doc=new JsPDF();
-  doc.setFontSize(16);doc.text("MRPSP STUDENT PAYMENT STATEMENT",14,18);
-  doc.setFontSize(10);doc.text(`Student: ${d.studentName}`,14,30);doc.text(`Email: ${d.email}`,14,37);doc.text(`Student ID: ${d.uid}`,14,44);
-  doc.text(`Calculated dues: ${mrpspMoney(d.due)}`,14,56);doc.text(`Verified paid: ${mrpspMoney(d.paid)}`,14,63);doc.text(`${d.balance<0?"Credit carried forward":"Outstanding balance"}: ${d.balance<0?"-":""}${mrpspMoney(Math.abs(d.balance))}`,14,70);
-  doc.text(`Asset purchase total: ${mrpspMoney(d.assetTotal)}`,14,82);doc.text(`Dues waivers: ${mrpspMoney(d.exemptionTotal)}`,14,89);doc.text(`Per-student share: ${mrpspMoney(d.perStudent)}`,14,96);
-  let y=110;doc.setFontSize(12);doc.text("Payment History",14,y);y+=8;doc.setFontSize(9);
-  d.payments.forEach(p=>{const line=`${mrpspDate(p.createdAt)} | ${mrpspMoney(p.amount)} | ${p.status||"PENDING"} | ${p.purpose||""}`;const lines=doc.splitTextToSize(line,180);if(y+lines.length*5>280){doc.addPage();y=18;}doc.text(lines,14,y);y+=lines.length*5+2;});
-  doc.save(`MRPSP_Payment_Statement_${String(d.studentName).replace(/[^a-z0-9]+/gi,"_")}.pdf`);
+  const d=window.mrpspCurrentReceipt;
+  if(!d)return alert("Select a student statement first.");
+  const rows=(d.payments||[]).map(p=>`<tr><td>${mrpspBillEscape(p.createdAt?new Date(p.createdAt).toLocaleString("en-IN"):"—")}</td><td>${mrpspBillEscape(mrpspMoney(p.amount))}</td><td>${mrpspBillEscape(p.purpose||"—")}</td><td>${mrpspBillEscape(p.status||"PENDING")}</td></tr>`).join("");
+  const balanceLabel=d.balance<0?"Credit carried forward":"Outstanding balance";
+  const w=window.open("","_blank","width=900,height=750");
+  if(!w)return alert("Your browser blocked the print window. Allow pop-ups for this site and try again.");
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><title>MRPSP Student Statement</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;color:#172033;padding:25px}h1{color:#17365d;font-size:21px}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{border:1px solid #d8dee8;padding:9px;text-align:left}.summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:20px 0}.summary div{border:1px solid #d8dee8;padding:12px}.paid{color:#16804a;font-weight:800}@page{size:A4;margin:14mm}</style></head><body>
+  <h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1><h2>STUDENT PAYMENT STATEMENT</h2>
+  <p><b>Student:</b> ${mrpspBillEscape(d.studentName)}<br><b>Email:</b> ${mrpspBillEscape(d.email)}<br><b>Student ID:</b> ${mrpspBillEscape(d.uid)}</p>
+  <div class="summary"><div>Calculated dues<br><b>${mrpspBillEscape(mrpspMoney(d.due))}</b></div><div>Verified payments<br><b>${mrpspBillEscape(mrpspMoney(d.paid))}</b></div><div>${mrpspBillEscape(balanceLabel)}<br><b>${d.balance<0?"-":""}${mrpspBillEscape(mrpspMoney(Math.abs(d.balance)))}</b></div><div>Asset purchase total<br><b>${mrpspBillEscape(mrpspMoney(d.assetTotal))}</b></div></div>
+  <h3>Payment History</h3><table><thead><tr><th>Date</th><th>Amount</th><th>Purpose</th><th>Status</th></tr></thead><tbody>${rows||"<tr><td colspan='4'>No payments</td></tr>"}</tbody></table>
+  <p style="margin-top:30px;font-size:11px;color:#64748b">Computer-generated account statement. Individual paid receipts can be printed from the Print Payment Bill tab.</p>
+  <script>window.onload=function(){setTimeout(function(){window.print()},300)};<\/script></body></html>`);
+  w.document.close();
 };
 
 window.mrpspEmailStudentStatement=async function(){
@@ -19342,6 +19414,93 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
     }
   };
 })();
+
+
+
+// Browser-native printable customer-style bill. This avoids jsPDF and other PDF dependencies.
+function mrpspBillEscape(value){
+  return String(value??"—").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function mrpspBillApprovedPayments(uid){
+  const requests=Object.entries(mrpspPaymentCache.requests||{}).map(([key,v])=>({key,...v}));
+  const finance=Object.entries(mrpspPaymentCache.finance||{}).map(([key,v])=>({key,...v}));
+  return requests.filter(p=>(p.createdBy===uid||p.studentUid===uid)&&
+      (p.status==="VERIFIED"||p.verified===true))
+    .map(p=>{
+      const linked=finance.find(f=>f.paymentRequestKey===p.key);
+      return {...p,utr:p.utr||p.transactionUtr||linked?.utr||linked?.transactionUtr||"Not recorded",
+        verifiedAt:p.verifiedAt||linked?.verifiedAt||0,
+        verifiedBy:p.verifiedBy||linked?.verifiedBy||"Administrator",
+        amount:Number(linked?.amount||p.amount)||0,
+        financeKey:linked?.key||p.creditEntryKey||""};
+    }).filter(p=>p.amount>0)
+    .sort((a,b)=>Number(b.verifiedAt||b.createdAt||0)-Number(a.verifiedAt||a.createdAt||0));
+}
+window.mrpspRenderBillTab=function(){
+  const studentSel=document.getElementById("mrpspBillStudent");
+  const paymentSel=document.getElementById("mrpspBillPayment");
+  const preview=document.getElementById("mrpspBillPreview");
+  if(!studentSel||!paymentSel||!preview)return;
+  const students=mrpspStudentUsers();
+  const oldStudent=studentSel.value;
+  const uid=auth.currentUser?.uid;
+  if(isAdmin){
+    studentSel.disabled=false;
+    studentSel.innerHTML='<option value="">Select student</option>'+students.map(st=>
+      `<option value="${mrpspBillEscape(st.uid)}">${mrpspBillEscape(mrpspName(st))} (${mrpspBillEscape(st.email||"")})</option>`).join("");
+    if(students.some(st=>st.uid===oldStudent))studentSel.value=oldStudent;
+    studentSel.onchange=()=>window.mrpspRenderBillTab();
+  }else{
+    studentSel.innerHTML=`<option value="${mrpspBillEscape(uid)}">${mrpspBillEscape(mrpspName(students.find(st=>st.uid===uid))||auth.currentUser?.email||"My account")}</option>`;
+    studentSel.value=uid||"";studentSel.disabled=true;
+  }
+  const selectedUid=studentSel.value;
+  const payments=selectedUid?mrpspBillApprovedPayments(selectedUid):[];
+  const oldPayment=paymentSel.value;
+  paymentSel.innerHTML='<option value="">Select an approved payment</option>'+payments.map(p=>
+    `<option value="${mrpspBillEscape(p.key)}">${mrpspBillEscape(mrpspMoney(p.amount)+" | "+(p.purpose||"Project contribution")+" | "+(p.verifiedAt?new Date(p.verifiedAt).toLocaleDateString("en-IN"):"Approval date unavailable"))}</option>`).join("");
+  if(payments.some(p=>p.key===oldPayment))paymentSel.value=oldPayment;
+  paymentSel.onchange=()=>window.mrpspRenderBillTab();
+  const p=payments.find(x=>x.key===paymentSel.value);
+  if(!p){
+    preview.innerHTML=payments.length?"Select an approved payment to preview its bill.":"<p class='pay-muted'>No Admin-approved payments are available for this student yet.</p>";
+    return;
+  }
+  const st=students.find(x=>x.uid===selectedUid);
+  const billNo="MRPSP-RCPT-"+String(p.key).slice(-10).toUpperCase();
+  window.mrpspSelectedBill={...p,studentUid:selectedUid,studentName:mrpspName(st)||p.studentName||p.payerName||"Student",studentEmail:mrpspUserEmail(st)||p.createdByEmail||"" ,billNo};
+  preview.innerHTML=`<div id="mrpspPrintableBill" style="max-width:760px;margin:0 auto;background:#fff;color:#172033;border:1px solid #d8dee8;padding:30px;font-family:Arial,sans-serif">
+    <div style="display:flex;justify-content:space-between;gap:20px;align-items:flex-start;border-bottom:3px solid #17365d;padding-bottom:18px">
+      <div><div style="font-size:21px;font-weight:800;color:#17365d">METRO RAILWAY PLATFORM SAFETY PROJECT</div><div style="font-size:12px;letter-spacing:2px;margin-top:6px">OFFICIAL PAYMENT RECEIPT</div></div>
+      <div style="border:3px solid #16804a;color:#16804a;font-size:22px;font-weight:900;padding:8px 15px;transform:rotate(-5deg)">PAID</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;gap:16px;margin:22px 0"><div><b>Receipt No:</b> ${mrpspBillEscape(billNo)}<br><b>Receipt Date:</b> ${p.verifiedAt?new Date(p.verifiedAt).toLocaleString("en-IN"):"—"}</div><div style="text-align:right"><b>Payment Status</b><div style="color:#16804a;font-weight:800;font-size:18px">PAYMENT RECEIVED</div></div></div>
+    <h4 style="margin:18px 0 8px;border-bottom:1px solid #d8dee8;padding-bottom:7px">Received From</h4>
+    <table style="width:100%;border-collapse:collapse"><tr><td style="padding:8px;border-bottom:1px solid #eee"><b>Student Name</b></td><td style="padding:8px;border-bottom:1px solid #eee">${mrpspBillEscape(window.mrpspSelectedBill.studentName)}</td></tr><tr><td style="padding:8px;border-bottom:1px solid #eee"><b>Student ID</b></td><td style="padding:8px;border-bottom:1px solid #eee">${mrpspBillEscape(selectedUid)}</td></tr><tr><td style="padding:8px;border-bottom:1px solid #eee"><b>Email</b></td><td style="padding:8px;border-bottom:1px solid #eee">${mrpspBillEscape(window.mrpspSelectedBill.studentEmail)}</td></tr></table>
+    <h4 style="margin:22px 0 8px;border-bottom:1px solid #d8dee8;padding-bottom:7px">Payment Details</h4>
+    <table style="width:100%;border-collapse:collapse"><tr style="background:#f1f5f9"><th style="text-align:left;padding:10px">Description</th><th style="text-align:right;padding:10px">Amount</th></tr><tr><td style="padding:13px 10px;border-bottom:1px solid #eee">${mrpspBillEscape(p.purpose||"Project contribution")}</td><td style="padding:13px 10px;text-align:right;border-bottom:1px solid #eee;font-weight:800">${mrpspBillEscape(mrpspMoney(p.amount))}</td></tr></table>
+    <div style="text-align:right;font-size:20px;font-weight:900;margin:18px 0">TOTAL RECEIVED: ${mrpspBillEscape(mrpspMoney(p.amount))}</div>
+    <h4 style="margin:18px 0 8px;border-bottom:1px solid #d8dee8;padding-bottom:7px">Transaction & Approval Information</h4>
+    <table style="width:100%;border-collapse:collapse">${[
+      ["Payment mode","UPI"],["Full UTR / Transaction ID",p.utr],["Date submitted",p.createdAt?new Date(p.createdAt).toLocaleString("en-IN"):"—"],
+      ["Approved on",p.verifiedAt?new Date(p.verifiedAt).toLocaleString("en-IN"):"—"],["Approved by",p.verifiedBy],
+      ["Verification remarks",p.verificationNote||"Verified against receiving account"],["Master Balance Sheet reference",p.financeKey||"—"]
+    ].map(([a,b])=>`<tr><td style="padding:7px;border-bottom:1px solid #eee;width:38%"><b>${mrpspBillEscape(a)}</b></td><td style="padding:7px;border-bottom:1px solid #eee">${mrpspBillEscape(b)}</td></tr>`).join("")}</table>
+    <div style="margin-top:35px;padding-top:14px;border-top:1px dashed #9aa4b2;font-size:11px;color:#64748b">This receipt confirms that the amount stated above has been received and approved by the project administrator. This is a computer-generated receipt.</div>
+    <div style="display:flex;justify-content:space-between;margin-top:26px;font-size:12px"><span>Student Copy</span><span>Authorised Project Accounts</span></div>
+  </div>`;
+};
+window.mrpspPrintSelectedBill=function(){
+  const bill=window.mrpspSelectedBill;
+  if(!bill)return alert("Select an approved payment first.");
+  const source=document.getElementById("mrpspPrintableBill");
+  if(!source)return alert("Receipt preview is not available. Select the payment again.");
+  const w=window.open("","_blank","width=900,height=750");
+  if(!w)return alert("Your browser blocked the print window. Allow pop-ups for this site and try again.");
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><title>${mrpspBillEscape(bill.billNo)}</title><meta charset="utf-8"><style>@page{size:A4;margin:14mm}body{margin:0;background:#fff}#mrpspPrintableBill{max-width:none!important;border:0!important;padding:0!important}@media print{button{display:none}}</style></head><body>${source.outerHTML}<script>window.onload=function(){setTimeout(function(){window.print()},300)};<\/script></body></html>`);
+  w.document.close();
+};
 
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
