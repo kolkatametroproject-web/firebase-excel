@@ -19511,6 +19511,57 @@ window.mrpspPrintSelectedBill=function(){
   w.document.close();
 };
 
+
+
+// Final receipt download override: use the browser print engine, never jsPDF.
+window.mrpspDownloadPaidReceipt=function(requestKey){
+  const d=window.mrpspCurrentReceipt||{};
+  const p=(d.payments||[]).find(x=>String(x.key)===String(requestKey));
+  if(!p || (!p.legacyImported && !(p.status==="VERIFIED" && p.verified===true))){
+    alert("A paid receipt is available only after Admin verification."); return;
+  }
+  const esc=window.mrpspBillEscape || (v=>String(v??"—").replace(/[&<>\"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[c])));
+  const money=window.mrpspMoney || (v=>"₹"+Number(v||0).toFixed(2));
+  const dateTime=v=>v?new Date(v).toLocaleString("en-IN"):"Not recorded";
+  const dateOnly=v=>v?new Date(String(v).length===10?String(v)+"T00:00:00":v).toLocaleDateString("en-IN"):"Not recorded";
+  const isLegacy=!!p.legacyImported;
+  const receiptNo=isLegacy?`MRPSP-HIST-${String(p.legacyFinanceKey||p.key).slice(-10).toUpperCase()}`:`MRPSP-${String(p.key||"").slice(-10).toUpperCase()}`;
+  const rows=isLegacy?[
+    ["Member name",d.studentName||p.studentName||"—"],["Student ID",d.uid||p.studentUid||"—"],["Email",d.email||"—"],
+    ["Amount recorded",money(p.amount)],["Original ledger description",p.purpose||"Historical payment"],
+    ["Original payment / ledger date",dateOnly(p.paymentDate||p.createdAt)],
+    ["Date linked to student account",dateTime(p.verifiedAt)], ["Linked by",p.verifiedBy||"Administrator"],
+    ["UTR / Transaction ID",p.utr||"Not present in original ledger"],["Source","Existing Master Balance Sheet entry"],
+    ["Ledger reference",p.legacyFinanceKey||p.key]
+  ]:[
+    ["Member name",d.studentName||p.studentName||p.payerName||"—"],["Student ID",d.uid||p.studentUid||p.createdBy||"—"],
+    ["Email",d.email||p.createdByEmail||"—"],["Project",p.project||window.activeProject||"MRPSP"],
+    ["Payment purpose",p.purpose||"Project contribution"],["Payer name",p.payerName||"—"],
+    ["Amount received",money(p.amount)],["Payment mode","UPI"],
+    ["Full UTR / Transaction ID",p.utr||p.transactionUtr||"Not recorded"],
+    ["Actual payment date",dateOnly(p.paymentDate)], ["Payment submitted for verification",dateTime(p.createdAt)],
+    ["Admin approval date & time",dateTime(p.verifiedAt)], ["Approved by",p.verifiedBy||"Administrator"],
+    ["Verification remarks",p.verificationNote||"Verified against receiving account"],
+    ["Master Balance Sheet reference",p.financeKey||p.creditEntryKey||"—"]
+  ];
+  const body=rows.map(([a,b])=>`<tr><th>${esc(a)}</th><td>${esc(b)}</td></tr>`).join("");
+  const w=window.open("","_blank","width=900,height=750");
+  if(!w){alert("Your browser blocked the receipt window. Allow pop-ups for this site and try again.");return;}
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(receiptNo)}</title><style>
+    @page{size:A4;margin:15mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;margin:0;background:#fff}
+    .head{background:#0f2a4e;color:#fff;padding:22px 24px}.head h1{font-size:19px;margin:0 0 7px}.head p{font-size:12px;letter-spacing:1.5px;margin:0}
+    .meta{display:flex;justify-content:space-between;align-items:center;margin:22px 0}.paid{border:3px solid #16804a;color:#16804a;padding:7px 16px;font-size:21px;font-weight:900;transform:rotate(-5deg)}
+    table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:12px;vertical-align:top}th{width:38%;background:#f8fafc}
+    .foot{margin-top:32px;padding-top:14px;border-top:1px dashed #9aa4b2;color:#64748b;font-size:10px;line-height:1.6}
+    .actions{text-align:center;margin:20px}@media print{.actions{display:none}}
+  </style></head><body><div class="head"><h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1><p>${isLegacy?"HISTORICAL PAYMENT RECEIPT":"OFFICIAL PAYMENT RECEIPT"}</p></div>
+  <div class="meta"><div><b>Receipt No:</b> ${esc(receiptNo)}<br><b>Receipt / Approval Date:</b> ${esc(dateTime(p.verifiedAt))}</div><div class="paid">PAID</div></div>
+  <table>${body}</table><div class="foot">This receipt records the payment information available in the project account. Historical fields not present in the original ledger are marked as not recorded.<br>Computer-generated receipt. Keep this document for your records.</div>
+  <div class="actions"><button onclick="window.print()">PRINT / SAVE AS PDF</button></div>
+  <script>window.onload=function(){setTimeout(function(){window.print()},350)};<\/script></body></html>`);
+  w.document.close();
+};
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
