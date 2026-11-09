@@ -18248,7 +18248,9 @@ const mrpspIsProjectHeadPayable = u => {
 };
 const mrpspStudentUsers = () => Object.entries(mrpspPaymentCache.users||{})
   .filter(([uid,u]) => {
-    if(!u || u.banned === true || !(u.email || u.personalEmail1 || u.personalEmail2)) return false;
+    // Include every active student account, even when no email is recorded.
+    // Exclude banned accounts and administrative accounts, except the payable Project Head.
+    if(!u || u.banned === true) return false;
     const email=String(u.email||"").toLowerCase();
     return !ADMIN_EMAILS.some(e=>e.toLowerCase()===email) || mrpspIsProjectHeadPayable(u);
   })
@@ -18601,15 +18603,10 @@ function mrpspBuildPaymentBasedRefundAllocation(){
   });
   const totalPaid=totals.reduce((sum,s)=>sum+s.paid,0);
   if(totalPaid<=0)return {totalPaid,allocation:[]};
-  let allocated=0;
-  const allocation=totals.map((s,i)=>{
-    const amount=i===totals.length-1?0:s.paid/totalPaid;
-    const percent=i===totals.length-1?0:amount*100;
-    return {...s,percent};
-  });
-  // Store exact ratios; final refund amounts are rounded to paise with the final
-  // eligible member receiving any rounding remainder.
-  return {totalPaid,allocation:allocation.filter(s=>s.paid>0).map(s=>({...s,percent:s.paid/totalPaid*100}))};
+  // Keep every active student in the allocation, including members with no
+  // verified payments. Their contribution and refund share are explicitly zero.
+  const allocation=totals.map(s=>({...s,percent:totalPaid>0?(s.paid/totalPaid)*100:0}));
+  return {totalPaid,allocation};
 }
 
 window.mrpspCreateRefundPool=async function(){
