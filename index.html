@@ -3870,7 +3870,7 @@ window.mrpspSubmitPaymentForVerification = async function () {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate) || Number.isNaN(Date.parse(paymentDate+"T00:00:00"))) return alert("Select a valid actual payment date.");
   if (paymentDate > new Date().toLocaleDateString("en-CA")) return alert("Payment date cannot be in the future.");
   if (!/^\d{4}$/.test(last4)) return alert("Enter exactly the last 4 digits of the UPI transaction/reference ID.");
-  const qrSnap = await get(ref(db, MRPSP_PAYMENT_QR_PATH));
+  const qrSnap = await get(projectAwareRef(MRPSP_PAYMENT_QR_PATH));
   if (!qrSnap.exists() || !qrSnap.val()?.dataUrl) return alert("The administrator has not uploaded the permanent payment QR yet.");
   const request = {
     type: "PROJECT_PAYMENT_VERIFICATION", status: "PAYMENT PENDING", verified: false,
@@ -3882,7 +3882,7 @@ window.mrpspSubmitPaymentForVerification = async function () {
   };
   try {
     // Generate the Firebase key first, then store it as the permanent payment ID in the same write.
-    const reqRef = push(ref(db, "eoffice_requests"));
+    const reqRef = push(projectAwareRef("eoffice_requests"));
     request.paymentId = reqRef.key;
     await set(reqRef, request);
     const msg = document.getElementById("mrpspPaymentPendingMessage");
@@ -3908,7 +3908,7 @@ window.mrpspSavePermanentPaymentQr = async function () {
     const dataUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file);
     });
-    await set(ref(db, MRPSP_PAYMENT_QR_PATH), { dataUrl, label, updatedAt: Date.now(), updatedBy: auth.currentUser?.email || "" });
+    await set(projectAwareRef(MRPSP_PAYMENT_QR_PATH), { dataUrl, label, updatedAt: Date.now(), updatedBy: auth.currentUser?.email || "" });
     alert("Permanent payment QR saved and shared with signed-in members.");
     document.getElementById("mrpspPermanentQrFile").value = "";
   } catch (err) {
@@ -3929,7 +3929,7 @@ window.mrpspRenderPermanentPaymentQr = function (value) {
 window.mrpspVerifyAndCreditPayment = async function (requestKey) {
   if (!isAdmin || !auth.currentUser) return alert("Only an administrator can verify and credit a payment.");
   try {
-    const reqRef = ref(db, `eoffice_requests/${requestKey}`);
+    const reqRef = projectAwareRef(`eoffice_requests/${requestKey}`);
     const snap = await get(reqRef);
     if (!snap.exists()) return alert("Payment request not found.");
     const payment = snap.val();
@@ -3979,7 +3979,7 @@ window.mrpspRejectPayment = async function (requestKey) {
   if (reason === null) return;
   if (!reason.trim()) return alert("A rejection reason is mandatory.");
   try {
-    const reqRef = ref(db, `eoffice_requests/${requestKey}`);
+    const reqRef = projectAwareRef(`eoffice_requests/${requestKey}`);
     const snap = await get(reqRef);
     if (!snap.exists()) return alert("Payment request not found.");
     const payment = snap.val();
@@ -4013,7 +4013,7 @@ window.mrpspLoadPaymentReviewQueue = async function () {
   if (qrPanel) qrPanel.classList.toggle("hidden", !isAdmin);
   if (!isAdmin) return;
   try {
-    const snap = await get(ref(db, "eoffice_requests"));
+    const snap = await get(projectAwareRef("eoffice_requests"));
     const items = [];
     if (snap.exists()) snap.forEach(child => { const v = child.val(); if (v?.type === "PROJECT_PAYMENT_VERIFICATION" && v.status === "PAYMENT PENDING") items.push({ key: child.key, ...v }); });
     items.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -4038,8 +4038,8 @@ window.mrpspInitPaymentFeatures = function () {
     if (typeof window.switchTab === "function") window.switchTab("payment");
     window.togglePaymentMode("student");
   }
-  if (mrpspPaymentQrListener) { try { off(ref(db, MRPSP_PAYMENT_QR_PATH)); } catch (_) {} }
-  mrpspPaymentQrListener = onValue(ref(db, MRPSP_PAYMENT_QR_PATH), snap => window.mrpspRenderPermanentPaymentQr(snap.exists() ? snap.val() : null), err => console.error("Payment QR read failed", err));
+  if (mrpspPaymentQrListener) { try { off(projectAwareRef(MRPSP_PAYMENT_QR_PATH)); } catch (_) {} }
+  mrpspPaymentQrListener = onValue(projectAwareRef(MRPSP_PAYMENT_QR_PATH), snap => window.mrpspRenderPermanentPaymentQr(snap.exists() ? snap.val() : null), err => console.error("Payment QR read failed", err));
   window.mrpspLoadPaymentReviewQueue();
   window.mrpspLoadMemberPaymentDashboard?.("dues");
 };
@@ -4527,11 +4527,31 @@ let quickTxnBusy = false;
 function projectAwareRef(path) {
     if (typeof path !== "string") return ref(db, path);
     const normalized = path.replace(/^\/+/, "");
-    const sharedPath = /^(users|admins|status|system_settings)(\/|$)/.test(normalized);
-    if (activeProject === "CCRAS" && !sharedPath) {
+
+    // Only identity, authentication and global status metadata are shared.
+    // All operational records (including finance, e-office/payment requests,
+    // inventory, reports, settings and project workflows) are project-scoped.
+    const sharedPath = /^(users|admins|status)(\/|$)/.test(normalized);
+
+    if (sharedPath) return ref(db, normalized);
+
+    if (!activeProject) {
+        throw new Error("Select a project before accessing project-specific data.");
+    }
+
+    if (activeProject === "YELLOW_LINE_BREACH") {
+        return ref(db, normalized);
+    }
+
+    if (activeProject === "CCRAS") {
+        // Accept already-prefixed paths without adding projects/CCRAS twice.
+        if (normalized === "projects/CCRAS" || normalized.startsWith("projects/CCRAS/")) {
+            return ref(db, normalized);
+        }
         return ref(db, `projects/CCRAS/${normalized}`);
     }
-    return ref(db, path);
+
+    throw new Error("No valid active project. Select CCRAS or Yellow Line before accessing project data.");
 }
 let currentUser;
 let isAdmin = false;
@@ -7243,7 +7263,7 @@ function ccrasRef(path) {
         throw new Error("CCRAS access denied.");
     }
 
-    return projectAwareRef( `projects/CCRAS/${path}`);
+    return ref(db, `projects/CCRAS/${String(path).replace(/^\/+/, "")}`);
 }
 // --- FIXED TOGGLE FUNCTION (Crash-Free for Checkout & Return) ---
 window.toggleInvMode = (mode) => {
@@ -18420,7 +18440,11 @@ window.mrpspRenderSelectedDues=function(){
   const uid=isAdmin?(document.getElementById("mrpspDuesStudentPicker")?.value||""):auth.currentUser?.uid;
   const student=model.rows.find(s=>s.uid===uid);
   if(!student){host.innerHTML='<p class="pay-muted">No student statement is available.</p>';return;}
-  const payments=Object.entries(mrpspPaymentCache.requests||{}).map(([key,v])=>({key,...v})).filter(p=>(p.createdBy===uid||p.studentUid===uid)).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  // Only Admin-verified payments are displayed as payment history or made eligible for receipts.
+  // Pending, rejected, unverified and legacy unapproved requests are deliberately excluded.
+  const payments=Object.entries(mrpspPaymentCache.requests||{}).map(([key,v])=>({key,...v}))
+    .filter(p=>(p.createdBy===uid||p.studentUid===uid) && p.type==="PROJECT_PAYMENT_VERIFICATION" && p.status==="VERIFIED" && p.verified===true)
+    .sort((a,b)=>(b.verifiedAt||b.createdAt||0)-(a.verifiedAt||a.createdAt||0));
   const receiptData={studentName:mrpspName(student),email:mrpspUserEmail(student),uid:student.uid,due:student.due,paid:student.paid,balance:student.balance,exempt:student.exempt,assetTotal:model.assetTotal,exemptionTotal:model.exemptionTotal,perStudent:model.perStudent,payments};
   window.mrpspCurrentReceipt=receiptData;
   host.innerHTML=`<div class="pay-grid">
@@ -18429,11 +18453,11 @@ window.mrpspRenderSelectedDues=function(){
     <div class="pay-stat"><span class="pay-muted">${student.balance<0?'Credit carried forward':'Outstanding balance'}</span><b style="color:${student.balance>0?'#b45309':'#15803d'}">${student.balance<0?'-'+mrpspMoney(Math.abs(student.balance)):mrpspMoney(student.balance)}</b></div>
     <div class="pay-stat"><span class="pay-muted">Account category</span><b>${student.exempt?'FIXED DUES PERIOD':'DYNAMIC DUES'}</b></div>
   </div>
-  <div style="display:flex;gap:9px;flex-wrap:wrap;margin:16px 0">
-    <button class="success" onclick="window.mrpspDownloadStudentReceipt()"><i class="fas fa-file-pdf"></i> DOWNLOAD RECEIPT / STATEMENT</button>
+  ${payments.length?`<div style="display:flex;gap:9px;flex-wrap:wrap;margin:16px 0">
+    <button class="success" onclick="window.mrpspDownloadStudentReceipt()"><i class="fas fa-file-pdf"></i> DOWNLOAD VERIFIED STATEMENT</button>
     <button class="info" onclick="window.mrpspEmailStudentStatement()"><i class="fas fa-envelope"></i> EMAIL STATEMENT</button>
-  </div>
-  <h4>Payment history</h4><div class="pay-table-wrap"><table><thead><tr><th>Submitted</th><th>Amount</th><th>Purpose</th><th>Status</th><th>Admin note</th></tr></thead><tbody>${payments.map(p=>`<tr><td>${mrpspDate(p.createdAt)}</td><td>${mrpspMoney(p.amount)}</td><td>${mrpspSafe(p.purpose||"—")}</td><td><span class="pay-chip ${p.status==="VERIFIED"?"ok":p.status==="REJECTED"?"bad":"warn"}">${mrpspSafe(p.status||"PENDING")}</span></td><td>${mrpspSafe(p.verificationNote||p.rejectionReason||"—")}</td></tr>`).join("")||'<tr><td colspan="5">No payment submissions found.</td></tr>'}</tbody></table></div>
+  </div>`:`<p class="pay-muted" style="margin:16px 0">Paid receipts and payment history will appear here only after Admin verifies a payment.</p>`}
+  <h4>Verified payment history</h4><div class="pay-table-wrap"><table><thead><tr><th>Submitted</th><th>Amount</th><th>Purpose</th><th>Status</th><th>Admin note</th><th>Receipt</th></tr></thead><tbody>${payments.map(p=>`<tr><td>${mrpspDate(p.createdAt)}</td><td>${mrpspMoney(p.amount)}</td><td>${mrpspSafe(p.purpose||"—")}</td><td><span class="pay-chip ok">VERIFIED</span></td><td>${mrpspSafe(p.verificationNote||"—")}</td><td><button type="button" class="success" style="font-size:11px;padding:7px 9px" onclick="window.mrpspDownloadPaidReceipt('${p.key}')">DOWNLOAD PAID RECEIPT</button></td></tr>`).join("")||'<tr><td colspan="6">No Admin-approved payments yet.</td></tr>'}</tbody></table></div>
   <p class="pay-muted" style="margin-top:12px">Due calculation: active exemption members pay their Admin-entered fixed amount for the selected period. The remaining approved asset purchase cost is divided equally among all other payable members, including Project Head. Your current due is ${mrpspMoney(student.due)}. Any verified payment above the calculated dues appears as a negative balance (credit) and is automatically carried forward against future dues as new approved asset costs are added.</p>`;
 };
 
@@ -18449,7 +18473,7 @@ window.mrpspDownloadStudentReceipt=function(){
   <h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1><h2>STUDENT PAYMENT STATEMENT</h2>
   <p><b>Student:</b> ${mrpspBillEscape(d.studentName)}<br><b>Email:</b> ${mrpspBillEscape(d.email)}<br><b>Student ID:</b> ${mrpspBillEscape(d.uid)}</p>
   <div class="summary"><div>Calculated dues<br><b>${mrpspBillEscape(mrpspMoney(d.due))}</b></div><div>Verified payments<br><b>${mrpspBillEscape(mrpspMoney(d.paid))}</b></div><div>${mrpspBillEscape(balanceLabel)}<br><b>${d.balance<0?"-":""}${mrpspBillEscape(mrpspMoney(Math.abs(d.balance)))}</b></div><div>Asset purchase total<br><b>${mrpspBillEscape(mrpspMoney(d.assetTotal))}</b></div></div>
-  <h3>Payment History</h3><table><thead><tr><th>Date</th><th>Amount</th><th>Purpose</th><th>Status</th></tr></thead><tbody>${rows||"<tr><td colspan='4'>No payments</td></tr>"}</tbody></table>
+  <h3>Admin-Verified Payment History</h3><table><thead><tr><th>Date</th><th>Amount</th><th>Purpose</th><th>Status</th></tr></thead><tbody>${rows||"<tr><td colspan='4'>No payments</td></tr>"}</tbody></table>
   <p style="margin-top:30px;font-size:11px;color:#64748b">Computer-generated account statement. Individual paid receipts can be printed from the Print Payment Bill tab.</p>
   <script>window.onload=function(){setTimeout(function(){window.print()},300)};<\/script>
 
@@ -18873,7 +18897,7 @@ window.mrpspDownloadPaidReceipt = function(requestKey){
 window.mrpspVerifyAndCreditPayment = async function(requestKey){
   if(!isAdmin || !auth.currentUser) return alert("Only an administrator can verify and credit a payment.");
   try{
-    const reqRef = ref(db,`eoffice_requests/${requestKey}`);
+    const reqRef = projectAwareRef(`eoffice_requests/${requestKey}`);
     const snap = await get(reqRef);
     if(!snap.exists()) return alert("Payment request not found.");
     const payment = snap.val();
@@ -18956,7 +18980,7 @@ window.mrpspCancelApprovedPayment = async function(requestKey, financeKeyOverrid
   if(reason===null)return;
   if(!reason.trim())return alert("Cancellation reason is required.");
   try{
-    const reqRef=requestKey?ref(db,`eoffice_requests/${requestKey}`):null;
+    const reqRef=requestKey?projectAwareRef(`eoffice_requests/${requestKey}`):null;
     const snap=reqRef?await get(reqRef):null;
     const payment=snap?.exists()?snap.val():{};
     let financeKey=financeKeyOverride||payment.creditEntryKey||"";
