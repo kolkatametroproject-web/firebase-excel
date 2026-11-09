@@ -2064,7 +2064,7 @@ tr:hover { background: #fcfcfd; }
     <div id="paymentMode-refund" class="hidden">
       <section class="pay-panel">
         <h3><i class="fas fa-money-bill-transfer"></i> Student Refunds</h3>
-        <p class="pay-muted">Refund sources are entered by Admin, allocated using student percentages, and recorded in the master balance sheet. Students upload their own QR. After Admin records the UTR and marks a refund sent, the student has exactly 8 hours to confirm receipt or report non-receipt.</p>
+        <p class="pay-muted">Refund sources are entered by Admin and automatically allocated in proportion to each member’s cumulative Admin-verified payments compared with everyone’s total Admin-verified payments. Pending, rejected, cancelled and unverified payments are excluded. Students upload their own QR. After Admin records the UTR and marks a refund sent, the student has exactly 8 hours to confirm receipt or report non-receipt.</p>
         <div id="mrpspRefundStudentQrPanel" class="hidden">
           <div class="pay-grid">
             <div><label for="mrpspRefundQrFile">Upload your personal UPI QR (PNG/JPG/WebP, max 300 KB)</label><input id="mrpspRefundQrFile" type="file" accept="image/png,image/jpeg,image/webp"></div>
@@ -9110,7 +9110,7 @@ window.printAssetTag = () => {
     win.document.write('<style>body{text-align:center;font-family:sans-serif;padding:20px;} img{max-width:100%;}</style>');
     win.document.write('</head><body>');
     win.document.write(printContent);
-    win.document.write('</body></html>');
+    win.document.write('\n\n</body></html>');
     win.document.close();
     win.focus();
     setTimeout(() => { win.print(); win.close(); }, 500);
@@ -18589,6 +18589,29 @@ function mrpspRenderOwnRefundQr(){
   host.innerHTML=qr?.dataUrl?`<img src="${qr.dataUrl}" alt="Your saved refund QR" style="max-width:180px;max-height:180px;object-fit:contain;border:1px solid #e2e8f0;border-radius:9px;padding:6px"><p class="pay-muted">Updated ${mrpspDate(qr.updatedAt)}</p>`:"No QR uploaded yet.";
 }
 
+function mrpspBuildPaymentBasedRefundAllocation(){
+  const students=mrpspStudentUsers();
+  const totals=students.map(s=>{
+    const paid=Object.values(mrpspPaymentCache.requests||{}).reduce((sum,p)=>{
+      const belongs=(p.createdBy===s.uid||p.studentUid===s.uid);
+      const verified=p.type==="PROJECT_PAYMENT_VERIFICATION"&&p.status==="VERIFIED"&&p.verified===true;
+      return sum+(belongs&&verified?Math.max(0,Number(p.amount)||0):0);
+    },0);
+    return {uid:s.uid,name:mrpspName(s),email:mrpspUserEmail(s),paid};
+  });
+  const totalPaid=totals.reduce((sum,s)=>sum+s.paid,0);
+  if(totalPaid<=0)return {totalPaid,allocation:[]};
+  let allocated=0;
+  const allocation=totals.map((s,i)=>{
+    const amount=i===totals.length-1?0:s.paid/totalPaid;
+    const percent=i===totals.length-1?0:amount*100;
+    return {...s,percent};
+  });
+  // Store exact ratios; final refund amounts are rounded to paise with the final
+  // eligible member receiving any rounding remainder.
+  return {totalPaid,allocation:allocation.filter(s=>s.paid>0).map(s=>({...s,percent:s.paid/totalPaid*100}))};
+}
+
 window.mrpspCreateRefundPool=async function(){
   if(!isAdmin)return alert("Administrator access required.");
   const source=(document.getElementById("mrpspRefundSourceName")?.value||"").trim();
@@ -18596,25 +18619,18 @@ window.mrpspCreateRefundPool=async function(){
   const reason=(document.getElementById("mrpspRefundSourceReason")?.value||"").trim();
   if(!source||!reason)return alert("Enter source and reason.");
   if(!Number.isFinite(amount)||amount<=0)return alert("Enter a valid source amount.");
-  const students=mrpspStudentUsers();
-  if(!students.length)return alert("No student accounts found.");
-  const allocation=students.map(s=>({uid:s.uid,name:mrpspName(s),email:mrpspUserEmail(s),percent:Number(document.getElementById(`mrpspRefundPct_${s.uid}`)?.value||0)}));
-  // If allocation editor has not been created yet, create it and require a second confirmation.
-  if(!document.getElementById(`mrpspRefundPct_${students[0].uid}`)){
-    document.getElementById("mrpspRefundAllocationEditor").innerHTML=`<h4>2. Enter refund percentage for each student</h4><div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Refund percentage</th><th>Calculated amount</th></tr></thead><tbody>${students.map(s=>`<tr><td>${mrpspSafe(mrpspName(s))}</td><td><input type="number" min="0" max="100" step="0.01" id="mrpspRefundPct_${mrpspSafe(s.uid)}" value="0" oninput="window.mrpspPreviewRefundAllocation(${amount})"></td><td id="mrpspRefundAmt_${mrpspSafe(s.uid)}">${mrpspMoney(0)}</td></tr>`).join("")}</tbody></table></div><p id="mrpspRefundPctTotal" class="pay-muted">Total allocation: 0%</p><button class="success" onclick="window.mrpspCreateRefundPool()">CONFIRM SOURCE & SAVE ALLOCATION</button>`;
-    window.mrpspPreviewRefundAllocation(amount);
-    return;
-  }
-  const totalPct=allocation.reduce((s,x)=>s+x.percent,0);
-  if(allocation.some(x=>!Number.isFinite(x.percent)||x.percent<0||x.percent>100)||Math.abs(totalPct-100)>0.001)return alert(`Student percentages must total exactly 100%. Current total: ${totalPct.toFixed(2)}%.`);
-  if(!confirm(`Create refund source of ${mrpspMoney(amount)} and allocate 100% across ${students.length} students?`))return;
+  const result=mrpspBuildPaymentBasedRefundAllocation();
+  if(!result.allocation.length||result.totalPaid<=0)return alert("No Admin-verified payments are available for proportional refund allocation.");
+  const allocation=result.allocation;
+  const preview=allocation.map(a=>`${a.name}: ${a.percent.toFixed(4)}% (${mrpspMoney(amount*a.percent/100)})`).join("\n");
+  if(!confirm(`Create refund source of ${mrpspMoney(amount)}?\n\nAllocation is based on cumulative Admin-verified payments (${mrpspMoney(result.totalPaid)} total):\n${preview}`))return;
   try{
     const finance=await push(projectAwareRef("finance"),{type:"CREDIT",amount,desc:`Student refund source — ${source} — ${reason}`,mode:"Refund source",status:"Approved",by:auth.currentUser.email||"Admin",timestamp:Date.now(),source:"STUDENT_REFUND_SOURCE"});
-    const pool=await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundPools`),{source,amount,reason,financeEntryKey:finance.key,createdAt:Date.now(),createdBy:auth.currentUser.uid,status:"ALLOCATED",allocation});
+    const pool=await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundPools`),{source,amount,reason,financeEntryKey:finance.key,createdAt:Date.now(),createdBy:auth.currentUser.uid,status:"ALLOCATED",allocation,totalVerifiedPayments:result.totalPaid,allocationMethod:"VERIFIED_PAYMENT_PROPORTION"});
     await update(projectAwareRef(`finance/${finance.key}`),{refundPoolKey:pool.key});
     document.getElementById("mrpspRefundSourceName").value="";document.getElementById("mrpspRefundSourceAmount").value="";document.getElementById("mrpspRefundSourceReason").value="";
     document.getElementById("mrpspRefundAllocationEditor").innerHTML="";
-    alert("Refund source and percentage allocation saved. Source credit is recorded in the master balance sheet.");
+    alert("Refund source saved. Allocation has been calculated automatically from each member’s share of total Admin-verified payments.");
     await window.mrpspLoadMemberPaymentDashboard("refund");
   }catch(e){alert("Could not create refund pool: "+(e.message||e));}
 };
