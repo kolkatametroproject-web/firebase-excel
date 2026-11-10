@@ -2064,7 +2064,7 @@ tr:hover { background: #fcfcfd; }
     <div id="paymentMode-refund" class="hidden">
       <section class="pay-panel">
         <h3><i class="fas fa-money-bill-transfer"></i> Student Refunds</h3>
-        <p class="pay-muted">Refund sources are entered by Admin and automatically allocated in proportion to each member’s cumulative Admin-verified payments compared with everyone’s total Admin-verified payments. Pending, rejected, cancelled and unverified payments are excluded. Students upload their own QR. After Admin records the UTR and marks a refund sent, the student has exactly 8 hours to confirm receipt or report non-receipt.</p>
+        <p class="pay-muted">Create a refund book first. All refund sources, calculations, student allocations, QR details, UTRs, dues snapshots and payout records are managed inside the selected book. Each book contains only Individual Refund and Batch Refund.</p>
         <div id="mrpspRefundStudentQrPanel" class="hidden">
           <div class="pay-grid">
             <div><label for="mrpspRefundQrFile">Upload your personal UPI QR (PNG/JPG/WebP, max 300 KB)</label><input id="mrpspRefundQrFile" type="file" accept="image/png,image/jpeg,image/webp"></div>
@@ -2083,7 +2083,7 @@ tr:hover { background: #fcfcfd; }
           <div id="mrpspRefundAllocationEditor" style="margin-top:16px"></div>
           <div id="mrpspRefundAdminQueue" style="margin-top:18px"></div>
         </div>
-        <div id="mrpspRefundStudentList" style="margin-top:18px"></div>
+        <div id="mrpspRefundStudentList" class="hidden" aria-hidden="true"></div>
       </section>
     </div>
 </div>
@@ -19798,7 +19798,7 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
     const active=Object.values(window.mrpspPaymentCache.refunds||{}).some(r=>r.studentUid===uid&&['AWAITING_STUDENT_CONFIRMATION','NOT_RECEIVED'].includes(r.status));
     if(active)return alert('Your QR cannot be deleted while a refund is awaiting confirmation or has been reported as not received. Contact Admin.');
     if(!confirm('Delete your uploaded refund QR? You can upload a new one later.'))return;
-    try{await remove(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundQr/${uid}`));alert('Your refund QR has been deleted.');await window.mrpspLoadMemberPaymentDashboard('refund');}
+    try{const fb=window.mrpspRefundFirebase;if(!fb||typeof fb.remove!=='function'||typeof fb.projectAwareRef!=='function')throw new Error('Firebase QR deletion helper is not ready. Refresh the page and try again.');await fb.remove(fb.projectAwareRef(`${window.MRPSP_MEMBER_PAYMENT_PATH||'memberPayment'}/refundQr/${uid}`));alert('Your refund QR has been deleted.');await window.mrpspLoadMemberPaymentDashboard('refund');}
     catch(e){console.error('Refund QR deletion failed',e);alert('Could not delete QR: '+(e.message||e));}
   };
   window.mrpspCancelRefundPayout=async function(poolKey,uid){
@@ -19882,7 +19882,7 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
    const src={name,amount,reason,createdAt:Date.now(),allocation:model.allocation,totalVerifiedPayments:model.totalPaid,method:'PROPORTIONAL_TO_ADMIN_VERIFIED_PAYMENTS'};
    try{await push(projectAwareRef(`${root()}/${b.key}/sources`),src);document.getElementById('mrpspBookSourceName').value='';document.getElementById('mrpspBookSourceAmount').value='';document.getElementById('mrpspBookSourceReason').value='';await loadBooks();await renderBooks(b.key);}catch(e){alert('Could not add source: '+(e.message||e));}
  };
- function payoutRows(b){const out=[];(b.sources||{});Object.entries(b.sources||{}).forEach(([sourceKey,src])=>(src.allocation||[]).forEach(a=>{const amount=Math.round((Number(src.amount)||0)*(Number(a.percent)||0))/100; if(amount>0)out.push({sourceKey,sourceName:src.name,uid:a.uid,name:a.name,email:a.email,amount,percent:a.percent});}));return out;}
+ function payoutRows(b){const out=[];(b.sources||{});Object.entries(b.sources||{}).forEach(([sourceKey,src])=>(src.allocation||[]).forEach(a=>{const amount=Math.round((Number(src.amount)||0)*(Number(a.percent)||0)*100)/100; if(amount>0)out.push({sourceKey,sourceName:src.name,uid:a.uid,name:a.name,email:a.email,amount,percent:a.percent});}));return out;}
  window.mrpspBookRefundOne=async function(uid,sourceKey){
    const b=getBook();if(!writable(b))return alert('This refund book is closed or not selected.');
    const src=b.sources?.[sourceKey];const a=src?.allocation?.find(x=>x.uid===uid);if(!a)return alert('Student allocation not found.');
@@ -19949,12 +19949,30 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
  window.mrpspSetRefundBookSubtab=function(which){window.__mrpspRefundBookSubtab=which;document.getElementById('mrpspRefundBookIndividual')?.classList.toggle('hidden',which!=='individual');document.getElementById('mrpspRefundBookBatch')?.classList.toggle('hidden',which!=='batch');};
  window.mrpspSelectRefundBook=()=>renderBooks(selected());
  const oldRender=window.mrpspRenderRefunds;
- window.mrpspRenderRefunds=function(){const adminHost=document.getElementById('mrpspRefundAdminQueue');if(adminHost)adminHost.innerHTML='';const legacyEditor=document.getElementById('mrpspRefundAllocationEditor');if(legacyEditor)legacyEditor.innerHTML='';const studentHost=document.getElementById('mrpspRefundStudentList');if(studentHost){const own=Object.entries(mrpspPaymentCache.refunds||{}).filter(([,r])=>r.studentUid===window.auth.currentUser?.uid&&r.refundBookKey).map(([key,r])=>({key,...r}));studentHost.innerHTML=`<h4>My Refunds · Closed Books Only</h4><div class="pay-table-wrap"><table><thead><tr><th>Refund book / source</th><th>Amount</th><th>UTR</th><th>Status / confirmation</th></tr></thead><tbody>${own.map(r=>`<tr><td>${mrpspSafe(r.sourceName)}</td><td>${mrpspMoney(r.amount)}</td><td>${mrpspSafe(r.utr||'—')}</td><td>${r.status==='AWAITING_STUDENT_CONFIRMATION'&&Date.now()<=Number(r.ackDeadline)?`<button class="success" onclick="window.mrpspConfirmRefund('${r.key}')">RECEIVED</button> <button class="danger" onclick="window.mrpspReportRefundNotReceived('${r.key}')">NOT RECEIVED</button>`:mrpspSafe(r.status)}</td></tr>`).join('')||'<tr><td colspan="4">No refund from a closed book.</td></tr>'}</tbody></table></div>`;}renderBooks();};
+ window.mrpspRenderRefunds=function(){
+   const adminHost=document.getElementById('mrpspRefundAdminQueue');if(adminHost)adminHost.innerHTML='';
+   const legacyEditor=document.getElementById('mrpspRefundAllocationEditor');if(legacyEditor)legacyEditor.innerHTML='';
+   const studentHost=document.getElementById('mrpspRefundStudentList');if(studentHost){studentHost.innerHTML='';studentHost.classList.add('hidden');}
+   const oldQr=document.getElementById('mrpspRefundStudentQrPanel');if(oldQr){oldQr.innerHTML='';oldQr.classList.add('hidden');}
+   renderBooks();
+ };
  const oldLoad=window.mrpspLoadMemberPaymentDashboard;
  window.mrpspLoadMemberPaymentDashboard=async function(mode){await oldLoad(mode);await loadBooks();if(mode==='refund')await renderBooks();};
  document.addEventListener('DOMContentLoaded',()=>{
-   const admin=document.getElementById('mrpspRefundAdminPanel');if(admin){const legacyGrid=document.getElementById('mrpspRefundSourceName')?.closest('.pay-grid');if(legacyGrid)legacyGrid.remove();const legacyHeadings=Array.from(admin.querySelectorAll('h4')).filter(x=>/Add Refund Source|Refund Sources & Disbursement Queue/i.test(x.textContent));legacyHeadings.forEach(x=>x.remove());const legacySave=Array.from(admin.querySelectorAll('button')).find(x=>(x.getAttribute('onclick')||'').includes('mrpspCreateRefundPool'));if(legacySave)legacySave.remove();}if(admin&&!document.getElementById('mrpspRefundBookWorkspace')){const wrap=document.createElement('div');wrap.id='mrpspRefundBookWorkspace';wrap.style.marginTop='20px';admin.appendChild(wrap);}
-   if(admin&&!document.getElementById('mrpspRefundBookCreate')){const create=document.createElement('div');create.id='mrpspRefundBookCreate';create.className='pay-panel';create.style.marginTop='16px';create.innerHTML='<h4>Refund Books</h4><div class="pay-grid"><div><label for="mrpspRefundBookTitle">New refund book name</label><input id="mrpspRefundBookTitle" placeholder="e.g. November 2026 Refund Book"></div></div><button class="info" onclick="window.mrpspCreateRefundBook()">+ CREATE NEW REFUND BOOK</button>'; admin.insertBefore(create,admin.firstChild);}
+   const admin=document.getElementById('mrpspRefundAdminPanel');
+   if(admin){
+     const legacyGrid=document.getElementById('mrpspRefundSourceName')?.closest('.pay-grid');if(legacyGrid)legacyGrid.remove();
+     Array.from(admin.querySelectorAll('h4')).filter(x=>/Add Refund Source|Refund Sources & Disbursement Queue/i.test(x.textContent)).forEach(x=>x.remove());
+     Array.from(admin.querySelectorAll('button')).filter(x=>(x.getAttribute('onclick')||'').includes('mrpspCreateRefundPool')).forEach(x=>x.remove());
+   }
+   const legacyEditor=document.getElementById('mrpspRefundAllocationEditor');if(legacyEditor)legacyEditor.remove();
+   const legacyQueue=document.getElementById('mrpspRefundAdminQueue');if(legacyQueue)legacyQueue.remove();
+   const legacyStudent=document.getElementById('mrpspRefundStudentList');if(legacyStudent)legacyStudent.remove();
+   if(admin&&!document.getElementById('mrpspRefundBookWorkspace')){const wrap=document.createElement('div');wrap.id='mrpspRefundBookWorkspace';wrap.style.marginTop='20px';admin.appendChild(wrap);}
+   if(admin&&!document.getElementById('mrpspRefundBookCreate')){const create=document.createElement('div');create.id='mrpspRefundBookCreate';create.className='pay-panel';create.style.marginTop='16px';create.innerHTML='<h4>Create Refund Book</h4><div class="pay-grid"><div><label for="mrpspRefundBookTitle">Refund book name</label><input id="mrpspRefundBookTitle" placeholder="e.g. November 2026 Refund Book"></div></div><button class="info" onclick="window.mrpspCreateRefundBook()">+ CREATE NEW REFUND BOOK</button>';admin.insertBefore(create,admin.firstChild);}
+   const workspace=document.getElementById('mrpspRefundBookWorkspace');
+   const qrPanel=document.getElementById('mrpspRefundStudentQrPanel');
+   if(workspace&&qrPanel){const moveQrInsideBook=()=>{if(workspace.childElementCount>0&&!qrPanel.isConnected===false){if(qrPanel.parentElement!==workspace)workspace.prepend(qrPanel);if(!window.isAdmin)qrPanel.classList.remove('hidden');}};new MutationObserver(moveQrInsideBook).observe(workspace,{childList:true,subtree:false});moveQrInsideBook();}
  });
 })();
 </script>
