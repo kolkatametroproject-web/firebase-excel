@@ -3506,6 +3506,30 @@ tr:hover { background: #fcfcfd; }
       #tab-workflow .wf-actions button{flex:1}
       #tab-workflow .wf-modalbox{padding:17px}
     }
+
+    /* Admin review queue: compact rows, readable detail-on-demand */
+    #tab-workflow .wf-review-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:4px 2px 16px;border-bottom:1px solid #e9eef5}
+    #tab-workflow .wf-review-heading h3{margin:0 0 5px;font-size:22px}
+    #tab-workflow .wf-review-heading p{margin:0;max-width:720px}
+    #tab-workflow .wf-review-mark{background:#eef3ff;color:#3454a4;padding:9px 13px;border-radius:30px;font-size:11px;font-weight:850;letter-spacing:.04em}
+    #tab-workflow .wf-review-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0}
+    #tab-workflow .wf-review-stat{background:linear-gradient(145deg,#fff,#f7f9fd);border:1px solid #e5eaf2;border-radius:13px;padding:14px 16px}
+    #tab-workflow .wf-review-stat b{display:block;font-size:23px;color:#15233c;line-height:1.2}
+    #tab-workflow .wf-review-stat span{display:block;color:#718096;font-size:11px;font-weight:750;margin-top:5px}
+    #tab-workflow .wf-review-toolbar{display:flex;gap:10px;flex-wrap:wrap;background:#f7f9fc;border:1px solid #e7edf5;border-radius:13px;padding:12px}
+    #tab-workflow .wf-review-toolbar input{flex:1;min-width:220px;margin:0}
+    #tab-workflow .wf-review-toolbar select{width:min(280px,100%);margin:0}
+    #tab-workflow .wf-review-list{display:grid;grid-template-columns:1fr;gap:10px}
+    #tab-workflow .wf-review-item{background:#fff;border:1px solid #e5eaf2;border-radius:13px;overflow:hidden;box-shadow:0 2px 8px rgba(15,23,42,.025)}
+    #tab-workflow .wf-review-main{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(150px,1fr) minmax(130px,.8fr) auto;align-items:center;gap:14px;padding:15px 17px}
+    #tab-workflow .wf-review-title{font-weight:850;color:#1b2942;font-size:14px;line-height:1.4;overflow-wrap:anywhere}
+    #tab-workflow .wf-review-sub{color:#778399;font-size:11px;line-height:1.5;margin-top:4px;overflow-wrap:anywhere}
+    #tab-workflow .wf-review-open{background:#f1f5fb!important;color:#253b5b!important;border:1px solid #dce5f0!important;padding:9px 13px!important;font-size:11px!important;white-space:nowrap}
+    #tab-workflow .wf-review-detail{border-top:1px solid #edf1f6;background:#fbfcfe;padding:16px 18px}
+    #tab-workflow .wf-review-detail p{margin:7px 0;font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+    #tab-workflow .wf-review-empty{padding:30px;text-align:center;border:1px dashed #d7e0ec;border-radius:14px;color:#718096;background:#fafcff}
+    @media(max-width:760px){#tab-workflow .wf-review-stats{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-workflow .wf-review-main{grid-template-columns:1fr 1fr;gap:9px}#tab-workflow .wf-review-main>div:last-child{grid-column:1/-1}#tab-workflow .wf-review-open{width:100%}}
+
   </style>
   <div class="panel" style="border-top:5px solid #fbbf24">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
@@ -17954,6 +17978,22 @@ async function wfNotifyUid(uid, subject, message){
     return true;
   } catch(e){ console.error('Workflow email failed',uid,e); return false; }
 }
+// Decision notifications: send only to the affected member's PRIMARY PERSONAL EMAIL.
+async function wfSendDecisionEmail(uid, subject, details){
+  try {
+    const u=WF.users[uid] || await wfRead(`users/${uid}`);
+    const to=String(u?.personalEmail1||'').trim();
+    if(!to) { console.warn('Workflow decision email skipped: PRIMARY PERSONAL EMAIL missing for',uid); return false; }
+    const body=`Dear ${wfName(u,uid)},\n\n${details}\n\nPlease sign in to the MRPSP portal to view the updated submission and take any required action.\n\nThis is an automated notification. Please do not reply.`;
+    const mail=typeof addProjectNameToEmail==='function'?addProjectNameToEmail(subject,body):{subject,body};
+    const formData=new URLSearchParams();
+    formData.append('to',to); formData.append('subject',mail.subject); formData.append('body',mail.body);
+    const endpoint='https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec';
+    await fetch(endpoint,{method:'POST',body:formData,mode:'no-cors'});
+    console.log('Workflow decision email handoff requested for',uid,to);
+    return true;
+  } catch(e){ console.error('Workflow decision email failed for',uid,e); return false; }
+}
 // Dedicated dispatcher for Admin Work Distribution emails.
 // Uses the portal's existing task-assignment email template and recipient email fields.
 async function wfSendWorkDistributionEmail(uid, workId, teamId){
@@ -18222,7 +18262,7 @@ window.wfOpenInchargeReview=async(wid,tid,taskId)=>{
 window.wfReviewStudentTask=async(approved)=>{
   const c=wfTaskContext;if(!c||c.mode!=='REVIEW')return;const t=wfAllTeams(c.wid)[c.tid];if(t?.inchargeUid!==currentUser.uid)return alert('Unauthorized review.');
   const remarks=document.getElementById('wfInchargeRemarks').value.trim();if(!approved&&!remarks)return alert('Remarks are mandatory when requesting correction.');
-  try{const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId];await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{status:approved?'VERIFIED':'REDO',inchargeRemarks:remarks||'Verified by team incharge',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});const decisionText=`Work: ${WF.works[c.wid]?.title||c.wid}\nTeam: ${t.teamName}\nStudent: ${task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid)}\nTask: ${task.title}\nStatus: ${approved?'VERIFIED BY INCHARGE':'CORRECTION REQUIRED'}\nIncharge: ${wfName(WF.users[currentUser.uid],currentUser.uid)}\nRemarks: ${remarks||'Verified by team incharge.'}`;await wfNotifyUid(task.assignedUid,approved?`Task verified: ${task.title}`:`Correction required: ${task.title}`,decisionText);wfCloseModal('wfTaskModal');await window.loadWorkflows();alert(approved?'Student submission verified.':'Correction request sent to student.');}catch(e){alert('Review failed: '+e.message);}
+  try{const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId];await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{status:approved?'VERIFIED':'REDO',inchargeRemarks:remarks||'Verified by team incharge',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});const decisionText=`Work: ${WF.works[c.wid]?.title||c.wid}\nTeam: ${t.teamName}\nStudent: ${task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid)}\nTask: ${task.title}\nStatus: ${approved?'VERIFIED BY INCHARGE':'CORRECTION REQUIRED'}\nIncharge: ${wfName(WF.users[currentUser.uid],currentUser.uid)}\nRemarks: ${remarks||'Verified by team incharge.'}`;await wfSendDecisionEmail(task.assignedUid,approved?`Your work has been verified by the Team Incharge: ${task.title}`:`Correction required for your work: ${task.title}`,decisionText);wfCloseModal('wfTaskModal');await window.loadWorkflows();alert(approved?'Student submission verified.':'Correction request sent to student.');}catch(e){alert('Review failed: '+e.message);}
 };
 window.wfSubmitFinal=async(wid,tid)=>{
   const t=wfAllTeams(wid)[tid];if(t?.inchargeUid!==currentUser.uid)return alert('Only the team incharge can submit the final team file.');if(!t.deadline||Date.now()>t.deadline)return alert('Team final deadline has passed. Contact Admin.');
@@ -18231,19 +18271,32 @@ window.wfSubmitFinal=async(wid,tid)=>{
   const file=document.getElementById(`wfFinalFile_${wid}_${tid}`).files[0],remarks=document.getElementById(`wfFinalRemarks_${wid}_${tid}`).value.trim();if(!file||! /\.(pdf|ppt|pptx)$/i.test(file.name))return alert('Attach exactly one final PDF, PPT or PPTX file.');
   try{const f=await wfReadFile(file);await set(projectAwareRef(wfFinalPath(wid,tid)),{teamId:tid,teamName:t.teamName,fileData:f.fileData,fileName:f.fileName,fileType:f.fileType,remarks,status:'PENDING_ADMIN',submittedBy:currentUser.uid,submittedAt:serverTimestamp(),revision:(existing?.revision||0)+1});await wfNotifyAdmins(`Final team submission: ${t.teamName}`,`Work: ${WF.works[wid].title}\nTeam: ${t.teamName}\nIncharge: ${currentUser.name||currentUser.email}\nA consolidated ${f.fileName} is awaiting final verification.`);await window.loadWorkflows();alert('One consolidated team file submitted to Admin.');}catch(e){alert('Final submission failed: '+e.message);}
 };
+window.wfAdminTaskReviewRows=[];
 window.wfRenderAdminTaskReview=()=>{
   if(!wfIsAdmin())return;
   const host=document.getElementById('wfAdminTaskReviewList');if(!host)return;
   const rows=[];
   Object.entries(WF.tasks||{}).forEach(([wid,byTeam])=>Object.entries(byTeam||{}).forEach(([tid,byTask])=>Object.entries(byTask||{}).forEach(([taskId,task])=>{
     if(task?.fileData)rows.push({wid,tid,taskId,task,team:wfAllTeams(wid)[tid]||{},work:WF.works[wid]||{}});
-  })));
+  }))));
   rows.sort((a,b)=>(Number(b.task.submittedAt)||0)-(Number(a.task.submittedAt)||0));
-  host.innerHTML=rows.length?rows.map(({wid,tid,taskId,task,team,work})=>`<article class="wf-card">
-    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><div><h4 style="margin:0 0 6px">${wfEsc(task.title||'Individual task')}</h4><p class="wf-muted">${wfEsc(work.title||wid)} · ${wfEsc(team.teamName||tid)}</p><p class="wf-muted">Student: ${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))} · Incharge: ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p class="wf-muted">Submitted: ${wfDate(task.submittedAt)} · Incharge review: ${wfDate(task.reviewedAt)}</p></div>${wfStatusPill(task.status)}</div>
-    <p>${wfEsc(task.studentRemarks||'No student remarks')}</p>${task.inchargeRemarks?`<p class="wf-muted"><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks)}</p>`:''}${task.adminRemarks?`<p class="wf-muted"><b>Previous Admin remarks:</b> ${wfEsc(task.adminRemarks)}</p>`:''}
-    <div class="wf-actions"><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')">VIEW / DOWNLOAD FILE</button><button class="success" onclick="wfOpenAdminTaskReview('${wfEsc(wid)}','${wfEsc(tid)}','${wfEsc(taskId)}')">${task.status==='VERIFIED'?'ADMIN REVIEW / DECIDE':task.status==='ADMIN_APPROVED'?'VIEW ADMIN DECISION':'VIEW / REJECT (WAITING FOR INCHARGE APPROVAL)'}</button></div>
-  </article>`).join(''):'<div class="wf-card">No student file submissions are available for Admin review yet.</div>';
+  window.wfAdminTaskReviewRows=rows;
+  const counts={total:rows.length,waiting:rows.filter(x=>x.task.status==='VERIFIED').length,approved:rows.filter(x=>x.task.status==='ADMIN_APPROVED').length,redo:rows.filter(x=>x.task.status==='REDO').length};
+  const stats=document.getElementById('wfAdminReviewStats');if(stats)stats.innerHTML=`<div class="wf-review-stat"><b>${counts.total}</b><span>TOTAL SUBMISSIONS</span></div><div class="wf-review-stat"><b>${counts.waiting}</b><span>AWAITING ADMIN</span></div><div class="wf-review-stat"><b>${counts.approved}</b><span>ADMIN APPROVED</span></div><div class="wf-review-stat"><b>${counts.redo}</b><span>CORRECTIONS REQUIRED</span></div>`;
+  window.wfFilterAdminTaskReview();
+};
+window.wfFilterAdminTaskReview=()=>{
+  const host=document.getElementById('wfAdminTaskReviewList');if(!host)return;
+  const q=(document.getElementById('wfAdminReviewSearch')?.value||'').trim().toLowerCase();
+  const status=document.getElementById('wfAdminReviewStatus')?.value||'ALL';
+  const rows=(window.wfAdminTaskReviewRows||[]).filter(({wid,tid,taskId,task,team,work})=>{
+    const hay=[wid,tid,taskId,task.title,task.assignedName,wfName(WF.users[task.assignedUid],task.assignedUid),team.teamName,work.title].join(' ').toLowerCase();
+    return (!q||hay.includes(q))&&(status==='ALL'||task.status===status);
+  });
+  host.innerHTML=rows.length?rows.map(({wid,tid,taskId,task,team,work},i)=>`<article class="wf-review-item">
+    <div class="wf-review-main"><div><div class="wf-review-title">${wfEsc(task.title||'Individual task')}</div><div class="wf-review-sub">${wfEsc(work.title||wid)} · ${wfEsc(team.teamName||tid)}</div></div><div><div class="wf-review-title">${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))}</div><div class="wf-review-sub">Student</div></div><div>${wfStatusPill(task.status)}<div class="wf-review-sub">Submitted ${task.submittedAt?wfDate(task.submittedAt):'—'}</div></div><div><button class="wf-review-open" onclick="wfOpenAdminTaskReview('${wfEsc(wid)}','${wfEsc(tid)}','${wfEsc(taskId)}')"><i class="fas fa-eye"></i> OPEN REVIEW</button></div></div>
+    <details class="wf-expand" style="margin:0 14px 13px"><summary>Quick details</summary><div class="wf-review-detail"><p><b>Team Incharge:</b> ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p><b>Student remarks:</b> ${wfEsc(task.studentRemarks||'No remarks provided')}</p>${task.inchargeRemarks?`<p><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks)}</p>`:''}${task.adminRemarks?`<p><b>Admin remarks:</b> ${wfEsc(task.adminRemarks)}</p>`:''}<div class="wf-actions"><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')"><i class="fas fa-download"></i> DOWNLOAD SUBMISSION</button>${task.status==='VERIFIED'?`<button class="success" onclick="wfOpenAdminTaskReview('${wfEsc(wid)}','${wfEsc(tid)}','${wfEsc(taskId)}')">REVIEW & DECIDE</button>`:''}</div></div></details>
+  </article>`).join(''):'<div class="wf-review-empty"><i class="fas fa-inbox" style="font-size:25px;display:block;margin-bottom:9px"></i>No submissions match these filters.</div>';
 };
 window.wfOpenAdminTaskReview=(wid,tid,taskId)=>{
   if(!wfIsAdmin())return alert('Admin access required.');const task=WF.tasks[wid]?.[tid]?.[taskId],team=wfAllTeams(wid)[tid]||{};if(!task?.fileData)return alert('Submitted file is not available.');
@@ -18257,8 +18310,8 @@ window.wfReviewTaskByAdmin=async(approved)=>{
   try{
     await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{status:approved?'ADMIN_APPROVED':'REDO',adminReviewedBy:currentUser.uid,adminReviewedByEmail:currentUser.email||'',adminReviewedAt:Date.now(),adminRemarks:remarks||(task.inchargeRemarks||'Approved by Admin')});
     const msg=`Work: ${WF.works[c.wid]?.title||c.wid}\nTeam: ${team.teamName||c.tid}\nStudent: ${task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid)}\nTask: ${task.title}\nAdmin decision: ${approved?'APPROVED':'REJECTED / REDO REQUIRED'}\nAdmin: ${currentUser.email||currentUser.uid}\nRemarks: ${remarks||'Approved by Admin'}`;
-    await wfNotifyUid(task.assignedUid,approved?`Admin approved: ${task.title}`:`Admin rejected work: ${task.title}`,msg);
-    await wfNotifyUid(team.inchargeUid,approved?`Admin confirmed student work: ${task.title}`:`Admin rejected incharge-approved work: ${task.title}`,msg);
+    await wfSendDecisionEmail(task.assignedUid,approved?`Admin approved your work: ${task.title}`:`Admin rejected your work: ${task.title}`,msg);
+    await wfSendDecisionEmail(team.inchargeUid,approved?`Admin confirmed your student's work: ${task.title}`:`Admin rejected the work you verified: ${task.title}`,msg);
     // Notify only the student whose work was decided and the responsible incharge. No team-wide/admin broadcast.
 
     wfCloseModal('wfTaskModal');await window.loadWorkflows();wfSetView('taskreview');alert(approved?'Work approved by Admin.':'Work rejected by Admin. Student and incharge notified.');
@@ -18294,7 +18347,7 @@ window.wfOpenFinalReview=async(wid,tid)=>{
 };
 window.wfReviewFinal=async(approved)=>{
   if(!wfIsAdmin()||!wfFinalContext)return alert('Admin access required.');const {wid,tid}=wfFinalContext,t=wfAllTeams(wid)[tid],f=WF.finals[wid]?.[tid],remarks=document.getElementById('wfAdminFinalRemarks').value.trim();if(!approved&&!remarks)return alert('Admin remarks are mandatory for rejection.');
-  try{await update(projectAwareRef(wfFinalPath(wid,tid)),{status:approved?'APPROVED':'REDO',remarks:remarks||'Approved by Admin',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});await wfNotifyUid(t.inchargeUid,approved?`Final team work approved: ${t.teamName}`:`Final team work rejected: ${t.teamName}`,`Work: ${WF.works[wid].title}\nAdmin decision: ${approved?'APPROVED':'REDO REQUIRED'}\nRemarks: ${remarks||'Approved'}`);wfCloseModal('wfFinalModal');await window.loadWorkflows();if(document.getElementById('wfWorkDetail').innerHTML)wfOpenWorkDetails(wid);alert(approved?'Final team submission approved.':'Final team submission rejected. Incharge notified.');}catch(e){alert('Admin verification failed: '+e.message);}
+  try{await update(projectAwareRef(wfFinalPath(wid,tid)),{status:approved?'APPROVED':'REDO',remarks:remarks||'Approved by Admin',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});await wfSendDecisionEmail(t.inchargeUid,approved?`Final team submission approved: ${t.teamName}`:`Final team submission requires correction: ${t.teamName}`,`Work: ${WF.works[wid].title}\nTeam: ${t.teamName}\nAdmin decision: ${approved?'APPROVED':'REDO REQUIRED'}\nRemarks: ${remarks||'Approved'}`);wfCloseModal('wfFinalModal');await window.loadWorkflows();if(document.getElementById('wfWorkDetail').innerHTML)wfOpenWorkDetails(wid);alert(approved?'Final team submission approved.':'Final team submission rejected. Incharge notified.');}catch(e){alert('Admin verification failed: '+e.message);}
 };
 window.wfDownloadData=(wid,tid,type,taskId)=>{
   let data,name;if(type==='TASK'){const t=WF.tasks[wid]?.[tid]?.[taskId];data=t?.fileData;name=t?.fileName||'student-submission';}else{const f=WF.finals[wid]?.[tid];data=f?.fileData;name=f?.fileName||'team-final-submission';}
