@@ -16675,13 +16675,12 @@ formData.append("to", emailTo);
 formData.append("subject", mail.subject);
 formData.append("body", mail.body);
     try {
-        fetch(scriptUrl, {
-            method: 'POST',
-            body: formData,
-            mode: 'no-cors' 
-        }).then(() => console.log("✅ Update Email push requested."));
+        await fetch(scriptUrl, { method: 'POST', body: formData, mode: 'no-cors' });
+        console.log('Update email request handed to existing dispatcher.');
+        return true;
     } catch (error) {
-        console.error("❌ Update Email Dispatch Failed:", error);
+        console.error('Update Email Dispatch Failed:', error);
+        throw error;
     }
 };
   // --- DEDICATED PROFESSIONAL EMAIL DISPATCHER FOR PIP ---
@@ -18027,22 +18026,38 @@ async function wfNotifyUid(uid, subject, message){
     return true;
   } catch(e){ console.error('Workflow email failed',uid,e); return false; }
 }
-// Decision notifications: send only to the affected member's PRIMARY PERSONAL EMAIL.
-async function wfSendDecisionEmail(uid, subject, details){
+// Workflow decision emails use the portal's established status-email dispatcher.
+// The recipient is always PRIMARY PERSONAL EMAIL (DISPATCH DEFAULT).
+async function wfSendDecisionEmail(uid, subject, details, context=null){
   try {
     const u=WF.users[uid] || await wfRead(`users/${uid}`);
     const to=String(u?.personalEmail1||'').trim();
     if(!to) { console.warn('Workflow decision email skipped: PRIMARY PERSONAL EMAIL missing for',uid); return false; }
-    const body=`Dear ${wfName(u,uid)},\n\n${details}\n\nPlease sign in to the MRPSP portal to view the updated submission and take any required action.\n\nThis is an automated notification. Please do not reply.`;
-    const mail=typeof addProjectNameToEmail==='function'?addProjectNameToEmail(subject,body):{subject,body};
-    const formData=new URLSearchParams();
-    formData.append('to',to); formData.append('subject',mail.subject); formData.append('body',mail.body);
-    const endpoint='https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec';
-    await fetch(endpoint,{method:'POST',body:formData,mode:'no-cors'});
-    console.log('Workflow decision email handoff requested for',uid,to);
+    if(typeof window.sendStatusEmailNotification!=='function') throw new Error('Existing status email dispatcher is unavailable.');
+    await window.sendStatusEmailNotification(to,wfName(u,uid),subject,details,'');
+    if(context?.wid&&context?.tid&&context?.taskId){
+      await update(projectAwareRef(`${wfTaskPath(context.wid,context.tid)}/${context.taskId}`),{
+        lastWorkflowEmail:{recipientUid:uid,recipientEmail:to,recipientName:wfName(u,uid),subject,details,sentAt:Date.now()}
+      });
+    }
+    console.log('Workflow decision email sent through existing status dispatcher for',uid,to);
     return true;
   } catch(e){ console.error('Workflow decision email failed for',uid,e); return false; }
 }
+window.wfResendLastDecisionEmail=async()=>{
+  const c=wfTaskContext;if(!wfIsAdmin()||!c||c.mode!=='ADMIN_REVIEW')return alert('Admin access required.');
+  const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId];const last=task?.lastWorkflowEmail;
+  if(!last?.sentAt||Date.now()-Number(last.sentAt)>30*60*1000)return alert('The 30-minute resend window has expired.');
+  const u=WF.users[last.recipientUid]||await wfRead(`users/${last.recipientUid}`);const to=String(u?.personalEmail1||'').trim();
+  if(!to)return alert('PRIMARY PERSONAL EMAIL is missing. Email was not resent.');
+  if(typeof window.sendStatusEmailNotification!=='function')return alert('Existing status email dispatcher is unavailable.');
+  if(!confirm(`Resend the last email to ${to}?`))return;
+  try{
+    await window.sendStatusEmailNotification(to,wfName(u,last.recipientUid),last.subject,last.details,'');
+    await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{lastWorkflowEmail:{...last,recipientEmail:to,lastResentAt:Date.now(),resendCount:(last.resendCount||0)+1}});
+    alert('Resend request submitted using the existing email dispatcher.');
+  }catch(e){alert('Email resend failed: '+(e.message||e));}
+};
 // Dedicated dispatcher for Admin Work Distribution emails.
 // Uses the portal's existing task-assignment email template and recipient email fields.
 async function wfSendWorkDistributionEmail(uid, workId, teamId){
@@ -18311,7 +18326,7 @@ window.wfOpenInchargeReview=async(wid,tid,taskId)=>{
 window.wfReviewStudentTask=async(approved)=>{
   const c=wfTaskContext;if(!c||c.mode!=='REVIEW')return;const t=wfAllTeams(c.wid)[c.tid];if(t?.inchargeUid!==currentUser.uid)return alert('Unauthorized review.');
   const remarks=document.getElementById('wfInchargeRemarks').value.trim();if(!approved&&!remarks)return alert('Remarks are mandatory when requesting correction.');
-  try{const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId];await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{status:approved?'VERIFIED':'REDO',inchargeRemarks:remarks||'Verified by team incharge',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});const decisionText=`Work: ${WF.works[c.wid]?.title||c.wid}\nTeam: ${t.teamName}\nStudent: ${task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid)}\nTask: ${task.title}\nStatus: ${approved?'VERIFIED BY INCHARGE':'CORRECTION REQUIRED'}\nIncharge: ${wfName(WF.users[currentUser.uid],currentUser.uid)}\nRemarks: ${remarks||'Verified by team incharge.'}`;await wfSendDecisionEmail(task.assignedUid,approved?`Your work has been verified by the Team Incharge: ${task.title}`:`Correction required for your work: ${task.title}`,decisionText);wfCloseModal('wfTaskModal');await window.loadWorkflows();alert(approved?'Student submission verified.':'Correction request sent to student.');}catch(e){alert('Review failed: '+e.message);}
+  try{const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId];await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{status:approved?'VERIFIED':'REDO',inchargeRemarks:remarks||'Verified by team incharge',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});const decisionText=`Work: ${WF.works[c.wid]?.title||c.wid}\nTeam: ${t.teamName}\nStudent: ${task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid)}\nTask: ${task.title}\nStatus: ${approved?'VERIFIED BY INCHARGE':'CORRECTION REQUIRED'}\nIncharge: ${wfName(WF.users[currentUser.uid],currentUser.uid)}\nRemarks: ${remarks||'Verified by team incharge.'}`;await wfSendDecisionEmail(task.assignedUid,approved?`Your work has been verified by the Team Incharge: ${task.title}`:`Correction required for your work: ${task.title}`,decisionText,c);wfCloseModal('wfTaskModal');await window.loadWorkflows();alert(approved?'Student submission verified.':'Correction request sent to student.');}catch(e){alert('Review failed: '+e.message);}
 };
 window.wfSubmitFinal=async(wid,tid)=>{
   const t=wfAllTeams(wid)[tid];if(t?.inchargeUid!==currentUser.uid)return alert('Only the team incharge can submit the final team file.');if(!t.deadline||Date.now()>t.deadline)return alert('Team final deadline has passed. Contact Admin.');
@@ -18390,7 +18405,7 @@ window.wfOpenAdminTaskReview=(wid,tid,taskId)=>{
   if(!wfIsAdmin())return alert('Admin access required.');const task=WF.tasks[wid]?.[tid]?.[taskId],team=wfAllTeams(wid)[tid]||{};if(!task?.fileData)return alert('Submitted file is not available.');
   wfTaskContext={wid,tid,taskId,mode:'ADMIN_REVIEW'};document.getElementById('wfTaskModalTitle').innerText='Admin Review of Individual Work';
   const canAdminApprove=task.status==='VERIFIED';
-  document.getElementById('wfTaskModalBody').innerHTML=`<p><b>Work:</b> ${wfEsc(WF.works[wid]?.title||wid)} · <b>Team:</b> ${wfEsc(team.teamName||tid)}</p><p><b>Student:</b> ${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))} · <b>Incharge:</b> ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p><b>Task:</b> ${wfEsc(task.title)} · <b>Status:</b> ${wfEsc(task.status)}</p><p><b>Student remarks:</b> ${wfEsc(task.studentRemarks||'—')}</p><p><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks||'—')}</p><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')">DOWNLOAD SUBMITTED FILE</button>${canAdminApprove?'<label>Admin remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Enter approval note or reason for rejection"></textarea><div class="wf-actions"><button class="success" onclick="wfReviewTaskByAdmin(true)">ADMIN APPROVE</button><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button></div>':`<p class="wf-pill warn">Admin approval is available only after the Team Incharge verifies this submission. Current status: ${wfEsc(task.status)}</p>${task.status!=='REDO'?'<label>Admin rejection remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Reason for Admin rejection / request redo"></textarea><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button>':''}`}`;
+  document.getElementById('wfTaskModalBody').innerHTML=`<p><b>Work:</b> ${wfEsc(WF.works[wid]?.title||wid)} · <b>Team:</b> ${wfEsc(team.teamName||tid)}</p><p><b>Student:</b> ${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))} · <b>Incharge:</b> ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p><b>Task:</b> ${wfEsc(task.title)} · <b>Status:</b> ${wfEsc(task.status)}</p><p><b>Student remarks:</b> ${wfEsc(task.studentRemarks||'—')}</p><p><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks||'—')}</p><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')">DOWNLOAD SUBMITTED FILE</button>${task.lastWorkflowEmail?.sentAt&&Date.now()-Number(task.lastWorkflowEmail.sentAt)<=30*60*1000?'<button class="secondary" onclick="wfResendLastDecisionEmail()">RESEND LAST EMAIL · '+Math.max(0,Math.ceil((30*60*1000-(Date.now()-Number(task.lastWorkflowEmail.sentAt)))/60000))+' MIN LEFT</button>':''}${canAdminApprove?'<label>Admin remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Enter approval note or reason for rejection"></textarea><div class="wf-actions"><button class="success" onclick="wfReviewTaskByAdmin(true)">ADMIN APPROVE</button><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button></div>':`<p class="wf-pill warn">Admin approval is available only after the Team Incharge verifies this submission. Current status: ${wfEsc(task.status)}</p>${task.status!=='REDO'?'<label>Admin rejection remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Reason for Admin rejection / request redo"></textarea><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button>':''}`}`;
   document.getElementById('wfTaskModal').classList.remove('hidden');
 };
 window.wfReviewTaskByAdmin=async(approved)=>{
@@ -18398,8 +18413,8 @@ window.wfReviewTaskByAdmin=async(approved)=>{
   try{
     await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{status:approved?'ADMIN_APPROVED':'REDO',adminReviewedBy:currentUser.uid,adminReviewedByEmail:currentUser.email||'',adminReviewedAt:Date.now(),adminRemarks:remarks||(task.inchargeRemarks||'Approved by Admin')});
     const msg=`Work: ${WF.works[c.wid]?.title||c.wid}\nTeam: ${team.teamName||c.tid}\nStudent: ${task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid)}\nTask: ${task.title}\nAdmin decision: ${approved?'APPROVED':'REJECTED / REDO REQUIRED'}\nAdmin: ${currentUser.email||currentUser.uid}\nRemarks: ${remarks||'Approved by Admin'}`;
-    await wfSendDecisionEmail(task.assignedUid,approved?`Admin approved your work: ${task.title}`:`Admin rejected your work: ${task.title}`,msg);
-    await wfSendDecisionEmail(team.inchargeUid,approved?`Admin confirmed your student's work: ${task.title}`:`Admin rejected the work you verified: ${task.title}`,msg);
+    await wfSendDecisionEmail(task.assignedUid,approved?`Admin approved your work: ${task.title}`:`Admin rejected your work: ${task.title}`,msg,c);
+    await wfSendDecisionEmail(team.inchargeUid,approved?`Admin confirmed your student's work: ${task.title}`:`Admin rejected the work you verified: ${task.title}`,msg,c);
     // Notify only the student whose work was decided and the responsible incharge. No team-wide/admin broadcast.
 
     wfCloseModal('wfTaskModal');await window.loadWorkflows();wfSetView('taskreview');alert(approved?'Work approved by Admin.':'Work rejected by Admin. Student and incharge notified.');
