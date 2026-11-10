@@ -3974,7 +3974,7 @@ Optional verification note (or Cancel):`, "Verified against bank/UPI statement")
     try {
       const userSnap = await get(projectAwareRef(`users/${payment.createdBy || payment.studentUid}`));
       const user = userSnap.exists() ? userSnap.val() : {};
-      const recipient = user.personalEmail1 || user.personalEmail2 || user.email || payment.createdByEmail;
+      const recipient = user.personalEmail1;
       if (recipient) await window.mrpspSendPaymentEmail(recipient, user.name || payment.studentName || payment.payerName, "PAYMENT APPROVED", payment, "The administrator verified the payment. It has now been credited to the project ledger.");
     } catch (mailErr) { console.warn("Payment approval email could not be sent", mailErr); }
     alert("Payment verified and credited to Project Funds.");
@@ -4005,7 +4005,7 @@ window.mrpspRejectPayment = async function (requestKey) {
     try {
       const userSnap = await get(projectAwareRef(`users/${payment.createdBy || payment.studentUid}`));
       const user = userSnap.exists() ? userSnap.val() : {};
-      const recipient = user.personalEmail1 || user.personalEmail2 || user.email || payment.createdByEmail;
+      const recipient = user.personalEmail1;
       if (recipient) await window.mrpspSendPaymentEmail(recipient, user.name || payment.studentName || payment.payerName, "PAYMENT REJECTED", payment, reason.trim());
     } catch (mailErr) { console.warn("Payment rejection email could not be sent", mailErr); }
     alert("Payment request rejected. No Project Funds credit was created.");
@@ -15991,7 +15991,7 @@ window.wfAssignTask = async () => {
         const uData = uSnap.exists() ? uSnap.val() : {};
         
         // Priority: Use Personal Email 1. If missing, try Personal Email 2. If missing, use Official Login Email.
-        const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+        const targetEmail = uData.personalEmail1;
 
         // 2. Save Task to Database
         await push(projectAwareRef( "workflows"), {
@@ -16181,7 +16181,7 @@ window.executeWfFailAction = async (key, targetUid, encodedTargetName) => {
 
             const uSnap = await get(projectAwareRef( `users/${targetUid}`));
             const uData = uSnap.exists() ? uSnap.val() : {};
-            const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+            const targetEmail = uData.personalEmail1;
 
             // 2. Update Task Status in Database
             await update(projectAwareRef( `workflows/${key}`), {
@@ -16396,7 +16396,7 @@ window.wfReviewTask = async (isApproved) => {
         // 2. Fetch User's Email for Notification
         const uSnap = await get(projectAwareRef( `users/${wf.targetUid}`));
         const uData = uSnap.exists() ? uSnap.val() : {};
-        const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+        const targetEmail = uData.personalEmail1;
 
         // 3. Send Notification Email
         if (targetEmail) {
@@ -16616,7 +16616,7 @@ window.dispatchPipEmail = async (uid, subject, professionalMessage) => {
     try {
         const uSnap = await get(projectAwareRef( `users/${uid}`));
         const uData = uSnap.exists() ? uSnap.val() : {};
-        const targetEmail = uData.personalEmail1 || uData.personalEmail2 || uData.email;
+        const targetEmail = uData.personalEmail1;
         const studentName = uData.name || "Personnel";
 
         if (!targetEmail) return console.warn("No email found for PIP dispatch.");
@@ -17938,7 +17938,8 @@ let wfTaskContext = null;
 let wfFinalContext = null;
 const wfEsc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const wfDate = (v) => v ? new Date(v).toLocaleString('en-IN') : 'Not set';
-const wfEmail = (u) => u?.personalEmail1 || u?.personalEmail2 || u?.email || '';
+// Send to the member's registered login email first; personal emails are fallback only.
+const wfEmail = (u) => String(u?.personalEmail1 || '').trim(); // PRIMARY PERSONAL EMAIL (DISPATCH DEFAULT) only
 const wfName = (u, uid) => u?.name || u?.fullName || u?.email || uid || 'Member';
 const wfIsAdmin = () => !!isAdmin || (currentUser?.email && ADMIN_EMAILS.some(e=>e.toLowerCase()===currentUser.email.toLowerCase()));
 const wfTeamPath = (workId, teamId) => `workTeams/${workId}/${teamId}`;
@@ -18198,7 +18199,7 @@ window.wfAssignStudentTask=async(wid,tid)=>{
   const t=wfAllTeams(wid)[tid];if(t?.inchargeUid!==currentUser.uid)return alert('Only this team incharge can assign tasks.');
   const uid=document.getElementById(`wfAssignee_${wid}_${tid}`).value,title=document.getElementById(`wfTaskTitle_${wid}_${tid}`).value.trim(),d=document.getElementById(`wfTaskDeadline_${wid}_${tid}`).value,deadline=new Date(d).getTime();
   if(!uid||!title||!d)return alert('Select a student, task and deadline.');if(!wfTeamMembers(t).includes(uid))return alert('You can assign work only to your own team members.');if(!t.deadline||deadline>t.deadline)return alert('Student deadline cannot exceed the team final deadline.');if(deadline<=Date.now())return alert('Choose a future deadline.');
-  try{const r=await push(projectAwareRef(wfTaskPath(wid,tid)),{assignedUid:uid,assignedName:wfName(WF.users[uid],uid),title,deadline,status:'ASSIGNED',assignedBy:currentUser.uid,assignedAt:serverTimestamp()});const assignmentMsg=`Work: ${WF.works[wid].title}\nTeam: ${t.teamName}\nTask: ${title}\nDeadline: ${wfDate(deadline)}\nAssigned student: ${wfName(WF.users[uid],uid)}\nAssigned by Incharge: ${currentUser.name||currentUser.email}`;await wfNotifyUid(uid,`New task assigned: ${title}`,assignmentMsg);await wfNotifyAdmins(`Incharge assigned student work: ${title}`,assignmentMsg);await window.loadWorkflows();alert('Student task assigned and email notification sent.');}catch(e){alert('Task assignment failed: '+e.message);}
+  try{const r=await push(projectAwareRef(wfTaskPath(wid,tid)),{assignedUid:uid,assignedName:wfName(WF.users[uid],uid),title,deadline,status:'ASSIGNED',assignedBy:currentUser.uid,assignedAt:serverTimestamp()});const assignmentMsg=`Work: ${WF.works[wid].title}\nTeam: ${t.teamName}\nTask: ${title}\nDeadline: ${wfDate(deadline)}\nAssigned student: ${wfName(WF.users[uid],uid)}\nAssigned by Incharge: ${currentUser.name||currentUser.email}`;await wfNotifyUid(uid,`New task assigned: ${title}`,assignmentMsg);await window.loadWorkflows();alert('Student task assigned and email notification sent.');}catch(e){alert('Task assignment failed: '+e.message);}
 };
 function wfReadFile(file){return new Promise((resolve,reject)=>{if(!file)return resolve(null);if(file.size>10*1024*1024)return reject(new Error('File exceeds 10 MB.'));const reader=new FileReader();reader.onload=()=>resolve({fileData:reader.result,fileName:file.name,fileType:file.type||'application/octet-stream'});reader.onerror=()=>reject(new Error('Could not read selected file.'));reader.readAsDataURL(file);});}
 window.wfOpenStudentTask=async(wid,tid,taskId)=>{
@@ -18221,14 +18222,14 @@ window.wfOpenInchargeReview=async(wid,tid,taskId)=>{
 window.wfReviewStudentTask=async(approved)=>{
   const c=wfTaskContext;if(!c||c.mode!=='REVIEW')return;const t=wfAllTeams(c.wid)[c.tid];if(t?.inchargeUid!==currentUser.uid)return alert('Unauthorized review.');
   const remarks=document.getElementById('wfInchargeRemarks').value.trim();if(!approved&&!remarks)return alert('Remarks are mandatory when requesting correction.');
-  try{const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId];await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{status:approved?'VERIFIED':'REDO',inchargeRemarks:remarks||'Verified by team incharge',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});const decisionText=`Work: ${WF.works[c.wid]?.title||c.wid}\nTeam: ${t.teamName}\nStudent: ${task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid)}\nTask: ${task.title}\nStatus: ${approved?'VERIFIED BY INCHARGE':'CORRECTION REQUIRED'}\nIncharge: ${wfName(WF.users[currentUser.uid],currentUser.uid)}\nRemarks: ${remarks||'Verified by team incharge.'}`;await wfNotifyUid(task.assignedUid,approved?`Task verified: ${task.title}`:`Correction required: ${task.title}`,decisionText);await wfNotifyAdmins(approved?`Incharge verified student work: ${task.title}`:`Incharge requested correction: ${task.title}`,decisionText);wfCloseModal('wfTaskModal');await window.loadWorkflows();alert(approved?'Student submission verified.':'Correction request sent to student.');}catch(e){alert('Review failed: '+e.message);}
+  try{const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId];await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{status:approved?'VERIFIED':'REDO',inchargeRemarks:remarks||'Verified by team incharge',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});const decisionText=`Work: ${WF.works[c.wid]?.title||c.wid}\nTeam: ${t.teamName}\nStudent: ${task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid)}\nTask: ${task.title}\nStatus: ${approved?'VERIFIED BY INCHARGE':'CORRECTION REQUIRED'}\nIncharge: ${wfName(WF.users[currentUser.uid],currentUser.uid)}\nRemarks: ${remarks||'Verified by team incharge.'}`;await wfNotifyUid(task.assignedUid,approved?`Task verified: ${task.title}`:`Correction required: ${task.title}`,decisionText);wfCloseModal('wfTaskModal');await window.loadWorkflows();alert(approved?'Student submission verified.':'Correction request sent to student.');}catch(e){alert('Review failed: '+e.message);}
 };
 window.wfSubmitFinal=async(wid,tid)=>{
   const t=wfAllTeams(wid)[tid];if(t?.inchargeUid!==currentUser.uid)return alert('Only the team incharge can submit the final team file.');if(!t.deadline||Date.now()>t.deadline)return alert('Team final deadline has passed. Contact Admin.');
   const tasks=wfTaskRows(wid,tid);if(!tasks.length||tasks.some(x=>!['VERIFIED','ADMIN_APPROVED'].includes(x.status)))return alert('All assigned individual tasks must be verified by the incharge before final submission.');
   const existing=WF.finals[wid]?.[tid];if(existing?.status==='PENDING_ADMIN'||existing?.status==='APPROVED')return alert('A final submission is already pending or approved.');
   const file=document.getElementById(`wfFinalFile_${wid}_${tid}`).files[0],remarks=document.getElementById(`wfFinalRemarks_${wid}_${tid}`).value.trim();if(!file||! /\.(pdf|ppt|pptx)$/i.test(file.name))return alert('Attach exactly one final PDF, PPT or PPTX file.');
-  try{const f=await wfReadFile(file);await set(projectAwareRef(wfFinalPath(wid,tid)),{teamId:tid,teamName:t.teamName,fileData:f.fileData,fileName:f.fileName,fileType:f.fileType,remarks,status:'PENDING_ADMIN',submittedBy:currentUser.uid,submittedAt:serverTimestamp(),revision:(existing?.revision||0)+1});await wfNotifyAdmins(`Final team submission: ${t.teamName}`,`Work: ${WF.works[wid].title}\nTeam: ${t.teamName}\nIncharge: ${currentUser.name||currentUser.email}\nA consolidated ${f.fileName} is awaiting final verification.`);await wfNotifyMany(wfAllMemberIds(t),`Final submission sent: ${t.teamName}`,`Your team final PPT/PDF for ${WF.works[wid].title} has been submitted to Admin for verification.`);await window.loadWorkflows();alert('One consolidated team file submitted to Admin.');}catch(e){alert('Final submission failed: '+e.message);}
+  try{const f=await wfReadFile(file);await set(projectAwareRef(wfFinalPath(wid,tid)),{teamId:tid,teamName:t.teamName,fileData:f.fileData,fileName:f.fileName,fileType:f.fileType,remarks,status:'PENDING_ADMIN',submittedBy:currentUser.uid,submittedAt:serverTimestamp(),revision:(existing?.revision||0)+1});await wfNotifyAdmins(`Final team submission: ${t.teamName}`,`Work: ${WF.works[wid].title}\nTeam: ${t.teamName}\nIncharge: ${currentUser.name||currentUser.email}\nA consolidated ${f.fileName} is awaiting final verification.`);await window.loadWorkflows();alert('One consolidated team file submitted to Admin.');}catch(e){alert('Final submission failed: '+e.message);}
 };
 window.wfRenderAdminTaskReview=()=>{
   if(!wfIsAdmin())return;
@@ -18236,29 +18237,30 @@ window.wfRenderAdminTaskReview=()=>{
   const rows=[];
   Object.entries(WF.tasks||{}).forEach(([wid,byTeam])=>Object.entries(byTeam||{}).forEach(([tid,byTask])=>Object.entries(byTask||{}).forEach(([taskId,task])=>{
     if(task?.fileData)rows.push({wid,tid,taskId,task,team:wfAllTeams(wid)[tid]||{},work:WF.works[wid]||{}});
-  })));
+  }))));
   rows.sort((a,b)=>(Number(b.task.submittedAt)||0)-(Number(a.task.submittedAt)||0));
   host.innerHTML=rows.length?rows.map(({wid,tid,taskId,task,team,work})=>`<article class="wf-card">
     <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><div><h4 style="margin:0 0 6px">${wfEsc(task.title||'Individual task')}</h4><p class="wf-muted">${wfEsc(work.title||wid)} · ${wfEsc(team.teamName||tid)}</p><p class="wf-muted">Student: ${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))} · Incharge: ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p class="wf-muted">Submitted: ${wfDate(task.submittedAt)} · Incharge review: ${wfDate(task.reviewedAt)}</p></div>${wfStatusPill(task.status)}</div>
     <p>${wfEsc(task.studentRemarks||'No student remarks')}</p>${task.inchargeRemarks?`<p class="wf-muted"><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks)}</p>`:''}${task.adminRemarks?`<p class="wf-muted"><b>Previous Admin remarks:</b> ${wfEsc(task.adminRemarks)}</p>`:''}
-    <div class="wf-actions"><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')">VIEW / DOWNLOAD FILE</button><button class="success" onclick="wfOpenAdminTaskReview('${wfEsc(wid)}','${wfEsc(tid)}','${wfEsc(taskId)}')">ADMIN REVIEW / DECIDE</button></div>
+    <div class="wf-actions"><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')">VIEW / DOWNLOAD FILE</button><button class="success" onclick="wfOpenAdminTaskReview('${wfEsc(wid)}','${wfEsc(tid)}','${wfEsc(taskId)}')">${task.status==='VERIFIED'?'ADMIN REVIEW / DECIDE':task.status==='ADMIN_APPROVED'?'VIEW ADMIN DECISION':'VIEW / REJECT (WAITING FOR INCHARGE APPROVAL)'}</button></div>
   </article>`).join(''):'<div class="wf-card">No student file submissions are available for Admin review yet.</div>';
 };
 window.wfOpenAdminTaskReview=(wid,tid,taskId)=>{
   if(!wfIsAdmin())return alert('Admin access required.');const task=WF.tasks[wid]?.[tid]?.[taskId],team=wfAllTeams(wid)[tid]||{};if(!task?.fileData)return alert('Submitted file is not available.');
   wfTaskContext={wid,tid,taskId,mode:'ADMIN_REVIEW'};document.getElementById('wfTaskModalTitle').innerText='Admin Review of Individual Work';
-  document.getElementById('wfTaskModalBody').innerHTML=`<p><b>Work:</b> ${wfEsc(WF.works[wid]?.title||wid)} · <b>Team:</b> ${wfEsc(team.teamName||tid)}</p><p><b>Student:</b> ${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))} · <b>Incharge:</b> ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p><b>Task:</b> ${wfEsc(task.title)} · <b>Status:</b> ${wfEsc(task.status)}</p><p><b>Student remarks:</b> ${wfEsc(task.studentRemarks||'—')}</p><p><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks||'—')}</p><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')">DOWNLOAD SUBMITTED FILE</button><label>Admin remarks (mandatory for rejection)</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Enter approval note or reason for rejection"></textarea><div class="wf-actions"><button class="success" onclick="wfReviewTaskByAdmin(true)">ADMIN APPROVE</button><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button></div>`;
+  const canAdminApprove=task.status==='VERIFIED';
+  document.getElementById('wfTaskModalBody').innerHTML=`<p><b>Work:</b> ${wfEsc(WF.works[wid]?.title||wid)} · <b>Team:</b> ${wfEsc(team.teamName||tid)}</p><p><b>Student:</b> ${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))} · <b>Incharge:</b> ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p><b>Task:</b> ${wfEsc(task.title)} · <b>Status:</b> ${wfEsc(task.status)}</p><p><b>Student remarks:</b> ${wfEsc(task.studentRemarks||'—')}</p><p><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks||'—')}</p><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')">DOWNLOAD SUBMITTED FILE</button>${canAdminApprove?'<label>Admin remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Enter approval note or reason for rejection"></textarea><div class="wf-actions"><button class="success" onclick="wfReviewTaskByAdmin(true)">ADMIN APPROVE</button><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button></div>':`<p class="wf-pill warn">Admin approval is available only after the Team Incharge verifies this submission. Current status: ${wfEsc(task.status)}</p>${task.status!=='REDO'?'<label>Admin rejection remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Reason for Admin rejection / request redo"></textarea><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button>':''}`}`;
   document.getElementById('wfTaskModal').classList.remove('hidden');
 };
 window.wfReviewTaskByAdmin=async(approved)=>{
-  const c=wfTaskContext;if(!wfIsAdmin()||!c||c.mode!=='ADMIN_REVIEW')return alert('Admin access required.');const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId],team=wfAllTeams(c.wid)[c.tid]||{},remarks=document.getElementById('wfAdminTaskRemarks').value.trim();if(!approved&&!remarks)return alert('Admin remarks are mandatory when rejecting work.');
+  const c=wfTaskContext;if(!wfIsAdmin()||!c||c.mode!=='ADMIN_REVIEW')return alert('Admin access required.');const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId],team=wfAllTeams(c.wid)[c.tid]||{},remarks=(document.getElementById('wfAdminTaskRemarks')?.value||'').trim();if(!task?.fileData)return alert('Submitted file is not available.');if(approved&&task.status!=='VERIFIED')return alert('Admin can approve only after the Team Incharge has approved (VERIFIED) this work.');if(!approved&&!remarks)return alert('Admin remarks are mandatory when rejecting work.');
   try{
     await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{status:approved?'ADMIN_APPROVED':'REDO',adminReviewedBy:currentUser.uid,adminReviewedByEmail:currentUser.email||'',adminReviewedAt:Date.now(),adminRemarks:remarks||(task.inchargeRemarks||'Approved by Admin')});
     const msg=`Work: ${WF.works[c.wid]?.title||c.wid}\nTeam: ${team.teamName||c.tid}\nStudent: ${task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid)}\nTask: ${task.title}\nAdmin decision: ${approved?'APPROVED':'REJECTED / REDO REQUIRED'}\nAdmin: ${currentUser.email||currentUser.uid}\nRemarks: ${remarks||'Approved by Admin'}`;
     await wfNotifyUid(task.assignedUid,approved?`Admin approved: ${task.title}`:`Admin rejected work: ${task.title}`,msg);
     await wfNotifyUid(team.inchargeUid,approved?`Admin confirmed student work: ${task.title}`:`Admin rejected incharge-approved work: ${task.title}`,msg);
-    await wfNotifyMany(wfTeamMembers(team).filter(uid=>uid!==task.assignedUid),approved?`Team work approved: ${task.title}`:`Team work requires redo: ${task.title}`,msg);
-    await wfNotifyAdmins(approved?`Admin approved individual work: ${task.title}`:`Admin rejected individual work: ${task.title}`,msg);
+    // Notify only the student whose work was decided and the responsible incharge. No team-wide/admin broadcast.
+
     wfCloseModal('wfTaskModal');await window.loadWorkflows();wfSetView('taskreview');alert(approved?'Work approved by Admin.':'Work rejected by Admin. Student and incharge notified.');
   }catch(e){alert('Admin review failed: '+e.message);}
 };
@@ -18292,7 +18294,7 @@ window.wfOpenFinalReview=async(wid,tid)=>{
 };
 window.wfReviewFinal=async(approved)=>{
   if(!wfIsAdmin()||!wfFinalContext)return alert('Admin access required.');const {wid,tid}=wfFinalContext,t=wfAllTeams(wid)[tid],f=WF.finals[wid]?.[tid],remarks=document.getElementById('wfAdminFinalRemarks').value.trim();if(!approved&&!remarks)return alert('Admin remarks are mandatory for rejection.');
-  try{await update(projectAwareRef(wfFinalPath(wid,tid)),{status:approved?'APPROVED':'REDO',remarks:remarks||'Approved by Admin',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});await wfNotifyMany(wfAllMemberIds(t),approved?`Final work approved: ${t.teamName}`:`Final work requires revision: ${t.teamName}`,`Work: ${WF.works[wid].title}\nTeam: ${t.teamName}\nStatus: ${approved?'APPROVED':'REJECTED / REDO REQUIRED'}\nAdmin remarks: ${remarks||'Final submission approved.'}`);await wfNotifyUid(t.inchargeUid,approved?`Final team work approved: ${t.teamName}`:`Final team work rejected: ${t.teamName}`,`Work: ${WF.works[wid].title}\nAdmin decision: ${approved?'APPROVED':'REDO REQUIRED'}\nRemarks: ${remarks||'Approved'}`);wfCloseModal('wfFinalModal');await window.loadWorkflows();if(document.getElementById('wfWorkDetail').innerHTML)wfOpenWorkDetails(wid);alert(approved?'Final team submission approved.':'Final team submission rejected. Team notified.');}catch(e){alert('Admin verification failed: '+e.message);}
+  try{await update(projectAwareRef(wfFinalPath(wid,tid)),{status:approved?'APPROVED':'REDO',remarks:remarks||'Approved by Admin',reviewedBy:currentUser.uid,reviewedAt:serverTimestamp()});await wfNotifyUid(t.inchargeUid,approved?`Final team work approved: ${t.teamName}`:`Final team work rejected: ${t.teamName}`,`Work: ${WF.works[wid].title}\nAdmin decision: ${approved?'APPROVED':'REDO REQUIRED'}\nRemarks: ${remarks||'Approved'}`);wfCloseModal('wfFinalModal');await window.loadWorkflows();if(document.getElementById('wfWorkDetail').innerHTML)wfOpenWorkDetails(wid);alert(approved?'Final team submission approved.':'Final team submission rejected. Incharge notified.');}catch(e){alert('Admin verification failed: '+e.message);}
 };
 window.wfDownloadData=(wid,tid,type,taskId)=>{
   let data,name;if(type==='TASK'){const t=WF.tasks[wid]?.[tid]?.[taskId];data=t?.fileData;name=t?.fileName||'student-submission';}else{const f=WF.finals[wid]?.[tid];data=f?.fileData;name=f?.fileName||'team-final-submission';}
@@ -18312,7 +18314,7 @@ window.mrpspPaymentCache = mrpspPaymentCache;
 
 const mrpspMoney = n => "₹" + (Number(n)||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
 const mrpspSafe = s => String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const mrpspUserEmail = u => u?.personalEmail1 || u?.personalEmail2 || u?.email || "";
+const mrpspUserEmail = u => u?.personalEmail1 || "";
 const mrpspIsProjectHeadPayable = u => {
   if(!u) return false;
   // Project Head account remains payable even though it is also in the Admin allowlist.
@@ -19005,7 +19007,7 @@ window.mrpspVerifyAndCreditPayment = async function(requestKey){
     try{
       const userSnap=await get(projectAwareRef(`users/${payment.createdBy||payment.studentUid}`));
       const user=userSnap.exists()?userSnap.val():{};
-      const recipient=user.personalEmail1||user.personalEmail2||user.email||payment.createdByEmail;
+      const recipient=user.personalEmail1;
       if(recipient){
         const approvedPayment={...payment,utr:utr.trim(),transactionUtr:utr.trim(),verifiedAt,verifiedBy:auth.currentUser.email||"",verificationNote:note.trim()};
         await window.mrpspSendPaymentEmail(recipient,user.name||payment.studentName||payment.payerName,"PAYMENT APPROVED",approvedPayment,
@@ -19075,7 +19077,7 @@ window.mrpspCancelApprovedPayment = async function(requestKey, financeKeyOverrid
     }
     try{
       const uid=finance.studentUid||payment.createdBy||payment.studentUid;
-      if(uid){const userSnap=await get(projectAwareRef(`users/${uid}`));const user=userSnap.exists()?userSnap.val():{};const recipient=user.personalEmail1||user.personalEmail2||user.email||finance.studentEmail||payment.createdByEmail;
+      if(uid){const userSnap=await get(projectAwareRef(`users/${uid}`));const user=userSnap.exists()?userSnap.val():{};const recipient=user.personalEmail1;
         if(recipient)await window.mrpspSendPaymentEmail(recipient,user.name||finance.studentName||payment.studentName||payment.payerName,"PAYMENT APPROVAL CANCELLED",{...payment,...finance,paymentId},`Payment ID: ${paymentId}. Amount: ${mrpspMoney(finance.amount)}. Reason: ${reason.trim()}. This payment credit has been cancelled by Admin and is no longer counted.`);
       }
     }catch(mailErr){console.warn("Cancellation email could not be sent",mailErr);}
