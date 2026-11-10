@@ -19669,6 +19669,11 @@ window.mrpspMoney = mrpspMoney;
 window.mrpspSafe = mrpspSafe;
 window.mrpspDate = mrpspDate;
 window.mrpspPaymentCache = mrpspPaymentCache;
+// Explicit bridge for the standalone Refund Book script. ES module imports and
+// lexical bindings are not visible to later classic scripts unless exported.
+window.mrpspRefundFirebase = { push, get, update, remove, set, projectAwareRef };
+window.MRPSP_MEMBER_PAYMENT_PATH = MRPSP_MEMBER_PAYMENT_PATH;
+window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
 </script>
 <div id="bigImageModal" class="modal-overlay hidden" onclick="document.getElementById('bigImageModal').classList.add('hidden')">
     <div class="panel" style="background: transparent; border: none; box-shadow: none; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; padding: 0;">
@@ -19832,6 +19837,18 @@ window.mrpspPaymentCache = mrpspPaymentCache;
 <script>
 /* Refund Book workflow: open books are editable by Admin; closed books are immutable. */
 (function(){
+ // Module scripts execute after parsing; resolve the bridge lazily when a user
+ // invokes a refund action, rather than during this classic script's evaluation.
+ const firebaseBridge=()=>window.mrpspRefundFirebase;
+ const callFirebase=(name,...args)=>{const api=firebaseBridge();if(!api||typeof api[name]!=='function')throw new Error('Firebase helper '+name+' is not ready. Refresh the page and try again.');return api[name](...args);};
+ const push=(...args)=>callFirebase('push',...args);
+ const get=(...args)=>callFirebase('get',...args);
+ const update=(...args)=>callFirebase('update',...args);
+ const remove=(...args)=>callFirebase('remove',...args);
+ const set=(...args)=>callFirebase('set',...args);
+ const projectAwareRef=(...args)=>callFirebase('projectAwareRef',...args);
+ const MRPSP_MEMBER_PAYMENT_PATH=window.MRPSP_MEMBER_PAYMENT_PATH||'memberPayment';
+ const MRPSP_REFUND_ACK_MS=Number(window.MRPSP_REFUND_ACK_MS)||8*60*60*1000;
  const root=()=>`${MRPSP_MEMBER_PAYMENT_PATH}/refundBooks`;
  const cash=n=>mrpspMoney(Number(n)||0);
  const esc=s=>mrpspSafe(String(s??''));
@@ -19936,7 +19953,7 @@ window.mrpspPaymentCache = mrpspPaymentCache;
  const oldLoad=window.mrpspLoadMemberPaymentDashboard;
  window.mrpspLoadMemberPaymentDashboard=async function(mode){await oldLoad(mode);await loadBooks();if(mode==='refund')await renderBooks();};
  document.addEventListener('DOMContentLoaded',()=>{
-   const admin=document.getElementById('mrpspRefundAdminPanel');if(admin){const legacyGrid=document.getElementById('mrpspRefundSourceName')?.closest('.pay-grid');if(legacyGrid)legacyGrid.remove();const legacyHeading=Array.from(admin.querySelectorAll('h4')).find(x=>x.textContent.includes('Add Refund Source'));if(legacyHeading)legacyHeading.remove();const legacySave=Array.from(admin.querySelectorAll('button')).find(x=>(x.getAttribute('onclick')||'').includes('mrpspCreateRefundPool'));if(legacySave)legacySave.remove();}if(admin&&!document.getElementById('mrpspRefundBookWorkspace')){const wrap=document.createElement('div');wrap.id='mrpspRefundBookWorkspace';wrap.style.marginTop='20px';admin.appendChild(wrap);}
+   const admin=document.getElementById('mrpspRefundAdminPanel');if(admin){const legacyGrid=document.getElementById('mrpspRefundSourceName')?.closest('.pay-grid');if(legacyGrid)legacyGrid.remove();const legacyHeadings=Array.from(admin.querySelectorAll('h4')).filter(x=>/Add Refund Source|Refund Sources & Disbursement Queue/i.test(x.textContent));legacyHeadings.forEach(x=>x.remove());const legacySave=Array.from(admin.querySelectorAll('button')).find(x=>(x.getAttribute('onclick')||'').includes('mrpspCreateRefundPool'));if(legacySave)legacySave.remove();}if(admin&&!document.getElementById('mrpspRefundBookWorkspace')){const wrap=document.createElement('div');wrap.id='mrpspRefundBookWorkspace';wrap.style.marginTop='20px';admin.appendChild(wrap);}
    if(admin&&!document.getElementById('mrpspRefundBookCreate')){const create=document.createElement('div');create.id='mrpspRefundBookCreate';create.className='pay-panel';create.style.marginTop='16px';create.innerHTML='<h4>Refund Books</h4><div class="pay-grid"><div><label for="mrpspRefundBookTitle">New refund book name</label><input id="mrpspRefundBookTitle" placeholder="e.g. November 2026 Refund Book"></div></div><button class="info" onclick="window.mrpspCreateRefundBook()">+ CREATE NEW REFUND BOOK</button>'; admin.insertBefore(create,admin.firstChild);}
  });
 })();
