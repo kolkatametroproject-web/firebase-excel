@@ -3565,7 +3565,7 @@ tr:hover { background: #fcfcfd; }
     <div id="wfAdminTaskreviewView" class="hidden">
       <h3>Admin Review of Individual Work</h3>
       <p class="wf-muted">Admin can inspect every student submission, including work already verified by the Team Incharge, and approve it or reject it with mandatory remarks.</p>
-      <div id="wfAdminTaskReviewList" class="wf-grid" style="margin-top:15px"></div>
+      <div id="wfAdminTaskReviewList" style="margin-top:18px"></div>
     </div>
     <div id="wfAdminFinalsView" class="hidden">
       <h3>Final Submissions by Team Incharges</h3>
@@ -18285,18 +18285,57 @@ window.wfRenderAdminTaskReview=()=>{
   const stats=document.getElementById('wfAdminReviewStats');if(stats)stats.innerHTML=`<div class="wf-review-stat"><b>${counts.total}</b><span>TOTAL SUBMISSIONS</span></div><div class="wf-review-stat"><b>${counts.waiting}</b><span>AWAITING ADMIN</span></div><div class="wf-review-stat"><b>${counts.approved}</b><span>ADMIN APPROVED</span></div><div class="wf-review-stat"><b>${counts.redo}</b><span>CORRECTIONS REQUIRED</span></div>`;
   window.wfFilterAdminTaskReview();
 };
+window.wfAdminSelectedTeam=null;
 window.wfFilterAdminTaskReview=()=>{
   const host=document.getElementById('wfAdminTaskReviewList');if(!host)return;
+  const rows=window.wfAdminTaskReviewRows||[];
   const q=(document.getElementById('wfAdminReviewSearch')?.value||'').trim().toLowerCase();
   const status=document.getElementById('wfAdminReviewStatus')?.value||'ALL';
-  const rows=(window.wfAdminTaskReviewRows||[]).filter(({wid,tid,taskId,task,team,work})=>{
+  const filtered=rows.filter(({wid,tid,taskId,task,team,work})=>{
     const hay=[wid,tid,taskId,task.title,task.assignedName,wfName(WF.users[task.assignedUid],task.assignedUid),team.teamName,work.title].join(' ').toLowerCase();
     return (!q||hay.includes(q))&&(status==='ALL'||task.status===status);
   });
-  host.innerHTML=rows.length?rows.map(({wid,tid,taskId,task,team,work},i)=>`<article class="wf-review-item">
-    <div class="wf-review-main"><div><div class="wf-review-title">${wfEsc(task.title||'Individual task')}</div><div class="wf-review-sub">${wfEsc(work.title||wid)} · ${wfEsc(team.teamName||tid)}</div></div><div><div class="wf-review-title">${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))}</div><div class="wf-review-sub">Student</div></div><div>${wfStatusPill(task.status)}<div class="wf-review-sub">Submitted ${task.submittedAt?wfDate(task.submittedAt):'—'}</div></div><div><button class="wf-review-open" onclick="wfOpenAdminTaskReview('${wfEsc(wid)}','${wfEsc(tid)}','${wfEsc(taskId)}')"><i class="fas fa-eye"></i> OPEN REVIEW</button></div></div>
-    <details class="wf-expand" style="margin:0 14px 13px"><summary>Quick details</summary><div class="wf-review-detail"><p><b>Team Incharge:</b> ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p><b>Student remarks:</b> ${wfEsc(task.studentRemarks||'No remarks provided')}</p>${task.inchargeRemarks?`<p><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks)}</p>`:''}${task.adminRemarks?`<p><b>Admin remarks:</b> ${wfEsc(task.adminRemarks)}</p>`:''}<div class="wf-actions"><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')"><i class="fas fa-download"></i> DOWNLOAD SUBMISSION</button>${task.status==='VERIFIED'?`<button class="success" onclick="wfOpenAdminTaskReview('${wfEsc(wid)}','${wfEsc(tid)}','${wfEsc(taskId)}')">REVIEW & DECIDE</button>`:''}</div></div></details>
-  </article>`).join(''):'<div class="wf-review-empty"><i class="fas fa-inbox" style="font-size:25px;display:block;margin-bottom:9px"></i>No submissions match these filters.</div>';
+  const teams={};
+  // Include every configured team, even when it has no submissions yet.
+  Object.entries(WF.works||{}).forEach(([wid,work])=>{
+    const all=wfAllTeams(wid)||{};
+    Object.entries(all).forEach(([tid,team])=>{
+      const key=wid+'::'+tid;
+      teams[key]={wid,tid,team:team||{},work:work||{},rows:[]};
+    });
+  });
+  filtered.forEach(r=>{
+    const key=r.wid+'::'+r.tid;
+    if(!teams[key])teams[key]={wid:r.wid,tid:r.tid,team:r.team||{},work:r.work||{},rows:[]};
+    teams[key].rows.push(r);
+  });
+  const selected=window.wfAdminSelectedTeam;
+  if(selected&&teams[selected]){
+    const t=teams[selected];
+    const memberMap={};
+    t.rows.forEach(r=>{
+      const uid=r.task.assignedUid||r.task.assignedName||r.taskId;
+      if(!memberMap[uid])memberMap[uid]={name:r.task.assignedName||wfName(WF.users[r.task.assignedUid],r.task.assignedUid),items:[]};
+      memberMap[uid].items.push(r);
+    });
+    const members=Object.values(memberMap);
+    host.innerHTML=`<section class="wf-admin-team-view">
+      <div class="wf-admin-team-toolbar"><button class="wf-admin-back" onclick="window.wfAdminSelectedTeam=null;wfFilterAdminTaskReview()"><i class="fas fa-arrow-left"></i> All teams</button><div><div class="wf-admin-eyebrow">TEAM WORKSPACE</div><h3>${wfEsc(t.team.teamName||t.tid)}</h3><p>${wfEsc(t.work.title||t.wid)} · Incharge: ${wfEsc(wfName(WF.users[t.team.inchargeUid],t.team.inchargeUid)||'Not assigned')}</p></div></div>
+      <div class="wf-admin-mini-stats"><span><b>${members.length}</b> Members</span><span><b>${t.rows.length}</b> Submissions</span><span><b>${t.rows.filter(r=>r.task.status==='VERIFIED').length}</b> Incharge verified</span><span><b>${t.rows.filter(r=>r.task.status==='ADMIN_APPROVED').length}</b> Admin approved</span></div>
+      ${members.length?members.map(m=>`<article class="wf-admin-member-card"><div class="wf-admin-member-head"><div><h4>${wfEsc(m.name)}</h4><span>${m.items.length} submission${m.items.length===1?'':'s'}</span></div></div>
+      ${m.items.map(({wid,tid,taskId,task})=>`<div class="wf-admin-submission-row"><div class="wf-admin-submission-info"><b>${wfEsc(task.title||'Individual task')}</b><small>Submitted: ${task.submittedAt?wfDate(task.submittedAt):'—'} · Incharge: ${wfEsc(task.inchargeRemarks||'No review remarks')}</small><div class="wf-admin-statusline">${wfStatusPill(task.status)}</div></div><button class="wf-review-open" onclick="wfOpenAdminTaskReview('${wfEsc(wid)}','${wfEsc(tid)}','${wfEsc(taskId)}')"><i class="fas fa-folder-open"></i> Open submission & review</button></div>`).join('')}
+      </article>`).join(''):'<div class="wf-admin-empty">No submissions match the selected filters for this team.</div>'}
+    </section>`;
+    return;
+  }
+  const teamList=Object.entries(teams).sort((a,b)=>(a[1].team.teamName||a[1].tid).localeCompare(b[1].team.teamName||b[1].tid));
+  host.innerHTML=teamList.length?`<div class="wf-admin-team-grid">${teamList.map(([key,t])=>{
+    const verified=t.rows.filter(r=>r.task.status==='VERIFIED').length;
+    const approved=t.rows.filter(r=>r.task.status==='ADMIN_APPROVED').length;
+    const redo=t.rows.filter(r=>r.task.status==='REDO').length;
+    const memberCount=new Set(t.rows.map(r=>r.task.assignedUid||r.task.assignedName||r.taskId)).size;
+    return `<button class="wf-admin-team-card" onclick="window.wfAdminSelectedTeam='${wfEsc(key)}';wfFilterAdminTaskReview()"><span class="wf-admin-team-icon"><i class="fas fa-people-group"></i></span><span class="wf-admin-eyebrow">TEAM</span><strong>${wfEsc(t.team.teamName||t.tid)}</strong><small>${wfEsc(t.work.title||t.wid)}</small><span class="wf-admin-team-meta">${wfEsc(wfName(WF.users[t.team.inchargeUid],t.team.inchargeUid)||'Incharge not assigned')}</span><span class="wf-admin-team-counts"><span>${memberCount} members</span><span>${t.rows.length} submissions</span></span><span class="wf-admin-team-pills"><i>${verified} Incharge verified</i><i>${approved} Admin approved</i>${redo?`<i class="redo">${redo} redo</i>`:''}</span><span class="wf-admin-team-open">OPEN TEAM <i class="fas fa-arrow-right"></i></span></button>`;
+  }).join('')}</div>`:'<div class="wf-admin-empty">No teams are available yet. Create and lock the teams first.';
 };
 window.wfOpenAdminTaskReview=(wid,tid,taskId)=>{
   if(!wfIsAdmin())return alert('Admin access required.');const task=WF.tasks[wid]?.[tid]?.[taskId],team=wfAllTeams(wid)[tid]||{};if(!task?.fileData)return alert('Submitted file is not available.');
@@ -19781,7 +19820,35 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
     table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:12px;vertical-align:top}th{width:38%;background:#f8fafc}
     .foot{margin-top:32px;padding-top:14px;border-top:1px dashed #9aa4b2;color:#64748b;font-size:10px;line-height:1.6}
     .actions{text-align:center;margin:20px}@media print{.actions{display:none}}
-  </style></head><body><div class="head"><h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1><p>${isLegacy?"HISTORICAL PAYMENT RECEIPT":"OFFICIAL PAYMENT RECEIPT"}</p></div>
+  </style>
+<style id="wf-admin-review-clean-ui">
+#wfAdminTaskreviewView{max-width:1180px;margin:0 auto;padding:22px}
+#wfAdminTaskreviewView>h3{font-size:25px;font-weight:800;letter-spacing:-.5px;color:#14243b;margin:0 0 6px}
+#wfAdminTaskreviewView>.wf-muted{font-size:13px;color:#718096;margin:0 0 20px;max-width:760px;line-height:1.6}
+.wf-admin-team-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.wf-admin-team-card{appearance:none;text-align:left;background:#fff;border:1px solid #e3eaf3;border-radius:16px;padding:22px;min-height:250px;display:flex;flex-direction:column;align-items:flex-start;gap:10px;cursor:pointer;box-shadow:0 5px 18px rgba(22,44,77,.045);transition:.18s}
+.wf-admin-team-card:hover{transform:translateY(-3px);border-color:#8eb6ef;box-shadow:0 12px 28px rgba(22,67,120,.10)}
+.wf-admin-team-icon{width:44px;height:44px;border-radius:13px;background:#eaf2ff;color:#2563b8;display:grid;place-items:center;font-size:19px}
+.wf-admin-eyebrow{font-size:10px;letter-spacing:1.2px;font-weight:800;color:#8291a6}
+.wf-admin-team-card strong{font-size:19px;color:#172b46}
+.wf-admin-team-card small,.wf-admin-team-meta{font-size:12px;color:#6b7b91;line-height:1.45}
+.wf-admin-team-counts{display:flex;gap:8px;flex-wrap:wrap;margin-top:5px}
+.wf-admin-team-counts span,.wf-admin-team-pills i{font-style:normal;font-size:11px;background:#f1f5f9;color:#526176;border-radius:20px;padding:6px 9px}
+.wf-admin-team-pills{display:flex;gap:6px;flex-wrap:wrap}.wf-admin-team-pills i:first-child{background:#e9f8ef;color:#187548}.wf-admin-team-pills i:nth-child(2){background:#eaf2ff;color:#245ca8}.wf-admin-team-pills .redo{background:#fff2e7;color:#a35412}
+.wf-admin-team-open{margin-top:auto;padding-top:12px;color:#1766c2;font-size:11px;font-weight:800;letter-spacing:.5px}
+.wf-admin-team-view{background:#f7f9fc;border:1px solid #e4eaf2;border-radius:16px;padding:20px}
+.wf-admin-team-toolbar{display:flex;align-items:flex-start;gap:18px;margin-bottom:18px}.wf-admin-back{border:1px solid #d8e2ef;background:#fff;border-radius:9px;padding:10px 13px;color:#315b8c;font-weight:700;cursor:pointer;white-space:nowrap}
+.wf-admin-team-toolbar h3{margin:3px 0 4px;font-size:23px;color:#172b46}.wf-admin-team-toolbar p{margin:0;color:#6b7b91;font-size:12px}
+.wf-admin-mini-stats{display:flex;gap:10px;flex-wrap:wrap;margin:15px 0 20px}.wf-admin-mini-stats span{background:#fff;border:1px solid #e5ebf3;border-radius:10px;padding:10px 14px;font-size:12px;color:#65758a}.wf-admin-mini-stats b{color:#1b3556;font-size:16px;margin-right:4px}
+.wf-admin-member-card{background:#fff;border:1px solid #e3eaf2;border-radius:13px;margin:12px 0;overflow:hidden}
+.wf-admin-member-head{padding:15px 18px;background:#fff;border-bottom:1px solid #edf1f6}.wf-admin-member-head h4{margin:0 0 3px;font-size:15px;color:#203653}.wf-admin-member-head span{font-size:11px;color:#8492a6}
+.wf-admin-submission-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:15px 18px;border-bottom:1px solid #f0f3f7}.wf-admin-submission-row:last-child{border-bottom:0}.wf-admin-submission-info{min-width:0}.wf-admin-submission-info>b{font-size:13px;color:#263b57}.wf-admin-submission-info small{display:block;margin-top:5px;color:#75849a;font-size:11px;line-height:1.5}.wf-admin-statusline{margin-top:7px}
+.wf-admin-submission-row .wf-review-open{white-space:nowrap;border:0;border-radius:8px;background:#1769c2;color:#fff;padding:10px 13px;font-size:11px;font-weight:800;cursor:pointer}
+.wf-admin-empty{padding:35px;text-align:center;background:#fff;border:1px dashed #cbd5e1;border-radius:13px;color:#748399;font-size:13px}
+@media(max-width:900px){.wf-admin-team-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){#wfAdminTaskreviewView{padding:14px}.wf-admin-team-grid{grid-template-columns:1fr}.wf-admin-team-toolbar{flex-direction:column}.wf-admin-submission-row{align-items:flex-start;flex-direction:column}.wf-admin-submission-row .wf-review-open{width:100%}}
+</style>
+</head><body><div class="head"><h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1><p>${isLegacy?"HISTORICAL PAYMENT RECEIPT":"OFFICIAL PAYMENT RECEIPT"}</p></div>
   <div class="meta"><div><b>Receipt No:</b> ${esc(receiptNo)}<br><b>Receipt / Approval Date:</b> ${esc(dateTime(p.verifiedAt))}</div><div class="paid">PAID</div></div>
   <table>${body}</table><div class="foot">This receipt records the payment information available in the project account. Historical fields not present in the original ledger are marked as not recorded.<br>Computer-generated receipt. Keep this document for your records.</div>
   <div class="actions"><button onclick="window.print()">PRINT / SAVE AS PDF</button></div>
