@@ -18045,42 +18045,58 @@ async function wfNotifyUid(uid, subject, message){
 }
 // Workflow decision emails use the same endpoint, form fields and project-name
 // formatting pattern as Member Payment emails, without changing that tab/function.
+const wfLastEmailKey=(c)=>`mrpsp_wf_last_email_${c.wid}_${c.tid}_${c.taskId}`;
+function wfReadLastDecisionEmail(c){
+  try { const raw=localStorage.getItem(wfLastEmailKey(c)); return raw?JSON.parse(raw):null; }
+  catch(e){ return null; }
+}
 async function wfSendDecisionEmail(uid, subject, details, context=null){
   try {
     const u=WF.users[uid] || await wfRead(`users/${uid}`);
     const to=String(u?.personalEmail1||'').trim();
-    if(!to) { console.warn('Workflow decision email skipped: PRIMARY PERSONAL EMAIL missing for',uid); return false; }
-    const body = `Dear ${wfName(u,uid)},\n\n${details}\n\nPlease log in to the MRPSP Portal to review this update and take any required action.\n\nThis is a system-generated automated dispatch. Please do not reply.\n\nSincerely,\nSystem Administrator\nMetro Railway Platform Safety Project (MRPSP)`;
-    await wfDispatchEmail(to, subject, body);
+    if(!to){ console.warn('Workflow decision email skipped: PRIMARY PERSONAL EMAIL missing for',uid); return false; }
+    if(typeof window.sendStatusEmailNotification!=='function')
+      throw new Error('Existing status email dispatcher is unavailable.');
+    // Use the exact dispatcher already used by the working Payment/other tabs.
+    const statusText = /reject|redo/i.test(subject) ? 'REJECTED (REDO REQUIRED)' : 'APPROVED / VERIFIED';
+    await window.sendStatusEmailNotification(
+      to,
+      wfName(u,uid),
+      details,
+      statusText,
+      details
+    );
     if(context?.wid&&context?.tid&&context?.taskId){
       const last={recipientUid:uid,recipientEmail:to,recipientName:wfName(u,uid),subject,details,sentAt:Date.now()};
-      // Keep resend metadata in this Admin browser. Do not write it to the task
-      // record, because Firebase workflow rules intentionally restrict that path.
-      try { localStorage.setItem(wfLastEmailKey(context), JSON.stringify(last)); } catch(storageError) { console.warn('Could not save local resend metadata',storageError); }
-      window.wfLastDecisionEmail=last;
+      try { localStorage.setItem(wfLastEmailKey(context),JSON.stringify(last)); }
+      catch(storageError){ console.warn('Resend tracking could not be saved in this browser',storageError); }
     }
-    console.log('Workflow decision email request handed to Member Payment-style dispatcher for',uid,to);
+    console.log('Workflow decision email handed to existing status dispatcher for',uid,to);
     return true;
-  } catch(e){ console.error('Workflow decision email failed for',uid,e); return false; }
-}
-const wfLastEmailKey=(c)=>`mrpsp_wf_last_email_${c.wid}_${c.tid}_${c.taskId}`;
-function wfGetLastWorkflowEmail(task,c){
-  try { const raw=localStorage.getItem(wfLastEmailKey(c)); return raw?JSON.parse(raw):null; } catch(e) { return null; }
+  } catch(e){
+    console.error('Workflow decision email failed for',uid,e);
+    return false;
+  }
 }
 window.wfResendLastDecisionEmail=async()=>{
-  const c=wfTaskContext;if(!wfIsAdmin()||!c||c.mode!=='ADMIN_REVIEW')return alert('Admin access required.');
-  const task=WF.tasks[c.wid]?.[c.tid]?.[c.taskId];const last=wfGetLastWorkflowEmail(task,c);
-  if(!last?.sentAt||Date.now()-Number(last.sentAt)>30*60*1000)return alert('The 30-minute resend window has expired.');
-  const u=WF.users[last.recipientUid]||await wfRead(`users/${last.recipientUid}`);const to=String(u?.personalEmail1||'').trim();
+  const c=wfTaskContext;
+  if(!wfIsAdmin()||!c||c.mode!=='ADMIN_REVIEW')return alert('Admin access required.');
+  const last=wfReadLastDecisionEmail(c);
+  if(!last?.sentAt||Date.now()-Number(last.sentAt)>30*60*1000)
+    return alert('The 30-minute resend window has expired.');
+  const u=WF.users[last.recipientUid]||await wfRead(`users/${last.recipientUid}`);
+  const to=String(u?.personalEmail1||'').trim();
   if(!to)return alert('PRIMARY PERSONAL EMAIL is missing. Email was not resent.');
   if(!confirm(`Resend the last email to ${to}?`))return;
   try{
-    const body=`Dear ${wfName(u,last.recipientUid)},\n\n${last.details||''}\n\nPlease log in to the MRPSP Portal to review this update and take any required action.\n\nThis is a system-generated automated dispatch. Please do not reply.\n\nSincerely,\nSystem Administrator\nMetro Railway Platform Safety Project (MRPSP)`;
-    await wfDispatchEmail(to,last.subject,body);
-    const refreshed={...last,recipientEmail:to,lastResentAt:Date.now(),sentAt:Date.now(),resendCount:(last.resendCount||0)+1};
-    try { localStorage.setItem(wfLastEmailKey(c),JSON.stringify(refreshed)); } catch(storageError) { console.warn('Could not update local resend metadata',storageError); }
-    window.wfLastDecisionEmail=refreshed;
-    alert('Resend request submitted using the Member Payment-style email dispatcher.');
+    if(typeof window.sendStatusEmailNotification!=='function')
+      throw new Error('Existing status email dispatcher is unavailable.');
+    const statusText=/reject|redo/i.test(last.subject)?'REJECTED (REDO REQUIRED)':'APPROVED / VERIFIED';
+    await window.sendStatusEmailNotification(to,wfName(u,last.recipientUid),last.details||'',statusText,last.details||'');
+    const refreshed={...last,sentAt:Date.now(),lastResentAt:Date.now(),resendCount:(last.resendCount||0)+1};
+    try{localStorage.setItem(wfLastEmailKey(c),JSON.stringify(refreshed));}catch(e){}
+    alert('Resend request handed to the existing status email dispatcher.');
+    if(typeof window.wfOpenAdminTaskReview==='function') window.wfOpenAdminTaskReview(c.wid,c.tid,c.taskId);
   }catch(e){alert('Email resend failed: '+(e.message||e));}
 };
 // Dedicated dispatcher for Admin Work Distribution emails.
@@ -18367,7 +18383,7 @@ window.wfRenderAdminTaskReview=()=>{
   const rows=[];
   Object.entries(WF.tasks||{}).forEach(([wid,byTeam])=>Object.entries(byTeam||{}).forEach(([tid,byTask])=>Object.entries(byTask||{}).forEach(([taskId,task])=>{
     if(task?.fileData)rows.push({wid,tid,taskId,task,team:wfAllTeams(wid)[tid]||{},work:WF.works[wid]||{}});
-  })));
+  }))));
   rows.sort((a,b)=>(Number(b.task.submittedAt)||0)-(Number(a.task.submittedAt)||0));
   window.wfAdminTaskReviewRows=rows;
   const counts={total:rows.length,waiting:rows.filter(x=>x.task.status==='VERIFIED').length,approved:rows.filter(x=>x.task.status==='ADMIN_APPROVED').length,redo:rows.filter(x=>x.task.status==='REDO').length};
@@ -18430,7 +18446,7 @@ window.wfOpenAdminTaskReview=(wid,tid,taskId)=>{
   if(!wfIsAdmin())return alert('Admin access required.');const task=WF.tasks[wid]?.[tid]?.[taskId],team=wfAllTeams(wid)[tid]||{};if(!task?.fileData)return alert('Submitted file is not available.');
   wfTaskContext={wid,tid,taskId,mode:'ADMIN_REVIEW'};document.getElementById('wfTaskModalTitle').innerText='Admin Review of Individual Work';
   const canAdminApprove=task.status==='VERIFIED';
-  document.getElementById('wfTaskModalBody').innerHTML=`<p><b>Work:</b> ${wfEsc(WF.works[wid]?.title||wid)} · <b>Team:</b> ${wfEsc(team.teamName||tid)}</p><p><b>Student:</b> ${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))} · <b>Incharge:</b> ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p><b>Task:</b> ${wfEsc(task.title)} · <b>Status:</b> ${wfEsc(task.status)}</p><p><b>Student remarks:</b> ${wfEsc(task.studentRemarks||'—')}</p><p><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks||'—')}</p><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')">DOWNLOAD SUBMITTED FILE</button>${wfGetLastWorkflowEmail(task,{wid,tid,taskId})?.sentAt&&Date.now()-Number(wfGetLastWorkflowEmail(task,{wid,tid,taskId}).sentAt)<=30*60*1000?'<button class="secondary" onclick="wfResendLastDecisionEmail()">RESEND LAST EMAIL · '+Math.max(0,Math.ceil((30*60*1000-(Date.now()-Number(wfGetLastWorkflowEmail(task,{wid,tid,taskId}).sentAt)))/60000))+' MIN LEFT</button>':''}${canAdminApprove?'<label>Admin remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Enter approval note or reason for rejection"></textarea><div class="wf-actions"><button class="success" onclick="wfReviewTaskByAdmin(true)">ADMIN APPROVE</button><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button></div>':`<p class="wf-pill warn">Admin approval is available only after the Team Incharge verifies this submission. Current status: ${wfEsc(task.status)}</p>${task.status!=='REDO'?'<label>Admin rejection remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Reason for Admin rejection / request redo"></textarea><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button>':''}`}`;
+  document.getElementById('wfTaskModalBody').innerHTML=`<p><b>Work:</b> ${wfEsc(WF.works[wid]?.title||wid)} · <b>Team:</b> ${wfEsc(team.teamName||tid)}</p><p><b>Student:</b> ${wfEsc(task.assignedName||wfName(WF.users[task.assignedUid],task.assignedUid))} · <b>Incharge:</b> ${wfEsc(wfName(WF.users[team.inchargeUid],team.inchargeUid))}</p><p><b>Task:</b> ${wfEsc(task.title)} · <b>Status:</b> ${wfEsc(task.status)}</p><p><b>Student remarks:</b> ${wfEsc(task.studentRemarks||'—')}</p><p><b>Incharge remarks:</b> ${wfEsc(task.inchargeRemarks||'—')}</p><button class="info" onclick="wfDownloadData('${wfEsc(wid)}','${wfEsc(tid)}','TASK','${wfEsc(taskId)}')">DOWNLOAD SUBMITTED FILE</button>${(()=>{const last=wfReadLastDecisionEmail({wid,tid,taskId});const left=last?.sentAt?30*60*1000-(Date.now()-Number(last.sentAt)):0;return left>0?'<button class="secondary" onclick="wfResendLastDecisionEmail()">RESEND LAST EMAIL · '+Math.ceil(left/60000)+' MIN LEFT</button>':''})()}${canAdminApprove?'<label>Admin remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Enter approval note or reason for rejection"></textarea><div class="wf-actions"><button class="success" onclick="wfReviewTaskByAdmin(true)">ADMIN APPROVE</button><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button></div>':`<p class="wf-pill warn">Admin approval is available only after the Team Incharge verifies this submission. Current status: ${wfEsc(task.status)}</p>${task.status!=='REDO'?'<label>Admin rejection remarks</label><textarea id="wfAdminTaskRemarks" rows="3" placeholder="Reason for Admin rejection / request redo"></textarea><button class="danger" onclick="wfReviewTaskByAdmin(false)">ADMIN REJECT / REQUEST REDO</button>':''}`}`;
   document.getElementById('wfTaskModal').classList.remove('hidden');
 };
 window.wfReviewTaskByAdmin=async(approved)=>{
