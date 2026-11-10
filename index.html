@@ -18019,28 +18019,45 @@ const wfTaskPath = (workId, teamId) => `workAssignments/${workId}/${teamId}`;
 const wfFinalPath = (workId, teamId) => `workFinalSubmissions/${workId}/${teamId}`;
 const wfStatusPill = (s) => { const v=String(s||'PENDING').toUpperCase(); const cls=['APPROVED','VERIFIED','ADMIN_APPROVED','COMPLETED'].includes(v)?'good':(['REDO','REJECTED','OVERDUE'].includes(v)?'bad':'warn'); return `<span class="wf-pill ${cls}">${wfEsc(v.replace(/_/g,' '))}</span>`; };
 async function wfRead(path){ const snap=await get(projectAwareRef(path)); return snap.exists()?snap.val():{}; }
+// Workflow email sender follows the same lightweight request format used by
+// Member Payment emails. The Member Payment tab and its dispatcher are untouched.
+const WF_EMAIL_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzHr2beSzoOTuEpGcLBUaUadBHwSCtV1JMngFuqv0Mq8E1rLU0EXivCz_fEr-wYLrl1zw/exec";
+async function wfDispatchEmail(to, subject, body){
+  if(!to) throw new Error('PRIMARY PERSONAL EMAIL is missing.');
+  const mail = typeof addProjectNameToEmail === 'function'
+    ? addProjectNameToEmail(subject, body)
+    : {subject, body};
+  const form = new URLSearchParams();
+  form.append('to', to);
+  form.append('subject', mail.subject);
+  form.append('body', mail.body);
+  await fetch(WF_EMAIL_SCRIPT_URL, {method:'POST', body:form, mode:'no-cors'});
+  return true;
+}
 async function wfNotifyUid(uid, subject, message){
-  try { const u=WF.users[uid] || await wfRead(`users/${uid}`); const to=wfEmail(u); if(!to) return false;
-    if(typeof window.sendStatusEmailNotification==='function') await window.sendStatusEmailNotification(to,wfName(u,uid),subject,message,'');
-    else if(typeof window.sendEmailNotification==='function') await window.sendEmailNotification(to,wfName(u,uid),`${subject}\n\n${message}`,new Date().toISOString());
+  try {
+    const u=WF.users[uid] || await wfRead(`users/${uid}`);
+    const to=String(u?.personalEmail1||'').trim();
+    if(!to) { console.warn('Workflow email skipped: PRIMARY PERSONAL EMAIL missing for',uid); return false; }
+    await wfDispatchEmail(to, subject, `Dear ${wfName(u,uid)},\n\n${message}\n\nThis is an automated notification from the Metro Railway Platform Safety Project (MRPSP) Portal. Please log in to review the update.\n\nRegards,\nMRPSP Administration`);
     return true;
   } catch(e){ console.error('Workflow email failed',uid,e); return false; }
 }
-// Workflow decision emails use the portal's established status-email dispatcher.
-// The recipient is always PRIMARY PERSONAL EMAIL (DISPATCH DEFAULT).
+// Workflow decision emails use the same endpoint, form fields and project-name
+// formatting pattern as Member Payment emails, without changing that tab/function.
 async function wfSendDecisionEmail(uid, subject, details, context=null){
   try {
     const u=WF.users[uid] || await wfRead(`users/${uid}`);
     const to=String(u?.personalEmail1||'').trim();
     if(!to) { console.warn('Workflow decision email skipped: PRIMARY PERSONAL EMAIL missing for',uid); return false; }
-    if(typeof window.sendStatusEmailNotification!=='function') throw new Error('Existing status email dispatcher is unavailable.');
-    await window.sendStatusEmailNotification(to,wfName(u,uid),subject,details,'');
+    const body = `Dear ${wfName(u,uid)},\n\n${details}\n\nPlease log in to the MRPSP Portal to review this update and take any required action.\n\nThis is a system-generated automated dispatch. Please do not reply.\n\nSincerely,\nSystem Administrator\nMetro Railway Platform Safety Project (MRPSP)`;
+    await wfDispatchEmail(to, subject, body);
     if(context?.wid&&context?.tid&&context?.taskId){
       await update(projectAwareRef(`${wfTaskPath(context.wid,context.tid)}/${context.taskId}`),{
         lastWorkflowEmail:{recipientUid:uid,recipientEmail:to,recipientName:wfName(u,uid),subject,details,sentAt:Date.now()}
       });
     }
-    console.log('Workflow decision email sent through existing status dispatcher for',uid,to);
+    console.log('Workflow decision email request handed to Member Payment-style dispatcher for',uid,to);
     return true;
   } catch(e){ console.error('Workflow decision email failed for',uid,e); return false; }
 }
@@ -18050,12 +18067,12 @@ window.wfResendLastDecisionEmail=async()=>{
   if(!last?.sentAt||Date.now()-Number(last.sentAt)>30*60*1000)return alert('The 30-minute resend window has expired.');
   const u=WF.users[last.recipientUid]||await wfRead(`users/${last.recipientUid}`);const to=String(u?.personalEmail1||'').trim();
   if(!to)return alert('PRIMARY PERSONAL EMAIL is missing. Email was not resent.');
-  if(typeof window.sendStatusEmailNotification!=='function')return alert('Existing status email dispatcher is unavailable.');
   if(!confirm(`Resend the last email to ${to}?`))return;
   try{
-    await window.sendStatusEmailNotification(to,wfName(u,last.recipientUid),last.subject,last.details,'');
+    const body=`Dear ${wfName(u,last.recipientUid)},\n\n${last.details||''}\n\nPlease log in to the MRPSP Portal to review this update and take any required action.\n\nThis is a system-generated automated dispatch. Please do not reply.\n\nSincerely,\nSystem Administrator\nMetro Railway Platform Safety Project (MRPSP)`;
+    await wfDispatchEmail(to,last.subject,body);
     await update(projectAwareRef(`${wfTaskPath(c.wid,c.tid)}/${c.taskId}`),{lastWorkflowEmail:{...last,recipientEmail:to,lastResentAt:Date.now(),resendCount:(last.resendCount||0)+1}});
-    alert('Resend request submitted using the existing email dispatcher.');
+    alert('Resend request submitted using the Member Payment-style email dispatcher.');
   }catch(e){alert('Email resend failed: '+(e.message||e));}
 };
 // Dedicated dispatcher for Admin Work Distribution emails.
