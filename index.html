@@ -18276,25 +18276,50 @@ window.wfRenderDistribution=()=>{
 window.wfAdminSaveTeamDeadline=async(workId,teamId)=>{
   if(!wfIsAdmin())return alert('Admin access required.');
   const team=wfAllTeams(workId)[teamId];
-  if(!team?.locked||team.distributionStatus!=='DISTRIBUTED')return alert('Only a locked and distributed team deadline can be edited.');
-  const input=document.getElementById(`${teamId}_editTeamDeadline`);
-  if(!input?.value)return alert('Choose the final team deadline.');
-  const newDeadline=new Date(input.value).getTime();
+  if(!team?.locked||team.distributionStatus!=='DISTRIBUTED')
+    return alert('Only a locked and distributed team deadline can be extended.');
+
+  const raw=prompt(`How many hours should be added to ${team.teamName||teamId}'s current deadline? Enter a positive number:`, '1');
+  if(raw===null)return;
+  const hours=Number(raw);
+  if(!Number.isFinite(hours)||hours<=0||hours>720)
+    return alert('Enter a number of hours greater than 0 and not more than 720.');
+
+  const oldDeadline=Number(team.deadline);
   const overallDeadline=Number(WF.works[workId]?.deadline)||0;
-  if(!Number.isFinite(newDeadline)||newDeadline<=Date.now())return alert('Choose a valid future deadline.');
-  if(overallDeadline&&newDeadline>overallDeadline)return alert('The team deadline cannot exceed the overall work deadline.');
-  if(newDeadline===Number(team.deadline))return alert('The deadline has not changed.');
-  if(!confirm(`Save the edited final deadline for ${team.teamName||teamId}?\nCurrent: ${wfDate(team.deadline)}\nNew: ${wfDate(newDeadline)}`))return;
+  if(!Number.isFinite(oldDeadline)||oldDeadline<=0)
+    return alert('The current team deadline is missing or invalid.');
+  const newDeadline=oldDeadline+(hours*60*60*1000);
+  if(overallDeadline&&newDeadline>overallDeadline)
+    return alert(`This extension exceeds the overall work deadline (${wfDate(overallDeadline)}). Reduce the hours or extend the overall work deadline first.`);
+
+  const now=Date.now();
+  const reason=`Admin deadline extension (+${hours} hours)`;
+  if(!confirm(`Extend ${team.teamName||teamId} by ${hours} hour(s)?\nCurrent: ${wfDate(oldDeadline)}\nNew: ${wfDate(newDeadline)}`))return;
+
   try{
-    await update(projectAwareRef(wfTeamPath(workId,teamId)),{deadline:newDeadline});
+    await update(projectAwareRef(wfTeamPath(workId,teamId)),{
+      deadline:newDeadline,
+      lastTeamDeadlineExtensionAt:now,
+      lastTeamDeadlineExtensionBy:currentUser.uid,
+      lastTeamDeadlineExtensionReason:reason,
+      [`teamDeadlineExtensionHistory/${now}`]:{
+        hours,
+        oldDeadline,
+        newDeadline,
+        extendedAt:now,
+        extendedBy:currentUser.uid,
+        reason
+      }
+    });
     await window.loadWorkflows();
     const select=document.getElementById('wfDistributionWork');
     if(select)select.value=workId;
     window.wfRenderDistribution();
-    alert('Final team deadline updated successfully.');
+    alert(`Team deadline extended by ${hours} hour(s). New deadline: ${wfDate(newDeadline)}`);
   }catch(e){
-    console.error('Team deadline edit failed:',e);
-    alert('Could not save the team deadline. Firebase rejected the database write: '+(e?.message||e));
+    console.error('Team deadline extension failed:',e);
+    alert('Deadline extension failed: '+(e?.message||e)+'\nCheck that the updated Firebase rules have been published and that your account is an authorized admin.');
   }
 };
 window.wfAdminGrantAssignmentReopen=async(workId,teamId)=>{
@@ -18496,7 +18521,7 @@ window.wfRenderAdminTaskReview=()=>{
   const rows=[];
   Object.entries(WF.tasks||{}).forEach(([wid,byTeam])=>Object.entries(byTeam||{}).forEach(([tid,byTask])=>Object.entries(byTask||{}).forEach(([taskId,task])=>{
     if(task?.fileData)rows.push({wid,tid,taskId,task,team:wfAllTeams(wid)[tid]||{},work:WF.works[wid]||{}});
-  })));
+  }))));
   rows.sort((a,b)=>(Number(b.task.submittedAt)||0)-(Number(a.task.submittedAt)||0));
   window.wfAdminTaskReviewRows=rows;
   const counts={total:rows.length,waiting:rows.filter(x=>x.task.status==='VERIFIED').length,approved:rows.filter(x=>x.task.status==='ADMIN_APPROVED').length,redo:rows.filter(x=>x.task.status==='REDO').length};
