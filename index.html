@@ -18289,29 +18289,17 @@ window.wfAdminSaveTeamDeadline=async(workId,teamId)=>{
   const overallDeadline=Number(WF.works[workId]?.deadline)||0;
   if(!Number.isFinite(oldDeadline)||oldDeadline<=0)
     return alert('The current team deadline is missing or invalid.');
+
   const newDeadline=oldDeadline+(hours*60*60*1000);
   if(overallDeadline&&newDeadline>overallDeadline)
     return alert(`This extension exceeds the overall work deadline (${wfDate(overallDeadline)}). Reduce the hours or extend the overall work deadline first.`);
 
-  const now=Date.now();
-  const reason=`Admin deadline extension (+${hours} hours)`;
   if(!confirm(`Extend ${team.teamName||teamId} by ${hours} hour(s)?\nCurrent: ${wfDate(oldDeadline)}\nNew: ${wfDate(newDeadline)}`))return;
 
   try{
-    await update(projectAwareRef(wfTeamPath(workId,teamId)),{
-      deadline:newDeadline,
-      lastTeamDeadlineExtensionAt:now,
-      lastTeamDeadlineExtensionBy:currentUser.uid,
-      lastTeamDeadlineExtensionReason:reason,
-      [`teamDeadlineExtensionHistory/${now}`]:{
-        hours,
-        oldDeadline,
-        newDeadline,
-        extendedAt:now,
-        extendedBy:currentUser.uid,
-        reason
-      }
-    });
+    // Deliberately update only the deadline field. This matches the narrow
+    // Firebase rule and avoids rejecting unrelated team metadata.
+    await update(projectAwareRef(wfTeamPath(workId,teamId)),{deadline:newDeadline});
     await window.loadWorkflows();
     const select=document.getElementById('wfDistributionWork');
     if(select)select.value=workId;
@@ -18319,7 +18307,7 @@ window.wfAdminSaveTeamDeadline=async(workId,teamId)=>{
     alert(`Team deadline extended by ${hours} hour(s). New deadline: ${wfDate(newDeadline)}`);
   }catch(e){
     console.error('Team deadline extension failed:',e);
-    alert('Deadline extension failed: '+(e?.message||e)+'\nCheck that the updated Firebase rules have been published and that your account is an authorized admin.');
+    alert('Deadline extension failed: '+(e?.message||e)+'\nConfirm that the matching Firebase rules are published and that you are signed in with an authorized administrator account.');
   }
 };
 window.wfAdminGrantAssignmentReopen=async(workId,teamId)=>{
