@@ -2064,7 +2064,7 @@ tr:hover { background: #fcfcfd; }
     <div id="paymentMode-refund" class="hidden">
       <section class="pay-panel">
         <h3><i class="fas fa-money-bill-transfer"></i> Student Refunds</h3>
-        <p class="pay-muted">Create a refund book first. All refund sources, calculations, student allocations, QR details, UTRs, dues snapshots and payout records are managed inside the selected book. Each book contains only Individual Refund and Batch Refund.</p>
+        <p class="pay-muted">Select a student, review their verified payments, dues and QR, then record the actual amount sent. One refund payment per student per day is allowed.</p>
         <div id="mrpspRefundStudentQrPanel" class="hidden">
           <div class="pay-grid">
             <div><label for="mrpspRefundQrFile">Upload your personal UPI QR (PNG/JPG/WebP, max 300 KB)</label><input id="mrpspRefundQrFile" type="file" accept="image/png,image/jpeg,image/webp"></div>
@@ -4041,6 +4041,7 @@ window.mrpspInitPaymentFeatures = function () {
   if (mrpspPaymentQrListener) { try { off(ref(db, MRPSP_PAYMENT_QR_PATH)); } catch (_) {} }
   mrpspPaymentQrListener = onValue(ref(db, MRPSP_PAYMENT_QR_PATH), snap => window.mrpspRenderPermanentPaymentQr(snap.exists() ? snap.val() : null), err => console.error("Payment QR read failed", err));
   window.mrpspLoadPaymentReviewQueue();
+  window.mrpspRenderDirectRefundAdmin?.();
   window.mrpspLoadMemberPaymentDashboard?.("dues");
 };
 
@@ -19670,6 +19671,7 @@ window.mrpspSafe = mrpspSafe;
 window.mrpspDate = mrpspDate;
 window.mrpspPaymentCache = mrpspPaymentCache;
 window.mrpspIsAdmin = () => isAdmin === true;
+window.mrpspCurrentAuthUser = () => auth.currentUser || currentUser || null;
 // Explicit bridge for the standalone Refund Book script. ES module imports and
 // lexical bindings are not visible to later classic scripts unless exported.
 window.mrpspRefundFirebase = { push, get, update, remove, set, projectAwareRef };
@@ -19847,7 +19849,7 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
   const ref=(...a)=>call("projectAwareRef",...a);
   const cash=n=>window.mrpspMoney(Number(n)||0);
   const safe=s=>window.mrpspSafe(String(s??""));
-  const isAdminUser=()=>!!(window.mrpspIsAdmin?.() || window.auth?.currentUser && ["soham@metro.project","heerok@metro.project","sujoy@metro.project","hodee@metro.project","hodcseaiml@metro.project","hodeee@metro.project","arijita@metro.project"].includes(String(window.auth.currentUser.email||"").toLowerCase()));
+  const isAdminUser=()=>window.mrpspIsAdmin?.()===true;
   const todayKey=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;};
   const financeRows=()=>Object.entries(window.mrpspPaymentCache?.finance||{}).map(([key,v])=>({key,...v}));
   let selectedUid="";
@@ -19901,10 +19903,9 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
   function render(){
     const admin=document.getElementById("mrpspRefundAdminPanel");
     if(!admin)return;
-    if(!isAdminUser()){
-      admin.innerHTML='<p class="pay-muted">Administrator access required to record student refunds.</p>';
-      return;
-    }
+    const allowed=isAdminUser();
+    admin.classList.toggle("hidden",!allowed);
+    if(!allowed)return;
     admin.innerHTML=`
       <section class="pay-panel" style="padding:16px;margin-top:14px">
         <h4 style="margin-top:0">Record Student Refund</h4>
@@ -19948,10 +19949,10 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
     const record={
       type:"DEBIT",amount,desc:`Student refund paid — ${window.mrpspName(s)}`,
       mode:`Refund payment · UTR ${utr}`,status:"Approved",
-      by:window.auth.currentUser.email||"Admin",timestamp:now,
+      by:window.mrpspCurrentAuthUser?.()?.email||"Admin",timestamp:now,
       source:"STUDENT_REFUND_DIRECT",studentUid:s.uid,
       studentName:window.mrpspName(s),utr,refundDateKey:day,
-      refundRecordedBy:window.auth.currentUser.uid
+      refundRecordedBy:window.mrpspCurrentAuthUser?.()?.uid||""
     };
     try{
       const saved=await push(ref("finance"),record);
@@ -19963,14 +19964,13 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
   };
 
   window.mrpspRenderRefunds=render;
+  window.mrpspRenderDirectRefundAdmin=render;
   const oldLoad=window.mrpspLoadMemberPaymentDashboard;
   window.mrpspLoadMemberPaymentDashboard=async function(mode){
     await oldLoad(mode);
     if(mode==="refund")render();
   };
   document.addEventListener("DOMContentLoaded",()=>{
-    const admin=document.getElementById("mrpspRefundAdminPanel");
-    if(admin)render();
     ["mrpspRefundAdminQueue","mrpspRefundStudentList","mrpspRefundAllocationEditor","mrpspRefundBookWorkspace","mrpspRefundBookCreate"].forEach(id=>document.getElementById(id)?.remove());
   });
 })();
