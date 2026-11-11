@@ -19901,12 +19901,40 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
     `;
   }
 
-  function render(){
+  async function render(){
     const admin=document.getElementById("mrpspRefundAdminPanel");
     if(!admin)return;
     const allowed=isAdminUser();
     admin.classList.toggle("hidden",!allowed);
     if(!allowed)return;
+
+    // Do not rely on the earlier Member Payment loader having populated its
+    // cache. Fetch the canonical users node directly before rendering options.
+    let students=[];
+    try{
+      const usersSnap=await call("get",ref("users"));
+      const users=usersSnap?.exists?.()?usersSnap.val():{};
+      if(users && typeof users==="object"){
+        window.mrpspPaymentCache.users=users;
+        students=Object.entries(users)
+          .filter(([uid,u])=>{
+            if(!u || u.banned===true) return false;
+            const email=String(u.email||"").toLowerCase();
+            const adminEmails=["soham@metro.project","heerok@metro.project","sujoy@metro.project","hodee@metro.project","hodcseaiml@metro.project","hodeee@metro.project","arijita@metro.project"];
+            const projectHead=String(u.email||"").toLowerCase()==="soham@metro.project" || u.isProjectHead===true || u.projectHead===true;
+            return !adminEmails.includes(email) || projectHead;
+          })
+          .map(([uid,u])=>({uid,...u}))
+          .sort((a,b)=>String(a.name||a.fullName||a.email||a.uid).localeCompare(String(b.name||b.fullName||b.email||b.uid)));
+      }
+    }catch(err){
+      console.error("Could not load student accounts for refund dropdown:",err);
+      admin.innerHTML=`<p style="color:#b91c1c">Could not load student accounts from Firebase: ${safe(err.message||err)}. Check read permission for /users.</p>`;
+      return;
+    }
+
+    const duesModel=window.mrpspBuildDues?.();
+    if(!students.length && duesModel?.students?.length) students=duesModel.students;
     admin.innerHTML=`
       <section class="pay-panel" style="padding:16px;margin-top:14px">
         <h4 style="margin-top:0">Record Student Refund</h4>
@@ -19914,8 +19942,9 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
         <label for="mrpspDirectRefundStudent">Select student</label>
         <select id="mrpspDirectRefundStudent" style="width:100%" onchange="window.mrpspDirectRefundStudentChanged(this.value)">
           <option value="">Choose a student</option>
-          ${((window.mrpspGetStudentRows?.() || window.mrpspBuildDues?.()?.students || window.mrpspBuildDues?.()?.rows || [])).map(s=>`<option value="${safe(s.uid)}">${safe(window.mrpspName(s))}</option>`).join("")}
+          ${students.map(s=>`<option value="${safe(s.uid)}">${safe(s.name||s.fullName||s.email||s.uid)}</option>`).join("")}
         </select>
+        ${students.length?'':'<p style="color:#b91c1c">Firebase /users returned no student accounts. Check the database users structure and read permissions.</p>'}
         <div id="mrpspDirectRefundDetails" style="margin-top:14px"><p class="pay-muted">Select a student to view their payment details and QR.</p></div>
       </section>
       <section class="pay-panel" style="padding:14px;margin-top:14px">
@@ -19969,18 +19998,7 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
   const oldLoad=window.mrpspLoadMemberPaymentDashboard;
   window.mrpspLoadMemberPaymentDashboard=async function(mode){
     await oldLoad(mode);
-    if(mode==="refund"){
-      render();
-      const picker=document.getElementById("mrpspDirectRefundStudent");
-      const students=window.mrpspGetStudentRows?.() || [];
-      if(picker && students.length && picker.options.length<=1){
-        picker.innerHTML='<option value="">Choose a student</option>'+students.map(s=>`<option value="${safe(s.uid)}">${safe(window.mrpspName(s))}</option>`).join("");
-      }
-      if(picker && !students.length){
-        const details=document.getElementById("mrpspDirectRefundDetails");
-        if(details)details.innerHTML='<p class="pay-muted">No student accounts were returned from the Firebase users list. Check that the users data loaded successfully.</p>';
-      }
-    }
+    if(mode==="refund") await render();
   };
   document.addEventListener("DOMContentLoaded",()=>{
     ["mrpspRefundAdminQueue","mrpspRefundStudentList","mrpspRefundAllocationEditor","mrpspRefundBookWorkspace","mrpspRefundBookCreate"].forEach(id=>document.getElementById(id)?.remove());
