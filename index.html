@@ -18143,7 +18143,26 @@ function wfAllTeams(workId){ return WF.teams[workId] || {}; }
 function wfTeamMembers(team){ return Array.isArray(team?.memberUids)?team.memberUids:[]; }
 function wfRoleFor(workId, teamId, team){ const uid=currentUser?.uid; return team?.inchargeUid===uid?'INCHARGE':wfTeamMembers(team).includes(uid)?'STUDENT':null; }
 function wfTaskRows(workId,teamId){ return Object.entries(WF.tasks[workId]?.[teamId]||{}).map(([id,t])=>({id,...t})); }
-function wfAssignmentsAreLocked(team){return team?.individualAssignmentsLocked===true&&(Number(team?.individualAssignmentsReopenUntil)||0)<=Date.now();}
+const WF_ALLOCATION_WINDOW_MS = 48 * 60 * 60 * 1000;
+const WF_ADMIN_REOPEN_MS = 2 * 60 * 60 * 1000;
+function wfAllocationClosesAt(team){
+  const distributedAt=Number(team?.distributedAt)||0;
+  return distributedAt>0?distributedAt+WF_ALLOCATION_WINDOW_MS:0;
+}
+function wfAssignmentsAreLocked(team){
+  const now=Date.now(),reopenUntil=Number(team?.individualAssignmentsReopenUntil)||0;
+  if(reopenUntil>now)return false;
+  if(team?.individualAssignmentsLocked===true)return true;
+  const closesAt=wfAllocationClosesAt(team);
+  return closesAt>0&&now>=closesAt;
+}
+function wfAllocationWindowMarkup(team){
+  const closesAt=wfAllocationClosesAt(team),reopenUntil=Number(team?.individualAssignmentsReopenUntil)||0;
+  if(reopenUntil>Date.now())return `<span class="wf-pill warn">ADMIN REOPEN ACTIVE · Until ${wfDate(reopenUntil)}</span>`;
+  if(!closesAt)return '<span class="wf-pill warn">48-HOUR ALLOCATION WINDOW STARTS WHEN ADMIN DISTRIBUTES</span>';
+  if(Date.now()>=closesAt)return `<span class="wf-pill bad">ALLOCATION CLOSED · ${wfDate(closesAt)}</span>`;
+  return `<span class="wf-pill good">ALLOCATION CLOSES AUTOMATICALLY · ${wfDate(closesAt)}</span>`;
+}
 function wfDeadlineMarkup(task){const history=Array.isArray(task?.deadlineHistory)?task.deadlineHistory:[];const prior=history.map(h=>`<div class="wf-muted"><s>${wfDate(h.previousDeadline)}</s> <span class="wf-pill warn">EXTENDED</span>${h.reason?` · ${wfEsc(h.reason)}`:''}</div>`).join('');return `${prior}<b>${wfDate(task?.deadline)}</b>`;}
 function wfTaskIsInchargeVerified(task){
   const s=String(task?.status||'').trim().toUpperCase().replace(/[\\s-]+/g,'_');
@@ -18247,21 +18266,32 @@ window.wfRenderDistribution=()=>{
   if(!workId||!WF.works[workId]){host.innerHTML='<div class="wf-card">Select a work to distribute responsibilities.</div>';return;}
   host.innerHTML=['team1','team2','team3'].map((tid,i)=>{const t=wfAllTeams(workId)[tid];if(!t?.locked)return `<div class="wf-card"><h4>Team ${i+1}</h4><span class="wf-pill warn">LOCK TEAM FIRST</span></div>`;
     return `<div class="wf-card"><h4>${wfEsc(t.teamName)}</h4><p class="wf-muted">Incharge: ${wfEsc(wfName(WF.users[t.inchargeUid],t.inchargeUid))}</p><label>Main responsibility / work assigned</label><textarea id="${tid}_mainTask" rows="4" ${t.distributionStatus==='DISTRIBUTED'?'disabled':''}>${wfEsc(t.mainTask||'')}</textarea><label>Final team deadline</label><input id="${tid}_teamDeadline" type="datetime-local" value="${t.deadline?new Date(t.deadline).toISOString().slice(0,16):''}" ${t.distributionStatus==='DISTRIBUTED'?'disabled':''}><p>${wfStatusPill(t.distributionStatus||'NOT DISTRIBUTED')}</p>${t.distributionStatus==='DISTRIBUTED'?`<p class="wf-muted">Deadline: ${wfDate(t.deadline)}</p><button class="info" onclick="wfResendInchargeEmail('${wfEsc(workId)}','${tid}')"><i class="fas fa-envelope"></i> RESEND EMAIL TO INCHARGE</button>`:`<button class="success" onclick="wfDistributeTeam('${wfEsc(workId)}','${tid}')">DISTRIBUTE TO TEAM</button>`}
-      <hr style="border:0;border-top:1px solid #e2e8f0;margin:14px 0"><h4>Individual assignment access</h4>
-      <p class="wf-muted">${t.individualAssignmentsLocked===true?'Assignments locked':'Assignments currently open'}${Number(t.individualAssignmentsReopenUntil)>Date.now()?` · Reopened until ${wfDate(t.individualAssignmentsReopenUntil)}`:''}</p>
-      <div class="wf-actions"><button class="warning" onclick="wfAdminGrantAssignmentReopen('${wfEsc(workId)}','${tid}')">GRANT TIMED REOPEN</button>${Number(t.individualAssignmentsReopenUntil)>Date.now()?`<button class="danger" onclick="wfAdminCloseAssignmentReopen('${wfEsc(workId)}','${tid}')">CLOSE ACCESS NOW</button>`:''}</div></div>`;
+      <hr style="border:0;border-top:1px solid #e2e8f0;margin:14px 0"><h4>Individual assignment allocation access</h4>
+      <p class="wf-muted">${wfAllocationWindowMarkup(t)}</p>
+      <p class="wf-muted">The Team Incharge can allocate or edit individual tasks for 48 hours from Admin distribution. After that, allocation closes automatically. Each Admin reopen grants a fresh 2-hour window.</p>
+      <div class="wf-actions">${t.distributionStatus==='DISTRIBUTED'?`<button class="warning" onclick="wfAdminGrantAssignmentReopen('${wfEsc(workId)}','${tid}')">${Number(t.individualAssignmentsReopenUntil)>Date.now()?'RESTART 2-HOUR WINDOW':'OPEN FOR 2 HOURS'}</button>`:''}${Number(t.individualAssignmentsReopenUntil)>Date.now()?`<button class="danger" onclick="wfAdminCloseAssignmentReopen('${wfEsc(workId)}','${tid}')">CLOSE ACCESS NOW</button>`:''}</div></div>`;
   }).join('');
 };
 window.wfAdminGrantAssignmentReopen=async(workId,teamId)=>{
   if(!wfIsAdmin())return alert('Admin access required.');
   const team=wfAllTeams(workId)[teamId];
-  if(!team?.locked||team.distributionStatus!=='DISTRIBUTED')return alert('Only a locked and distributed team can be reopened.');
-  if(team.individualAssignmentsLocked!==true)return alert('Individual assignments are not locked yet.');
-  const raw=prompt('How many minutes should the Team Incharge be allowed to edit individual assignments? Enter 1 to 1440 minutes.','60');if(raw===null)return;
-  const minutes=Number(raw);if(!Number.isInteger(minutes)||minutes<1||minutes>1440)return alert('Enter a whole number from 1 to 1440.');
-  const reason=(prompt('Reason for granting temporary access (required):','')||'').trim();if(!reason)return alert('A reason is required.');
-  const until=Date.now()+minutes*60000;if(!confirm(`Reopen individual assignments for ${team.teamName} for ${minutes} minutes?`))return;
-  try{await update(projectAwareRef(wfTeamPath(workId,teamId)),{individualAssignmentsReopenUntil:until,individualAssignmentsReopenGrantedAt:Date.now(),individualAssignmentsReopenGrantedBy:currentUser.uid,individualAssignmentsReopenReason:reason});await window.loadWorkflows();document.getElementById('wfDistributionWork').value=workId;wfRenderDistribution();alert(`Assignment access reopened until ${wfDate(until)}.`);}catch(e){alert('Could not reopen assignments: '+e.message);}
+  if(!team?.locked||team.distributionStatus!=='DISTRIBUTED')return alert('Only a locked and distributed team can reopen individual allocation.');
+  const reason=(prompt('Reason for opening the 2-hour individual allocation window (required):','')||'').trim();
+  if(!reason)return alert('A reason is required.');
+  const until=Date.now()+WF_ADMIN_REOPEN_MS;
+  if(!confirm(`Open individual assignment allocation for ${team.teamName} for 2 hours? The window will close automatically at ${wfDate(until)}.`))return;
+  try{
+    await update(projectAwareRef(wfTeamPath(workId,teamId)),{
+      individualAssignmentsReopenUntil:until,
+      individualAssignmentsReopenGrantedAt:Date.now(),
+      individualAssignmentsReopenGrantedBy:currentUser.uid,
+      individualAssignmentsReopenReason:reason,
+      individualAssignmentsReopenCount:(Number(team.individualAssignmentsReopenCount)||0)+1
+    });
+    await window.loadWorkflows();
+    document.getElementById('wfDistributionWork').value=workId;wfRenderDistribution();
+    alert(`Individual assignment allocation is open for 2 hours, until ${wfDate(until)}.`);
+  }catch(e){alert('Could not reopen assignments: '+e.message);}
 };
 window.wfAdminCloseAssignmentReopen=async(workId,teamId)=>{
   if(!wfIsAdmin())return alert('Admin access required.');const team=wfAllTeams(workId)[teamId];
@@ -18288,9 +18318,9 @@ window.wfDistributeTeam=async(workId,teamId)=>{
   const mainTask=document.getElementById(`${teamId}_mainTask`).value.trim(),deadlineVal=document.getElementById(`${teamId}_teamDeadline`).value,deadline=new Date(deadlineVal).getTime();
   if(!mainTask||!deadlineVal)return alert('Enter team responsibility and deadline.');if(deadline>Date.now()&&deadline>WF.works[workId].deadline)return alert('Team deadline cannot exceed the overall work deadline.');if(deadline<=Date.now())return alert('Choose a future deadline.');
   try{
-    await update(projectAwareRef(wfTeamPath(workId,teamId)),{mainTask,deadline,distributionStatus:'DISTRIBUTED',distributedAt:serverTimestamp(),distributedBy:currentUser.uid});
+    await update(projectAwareRef(wfTeamPath(workId,teamId)),{mainTask,deadline,distributionStatus:'DISTRIBUTED',distributedAt:serverTimestamp(),assignmentAllocationClosesAt:Date.now()+WF_ALLOCATION_WINDOW_MS,individualAssignmentsReopenUntil:0,distributedBy:currentUser.uid});
     WF.teams[workId]=WF.teams[workId]||{};
-    WF.teams[workId][teamId]={...t,mainTask,deadline,distributionStatus:'DISTRIBUTED'};
+    WF.teams[workId][teamId]={...t,mainTask,deadline,distributionStatus:'DISTRIBUTED',assignmentAllocationClosesAt:Date.now()+WF_ALLOCATION_WINDOW_MS};
     const emailResults=await wfSendWorkDistributionEmails(workId,teamId,wfAllMemberIds(t));
     await update(projectAwareRef(`workProjects/${workId}`),{status:'IN_PROGRESS'});
     await window.loadWorkflows();document.getElementById('wfDistributionWork').value=workId;wfRenderDistribution();
@@ -18362,7 +18392,7 @@ function wfRenderInchargeTeam(wid,tid,t){
   const key=`${wid}_${tid}`;
   const assignmentLocked=wfAssignmentsAreLocked(t);
   const assignedMembers=new Set(tasks.map(x=>x.assignedUid).filter(Boolean));
-  const allocation=`<div class="wf-card"><h4>Assign individual work</h4>${assignmentLocked?'<p class="wf-pill good">ASSIGNMENTS LOCKED · No further student/task changes allowed</p>':Number(t.individualAssignmentsReopenUntil)>Date.now()?`<p class="wf-pill warn">ADMIN REOPEN ACTIVE · Editing closes ${wfDate(t.individualAssignmentsReopenUntil)}</p>`:'<p class="wf-muted">Assign at least one task to every team member. When all assignments are complete, press FINISH ASSIGNMENTS to lock this section.</p>'}<div class="wf-formgrid"><div><label>Assign to team member</label><select id="wfAssignee_${wid}_${tid}" ${assignmentLocked?'disabled':''}><option value="">Select student</option>${members.map(uid=>`<option value="${wfEsc(uid)}">${wfEsc(wfName(WF.users[uid],uid))}${assignedMembers.has(uid)?' · Assigned':''}</option>`).join('')}</select></div><div><label>Individual task title / instructions</label><input id="wfTaskTitle_${wid}_${tid}" placeholder="Describe assigned task" ${assignmentLocked?'disabled':''}></div><div><label>Student deadline</label><input id="wfTaskDeadline_${wid}_${tid}" type="datetime-local" max="${t.deadline?new Date(t.deadline).toISOString().slice(0,16):''}" ${assignmentLocked?'disabled':''}></div></div><button class="info" ${assignmentLocked?'disabled':''} onclick="wfAssignStudentTask('${wfEsc(wid)}','${tid}')">ASSIGN TASK</button>${assignmentLocked?'':`<button class="success" style="margin-left:8px" onclick="wfFinishIndividualAssignments('${wfEsc(wid)}','${tid}')">FINISH ASSIGNMENTS</button>`}<p class="wf-muted">${assignedMembers.size} of ${members.length} team members have at least one task assigned.</p></div>`;
+  const allocation=`<div class="wf-card"><h4>Assign individual work</h4>${assignmentLocked?(t.individualAssignmentsLocked===true?'<p class="wf-pill good">ASSIGNMENTS LOCKED · No further student/task changes allowed</p>':`<p class="wf-pill bad">48-HOUR ALLOCATION WINDOW CLOSED AUTOMATICALLY · ${wfDate(wfAllocationClosesAt(t))}</p>`):Number(t.individualAssignmentsReopenUntil)>Date.now()?`<p class="wf-pill warn">ADMIN REOPEN ACTIVE · Editing closes ${wfDate(t.individualAssignmentsReopenUntil)}</p>`:`<p class="wf-muted">${wfAllocationWindowMarkup(t)}<br>Assign at least one task to every team member. You can finish and lock assignments earlier.</p>`}<div class="wf-formgrid"><div><label>Assign to team member</label><select id="wfAssignee_${wid}_${tid}" ${assignmentLocked?'disabled':''}><option value="">Select student</option>${members.map(uid=>`<option value="${wfEsc(uid)}">${wfEsc(wfName(WF.users[uid],uid))}${assignedMembers.has(uid)?' · Assigned':''}</option>`).join('')}</select></div><div><label>Individual task title / instructions</label><input id="wfTaskTitle_${wid}_${tid}" placeholder="Describe assigned task" ${assignmentLocked?'disabled':''}></div><div><label>Student deadline</label><input id="wfTaskDeadline_${wid}_${tid}" type="datetime-local" max="${t.deadline?new Date(t.deadline).toISOString().slice(0,16):''}" ${assignmentLocked?'disabled':''}></div></div><button class="info" ${assignmentLocked?'disabled':''} onclick="wfAssignStudentTask('${wfEsc(wid)}','${tid}')">ASSIGN TASK</button>${assignmentLocked?'':`<button class="success" style="margin-left:8px" onclick="wfFinishIndividualAssignments('${wfEsc(wid)}','${tid}')">FINISH ASSIGNMENTS</button>`}<p class="wf-muted">${assignedMembers.size} of ${members.length} team members have at least one task assigned.</p></div>`;
   const verification=`<div class="wf-card"><h4>All individual submissions</h4><p class="wf-muted">Review every team member's submission here. Open a pending submission to download the file, read remarks, and verify it or request correction.</p><div class="wf-table"><table><thead><tr><th>Student</th><th>Task</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead><tbody>${tasks.map(x=>`<tr><td>${wfEsc(wfName(WF.users[x.assignedUid],x.assignedUid))}</td><td>${wfEsc(x.title)}</td><td>${x.submittedAt?wfDate(x.submittedAt):'—'}</td><td>${wfStatusPill(x.status)}</td><td>${x.status==='PENDING_INCHARGE'?`<button class="success" onclick="wfOpenInchargeReview('${wfEsc(wid)}','${tid}','${wfEsc(x.id)}')">VERIFY / REVIEW</button>`:x.status==='REDO'?'<span class="wf-muted">Correction requested · Awaiting resubmission</span>':['VERIFIED','ADMIN_APPROVED'].includes(x.status)?'<span class="wf-pill good">VERIFIED</span>':`<span class="wf-muted">Awaiting student submission</span>`}${['ASSIGNED','REDO'].includes(x.status)?`<button class="warning" style="margin:4px" onclick="wfExtendIndividualDeadline('${wfEsc(wid)}','${tid}','${wfEsc(x.id)}')">EXTEND DEADLINE</button>`:''}</td></tr>`).join('')||'<tr><td colspan="5">No individual tasks assigned yet.</td></tr>'}</tbody></table></div></div>`;
   const finalPanel=`<div class="wf-card"><h4>Final team submission</h4><p class="wf-muted">Submit one consolidated PPT/PDF after all individual tasks are verified by you.</p>${final?`<p>${wfStatusPill(final.status)} · Submitted: ${wfDate(final.submittedAt)}</p><p><b>File:</b> ${wfEsc(final.fileName||'Not available')}</p>${final.remarks?`<p class="wf-muted">Remarks: ${wfEsc(final.remarks)}</p>`:''}${final.status==='PENDING_ADMIN'?'<p class="wf-pill warn">Awaiting Admin verification</p>':final.status==='APPROVED'?'<p class="wf-pill good">Admin approved the final team submission</p>':final.status==='REDO'?'<p class="wf-pill warn">Admin requested changes. Upload a revised final file below.</p>':''}`:''}${final?.status==='PENDING_ADMIN'||final?.status==='APPROVED'?'':`<label>Consolidated PPT/PDF</label><input id="wfFinalFile_${wid}_${tid}" type="file" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"><label>Submission remarks</label><textarea id="wfFinalRemarks_${wid}_${tid}" rows="2" placeholder="Summary of team deliverables"></textarea><button class="success" onclick="wfSubmitFinal('${wfEsc(wid)}','${tid}')">SUBMIT ONE FINAL TEAM FILE</button>`}</div>`;
   return `<div class="wf-card" style="margin-bottom:14px"><h3>${wfEsc(WF.works[wid].title)} · ${wfEsc(t.teamName)}</h3><p class="wf-muted">Main work: ${wfEsc(t.mainTask||'Not distributed')} · Final deadline: ${wfDate(t.deadline)}</p><div class="wf-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0"><button class="info" onclick="wfSetInchargeTab('${wfEsc(key)}','allocation')">WORK ALLOCATION</button><button class="info" onclick="wfSetInchargeTab('${wfEsc(key)}','verify')">SUBMISSION VERIFICATION (${tasks.filter(x=>x.status==='PENDING_INCHARGE').length} PENDING)</button><button class="info" onclick="wfSetInchargeTab('${wfEsc(key)}','final')">FINAL TEAM SUBMISSION</button></div><section id="wfInchargeTab_${key}_allocation">${allocation}</section><section id="wfInchargeTab_${key}_verify" class="hidden">${verification}</section><section id="wfInchargeTab_${key}_final" class="hidden">${finalPanel}</section></div>`;
@@ -18391,7 +18421,7 @@ window.wfAssignStudentTask=async(wid,tid)=>{
 window.wfFinishIndividualAssignments=async(wid,tid)=>{
   const t=wfAllTeams(wid)[tid];
   if(t?.inchargeUid!==currentUser.uid)return alert('Only this team incharge can finish and lock assignments.');
-  if(t.individualAssignmentsLocked===true)return alert('Assignments are already locked.');
+  if(wfAssignmentsAreLocked(t))return alert(t.individualAssignmentsLocked===true?'Assignments are already locked.':'The 48-hour allocation window has closed. Ask Admin to open a 2-hour window.');
   const members=wfTeamMembers(t),tasks=wfTaskRows(wid,tid);
   if(!members.length)return alert('No team members are configured.');
   const missing=members.filter(uid=>!tasks.some(task=>task.assignedUid===uid));
@@ -18440,7 +18470,7 @@ window.wfRenderAdminTaskReview=()=>{
   const rows=[];
   Object.entries(WF.tasks||{}).forEach(([wid,byTeam])=>Object.entries(byTeam||{}).forEach(([tid,byTask])=>Object.entries(byTask||{}).forEach(([taskId,task])=>{
     if(task?.fileData)rows.push({wid,tid,taskId,task,team:wfAllTeams(wid)[tid]||{},work:WF.works[wid]||{}});
-  })));
+  }))));
   rows.sort((a,b)=>(Number(b.task.submittedAt)||0)-(Number(a.task.submittedAt)||0));
   window.wfAdminTaskReviewRows=rows;
   const counts={total:rows.length,waiting:rows.filter(x=>x.task.status==='VERIFIED').length,approved:rows.filter(x=>x.task.status==='ADMIN_APPROVED').length,redo:rows.filter(x=>x.task.status==='REDO').length};
