@@ -18437,8 +18437,7 @@ window.mrpspRenderSelectedDues=function(){
     .sort((a,b)=>(a.verifiedAt||a.createdAt||0)-(b.verifiedAt||b.createdAt||0));
   const refunds=(model.directRefunds||[]).filter(r=>r.studentUid===uid).sort((a,b)=>(a.timestamp||0)-(b.timestamp||0));
   const grossPaid=Number(student.grossPaid)||0,refundPaid=Number(student.refundPaid)||0;
-  const carryForward=Math.max(0,-Number(student.balance||0));
-  const outstanding=Math.max(0,Number(student.balance||0));
+  const signedBalance=Number(student.balance||0);
   const receiptData={studentName:mrpspName(student),email:mrpspUserEmail(student),uid:student.uid,due:student.due,paid:student.paid,grossPaid,refundPaid,balance:student.balance,carryForward,outstanding,exempt:student.exempt,assetTotal:model.assetTotal,exemptionTotal:model.exemptionTotal,perStudent:model.perStudent,payments,refunds};
   window.mrpspCurrentReceipt=receiptData;
   const statementRows=[
@@ -18478,7 +18477,7 @@ window.mrpspDownloadStudentReceipt=function(){
   w.document.write(`<!doctype html><html><head><title>MRPSP Student Statement</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;color:#172033;padding:25px}h1{color:#17365d;font-size:21px}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{border:1px solid #d8dee8;padding:9px;text-align:left}.summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:20px 0}.summary div{border:1px solid #d8dee8;padding:12px}@page{size:A4;margin:14mm}</style></head><body>
   <h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1><h2>STUDENT DUES STATEMENT</h2>
   <p><b>Student:</b> ${mrpspBillEscape(d.studentName)}<br><b>Email:</b> ${mrpspBillEscape(d.email)}<br><b>Student ID:</b> ${mrpspBillEscape(d.uid)}</p>
-  <div class="summary"><div>Calculated dues<br><b>${mrpspBillEscape(mrpspMoney(d.due))}</b></div><div>Verified payments<br><b>${mrpspBillEscape(mrpspMoney(d.grossPaid||0))}</b></div><div>Refund adjustment<br><b>${mrpspBillEscape(mrpspMoney(d.refundPaid||0))}</b></div><div>${balanceLabel}<br><b>${mrpspBillEscape(mrpspMoney(balanceValue))}</b></div></div>
+  <div class="summary"><div>Calculated dues<br><b>${mrpspBillEscape(mrpspMoney(d.due))}</b></div><div>Verified payments<br><b>${mrpspBillEscape(mrpspMoney(d.grossPaid||0))}</b></div><div>Refund adjustment<br><b>${mrpspBillEscape(mrpspMoney(d.refundPaid||0))}</b></div><div>${balanceLabel}<br><b>${signedBalance<0?"-":""}${mrpspBillEscape(mrpspMoney(Math.abs(balanceValue)))}</b></div></div>
   <h3>Student Dues Statement</h3><table><thead><tr><th>Date</th><th>Entry</th><th>Details / UTR</th><th>Amount</th><th>Adjustment</th></tr></thead><tbody>${rows||"<tr><td colspan='5'>No entries</td></tr>"}</tbody></table>
   <p style="margin-top:24px">Refunds reduce carry-forward credit first. Remaining credit is applied to future dues.</p>
   <p style="margin-top:30px;font-size:11px;color:#64748b">Computer-generated account statement. Individual paid receipts can be printed from the Print Payment Bill tab.</p>
@@ -18491,14 +18490,13 @@ window.mrpspEmailStudentStatement=async function(){
   const student=mrpspStudentUsers().find(s=>s.uid===d.uid);
   const email=mrpspUserEmail(student);
   if(!email)return alert("No email address is saved for this student.");
-  const carryForward=Math.max(0,-Number(d.balance||0));
-  const outstanding=Math.max(0,Number(d.balance||0));
+  const signedBalance=Number(d.balance||0);
   const body=[
     `Student: ${d.studentName}`,`Email: ${d.email}`,
     `Calculated dues: ${mrpspMoney(d.due)}`,
     `Verified payments: ${mrpspMoney(d.grossPaid||0)}`,
     `Refund adjustment: ${mrpspMoney(d.refundPaid||0)}`,
-    `${carryForward>0?"Carry forward credit":"Outstanding balance"}: ${mrpspMoney(carryForward>0?carryForward:outstanding)}`,
+    `Balance (negative = excess payment): ${signedBalance<0?"-":""}${mrpspMoney(Math.abs(signedBalance))}`,
     "", "Student dues statement:",
     ...[
       ...(d.payments||[]).map(p=>`${mrpspDate(p.verifiedAt||p.createdAt)} | PAYMENT | ${mrpspMoney(p.amount)} | ${p.purpose||""}`),
@@ -19280,6 +19278,31 @@ window.mrpspRenderSelectedDues=function(){
   if(!legacy.length)return;
   const combined=[...(d.payments||[]),...legacy].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
   d.payments=combined;
+  // Use the displayed transaction list as the source of truth for the total.
+  // De-duplicate by payment key / linked finance key to avoid double counting.
+  const seenPaymentKeys=new Set();
+  const uniquePayments=combined.filter(p=>{
+    const k=String(p.key||p.financeKey||p.legacyFinanceKey||"");
+    if(k && seenPaymentKeys.has(k))return false;
+    if(k)seenPaymentKeys.add(k);
+    return true;
+  });
+  d.grossPaid=uniquePayments.reduce((sum,p)=>sum+(Number(p.amount)||0),0);
+  d.refundPaid=(d.refunds||[]).reduce((sum,r)=>sum+(Number(r.amount)||0),0);
+  d.paid=d.grossPaid-d.refundPaid;
+  d.balance=Number(d.due||0)-d.paid;
+  d.carryForward=Math.max(0,-d.balance);
+  d.outstanding=Math.max(0,d.balance);
+  const stats=host.querySelectorAll(".pay-grid .pay-stat b");
+  if(stats.length>=4){
+    stats[0].textContent=mrpspMoney(d.due);
+    stats[1].textContent=mrpspMoney(d.grossPaid);
+    stats[2].textContent=mrpspMoney(d.refundPaid);
+    stats[3].textContent=(d.balance<0?"-":"")+mrpspMoney(Math.abs(Number(d.balance)||0));
+    const label=host.querySelectorAll(".pay-grid .pay-stat .pay-muted")[3];
+    if(label)label.textContent="Balance (negative = excess payment)";
+  }
+  window.mrpspCurrentReceipt=d;
   const table=host.querySelector("table");
   if(table){
     const header=table.querySelector("thead tr");
@@ -19391,18 +19414,23 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
     const rows=model.rows.map(st=>{
       const fixed=byStudent.get(st.uid);
       const due=fixed?Math.max(0,Number(fixed.amount)||0):perStudent;
-      const paid=Number(st.paid)||0;
+      const paid=Number(st.paid)||0; // verified total less refunds, including linked historical credits
+      const refundPaid=Number(st.refundPaid)||0;
+      const grossPaid=paid+refundPaid; // total verified payments before refund adjustment
+      const balance=due-paid; // positive = outstanding; negative = credit carried forward
       return {
         ...st,
         exempt:!!fixed,
         exemptionPeriod:fixed||null,
         due,
         dueType:fixed?"FIXED_PERIOD":"DYNAMIC",
+        grossPaid,
+        refundPaid,
         paid,
         // Keep a signed balance: negative means a credit carried forward to future dues.
-        balance:due-paid,
-        overpaid:Math.max(0,paid-due),
-        creditCarryForward:Math.max(0,paid-due)
+        balance,
+        overpaid:Math.max(0,-balance),
+        creditCarryForward:Math.max(0,-balance)
       };
     });
     return {
