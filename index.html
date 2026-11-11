@@ -18266,48 +18266,46 @@ window.wfRenderDistribution=()=>{
   const workId=document.getElementById('wfDistributionWork')?.value;const host=document.getElementById('wfDistributionTeams');if(!host)return;
   if(!workId||!WF.works[workId]){host.innerHTML='<div class="wf-card">Select a work to distribute responsibilities.</div>';return;}
   host.innerHTML=['team1','team2','team3'].map((tid,i)=>{const t=wfAllTeams(workId)[tid];if(!t?.locked)return `<div class="wf-card"><h4>Team ${i+1}</h4><span class="wf-pill warn">LOCK TEAM FIRST</span></div>`;
-    return `<div class="wf-card"><h4>${wfEsc(t.teamName)}</h4><p class="wf-muted">Incharge: ${wfEsc(wfName(WF.users[t.inchargeUid],t.inchargeUid))}</p><label>Main responsibility / work assigned</label><textarea id="${tid}_mainTask" rows="4" ${t.distributionStatus==='DISTRIBUTED'?'disabled':''}>${wfEsc(t.mainTask||'')}</textarea><label>Final team deadline</label><input id="${tid}_teamDeadline" type="datetime-local" value="${t.deadline?new Date(t.deadline).toISOString().slice(0,16):''}" ${t.distributionStatus==='DISTRIBUTED'?'disabled':''}><p>${wfStatusPill(t.distributionStatus||'NOT DISTRIBUTED')}</p>${t.distributionStatus==='DISTRIBUTED'?`<p class="wf-muted">Current final team deadline: <b>${wfDate(t.deadline)}</b></p><div style="margin:12px 0;padding:12px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc"><label for="${tid}_editTeamDeadline">Edit final team deadline (date only)</label><input id="${tid}_editTeamDeadline" type="date" value="${(()=>{const d=new Date(Number(t.deadline));const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`})()}" max="${(()=>{const d=new Date(Number(WF.works[workId]?.deadline)||0);if(!WF.works[workId]?.deadline)return '';const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`})()}" style="width:100%;max-width:360px"><p class="wf-muted">The selected date will be saved as 11:59:59 PM local time.</p><button class="info" style="margin-top:9px" onclick="wfAdminSaveTeamDeadline('${wfEsc(workId)}','${tid}')"><i class="fas fa-save"></i> SAVE DEADLINE</button></div><button class="info" onclick="wfResendInchargeEmail('${wfEsc(workId)}','${tid}')"><i class="fas fa-envelope"></i> RESEND EMAIL TO INCHARGE</button>`:`<button class="success" onclick="wfDistributeTeam('${wfEsc(workId)}','${tid}')">DISTRIBUTE TO TEAM</button>`}
+    return `<div class="wf-card"><h4>${wfEsc(t.teamName)}</h4><p class="wf-muted">Incharge: ${wfEsc(wfName(WF.users[t.inchargeUid],t.inchargeUid))}</p><label>Main responsibility / work assigned</label><textarea id="${tid}_mainTask" rows="4" ${t.distributionStatus==='DISTRIBUTED'?'disabled':''}>${wfEsc(t.mainTask||'')}</textarea><label>Final team deadline</label><input id="${tid}_teamDeadline" type="datetime-local" value="${t.deadline?new Date(t.deadline).toISOString().slice(0,16):''}" ${t.distributionStatus==='DISTRIBUTED'?'disabled':''}><p>${wfStatusPill(t.distributionStatus||'NOT DISTRIBUTED')}</p>${t.distributionStatus==='DISTRIBUTED'?`<p class="wf-muted">Current final team deadline: <b>${wfDate(t.deadline)}</b></p><div style="margin:12px 0;padding:12px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc"><label for="${tid}_editTeamDeadline">Edit final team deadline</label><input id="${tid}_editTeamDeadline" type="datetime-local" value="${wfLocalDateTimeInput(t.deadline)}" max="${wfLocalDateTimeInput(WF.works[workId]?.deadline)}" style="width:100%;max-width:360px"><div style="margin-top:10px"><button class="success" type="button" onclick="wfAdminSaveTeamDeadline('${wfEsc(workId)}','${tid}',document.getElementById('${tid}_editTeamDeadline').value)">SAVE DEADLINE</button></div><small class="wf-muted">Select the new date and time, then click Save Deadline.</small></div><button class="info" onclick="wfResendInchargeEmail('${wfEsc(workId)}','${tid}')"><i class="fas fa-envelope"></i> RESEND EMAIL TO INCHARGE</button>`:`<button class="success" onclick="wfDistributeTeam('${wfEsc(workId)}','${tid}')">DISTRIBUTE TO TEAM</button>`}
       <hr style="border:0;border-top:1px solid #e2e8f0;margin:14px 0"><h4>Individual assignment allocation access</h4>
       <p class="wf-muted">${wfAllocationWindowMarkup(t)}</p>
       <p class="wf-muted">The Team Incharge can allocate or edit individual tasks for 48 hours from Admin distribution. After that, allocation closes automatically. Each Admin reopen grants a fresh 2-hour window.</p>
       <div class="wf-actions">${t.distributionStatus==='DISTRIBUTED'?`<button class="warning" onclick="wfAdminGrantAssignmentReopen('${wfEsc(workId)}','${tid}')">${Number(t.individualAssignmentsReopenUntil)>Date.now()?'RESTART 2-HOUR WINDOW':'OPEN FOR 2 HOURS'}</button>`:''}${Number(t.individualAssignmentsReopenUntil)>Date.now()?`<button class="danger" onclick="wfAdminCloseAssignmentReopen('${wfEsc(workId)}','${tid}')">CLOSE ACCESS NOW</button>`:''}</div></div>`;
   }).join('');
 };
-window.wfAdminSaveTeamDeadline=async(workId,teamId)=>{
+window.wfAdminSaveTeamDeadline=async(workId,teamId,selectedValue)=>{
   if(!wfIsAdmin())return alert('Admin access required.');
   const team=wfAllTeams(workId)[teamId];
   if(!team?.locked||team.distributionStatus!=='DISTRIBUTED')
-    return alert('Only a locked and distributed team deadline can be extended.');
-
-  const dateValue=document.getElementById(`${teamId}_editTeamDeadline`)?.value;
-  if(!dateValue)return alert('Please select a deadline date.');
-
-  // Date-only input is interpreted as the end of that calendar day in local time.
-  const parts=dateValue.split('-').map(Number);
-  if(parts.length!==3||parts.some(n=>!Number.isInteger(n)))return alert('Please select a valid date.');
-  const newDeadline=new Date(parts[0],parts[1]-1,parts[2],23,59,59,999).getTime();
+    return alert('Only a locked and distributed team deadline can be changed.');
+  if(!selectedValue)return;
+  const newDeadline=new Date(selectedValue).getTime();
   const oldDeadline=Number(team.deadline);
   const overallDeadline=Number(WF.works[workId]?.deadline)||0;
-  if(!Number.isFinite(oldDeadline)||oldDeadline<=0)
-    return alert('The current team deadline is missing or invalid.');
+  if(!Number.isFinite(newDeadline)||newDeadline<=0)
+    return alert('Please select a valid date and time.');
   if(newDeadline<=oldDeadline)
-    return alert('Choose a date later than the current team deadline.');
+    return alert('Select a date and time later than the current deadline.');
   if(overallDeadline&&newDeadline>overallDeadline)
-    return alert(`The selected date ends after the overall project deadline (${wfDate(overallDeadline)}). Choose an earlier date or extend the overall project deadline first.`);
-
-  if(!confirm(`Set ${team.teamName||teamId} deadline to ${new Date(newDeadline).toLocaleDateString()} (11:59 PM)?\nCurrent: ${wfDate(oldDeadline)}\nNew: ${wfDate(newDeadline)}`))return;
-
+    return alert(`This deadline exceeds the overall work deadline (${wfDate(overallDeadline)}).`);
+  const picker=document.getElementById(`${teamId}_editTeamDeadline`);
+  if(!confirm(`Confirm deadline change?\n\nCurrent: ${wfDate(oldDeadline)}\nNew: ${wfDate(newDeadline)}\n\nSave this new date and time?`)){
+    if(picker)picker.value=wfLocalDateTimeInput(oldDeadline);
+    return;
+  }
+  if(picker)picker.disabled=true;
   try{
-    // Write only the deadline field, preserving all other team data.
+    // Save immediately after confirmation; only the deadline field is written.
     await set(projectAwareRef(wfTeamPath(workId,teamId)+'/deadline'),newDeadline);
     await window.loadWorkflows();
     const select=document.getElementById('wfDistributionWork');
     if(select)select.value=workId;
     window.wfRenderDistribution();
-    alert(`Team deadline updated to ${new Date(newDeadline).toLocaleDateString()} (11:59 PM).`);
+    alert(`Deadline saved: ${wfDate(newDeadline)}`);
   }catch(e){
-    console.error('Team deadline date update failed:',e);
-    alert('Deadline update failed: '+(e?.message||e)+'\nConfirm that the matching Firebase rules are published and that you are signed in with an authorized administrator account.');
+    console.error('Team deadline save failed:',e);
+    alert('Deadline save failed: '+(e?.message||e));
+    if(picker)picker.disabled=false;
   }
 };
 window.wfAdminGrantAssignmentReopen=async(workId,teamId)=>{
