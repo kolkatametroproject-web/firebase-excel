@@ -18334,17 +18334,55 @@ window.wfAdminExtendTeamDeadline=async(workId,teamId)=>{
   if(!reason)return alert('A reason is required.');
   if(!confirm(`Extend the final deadline for ${team.teamName||teamId}?\nPrevious: ${wfDate(oldDeadline)}\nNew: ${wfDate(newDeadline)}\nReason: ${reason}`))return;
   const now=Date.now();
-  const rawHistory=team.teamDeadlineExtensionHistory||[];
-  const history=Array.isArray(rawHistory)?rawHistory.slice():Object.keys(rawHistory).sort((a,b)=>Number(a)-Number(b)).map(k=>rawHistory[k]);
-  history.push({previousDeadline:oldDeadline,newDeadline,extendedAt:now,extendedBy:currentUser.uid,extendedByName:currentUser.name||currentUser.email||'Admin',reason});
   try{
-    await update(projectAwareRef(wfTeamPath(workId,teamId)),{
+    const teamRef=projectAwareRef(wfTeamPath(workId,teamId));
+    const workRef=projectAwareRef(`workProjects/${workId}`);
+    const [teamSnap,workSnap,tokenInfo]=await Promise.all([
+      get(teamRef),get(workRef),auth.currentUser?.getIdTokenResult()
+    ]);
+    const liveTeam=teamSnap.val()||{};
+    const liveWork=workSnap.val()||{};
+    const oldLiveDeadline=Number(liveTeam.deadline);
+    const rawHistory=liveTeam.teamDeadlineExtensionHistory||[];
+    const history=Array.isArray(rawHistory)?rawHistory.slice():Object.keys(rawHistory).sort((a,b)=>Number(a)-Number(b)).map(k=>rawHistory[k]);
+    history.push({previousDeadline:oldLiveDeadline,newDeadline,extendedAt:now,extendedBy:currentUser.uid,extendedByName:currentUser.name||currentUser.email||'Admin',reason});
+    const payload={
       deadline:newDeadline,
       teamDeadlineExtensionHistory:history,
       lastTeamDeadlineExtensionAt:now,
       lastTeamDeadlineExtensionBy:currentUser.uid,
       lastTeamDeadlineExtensionReason:reason
-    });
+    };
+    const diagnostic={
+      databasePath:teamRef.toString(),
+      workPath:workRef.toString(),
+      authEmail:auth.currentUser?.email||null,
+      tokenEmail:tokenInfo?.claims?.email||null,
+      authUid:auth.currentUser?.uid||null,
+      portalUid:currentUser?.uid||null,
+      workId,teamId,
+      teamExists:teamSnap.exists(),
+      locked:liveTeam.locked,
+      distributionStatus:liveTeam.distributionStatus,
+      teamIdInRecord:liveTeam.teamId??null,
+      teamNamePresent:typeof liveTeam.teamName==='string',
+      inchargeUidPresent:typeof liveTeam.inchargeUid==='string',
+      oldDeadline:liveTeam.deadline??null,
+      oldDeadlineType:typeof liveTeam.deadline,
+      newDeadline,
+      overallDeadline:liveWork.deadline??null,
+      overallDeadlineType:typeof liveWork.deadline,
+      historyWasArray:Array.isArray(rawHistory),
+      historyHadChildren:Array.isArray(rawHistory)?rawHistory.length>0:Object.keys(rawHistory).length>0,
+      historyNewLength:history.length,
+      uidForExtension:currentUser.uid,
+      reasonPresent:!!reason,
+      payloadKeys:Object.keys(payload)
+    };
+    console.log('MRPSP_TEAM_DEADLINE_DIAGNOSTIC',JSON.stringify(diagnostic,null,2));
+    console.log('MRPSP_TEAM_DEADLINE_PAYLOAD',JSON.stringify(payload));
+    if(!teamSnap.exists())throw new Error('Team record could not be read at '+teamRef.toString());
+    await update(teamRef,payload);
     await window.loadWorkflows();
     const select=document.getElementById('wfDistributionWork');
     if(select)select.value=workId;
@@ -18352,7 +18390,7 @@ window.wfAdminExtendTeamDeadline=async(workId,teamId)=>{
     alert('Final team deadline extended successfully. The previous deadline and reason are recorded in the team history.');
   }catch(e){
     console.error('Team deadline extension failed:',e);
-    alert('Could not extend final team deadline: '+(e?.message||e));
+    alert('Could not extend final team deadline: '+(e?.message||e)+'. Diagnostic details are available in the browser Console under MRPSP_TEAM_DEADLINE_DIAGNOSTIC.');
   }
 };
 window.wfAdminGrantAssignmentReopen=async(workId,teamId)=>{
