@@ -19836,167 +19836,143 @@ window.MRPSP_REFUND_ACK_MS = MRPSP_REFUND_ACK_MS;
 })();
 </script>
 <script>
-/* Refund Book workflow: open books are editable by Admin; closed books are immutable. */
+/* Simple direct student refund recording.
+   Admin selects one student, enters the actual amount sent, marks payment done,
+   enters UTR, and writes one DEBIT directly to the Master Balance Sheet.
+   A student may receive at most one direct refund per local calendar day. */
 (function(){
- // Module scripts execute after parsing; resolve the bridge lazily when a user
- // invokes a refund action, rather than during this classic script's evaluation.
- const firebaseBridge=()=>window.mrpspRefundFirebase;
- const callFirebase=(name,...args)=>{const api=firebaseBridge();if(!api||typeof api[name]!=='function')throw new Error('Firebase helper '+name+' is not ready. Refresh the page and try again.');return api[name](...args);};
- const push=(...args)=>callFirebase('push',...args);
- const get=(...args)=>callFirebase('get',...args);
- const update=(...args)=>callFirebase('update',...args);
- const remove=(...args)=>callFirebase('remove',...args);
- const set=(...args)=>callFirebase('set',...args);
- const projectAwareRef=(...args)=>callFirebase('projectAwareRef',...args);
- const MRPSP_MEMBER_PAYMENT_PATH=window.MRPSP_MEMBER_PAYMENT_PATH||'memberPayment';
- const MRPSP_REFUND_ACK_MS=Number(window.MRPSP_REFUND_ACK_MS)||8*60*60*1000;
- const root=()=>`${MRPSP_MEMBER_PAYMENT_PATH}/refundBooks`;
- const cash=n=>window.mrpspMoney(Number(n)||0);
- const esc=s=>window.mrpspSafe(String(s??''));
- const isBookAdmin=()=>{const email=String(window.auth?.currentUser?.email||'').toLowerCase();return (typeof window.mrpspIsAdmin==='function'&&window.mrpspIsAdmin()) || window.isAdmin===true || ['soham@metro.project','heerok@metro.project','sujoy@metro.project','hodee@metro.project','hodcseaiml@metro.project','hodeee@metro.project','arijita@metro.project'].includes(email);};
- let books={};
- let activeBookKey="";
- const current=()=>Object.entries(books).map(([key,b])=>({key,...b})).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
- const selected=()=>activeBookKey||document.getElementById('mrpspRefundBookSelect')?.value||'';
- const getBook=()=>books[selected()]||null;
- const writable=b=>!!(isBookAdmin()&&b&&b.status==='OPEN'&&!b.closedAt);
- async function loadBooks(){try{const snap=await get(projectAwareRef(root()));books=snap.exists()?snap.val():{};}catch(e){console.warn('Refund books could not be loaded',e);books={};}}
- function snapshotForBook(){
-   const model=window.mrpspBuildDues();
-   const finance=Object.entries(window.mrpspPaymentCache.finance||{}).map(([key,x])=>({key,...x}));
-   const credit=finance.filter(x=>x.status==='Approved'&&x.type==='CREDIT').reduce((a,x)=>a+(Number(x.amount)||0),0);
-   const debit=finance.filter(x=>x.status==='Approved'&&x.type==='DEBIT').reduce((a,x)=>a+(Number(x.amount)||0),0);
-   return {createdAt:Date.now(),createdBy:window.auth.currentUser.uid,status:'OPEN',title:'Refund Book',sources:[],payouts:[],snapshot:{capturedAt:Date.now(),masterBalance:{totalCredit:credit,totalDebit:debit,balance:credit-debit},dues:model.rows.map(x=>({uid:x.uid,name:window.mrpspName(x),due:x.due,paid:x.paid,balance:x.balance,exempt:!!x.exempt})),totalDues:model.rows.reduce((a,x)=>a+(Number(x.balance)||0),0),studentCount:model.rows.length}};
- }
- window.mrpspCreateRefundBook=async function(){
-   if(!isBookAdmin())return alert('Administrator access required.');
-   const title=(document.getElementById('mrpspRefundBookTitle')?.value||'').trim();if(!title)return alert('Enter a refund book name.');
-   const b=snapshotForBook();b.title=title;
-   try{const r=await push(projectAwareRef(root()),b);books[r.key]=b;document.getElementById('mrpspRefundBookTitle').value='';await renderBooks(r.key);alert('New refund book created. All changes remain editable until it is closed.');}
-   catch(e){console.error('Refund book creation failed',e);alert('Could not create refund book: '+(e.message||e)+'\n\nIf this is PERMISSION_DENIED, publish the accompanying Firebase rules file.');}
- };
- window.mrpspAddBookRefundSource=async function(){
-   const b=getBook();if(!writable(b))return alert('Select an open refund book.');
-   const name=(document.getElementById('mrpspBookSourceName')?.value||'').trim(),amount=Number(document.getElementById('mrpspBookSourceAmount')?.value),reason=(document.getElementById('mrpspBookSourceReason')?.value||'').trim();
-   if(!name||!reason||!Number.isFinite(amount)||amount<=0)return alert('Enter source, valid amount and remarks.');
-   const model=window.mrpspBuildPaymentBasedRefundAllocation();if(!model.allocation.length||model.totalPaid<=0)return alert('No verified payment history is available for proportional allocation.');
-   const src={name,amount,reason,createdAt:Date.now(),allocation:model.allocation,totalVerifiedPayments:model.totalPaid,method:'PROPORTIONAL_TO_ADMIN_VERIFIED_PAYMENTS'};
-   try{await push(projectAwareRef(`${root()}/${b.key}/sources`),src);document.getElementById('mrpspBookSourceName').value='';document.getElementById('mrpspBookSourceAmount').value='';document.getElementById('mrpspBookSourceReason').value='';await loadBooks();await renderBooks(b.key);}catch(e){alert('Could not add source: '+(e.message||e));}
- };
- function payoutRows(b){const out=[];(b.sources||{});Object.entries(b.sources||{}).forEach(([sourceKey,src])=>(src.allocation||[]).forEach(a=>{const amount=Math.round((Number(src.amount)||0)*(Number(a.percent)||0)*100)/100; if(amount>0)out.push({sourceKey,sourceName:src.name,uid:a.uid,name:a.name,email:a.email,amount,percent:a.percent});}));return out;}
- window.mrpspBookRefundOne=async function(uid,sourceKey){
-   const b=getBook();if(!writable(b))return alert('This refund book is closed or not selected.');
-   const src=b.sources?.[sourceKey];const a=src?.allocation?.find(x=>x.uid===uid);if(!a)return alert('Student allocation not found.');
-   const qr=window.mrpspPaymentCache.qr?.[uid];if(!qr?.dataUrl)return alert('Student QR is not uploaded.');
-   const amount=Math.round((Number(src.amount)*Number(a.percent)/100)*100)/100;const utr=(document.getElementById(`rb_utr_${sourceKey}_${uid}`)?.value||'').trim();if(!utr)return alert('Enter the UTR / bank reference.');
-   const duplicate=Object.values(b.payouts||{}).some(x=>x.uid===uid&&x.sourceKey===sourceKey);if(duplicate)return alert('This student refund is already recorded in this book.');
-   const rec={uid,name:a.name,email:a.email||'',amount,utr,sourceKey,sourceName:src.name,status:'READY_TO_POST',createdAt:Date.now(),createdBy:window.auth.currentUser.uid};
-   try{await push(projectAwareRef(`${root()}/${b.key}/payouts`),rec);await loadBooks();await renderBooks(b.key);}catch(e){alert('Could not record payout: '+(e.message||e));}
- };
- window.mrpspBookRefundBatch=async function(sourceKey){
-   const b=getBook();if(!writable(b))return alert('This refund book is closed or not selected.');const src=b.sources?.[sourceKey];if(!src)return alert('Refund source not found.');
-   const due=(src.allocation||[]).filter(a=>Number(a.percent)>0);const missing=[];const prepared=[];
-   due.forEach(a=>{const qr=window.mrpspPaymentCache.qr?.[a.uid],utr=(document.getElementById(`rb_batch_utr_${sourceKey}_${a.uid}`)?.value||document.getElementById(`rb_utr_${sourceKey}_${a.uid}`)?.value||'').trim();const already=Object.values(b.payouts||{}).some(x=>x.uid===a.uid&&x.sourceKey===sourceKey);if(already)return;if(!qr?.dataUrl||!utr)missing.push(a.name+(!qr?.dataUrl?' (QR missing)':' (UTR missing)'));else prepared.push({uid:a.uid,name:a.name,email:a.email||'',amount:Math.round((Number(src.amount)*Number(a.percent)/100)*100)/100,utr,sourceKey,sourceName:src.name,status:'READY_TO_POST',createdAt:Date.now(),createdBy:window.auth.currentUser.uid});});
-   if(missing.length)return alert('Batch not processed. Complete every eligible student first:\n'+missing.join('\n'));
-   if(!prepared.length)return alert('No remaining student refunds to add.');
-   if(!confirm(`Add ${prepared.length} student refunds totalling ${cash(prepared.reduce((s,x)=>s+x.amount,0))} to this open book? These are posted to the master balance sheet only when the book is closed.`))return;
-   try{for(const r of prepared)await push(projectAwareRef(`${root()}/${b.key}/payouts`),r);await loadBooks();await renderBooks(b.key);alert('Batch refund entries added to the open book. Close the book after review to post them to the master balance sheet.');}catch(e){alert('Batch could not be completed: '+(e.message||e));}
- };
- window.mrpspCloseRefundBook=async function(key){
-   if(!isBookAdmin())return alert('Administrator access required.');const b=books[key];if(!isBookAdmin()||!b||b.status==='CLOSED'||b.closedAt)return alert('This book is already closed.');
-   const payouts=Object.entries(b.payouts||{}).map(([k,x])=>({key:k,...x}));const sources=Object.entries(b.sources||{}).map(([k,x])=>({key:k,...x}));
-   const totalIn=sources.reduce((s,x)=>s+(Number(x.amount)||0),0),totalOut=payouts.reduce((s,x)=>s+(Number(x.amount)||0),0);
-   if(!confirm(`Close “${b.title}” permanently?\nSources: ${cash(totalIn)}\nStudent payouts: ${cash(totalOut)}\n\nClosing posts source credits and refund debits to the master balance sheet, creates student refund confirmations, and permanently locks every subtab and record. Even Admin cannot edit or reopen it.`))return;
-   try{
-     await update(projectAwareRef(`${root()}/${key}`),{status:'CLOSING',closingStartedAt:Date.now(),closingStartedBy:window.auth.currentUser.uid});
-     for(const src of sources){if(src.financeEntryKey)continue;const f=await push(projectAwareRef('finance'),{type:'CREDIT',amount:Number(src.amount),desc:`Refund Book ${b.title} — ${src.name}`,mode:'Refund book source',status:'Approved',by:window.auth.currentUser.email||'Admin',timestamp:Date.now(),source:'REFUND_BOOK_SOURCE',refundBookKey:key,refundSourceKey:src.key});await update(projectAwareRef(`${root()}/${key}/sources/${src.key}`),{financeEntryKey:f.key,postedAt:Date.now()});src.financeEntryKey=f.key;}
-     for(const p of payouts){if(p.financeEntryKey&&p.refundRecordKey)continue;let financeKey=p.financeEntryKey;if(!financeKey){const f=await push(projectAwareRef('finance'),{type:'DEBIT',amount:Number(p.amount),desc:`Student refund — ${p.name} — ${p.sourceName} — ${b.title}`,mode:`UPI refund UTR ${p.utr}`,status:'Approved',by:window.auth.currentUser.email||'Admin',timestamp:Date.now(),source:'STUDENT_REFUND_PAYOUT',refundBookKey:key,studentUid:p.uid});financeKey=f.key;await update(projectAwareRef(`${root()}/${key}/payouts/${p.key}`),{financeEntryKey:financeKey});p.financeEntryKey=financeKey;}let refundKey=p.refundRecordKey;if(!refundKey){const refund=await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`),{studentUid:p.uid,studentName:p.name,studentEmail:p.email,amount:Number(p.amount),utr:p.utr,sourceName:`${p.sourceName} (${b.title})`,status:'AWAITING_STUDENT_CONFIRMATION',sentAt:Date.now(),ackDeadline:Date.now()+MRPSP_REFUND_ACK_MS,financeEntryKey:financeKey,refundBookKey:key,recordedBy:window.auth.currentUser.uid});refundKey=refund.key;}await update(projectAwareRef(`${root()}/${key}/payouts/${p.key}`),{status:'POSTED',financeEntryKey:financeKey,refundRecordKey:refundKey,postedAt:Date.now()});}
-     await update(projectAwareRef(`${root()}/${key}`),{status:'CLOSED',closedAt:Date.now(),closedBy:window.auth.currentUser.uid,closingSummary:{sourceTotal:totalIn,payoutTotal:totalOut,net:totalIn-totalOut,payoutCount:payouts.length,sourceCount:sources.length}});
-     await loadBooks();await window.mrpspLoadMemberPaymentDashboard('refund');alert('Refund book closed permanently. Master balance sheet updated and student refund confirmations created.');
-   }catch(e){alert('Book closing stopped because an entry could not be posted: '+(e.message||e)+'. Check the master balance sheet before retrying to avoid duplicate postings.');}
- };
- async function renderBooks(preselect){
-   const host=document.getElementById('mrpspRefundBookWorkspace');if(!host)return;
-   const all=current();
-   if(preselect)activeBookKey=preselect;
-   if(!books[activeBookKey])activeBookKey='';
-   const bookCards=all.map(b=>{
-     const closed=b.status==='CLOSED'||!!b.closedAt;
-     const status=closed?'CLOSED':b.status==='CLOSING'?'CLOSING · LOCKED':'OPEN · EDITABLE';
-     const count=Object.keys(b.sources||{}).length;
-     return `<button type="button" class="pay-panel" style="display:block;width:100%;text-align:left;margin:8px 0;padding:14px;cursor:pointer;border:1px solid #dbe3ee;background:${b.key===activeBookKey?'#eff6ff':'#fff'}" onclick="window.mrpspSelectRefundBookByKey('${esc(b.key)}')"><div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap"><b>${esc(b.title||'Untitled refund book')}</b><span class="pay-chip ${closed?'ok':'warn'}">${status}</span></div><small class="pay-muted">Created ${window.mrpspDate(b.createdAt)} · ${count} refund source(s) · ${Object.keys(b.payouts||{}).length} payout(s)</small></button>`;
-   }).join('');
-   const shelf=`<section class="pay-panel" style="margin:14px 0;padding:16px"><h4 style="margin-top:0">All Refund Books</h4><p class="pay-muted">Every open and closed book is listed here. Select a book to view its refund estimates and records. Closed books are permanently read-only.</p>${bookCards||'<p class="pay-muted">No refund books created yet.</p>'}</section>`;
-   const b=books[activeBookKey];
-   if(!b){host.innerHTML=shelf+'<div class="pay-panel"><b>Select a refund book</b><p class="pay-muted">Create a new book above or select an existing open or closed book from the list.</p></div>';return;}
-   const open=writable(b),sources=Object.entries(b.sources||{}),payouts=Object.entries(b.payouts||{});
-   const sourceOptions=sources.map(([k,x])=>`<option value="${esc(k)}">${esc(x.name)} · ${cash(x.amount)}</option>`).join('');
-   const firstSource=sources[0]?.[0]||'';
-   let individualOptions='',batchRows='';
-   if(firstSource){
-     const src=b.sources[firstSource];
-     individualOptions=(src.allocation||[]).filter(a=>Number(a.percent)>0).map(a=>`<option value="${esc(a.uid)}">${esc(a.name)} · Estimated ${cash(Number(src.amount)*Number(a.percent)/100)}</option>`).join('');
-   }
-   const sourceSelector=sources.length?`<label for="mrpspBookActiveSource">Refund source</label><select id="mrpspBookActiveSource" onchange="window.mrpspRenderBookRefundPanels()">${sourceOptions}</select>`:'<p class="pay-muted">Add a refund source to calculate student refund estimates.</p>';
-   const selectedSource=firstSource?b.sources[firstSource]:null;
-   if(selectedSource){
-     const alloc=(selectedSource.allocation||[]).filter(a=>Number(a.percent)>0);
-     batchRows=alloc.map(a=>{
-       const amount=Math.round(Number(selectedSource.amount)*Number(a.percent)/100*100)/100;
-       const prior=payouts.find(([,p])=>p.uid===a.uid&&p.sourceKey===firstSource);
-       const qr=window.mrpspPaymentCache.qr?.[a.uid];
-       const qrHtml=qr?.dataUrl?`<img src="${qr.dataUrl}" alt="${esc(a.name)} refund QR" style="width:90px;height:90px;object-fit:contain;background:#fff;border:1px solid #dbe3ee;border-radius:8px;padding:4px">`:'<span class="pay-chip warn">QR not uploaded</span>';
-       const status=prior?`<span class="pay-chip ok">${esc(prior[1].status||'RECORDED')}</span><br>UTR: ${esc(prior[1].utr||'—')}`:open?`<input id="rb_batch_utr_${firstSource}_${a.uid}" placeholder="Enter UTR / bank reference" ${qr?.dataUrl?'':'disabled'} style="min-width:170px">`:'<span class="pay-muted">Not recorded</span>';
-       return `<tr><td>${esc(a.name)}</td><td>${Number(a.percent).toFixed(3)}%</td><td><b>${cash(amount)}</b></td><td>${qrHtml}</td><td>${status}</td></tr>`;
-     }).join('');
-   }
-   const snapRows=(b.snapshot?.dues||[]).map(x=>`<tr><td>${esc(x.name)}</td><td>${cash(x.due)}</td><td>${cash(x.paid)}</td><td>${cash(x.balance)}</td></tr>`).join('');
-   const summary=`<div class="pay-grid" style="margin:12px 0"><div class="pay-card"><small>Total sources</small><h3>${cash(sources.reduce((n,[,x])=>n+(Number(x.amount)||0),0))}</h3></div><div class="pay-card"><small>Estimated student refunds</small><h3>${cash(sources.reduce((n,[,x])=>n+(Number(x.amount)||0),0))}</h3></div><div class="pay-card"><small>Recorded payouts</small><h3>${cash(payouts.reduce((n,[,x])=>n+(Number(x.amount)||0),0))}</h3></div></div>`;
-   const sourceForm=open?`<section class="pay-panel" style="margin:14px 0;padding:14px"><h4>Add Refund Source</h4><p class="pay-muted">Enter the money received for refund. The system calculates each student's estimated share in proportion to cumulative Admin-verified payments.</p><div class="pay-grid"><div><label for="mrpspBookSourceName">Source name</label><input id="mrpspBookSourceName" placeholder="e.g. Refund received from vendor"></div><div><label for="mrpspBookSourceAmount">Amount (₹)</label><input id="mrpspBookSourceAmount" type="number" min="0.01" step="0.01" placeholder="0.00"></div><div style="grid-column:1/-1"><label for="mrpspBookSourceReason">Reason / remarks</label><textarea id="mrpspBookSourceReason" rows="2" placeholder="Enter source details"></textarea></div></div><button type="button" class="success" onclick="window.mrpspAddBookRefundSource()">ADD SOURCE & CALCULATE ESTIMATED REFUNDS</button></section>`:'';
-   const individualPanel=`<div id="mrpspRefundBookIndividual" ${window.__mrpspRefundBookSubtab==='batch'?'class="hidden"':''}><section class="pay-panel" style="padding:14px"><h4>Individual Refund</h4>${sourceSelector}${sources.length?`<label for="mrpspBookIndividualStudent" style="margin-top:12px">Select student</label><select id="mrpspBookIndividualStudent" onchange="window.mrpspRenderIndividualEstimate()"><option value="">Choose a student</option>${individualOptions}</select><div id="mrpspBookIndividualEstimate" style="margin-top:12px"><p class="pay-muted">Select a student to view the estimated refund, QR and payout details.</p></div>`:''}</section></div>`;
-   const batchPanel=`<div id="mrpspRefundBookBatch" ${window.__mrpspRefundBookSubtab==='batch'?'':'class="hidden"'}><section class="pay-panel" style="padding:14px"><h4>Batch Refund</h4><p class="pay-muted">All students with a positive verified-payment share are listed below. Enter each UTR and process the eligible students together.</p>${sources.length?`<label for="mrpspBookBatchSource">Refund source</label><select id="mrpspBookBatchSource" onchange="window.mrpspRenderBatchEstimate()">${sourceOptions}</select><div id="mrpspBookBatchRows">${batchRows?`<div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Share</th><th>Estimated refund</th><th>QR</th><th>UTR / status</th></tr></thead><tbody>${batchRows}</tbody></table></div>`:''}</div>${open?`<button type="button" class="info" style="margin-top:12px" onclick="window.mrpspBookRefundBatch(document.getElementById('mrpspBookBatchSource').value)">PROCESS BATCH REFUND</button>`:''}`:'<p class="pay-muted">Add a refund source first.</p>'}</section></div>`;
-   host.innerHTML=shelf+`<section class="pay-panel" style="margin-top:14px;padding:16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><h4 style="margin:0">${esc(b.title)}</h4><small class="pay-muted">Created ${window.mrpspDate(b.createdAt)}</small></div><span class="pay-chip ${open?'warn':'ok'}">${open?'OPEN · EDITABLE':b.status==='CLOSING'?'CLOSING · LOCKED':'CLOSED · PERMANENTLY LOCKED'}</span></div>${summary}${sourceForm}<div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0"><button type="button" class="info" onclick="window.mrpspSetRefundBookSubtab('individual')">INDIVIDUAL REFUND</button><button type="button" class="info" onclick="window.mrpspSetRefundBookSubtab('batch')">BATCH REFUND</button></div>${individualPanel}${batchPanel}<h4 style="margin-top:20px">Book balance sheet & dues snapshot</h4><div class="pay-grid"><div>Credits: <b>${cash(b.snapshot?.masterBalance?.totalCredit)}</b></div><div>Debits: <b>${cash(b.snapshot?.masterBalance?.totalDebit)}</b></div><div>Balance: <b>${cash(b.snapshot?.masterBalance?.balance)}</b></div><div>Student dues: <b>${cash(b.snapshot?.totalDues)}</b></div></div><details style="margin-top:10px"><summary>View dues & pay all snapshot</summary><div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Due</th><th>Paid</th><th>Balance</th></tr></thead><tbody>${snapRows||'<tr><td colspan="4">No dues snapshot available.</td></tr>'}</tbody></table></div></details>${open?`<div style="margin-top:18px"><button type="button" class="success" onclick="window.mrpspCloseRefundBook('${esc(b.key)}')">REVIEW & CLOSE BOOK PERMANENTLY</button></div>`:`<p style="margin-top:18px;color:#166534;font-weight:700">Closed ${window.mrpspDate(b.closedAt)} by ${esc(b.closedBy||'Admin')}. This book is permanently read-only, including for Admin.</p><p>Closing summary: sources ${cash(b.closingSummary?.sourceTotal)} · payouts ${cash(b.closingSummary?.payoutTotal)} · ${Number(b.closingSummary?.payoutCount)||0} student payouts posted.</p>`}</section>`;
-   window.mrpspRenderIndividualEstimate();window.mrpspRenderBatchEstimate();
- }
- window.mrpspSelectRefundBookByKey=function(key){activeBookKey=key;renderBooks(key);};
- window.mrpspRenderBookRefundPanels=function(){const b=getBook();if(!b)return;const sourceKey=document.getElementById('mrpspBookActiveSource')?.value||Object.keys(b.sources||{})[0];const src=b.sources?.[sourceKey];const sel=document.getElementById('mrpspBookIndividualStudent');if(sel&&src){sel.innerHTML='<option value="">Choose a student</option>'+(src.allocation||[]).filter(a=>Number(a.percent)>0).map(a=>`<option value="${esc(a.uid)}">${esc(a.name)} · Estimated ${cash(Number(src.amount)*Number(a.percent)/100)}</option>`).join('');}window.mrpspRenderIndividualEstimate();};
- window.mrpspRenderIndividualEstimate=function(){
-   const host=document.getElementById('mrpspBookIndividualEstimate');if(!host)return;const b=getBook();const sourceKey=document.getElementById('mrpspBookActiveSource')?.value||Object.keys(b?.sources||{})[0];const src=b?.sources?.[sourceKey];const uid=document.getElementById('mrpspBookIndividualStudent')?.value;if(!src||!uid){host.innerHTML='<p class="pay-muted">Select a student to view the estimated refund, QR and payout details.</p>';return;}
-   const a=(src.allocation||[]).find(x=>x.uid===uid);if(!a)return;const amount=Math.round(Number(src.amount)*Number(a.percent)/100*100)/100;const prior=Object.entries(b.payouts||{}).find(([,p])=>p.uid===uid&&p.sourceKey===sourceKey);const qr=window.mrpspPaymentCache.qr?.[uid];const qrHtml=qr?.dataUrl?`<img src="${qr.dataUrl}" alt="${esc(a.name)} refund QR" style="width:170px;height:170px;object-fit:contain;border:1px solid #dbe3ee;border-radius:10px;padding:6px;background:white">`:'<span class="pay-chip warn">Student QR not uploaded</span>';
-   host.innerHTML=`<div class="pay-grid"><div><small class="pay-muted">Estimated refund</small><h2 style="margin:6px 0">${cash(amount)}</h2><p>${Number(a.percent).toFixed(3)}% of ${cash(src.amount)}</p></div><div>${qrHtml}</div></div>${prior?`<p class="pay-chip ok">${esc(prior[1].status||'RECORDED')} · UTR ${esc(prior[1].utr||'—')}</p>`:writable(b)?`<label for="rb_utr_${sourceKey}_${uid}">UTR / bank reference</label><input id="rb_utr_${sourceKey}_${uid}" placeholder="Enter UTR / bank reference" ${qr?.dataUrl?'':'disabled'}><button type="button" class="success" style="margin-top:8px" ${qr?.dataUrl?'':'disabled'} onclick="window.mrpspBookRefundOne('${esc(uid)}','${esc(sourceKey)}')">RECORD INDIVIDUAL REFUND</button>`:'<p class="pay-muted">This closed book is read-only.</p>'}`;
- };
- window.mrpspRenderBatchEstimate=function(){
-   const host=document.getElementById('mrpspBookBatchRows');if(!host)return;const b=getBook();const sourceKey=document.getElementById('mrpspBookBatchSource')?.value||Object.keys(b?.sources||{})[0];const src=b?.sources?.[sourceKey];if(!src){host.innerHTML='<p class="pay-muted">Add a refund source first.</p>';return;}
-   const rows=(src.allocation||[]).filter(a=>Number(a.percent)>0).map(a=>{const amount=Math.round(Number(src.amount)*Number(a.percent)/100*100)/100;const prior=Object.entries(b.payouts||{}).find(([,p])=>p.uid===a.uid&&p.sourceKey===sourceKey);const qr=window.mrpspPaymentCache.qr?.[a.uid];const qrHtml=qr?.dataUrl?`<img src="${qr.dataUrl}" alt="${esc(a.name)} refund QR" style="width:86px;height:86px;object-fit:contain;border:1px solid #dbe3ee;border-radius:8px;padding:4px;background:white">`:'<span class="pay-chip warn">QR not uploaded</span>';const action=prior?`<span class="pay-chip ok">${esc(prior[1].status||'RECORDED')}</span><br>UTR: ${esc(prior[1].utr||'—')}`:writable(b)?`<input id="rb_batch_utr_${sourceKey}_${a.uid}" placeholder="Enter UTR / bank reference" ${qr?.dataUrl?'':'disabled'}>`:'<span class="pay-muted">Read-only</span>';return `<tr><td>${esc(a.name)}</td><td>${Number(a.percent).toFixed(3)}%</td><td><b>${cash(amount)}</b></td><td>${qrHtml}</td><td>${action}</td></tr>`;}).join('');host.innerHTML=`<div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Verified share</th><th>Estimated refund</th><th>Student QR</th><th>UTR / status</th></tr></thead><tbody>${rows||'<tr><td colspan="5">No students have a positive verified-payment share.</td></tr>'}</tbody></table></div>`;
- };
- window.mrpspSetRefundBookSubtab=function(which){window.__mrpspRefundBookSubtab=which;document.getElementById('mrpspRefundBookIndividual')?.classList.toggle('hidden',which!=='individual');document.getElementById('mrpspRefundBookBatch')?.classList.toggle('hidden',which!=='batch');};
- window.mrpspSelectRefundBook=()=>renderBooks(selected());
- const oldRender=window.mrpspRenderRefunds;
- window.mrpspRenderRefunds=function(){
-   const adminHost=document.getElementById('mrpspRefundAdminQueue');if(adminHost)adminHost.innerHTML='';
-   const legacyEditor=document.getElementById('mrpspRefundAllocationEditor');if(legacyEditor)legacyEditor.innerHTML='';
-   const studentHost=document.getElementById('mrpspRefundStudentList');if(studentHost){studentHost.innerHTML='';studentHost.classList.add('hidden');}
-   const oldQr=document.getElementById('mrpspRefundStudentQrPanel');if(oldQr){oldQr.innerHTML='';oldQr.classList.add('hidden');}
-   renderBooks();
- };
- const oldLoad=window.mrpspLoadMemberPaymentDashboard;
- window.mrpspLoadMemberPaymentDashboard=async function(mode){await oldLoad(mode);await loadBooks();if(mode==='refund')await renderBooks();};
- document.addEventListener('DOMContentLoaded',()=>{
-   const admin=document.getElementById('mrpspRefundAdminPanel');
-   if(admin){
-     const legacyGrid=document.getElementById('mrpspRefundSourceName')?.closest('.pay-grid');if(legacyGrid)legacyGrid.remove();
-     Array.from(admin.querySelectorAll('h4')).filter(x=>/Add Refund Source|Refund Sources & Disbursement Queue/i.test(x.textContent)).forEach(x=>x.remove());
-     Array.from(admin.querySelectorAll('button')).filter(x=>(x.getAttribute('onclick')||'').includes('mrpspCreateRefundPool')).forEach(x=>x.remove());
-   }
-   const legacyEditor=document.getElementById('mrpspRefundAllocationEditor');if(legacyEditor)legacyEditor.remove();
-   const legacyQueue=document.getElementById('mrpspRefundAdminQueue');if(legacyQueue)legacyQueue.remove();
-   const legacyStudent=document.getElementById('mrpspRefundStudentList');if(legacyStudent)legacyStudent.remove();
-   if(admin&&!document.getElementById('mrpspRefundBookWorkspace')){const wrap=document.createElement('div');wrap.id='mrpspRefundBookWorkspace';wrap.style.marginTop='20px';admin.appendChild(wrap);}
-   if(admin&&!document.getElementById('mrpspRefundBookCreate')){const create=document.createElement('div');create.id='mrpspRefundBookCreate';create.className='pay-panel';create.style.marginTop='16px';create.innerHTML='<h4>Create Refund Book</h4><div class="pay-grid"><div><label for="mrpspRefundBookTitle">Refund book name</label><input id="mrpspRefundBookTitle" placeholder="e.g. November 2026 Refund Book"></div></div><button class="info" onclick="window.mrpspCreateRefundBook()">+ CREATE NEW REFUND BOOK</button>';admin.insertBefore(create,admin.firstChild);}
-   const workspace=document.getElementById('mrpspRefundBookWorkspace');
-   const qrPanel=document.getElementById('mrpspRefundStudentQrPanel');
-   if(workspace&&qrPanel){const moveQrInsideBook=()=>{if(workspace.childElementCount>0&&!qrPanel.isConnected===false){if(qrPanel.parentElement!==workspace)workspace.prepend(qrPanel);if(!window.isAdmin)qrPanel.classList.remove('hidden');}};new MutationObserver(moveQrInsideBook).observe(workspace,{childList:true,subtree:false});moveQrInsideBook();}
- });
+  const fb=()=>window.mrpspRefundFirebase;
+  const call=(name,...args)=>{const x=fb();if(!x||typeof x[name]!=="function")throw new Error("Firebase helper "+name+" is not ready. Refresh the page.");return x[name](...args);};
+  const push=(...a)=>call("push",...a);
+  const ref=(...a)=>call("projectAwareRef",...a);
+  const cash=n=>window.mrpspMoney(Number(n)||0);
+  const safe=s=>window.mrpspSafe(String(s??""));
+  const isAdminUser=()=>!!(window.mrpspIsAdmin?.() || window.auth?.currentUser && ["soham@metro.project","heerok@metro.project","sujoy@metro.project","hodee@metro.project","hodcseaiml@metro.project","hodeee@metro.project","arijita@metro.project"].includes(String(window.auth.currentUser.email||"").toLowerCase()));
+  const todayKey=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;};
+  const financeRows=()=>Object.entries(window.mrpspPaymentCache?.finance||{}).map(([key,v])=>({key,...v}));
+  let selectedUid="";
+  let paymentStep=false;
+
+  function directRefundsToday(uid){
+    const day=todayKey();
+    return financeRows().filter(x=>x.source==="STUDENT_REFUND_DIRECT" && x.studentUid===uid && (x.refundDateKey===day || todayKeyFromTimestamp(x.timestamp)===day));
+  }
+  function todayKeyFromTimestamp(ts){
+    if(!Number(ts))return "";
+    const d=new Date(Number(ts));
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  }
+  function selectedStudent(){
+    const model=window.mrpspBuildDues?.();
+    return model?.rows?.find(x=>x.uid===selectedUid)||null;
+  }
+  function renderDetails(){
+    const host=document.getElementById("mrpspDirectRefundDetails");
+    if(!host)return;
+    const s=selectedStudent();
+    paymentStep=false;
+    if(!s){host.innerHTML='<p class="pay-muted">Select a student to view their payment details and QR.</p>';return;}
+    const history=directRefundsToday(s.uid);
+    const qr=window.mrpspPaymentCache?.qr?.[s.uid];
+    const qrHtml=qr?.dataUrl
+      ? `<img src="${qr.dataUrl}" alt="${safe(window.mrpspName(s))} payment QR" style="width:190px;height:190px;object-fit:contain;border:1px solid #dbe3ee;border-radius:10px;padding:8px;background:#fff">`
+      : '<span class="pay-chip warn">Student has not uploaded a QR</span>';
+    const todayPaid=history.reduce((sum,x)=>sum+(Number(x.amount)||0),0);
+    const paidTotal=Number(s.paid)||0, due=Number(s.due)||0, outstanding=Number(s.balance)||0;
+    host.innerHTML=`
+      <div class="pay-grid" style="margin:14px 0">
+        <div class="pay-panel" style="padding:14px"><small class="pay-muted">Total verified payment</small><h3 style="margin:6px 0">${cash(paidTotal)}</h3></div>
+        <div class="pay-panel" style="padding:14px"><small class="pay-muted">Total due</small><h3 style="margin:6px 0">${cash(due)}</h3></div>
+        <div class="pay-panel" style="padding:14px"><small class="pay-muted">Outstanding balance</small><h3 style="margin:6px 0">${cash(outstanding)}</h3></div>
+      </div>
+      <div class="pay-grid" style="align-items:start">
+        <div>
+          <label for="mrpspDirectRefundAmount">Actual amount sent today (₹)</label>
+          <input id="mrpspDirectRefundAmount" type="number" min="0.01" step="0.01" placeholder="Enter amount you actually sent" ${history.length?'disabled':''}>
+          ${history.length?`<p class="pay-chip ok">Today's refund already recorded · ${cash(todayPaid)}</p><p class="pay-muted">Only one refund payment per student per calendar day is allowed.</p>`:`<button type="button" class="success" style="margin-top:10px" onclick="window.mrpspDirectRefundPaymentDone()">PAYMENT DONE</button>`}
+          <div id="mrpspDirectRefundUtrArea" style="margin-top:12px"></div>
+        </div>
+        <div><small class="pay-muted" style="display:block;margin-bottom:7px">Student payment QR</small>${qrHtml}</div>
+      </div>
+      ${history.length?`<div class="pay-panel" style="padding:12px;margin-top:12px"><b>Today's recorded payment</b><p style="margin:6px 0">Amount: ${cash(todayPaid)}</p><p style="margin:6px 0">UTR: ${safe(history[0].utr||"—")}</p></div>`:""}
+    `;
+  }
+
+  function render(){
+    const admin=document.getElementById("mrpspRefundAdminPanel");
+    if(!admin)return;
+    if(!isAdminUser()){
+      admin.innerHTML='<p class="pay-muted">Administrator access required to record student refunds.</p>';
+      return;
+    }
+    admin.innerHTML=`
+      <section class="pay-panel" style="padding:16px;margin-top:14px">
+        <h4 style="margin-top:0">Record Student Refund</h4>
+        <p class="pay-muted">Select a student, check their verified payments, dues and QR, then record only the amount actually sent. One refund payment per student per day is allowed.</p>
+        <label for="mrpspDirectRefundStudent">Select student</label>
+        <select id="mrpspDirectRefundStudent" style="width:100%" onchange="window.mrpspDirectRefundStudentChanged(this.value)">
+          <option value="">Choose a student</option>
+          ${(window.mrpspBuildDues?.()?.rows||[]).map(s=>`<option value="${safe(s.uid)}">${safe(window.mrpspName(s))}</option>`).join("")}
+        </select>
+        <div id="mrpspDirectRefundDetails" style="margin-top:14px"><p class="pay-muted">Select a student to view their payment details and QR.</p></div>
+      </section>
+      <section class="pay-panel" style="padding:14px;margin-top:14px">
+        <h4 style="margin-top:0">Today's Refund Records</h4>
+        <div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Amount sent</th><th>UTR</th><th>Date</th></tr></thead><tbody>
+        ${financeRows().filter(x=>x.source==="STUDENT_REFUND_DIRECT").sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).map(x=>`<tr><td>${safe(x.studentName||"Student")}</td><td>${cash(x.amount)}</td><td>${safe(x.utr||"—")}</td><td>${safe(window.mrpspDate(x.timestamp))}</td></tr>`).join("")||'<tr><td colspan="4">No direct refund payments recorded yet.</td></tr>'}
+        </tbody></table></div>
+      </section>`;
+  }
+
+  window.mrpspDirectRefundStudentChanged=function(uid){selectedUid=uid||"";renderDetails();};
+  window.mrpspDirectRefundPaymentDone=function(){
+    if(!isAdminUser())return alert("Administrator access required.");
+    const s=selectedStudent();if(!s)return alert("Select a student first.");
+    if(directRefundsToday(s.uid).length)return alert("This student has already received a refund payment today. Only one payment per day is allowed.");
+    const amount=Number(document.getElementById("mrpspDirectRefundAmount")?.value);
+    if(!Number.isFinite(amount)||amount<=0)return alert("Enter the actual amount sent.");
+    const area=document.getElementById("mrpspDirectRefundUtrArea");if(!area)return;
+    paymentStep=true;
+    area.innerHTML=`<label for="mrpspDirectRefundUTR">UTR / transaction reference</label><input id="mrpspDirectRefundUTR" placeholder="Enter UTR after payment is completed"><button type="button" class="info" style="margin-top:9px" onclick="window.mrpspSaveDirectRefund()">SAVE PAYMENT & UPDATE MASTER BALANCE SHEET</button>`;
+  };
+  window.mrpspSaveDirectRefund=async function(){
+    if(!isAdminUser())return alert("Administrator access required.");
+    const s=selectedStudent();if(!s)return alert("Select a student first.");
+    if(!paymentStep)return alert("Click PAYMENT DONE first.");
+    if(directRefundsToday(s.uid).length)return alert("This student already has a refund recorded today.");
+    const amount=Number(document.getElementById("mrpspDirectRefundAmount")?.value);
+    const utr=(document.getElementById("mrpspDirectRefundUTR")?.value||"").trim();
+    if(!Number.isFinite(amount)||amount<=0)return alert("Enter a valid amount.");
+    if(!utr)return alert("Enter the UTR / transaction reference.");
+    const now=Date.now(),day=todayKey();
+    const record={
+      type:"DEBIT",amount,desc:`Student refund paid — ${window.mrpspName(s)}`,
+      mode:`Refund payment · UTR ${utr}`,status:"Approved",
+      by:window.auth.currentUser.email||"Admin",timestamp:now,
+      source:"STUDENT_REFUND_DIRECT",studentUid:s.uid,
+      studentName:window.mrpspName(s),utr,refundDateKey:day,
+      refundRecordedBy:window.auth.currentUser.uid
+    };
+    try{
+      const saved=await push(ref("finance"),record);
+      if(window.mrpspPaymentCache?.finance)window.mrpspPaymentCache.finance[saved.key]=record;
+      paymentStep=false;
+      alert(`Refund payment of ${cash(amount)} recorded for ${window.mrpspName(s)}. A DEBIT has been added to the Master Balance Sheet.`);
+      await window.mrpspLoadMemberPaymentDashboard("refund");
+    }catch(e){console.error("Direct student refund failed",e);alert("Could not record refund payment: "+(e.message||e));}
+  };
+
+  window.mrpspRenderRefunds=render;
+  const oldLoad=window.mrpspLoadMemberPaymentDashboard;
+  window.mrpspLoadMemberPaymentDashboard=async function(mode){
+    await oldLoad(mode);
+    if(mode==="refund")render();
+  };
+  document.addEventListener("DOMContentLoaded",()=>{
+    const admin=document.getElementById("mrpspRefundAdminPanel");
+    if(admin)render();
+    ["mrpspRefundAdminQueue","mrpspRefundStudentList","mrpspRefundAllocationEditor","mrpspRefundBookWorkspace","mrpspRefundBookCreate"].forEach(id=>document.getElementById(id)?.remove());
+  });
 })();
 </script>
 </body>
