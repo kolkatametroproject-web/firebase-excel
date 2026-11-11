@@ -18438,7 +18438,7 @@ window.mrpspRenderSelectedDues=function(){
   const refunds=(model.directRefunds||[]).filter(r=>r.studentUid===uid).sort((a,b)=>(a.timestamp||0)-(b.timestamp||0));
   const grossPaid=Number(student.grossPaid)||0,refundPaid=Number(student.refundPaid)||0;
   const signedBalance=Number(student.balance||0);
-  const receiptData={studentName:mrpspName(student),email:mrpspUserEmail(student),uid:student.uid,due:student.due,paid:student.paid,grossPaid,refundPaid,balance:student.balance,carryForward,outstanding,exempt:student.exempt,assetTotal:model.assetTotal,exemptionTotal:model.exemptionTotal,perStudent:model.perStudent,payments,refunds};
+  const receiptData={studentName:mrpspName(student),email:mrpspUserEmail(student),uid:student.uid,due:student.due,paid:student.paid,grossPaid,refundPaid,balance:signedBalance,exempt:student.exempt,assetTotal:model.assetTotal,exemptionTotal:model.exemptionTotal,perStudent:model.perStudent,payments,refunds};
   window.mrpspCurrentReceipt=receiptData;
   const statementRows=[
     ...payments.map(p=>({date:p.verifiedAt||p.createdAt,type:"PAYMENT",detail:p.purpose||"Verified student payment",amount:Number(p.amount)||0,effect:"Added to student account",receipt:`<button type="button" class="success" style="font-size:11px;padding:7px 9px" onclick="window.mrpspDownloadPaidReceipt('${p.key}')">PAID RECEIPT</button>`})),
@@ -18448,7 +18448,7 @@ window.mrpspRenderSelectedDues=function(){
     <div class="pay-stat"><span class="pay-muted">Calculated dues</span><b>${mrpspMoney(student.due)}</b></div>
     <div class="pay-stat"><span class="pay-muted">Verified payments</span><b>${mrpspMoney(grossPaid)}</b></div>
     <div class="pay-stat"><span class="pay-muted">Refund adjustment</span><b>${mrpspMoney(refundPaid)}</b></div>
-    <div class="pay-stat"><span class="pay-muted">${carryForward>0?'Carry forward':'Outstanding balance'}</span><b style="color:${outstanding>0?'#b45309':'#15803d'}">${mrpspMoney(carryForward>0?carryForward:outstanding)}</b></div>
+    <div class="pay-stat"><span class="pay-muted">Balance (negative = excess payment)</span><b style="color:${signedBalance>0?'#b45309':signedBalance<0?'#15803d':'#111827'}">${signedBalance<0?"-":""}${mrpspMoney(Math.abs(signedBalance))}</b></div>
   </div>
   <div style="display:flex;gap:9px;flex-wrap:wrap;margin:16px 0">
     <button class="success" onclick="window.mrpspDownloadStudentReceipt()"><i class="fas fa-file-pdf"></i> DOWNLOAD STATEMENT</button>
@@ -18468,16 +18468,16 @@ window.mrpspDownloadStudentReceipt=function(){
     ...(d.payments||[]).map(p=>({date:p.verifiedAt||p.createdAt,type:"PAYMENT",detail:p.purpose||"Verified student payment",amount:Number(p.amount)||0,adjustment:"Added to account"})),
     ...(d.refunds||[]).map(r=>({date:r.timestamp,type:"REFUND",detail:`UTR ${r.utr||"—"}`,amount:Number(r.amount)||0,adjustment:"Deducted from carry-forward"}))
   ].sort((a,b)=>(a.date||0)-(b.date||0)).map(x=>`<tr><td>${mrpspBillEscape(x.date?new Date(x.date).toLocaleString("en-IN"):"—")}</td><td>${x.type}</td><td>${mrpspBillEscape(x.detail)}</td><td>${mrpspBillEscape(mrpspMoney(x.amount))}</td><td>${x.adjustment}</td></tr>`).join("");
-  const carryForward=Math.max(0,-Number(d.balance||0)),outstanding=Math.max(0,Number(d.balance||0));
-  const balanceLabel=carryForward>0?"Carry forward credit":"Outstanding balance";
-  const balanceValue=carryForward>0?carryForward:outstanding;
+  const signedBalance=Number(d.balance||0);
+  const balanceLabel="Balance (negative = excess payment)";
+  const balanceValue=Math.abs(signedBalance);
   const w=window.open("","_blank","width=900,height=750");
   if(!w)return alert("Your browser blocked the print window. Allow pop-ups for this site and try again.");
   w.document.open();
   w.document.write(`<!doctype html><html><head><title>MRPSP Student Statement</title><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;color:#172033;padding:25px}h1{color:#17365d;font-size:21px}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{border:1px solid #d8dee8;padding:9px;text-align:left}.summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:20px 0}.summary div{border:1px solid #d8dee8;padding:12px}@page{size:A4;margin:14mm}</style></head><body>
   <h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1><h2>STUDENT DUES STATEMENT</h2>
   <p><b>Student:</b> ${mrpspBillEscape(d.studentName)}<br><b>Email:</b> ${mrpspBillEscape(d.email)}<br><b>Student ID:</b> ${mrpspBillEscape(d.uid)}</p>
-  <div class="summary"><div>Calculated dues<br><b>${mrpspBillEscape(mrpspMoney(d.due))}</b></div><div>Verified payments<br><b>${mrpspBillEscape(mrpspMoney(d.grossPaid||0))}</b></div><div>Refund adjustment<br><b>${mrpspBillEscape(mrpspMoney(d.refundPaid||0))}</b></div><div>${balanceLabel}<br><b>${signedBalance<0?"-":""}${mrpspBillEscape(mrpspMoney(Math.abs(balanceValue)))}</b></div></div>
+  <div class="summary"><div>Calculated dues<br><b>${mrpspBillEscape(mrpspMoney(d.due))}</b></div><div>Verified payments<br><b>${mrpspBillEscape(mrpspMoney(d.grossPaid||0))}</b></div><div>Refund adjustment<br><b>${mrpspBillEscape(mrpspMoney(d.refundPaid||0))}</b></div><div>${balanceLabel}<br><b>${signedBalance<0?"-":""}${mrpspBillEscape(mrpspMoney(balanceValue))}</b></div></div>
   <h3>Student Dues Statement</h3><table><thead><tr><th>Date</th><th>Entry</th><th>Details / UTR</th><th>Amount</th><th>Adjustment</th></tr></thead><tbody>${rows||"<tr><td colspan='5'>No entries</td></tr>"}</tbody></table>
   <p style="margin-top:24px">Refunds reduce carry-forward credit first. Remaining credit is applied to future dues.</p>
   <p style="margin-top:30px;font-size:11px;color:#64748b">Computer-generated account statement. Individual paid receipts can be printed from the Print Payment Bill tab.</p>
@@ -18504,7 +18504,7 @@ window.mrpspEmailStudentStatement=async function(){
     ],
     "", "Refunds are adjusted against carry-forward credit first. Remaining credit is applied to future dues."
   ].join("\\n");
-  const fakePayment={payerName:d.studentName,amount:d.grossPaid||0,purpose:`Dues statement | Dues ${mrpspMoney(d.due)} | Refund ${mrpspMoney(d.refundPaid||0)} | Carry forward ${mrpspMoney(carryForward)}`,createdAt:Date.now(),transactionLast4:"—"};
+  const fakePayment={payerName:d.studentName,amount:d.grossPaid||0,purpose:`Dues statement | Dues ${mrpspMoney(d.due)} | Refund ${mrpspMoney(d.refundPaid||0)} | Signed balance ${signedBalance<0?"-":""}${mrpspMoney(Math.abs(signedBalance))}`,createdAt:Date.now(),transactionLast4:"—"};
   try{await window.mrpspSendPaymentEmail(email,d.studentName,"DUES & PAYMENT STATEMENT",fakePayment,body);alert("Statement email request sent to "+email+".");}
   catch(e){alert("Could not send email: "+(e.message||e));}
 };
