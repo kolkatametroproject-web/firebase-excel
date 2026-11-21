@@ -18632,7 +18632,7 @@ window.wfDownloadData=(wid,tid,type,taskId)=>{
 // All new records are project-aware and all payment credits require Admin verification.
 // ================================================================
 const MRPSP_MEMBER_PAYMENT_PATH = "memberPayment";
-let mrpspPaymentCache = { users:{}, finance:{}, requests:{}, exemptions:{}, studentRefunds:{} };
+let mrpspPaymentCache = { users:{}, finance:{}, requests:{}, exemptions:{}, refunds:{} };
 // Expose the live cache to later classic-script event handlers.
 window.mrpspPaymentCache = mrpspPaymentCache;
 
@@ -18691,16 +18691,16 @@ window.mrpspSendPaymentEmail = async function(to,name,subject,payment,extra){
 window.mrpspLoadMemberPaymentDashboard = async function(mode){
   if(!auth.currentUser)return;
   try{
-    const [u,f,r,e,sr] = await Promise.all([
+    const [u,f,r,e,rf] = await Promise.all([
       get(projectAwareRef("users")),get(projectAwareRef("finance")),get(ref(db,"eoffice_requests")),
       get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/exemptions`)),
-      get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds`))
+      get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`))
     ]);
     mrpspPaymentCache.users=u.exists()?u.val():{};
     mrpspPaymentCache.finance=f.exists()?f.val():{};
     mrpspPaymentCache.requests=r.exists()?r.val():{};
     mrpspPaymentCache.exemptions=e.exists()?e.val():{};
-    mrpspPaymentCache.studentRefunds=sr.exists()?sr.val():{};
+    mrpspPaymentCache.refunds=rf.exists()?rf.val():{};
     mrpspRenderPaymentViews(mode);
   }catch(err){
     console.error("Member payment dashboard load failed",err);
@@ -18721,8 +18721,15 @@ function mrpspBuildDues(){
   const perStudent=liableCount>0?Math.max(0,assetTotal-exemptionTotal)/liableCount:0;
   const requests=Object.entries(mrpspPaymentCache.requests||{}).map(([key,v])=>({key,...v}));
   const approvedPayments={};
+  const syncedRefundKeys = new Set();
   finance.filter(x=>(x.source==="VERIFIED_MEMBER_PAYMENT" || x.source==="STUDENT_REFUND_DUE_SETTLEMENT") && x.status==="Approved").forEach(x=>{
     if(x.studentUid)approvedPayments[x.studentUid]=(approvedPayments[x.studentUid]||0)+(Number(x.amount)||0);
+    if(x.source==="STUDENT_REFUND_DUE_SETTLEMENT" && x.refundKey) syncedRefundKeys.add(x.refundKey);
+  });
+  Object.entries(mrpspPaymentCache.refunds||{}).forEach(([rk, r])=>{
+    if(r && r.workflowType==="STUDENT_WISE_REFUND" && r.mode==="DUE_CLEAR" && r.status==="CLOSED" && r.studentUid && !syncedRefundKeys.has(rk)){
+      approvedPayments[r.studentUid]=(approvedPayments[r.studentUid]||0)+(Number(r.amount)||0);
+    }
   });
   // Include older verified requests if the linked finance entry predates studentUid tagging.
   requests.filter(x=>x.type==="PROJECT_PAYMENT_VERIFICATION"&&(x.status==="VERIFIED"||x.verified===true)).forEach(req=>{
@@ -18986,10 +18993,16 @@ function mrpspComputeAvailableFundBalance(financeMap){
   return { totalCredit, totalDebit, available: totalCredit - totalDebit };
 }
 
+function mrpspGetStudentWiseRefunds(refundsMap){
+  return Object.entries(refundsMap || {})
+    .filter(([, r]) => r && r.workflowType === "STUDENT_WISE_REFUND")
+    .map(([key, r]) => ({ key, ...r }));
+}
+
 function mrpspComputeReservedRefunds(refundsMap, excludeKey = ""){
-  return Object.entries(refundsMap || {}).reduce((sum, [k, r]) => {
-    if (!r || k === excludeKey) return sum;
-    if (["AWAITING_STUDENT_MODE", "AWAITING_QR_UPLOAD", "AWAITING_ADMIN_UTR"].includes(r.status) && !r.deductedFromFund) {
+  return mrpspGetStudentWiseRefunds(refundsMap).reduce((sum, r) => {
+    if (r.key === excludeKey) return sum;
+    if ((["AWAITING_STUDENT_MODE", "AWAITING_QR_UPLOAD", "AWAITING_ADMIN_UTR"].includes(r.status) || r.pendingFundLedgerSync) && !r.deductedFromFund) {
       return sum + (Number(r.amount) || 0);
     }
     return sum;
@@ -18997,7 +19010,7 @@ function mrpspComputeReservedRefunds(refundsMap, excludeKey = ""){
 }
 
 window.mrpspOpenRefundQrModal = function(refundKey){
-  const r = mrpspPaymentCache.studentRefunds?.[refundKey];
+  const r = mrpspPaymentCache.refunds?.[refundKey];
   if (!r || !r.qrDataUrl) return alert("Student has not uploaded a QR code yet.");
   let modal = document.getElementById("mrpspRefundQrModal");
   if (!modal) {
@@ -19033,7 +19046,7 @@ window.mrpspAdminMarkStudentRefund = async function(){
     // Re-read live finance and open refunds to verify sufficient balance is present in Project Funds.
     const [finSnap, refSnap] = await Promise.all([
       get(projectAwareRef("finance")),
-      get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds`))
+      get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`))
     ]);
     const liveFinance = finSnap.exists() ? finSnap.val() : {};
     const liveRefunds = refSnap.exists() ? refSnap.val() : {};
@@ -19051,7 +19064,8 @@ window.mrpspAdminMarkStudentRefund = async function(){
     if (!confirm(`Mark student-wise refund of ${mrpspMoney(amount)} for ${mrpspName(student)}?\n\nThe student will be asked to choose either Due Clear (Fund Settlement) or Credit to Account. Their selection will be final.`)) return;
 
     const now = Date.now();
-    await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds`), {
+    await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`), {
+      workflowType: "STUDENT_WISE_REFUND",
       studentUid: uid,
       studentName: mrpspName(student),
       studentEmail: mrpspUserEmail(student) || student.email || "",
@@ -19081,15 +19095,15 @@ window.mrpspAdminMarkStudentRefund = async function(){
 
 window.mrpspAdminCancelStudentRefund = async function(refundKey){
   if (!isAdmin || !auth.currentUser) return alert("Administrator access required.");
-  const r = mrpspPaymentCache.studentRefunds?.[refundKey];
-  if (!r) return alert("Refund record not found.");
+  const r = mrpspPaymentCache.refunds?.[refundKey];
+  if (!r || r.workflowType !== "STUDENT_WISE_REFUND") return alert("Refund record not found.");
   if (r.status === "CLOSED" || r.deductedFromFund) return alert("A closed/deducted refund cannot be cancelled.");
   if (r.status === "CANCELLED") return alert("This refund is already cancelled.");
   const reason = prompt(`Cancel refund of ${mrpspMoney(r.amount)} for ${r.studentName}? Enter cancellation reason:`);
   if (reason === null) return;
   if (!reason.trim()) return alert("Cancellation reason is required.");
   try {
-    await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds/${refundKey}`), {
+    await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${refundKey}`), {
       status: "CANCELLED",
       cancelledAt: Date.now(),
       cancelledBy: auth.currentUser.email || auth.currentUser.uid,
@@ -19102,17 +19116,60 @@ window.mrpspAdminCancelStudentRefund = async function(refundKey){
   }
 };
 
+window.mrpspAdminSyncDueSettlementToFund = async function(refundKey){
+  if (!isAdmin || !auth.currentUser) return alert("Administrator access required.");
+  try {
+    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${refundKey}`);
+    const [refSnap, finSnap] = await Promise.all([get(refundRef), get(projectAwareRef("finance"))]);
+    if (!refSnap.exists()) return alert("Refund record not found.");
+    const r = refSnap.val();
+    if (r.deductedFromFund && r.financeEntryKey) return alert("Already deducted from Project Funds.");
+    const amount = Number(r.amount) || 0;
+    const fundInfo = mrpspComputeAvailableFundBalance(finSnap.exists() ? finSnap.val() : {});
+    if (fundInfo.available < amount) {
+      return alert(`Insufficient balance in Project Funds.\nAvailable Fund: ${mrpspMoney(fundInfo.available)}\nRefund Amount: ${mrpspMoney(amount)}`);
+    }
+    const now = Date.now();
+    const finRef = await push(projectAwareRef("finance"), {
+      type: "DEBIT",
+      amount,
+      desc: `Student Refund (Due Settlement) — ${r.studentName}${r.remarks ? " — " + r.remarks : ""}`,
+      mode: "Fund Settlement (Due Clear)",
+      status: "Approved",
+      by: auth.currentUser.email || "Admin",
+      timestamp: now,
+      source: "STUDENT_REFUND_DUE_SETTLEMENT",
+      refundKey,
+      studentUid: r.studentUid,
+      studentName: r.studentName
+    });
+    await update(refundRef, {
+      financeEntryKey: finRef.key,
+      deductedFromFund: true,
+      pendingFundLedgerSync: false,
+      fundSyncedAt: now,
+      fundSyncedBy: auth.currentUser.email || auth.currentUser.uid
+    });
+    alert(`Deducted ${mrpspMoney(amount)} from Project Funds ledger.`);
+    await window.mrpspLoadMemberPaymentDashboard("refund");
+  } catch (e) {
+    console.error("Failed to sync due settlement to fund", e);
+    alert("Could not sync deduction: " + (e?.message || e));
+  }
+};
+
 window.mrpspStudentSelectRefundMode = async function(refundKey, mode){
   if (!auth.currentUser) return alert("Please sign in first.");
   if (!["DUE_CLEAR", "CREDIT_TO_ACCOUNT"].includes(mode)) return alert("Invalid refund mode.");
   try {
-    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds/${refundKey}`);
+    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${refundKey}`);
     const [refSnap, finSnap] = await Promise.all([
       get(refundRef),
       get(projectAwareRef("finance"))
     ]);
     if (!refSnap.exists()) return alert("Refund record not found.");
     const r = refSnap.val();
+    if (r.workflowType !== "STUDENT_WISE_REFUND") return alert("Invalid refund record.");
     if (r.studentUid !== auth.currentUser.uid) return alert("This refund does not belong to your account.");
     if (r.modeLocked || r.status !== "AWAITING_STUDENT_MODE") return alert("Your payment mode selection is already finalized and cannot be changed.");
 
@@ -19131,20 +19188,29 @@ window.mrpspStudentSelectRefundMode = async function(refundKey, mode){
 
     const now = Date.now();
     if (mode === "DUE_CLEAR") {
-      // Deduct from Project Funds and adjust directly against the student's dues.
-      const finRef = await push(projectAwareRef("finance"), {
-        type: "DEBIT",
-        amount,
-        desc: `Student Refund (Due Settlement) — ${r.studentName}${r.remarks ? " — " + r.remarks : ""}`,
-        mode: "Fund Settlement (Due Clear)",
-        status: "Approved",
-        by: auth.currentUser.email || r.studentName || "Student",
-        timestamp: now,
-        source: "STUDENT_REFUND_DUE_SETTLEMENT",
-        refundKey,
-        studentUid: r.studentUid,
-        studentName: r.studentName
-      });
+      // Attempt direct deduction from Project Funds; if student DB rules restrict finance writes, mark for one-click Admin sync while immediately adjusting dues.
+      let financeEntryKey = null;
+      let deductedFromFund = false;
+      try {
+        const finRef = await push(projectAwareRef("finance"), {
+          type: "DEBIT",
+          amount,
+          desc: `Student Refund (Due Settlement) — ${r.studentName}${r.remarks ? " — " + r.remarks : ""}`,
+          mode: "Fund Settlement (Due Clear)",
+          status: "Approved",
+          by: auth.currentUser.email || r.studentName || "Student",
+          timestamp: now,
+          source: "STUDENT_REFUND_DUE_SETTLEMENT",
+          refundKey,
+          studentUid: r.studentUid,
+          studentName: r.studentName
+        });
+        financeEntryKey = finRef.key;
+        deductedFromFund = true;
+      } catch (finErr) {
+        console.warn("Student finance ledger write restricted by DB rules; flagging for Admin fund sync:", finErr?.message || finErr);
+      }
+
       try {
         await update(refundRef, {
           mode: "DUE_CLEAR",
@@ -19154,14 +19220,19 @@ window.mrpspStudentSelectRefundMode = async function(refundKey, mode){
           settledAt: now,
           closedAt: now,
           closedBy: auth.currentUser.email || auth.currentUser.uid,
-          financeEntryKey: finRef.key,
-          deductedFromFund: true
+          financeEntryKey,
+          deductedFromFund,
+          pendingFundLedgerSync: !deductedFromFund
         });
       } catch (updateErr) {
-        try { await remove(finRef); } catch (rbErr) { console.error("Rollback failed", rbErr); }
+        if (financeEntryKey) {
+          try { await remove(projectAwareRef(`finance/${financeEntryKey}`)); } catch (rbErr) { console.error("Rollback failed", rbErr); }
+        }
         throw updateErr;
       }
-      alert(`Due Clear selected (FINAL). ${mrpspMoney(amount)} has been deducted from Project Funds and adjusted with your dues. Case closed.`);
+      alert(deductedFromFund
+        ? `Due Clear selected (FINAL). ${mrpspMoney(amount)} has been deducted from Project Funds and adjusted with your dues. Case closed.`
+        : `Due Clear selected (FINAL). ${mrpspMoney(amount)} has been adjusted with your dues and the case is closed. Admin can sync the deduction to Project Funds.`);
       await window.mrpspLoadMemberPaymentDashboard("refund");
       return;
     }
@@ -19189,7 +19260,7 @@ window.mrpspStudentUploadRefundQr = async function(refundKey){
   if (file.size > 300 * 1024) return alert("QR image must be under 300 KB.");
 
   try {
-    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds/${refundKey}`);
+    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${refundKey}`);
     const snap = await get(refundRef);
     if (!snap.exists()) return alert("Refund record not found.");
     const r = snap.val();
@@ -19223,7 +19294,7 @@ window.mrpspAdminCloseCreditRefund = async function(refundKey){
   if (!utr || utr.length < 6) return alert("Enter a valid UTR / transaction reference ID (at least 6 characters).");
 
   try {
-    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds/${refundKey}`);
+    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${refundKey}`);
     const [refSnap, finSnap] = await Promise.all([
       get(refundRef),
       get(projectAwareRef("finance"))
@@ -19318,13 +19389,12 @@ function mrpspRenderRefunds(){
   const summaryHost = document.getElementById("mrpspRefundFundSummary");
   const studentSelect = document.getElementById("mrpspRefundStudentSelect");
 
-  const refunds = Object.entries(mrpspPaymentCache.studentRefunds || {})
-    .map(([key, v]) => ({ key, ...v }))
+  const refunds = mrpspGetStudentWiseRefunds(mrpspPaymentCache.refunds)
     .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
 
   const model = mrpspBuildDues();
   const fundInfo = mrpspComputeAvailableFundBalance(mrpspPaymentCache.finance);
-  const reserved = mrpspComputeReservedRefunds(mrpspPaymentCache.studentRefunds);
+  const reserved = mrpspComputeReservedRefunds(mrpspPaymentCache.refunds);
   const usable = Math.max(0, fundInfo.available - reserved);
 
   if (isAdmin) {
@@ -19366,9 +19436,12 @@ function mrpspRenderRefunds(){
               <button type="button" class="success" onclick="window.mrpspAdminCloseCreditRefund('${mrpspSafe(r.key)}')">SUBMIT UTR & CLOSE CASE</button>
               <button type="button" class="danger" style="margin-top:6px" onclick="window.mrpspAdminCancelStudentRefund('${mrpspSafe(r.key)}')">CANCEL</button>`;
           } else if (r.status === "CLOSED") {
-            actionCol = r.mode === "CREDIT_TO_ACCOUNT"
-              ? `<div><b>UTR:</b> ${mrpspSafe(r.utr || "—")}</div><small class="pay-muted">Closed ${mrpspDate(r.closedAt)}</small>`
-              : `<div><b>Due Adjusted</b></div><small class="pay-muted">Closed ${mrpspDate(r.closedAt)}</small>`;
+            if (r.mode === "CREDIT_TO_ACCOUNT") {
+              actionCol = `<div><b>UTR:</b> ${mrpspSafe(r.utr || "—")}</div><small class="pay-muted">Closed ${mrpspDate(r.closedAt)}</small>`;
+            } else {
+              actionCol = `<div><b>Due Adjusted</b></div><small class="pay-muted">Closed ${mrpspDate(r.closedAt)}</small>` +
+                (r.pendingFundLedgerSync ? `<br><button type="button" class="warning" style="margin-top:6px" onclick="window.mrpspAdminSyncDueSettlementToFund('${mrpspSafe(r.key)}')">SYNC DEDUCTION TO FUND</button>` : "");
+            }
           } else if (r.status === "CANCELLED") {
             actionCol = `<small class="pay-muted">${mrpspSafe(r.cancellationReason || "Cancelled")}</small>`;
           }
