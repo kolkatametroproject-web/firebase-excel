@@ -19009,6 +19009,110 @@ function mrpspComputeReservedRefunds(refundsMap, excludeKey = ""){
   }, 0);
 }
 
+function mrpspComputeStudentActualPaid(uid, financeMap, requestsMap){
+  if (!uid) return 0;
+  const finance = Object.entries(financeMap || {}).map(([key, v]) => ({ key, ...v }));
+  const requests = Object.entries(requestsMap || {}).map(([key, v]) => ({ key, ...v }));
+  let total = 0;
+  // Count only real money paid by the student (exclude STUDENT_REFUND_DUE_SETTLEMENT so refunds cannot inflate the refund cap).
+  finance.forEach(x => {
+    if (!x || x.status !== "Approved" || x.studentUid !== uid) return;
+    if (
+      x.source === "VERIFIED_MEMBER_PAYMENT" ||
+      x.legacyPaymentLinked === true ||
+      x.source === "PRE_FEATURE_MASTER_LEDGER_PAYMENT"
+    ) {
+      total += Number(x.amount) || 0;
+    }
+  });
+  requests.filter(x => x.type === "PROJECT_PAYMENT_VERIFICATION" && (x.status === "VERIFIED" || x.verified === true)).forEach(req => {
+    const linked = finance.find(x => x.paymentRequestKey === req.key);
+    if (linked && !linked.studentUid && req.createdBy === uid) {
+      total += Number(linked.amount || req.amount) || 0;
+    }
+  });
+  return Number(total.toFixed(2));
+}
+
+function mrpspComputeStudentRefundedTotal(uid, refundsMap, excludeKey = ""){
+  if (!uid) return 0;
+  const total = mrpspGetStudentWiseRefunds(refundsMap).reduce((sum, r) => {
+    if (r.key === excludeKey) return sum;
+    if (r.studentUid === uid && r.status !== "CANCELLED") {
+      return sum + (Number(r.amount) || 0);
+    }
+    return sum;
+  }, 0);
+  return Number(total.toFixed(2));
+}
+
+function mrpspGetStudentDueSettlementPayments(uid, fallbackName = ""){
+  if (!uid) return [];
+  const financeEntries = Object.entries(mrpspPaymentCache.finance || {}).map(([key, v]) => ({ key, ...v }));
+  const refundsMap = mrpspPaymentCache.refunds || {};
+  const results = [];
+  const seenRefundKeys = new Set();
+
+  financeEntries
+    .filter(x => x && x.source === "STUDENT_REFUND_DUE_SETTLEMENT" && x.status === "Approved" && x.studentUid === uid)
+    .forEach(f => {
+      const rKey = f.refundKey || "";
+      const r = rKey ? refundsMap[rKey] : null;
+      if (rKey) seenRefundKeys.add(rKey);
+      const amt = Number(f.amount || r?.amount) || 0;
+      if (amt <= 0) return;
+      const settledAt = Number(r?.closedAt || f.timestamp || r?.modeSelectedAt || r?.createdAt || 0);
+      results.push({
+        key: `DUE-SETTLE-${rKey || f.key}`,
+        refundKey: rKey,
+        financeKey: f.key,
+        dueSettlementPayment: true,
+        status: "VERIFIED",
+        verified: true,
+        amount: amt,
+        payerName: f.studentName || r?.studentName || fallbackName || "Student",
+        studentName: f.studentName || r?.studentName || fallbackName || "Student",
+        studentUid: uid,
+        purpose: f.desc || `Refund Adjusted to Dues${r?.remarks ? " — " + r.remarks : ""}`,
+        paymentMode: "Refund Settlement (Due Clear)",
+        createdAt: Number(r?.modeSelectedAt || settledAt),
+        verifiedAt: settledAt,
+        verifiedBy: f.by || r?.createdByEmail || "Administrator",
+        verificationNote: "Refund adjusted to dues (treated as verified payment).",
+        utr: `DUE-SETTLE-${String(rKey || f.key).slice(-8).toUpperCase()}`
+      });
+    });
+
+  Object.entries(refundsMap).forEach(([rk, r]) => {
+    if (!r || r.workflowType !== "STUDENT_WISE_REFUND" || r.mode !== "DUE_CLEAR" || r.status !== "CLOSED" || r.studentUid !== uid) return;
+    if (seenRefundKeys.has(rk)) return;
+    const amt = Number(r.amount) || 0;
+    if (amt <= 0) return;
+    const settledAt = Number(r.closedAt || r.modeSelectedAt || r.createdAt || 0);
+    results.push({
+      key: `DUE-SETTLE-${rk}`,
+      refundKey: rk,
+      financeKey: r.financeEntryKey || "",
+      dueSettlementPayment: true,
+      status: "VERIFIED",
+      verified: true,
+      amount: amt,
+      payerName: r.studentName || fallbackName || "Student",
+      studentName: r.studentName || fallbackName || "Student",
+      studentUid: uid,
+      purpose: `Refund Adjusted to Dues${r.remarks ? " — " + r.remarks : ""}`,
+      paymentMode: "Refund Settlement (Due Clear)",
+      createdAt: Number(r.modeSelectedAt || settledAt),
+      verifiedAt: settledAt,
+      verifiedBy: r.createdByEmail || "Administrator",
+      verificationNote: "Refund adjusted to dues (treated as verified payment).",
+      utr: `DUE-SETTLE-${String(rk).slice(-8).toUpperCase()}`
+    });
+  });
+
+  return results.sort((a, b) => (b.verifiedAt || b.createdAt || 0) - (a.verifiedAt || a.createdAt || 0));
+}
+
 window.mrpspOpenRefundQrModal = function(refundKey){
   const r = mrpspPaymentCache.refunds?.[refundKey];
   if (!r || !r.qrDataUrl) return alert("Student has not uploaded a QR code yet.");
@@ -19043,13 +19147,27 @@ window.mrpspAdminMarkStudentRefund = async function(){
   if (!Number.isFinite(amount) || amount <= 0) return alert("Enter a valid refund amount greater than zero.");
 
   try {
-    // Re-read live finance and open refunds to verify sufficient balance is present in Project Funds.
-    const [finSnap, refSnap] = await Promise.all([
+    // Re-read live finance, requests, and refunds to enforce both paid cap and Project Fund balance.
+    const [finSnap, reqSnap, refSnap] = await Promise.all([
       get(projectAwareRef("finance")),
+      get(projectAwareRef("eoffice_requests")),
       get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`))
     ]);
     const liveFinance = finSnap.exists() ? finSnap.val() : {};
+    const liveRequests = reqSnap.exists() ? reqSnap.val() : {};
     const liveRefunds = refSnap.exists() ? refSnap.val() : {};
+
+    const actualPaid = mrpspComputeStudentActualPaid(uid, liveFinance, liveRequests);
+    const alreadyRefunded = mrpspComputeStudentRefundedTotal(uid, liveRefunds);
+    const remainingRefundable = Math.max(0, Number((actualPaid - alreadyRefunded).toFixed(2)));
+
+    if (actualPaid <= 0) {
+      return alert(`Cannot mark refund for ${mrpspName(student)}.\nVerified Amount Paid: ${mrpspMoney(0)}\nRefund amount cannot exceed the amount paid by the student.`);
+    }
+    if (amount > remainingRefundable + 0.001) {
+      return alert(`Refund amount cannot exceed the amount paid by ${mrpspName(student)}.\nTotal Amount Paid: ${mrpspMoney(actualPaid)}\nAlready Refunded / Open Refunds: ${mrpspMoney(alreadyRefunded)}\nMax Refundable Remaining: ${mrpspMoney(remainingRefundable)}\nRequested Refund: ${mrpspMoney(amount)}`);
+    }
+
     const fundInfo = mrpspComputeAvailableFundBalance(liveFinance);
     const reserved = mrpspComputeReservedRefunds(liveRefunds);
     const usableFund = fundInfo.available - reserved;
@@ -19408,8 +19526,11 @@ function mrpspRenderRefunds(){
     if (studentSelect) {
       const prev = studentSelect.value;
       studentSelect.innerHTML = '<option value="">Select student</option>' + model.rows.map(s => {
+        const actualPaid = mrpspComputeStudentActualPaid(s.uid, mrpspPaymentCache.finance, mrpspPaymentCache.requests);
+        const alreadyRefunded = mrpspComputeStudentRefundedTotal(s.uid, mrpspPaymentCache.refunds);
+        const maxRef = Math.max(0, Number((actualPaid - alreadyRefunded).toFixed(2)));
         const balText = s.balance > 0 ? `Due: ${mrpspMoney(s.balance)}` : (s.balance < 0 ? `Credit: ${mrpspMoney(Math.abs(s.balance))}` : "No due");
-        return `<option value="${mrpspSafe(s.uid)}">${mrpspSafe(mrpspName(s))} (${balText})</option>`;
+        return `<option value="${mrpspSafe(s.uid)}">${mrpspSafe(mrpspName(s))} (Paid: ${mrpspMoney(actualPaid)} | Max Refundable: ${mrpspMoney(maxRef)} | ${balText})</option>`;
       }).join("");
       if (model.rows.some(s => s.uid === prev)) studentSelect.value = prev;
     }
@@ -20045,9 +20166,20 @@ window.mrpspRenderSelectedDues=function(){
       verifiedAt:Number(x.legacyAssignedAt||0),verifiedBy:x.legacyAssignedBy||"Administrator",
       utr:x.utr||x.transactionUtr||"",transactionLast4:x.transactionLast4||""
     }));
-  if(!legacy.length)return;
-  const combined=[...(d.payments||[]),...legacy].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  const dueSettlements = mrpspGetStudentDueSettlementPayments(uid, d.studentName);
+  if(!legacy.length && !dueSettlements.length)return;
+  const combined=[...(d.payments||[]),...legacy,...dueSettlements].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
   d.payments=combined;
+  if (combined.length && !host.querySelector('button[onclick*="mrpspDownloadStudentReceipt"]')) {
+    const emptyMsg = [...host.querySelectorAll("p.pay-muted")].find(el => el.textContent.includes("Paid receipts and payment history will appear here"));
+    if (emptyMsg) {
+      const btnWrap = document.createElement("div");
+      btnWrap.style.cssText = "display:flex;gap:9px;flex-wrap:wrap;margin:16px 0";
+      btnWrap.innerHTML = `<button class="success" onclick="window.mrpspDownloadStudentReceipt()"><i class="fas fa-file-pdf"></i> DOWNLOAD VERIFIED STATEMENT</button>
+        <button class="info" onclick="window.mrpspEmailStudentStatement()"><i class="fas fa-envelope"></i> EMAIL STATEMENT</button>`;
+      emptyMsg.replaceWith(btnWrap);
+    }
+  }
   const table=host.querySelector("table");
   if(table){
     const header=table.querySelector("thead tr");
@@ -20060,15 +20192,18 @@ window.mrpspRenderSelectedDues=function(){
       const linked=financeEntries.find(([k,v])=>v?.paymentRequestKey===p.key || v?.paymentId===(p.paymentId||p.key) || k===p.financeKey || k===p.creditEntryKey);
       const finance=linked?.[1]||null;
       const state=window.mrpspPaymentCancellationState(p,finance);
-      const isVerified=!p.legacyImported && (p.status==="VERIFIED" || p.verified===true);
+      const isVerified=!p.legacyImported && !p.dueSettlementPayment && (p.status==="VERIFIED" || p.verified===true);
       let action="";
       if(p.status==="CANCELLED" || finance?.status==="Cancelled") action='<span style="font-weight:800;color:#b91c1c">CANCELLED</span>';
       else if(isAdmin && isVerified && state.allowed && finance?.status==="Approved") action=`<button class="danger" style="padding:9px 16px;white-space:nowrap" onclick="window.mrpspCancelApprovedPayment('${mrpspSafe(p.key)}','${mrpspSafe(linked[0])}')">CANCEL PAYMENT</button><div style="font-size:10px;color:#64748b;margin-top:4px">Available for 24 hours after verification</div>`;
       else if(isAdmin && isVerified) action=`<span title="${mrpspSafe(state.reason)}" style="font-size:11px;font-weight:700;color:#64748b">${state.reason.includes("expired")?"EXPIRED (24H)":"NOT CANCELLABLE"}</span>`;
+      else if(p.dueSettlementPayment) action='<span style="font-size:11px;font-weight:700;color:#15803d">REFUND SETTLEMENT</span>';
+      const statusLabel = p.legacyImported ? "HISTORICAL PAYMENT" : (p.dueSettlementPayment ? "DUE SETTLEMENT (PAID)" : mrpspSafe(p.status||"VERIFIED"));
+      const noteText = p.legacyImported ? "Imported from Master Balance Sheet. UTR shown only if present in original ledger." : (p.verificationNote||"—");
       return `<tr>
         <td>${mrpspDate(p.createdAt)}</td><td>${mrpspMoney(p.amount)}</td><td>${mrpspSafe(p.purpose||"—")}</td>
-        <td><span class="pay-chip ${p.status==="CANCELLED"?"bad":"ok"}">${p.legacyImported?"HISTORICAL PAYMENT":mrpspSafe(p.status||"VERIFIED")}</span></td>
-        <td>${mrpspSafe(p.legacyImported?"Imported from Master Balance Sheet. UTR shown only if present in original ledger.":p.verificationNote||"—")}</td>
+        <td><span class="pay-chip ${p.status==="CANCELLED"?"bad":"ok"}">${statusLabel}</span></td>
+        <td>${mrpspSafe(noteText)}</td>
         <td><button class="success" onclick="window.mrpspDownloadPaidReceipt('${mrpspSafe(p.key)}')">Download Paid Receipt</button></td>
         ${isAdmin?`<td>${action||"—"}</td>`:""}
       </tr>`;
@@ -20323,7 +20458,7 @@ function mrpspBillEscape(value){
 function mrpspBillApprovedPayments(uid){
   const requests=Object.entries(mrpspPaymentCache.requests||{}).map(([key,v])=>({key,...v}));
   const finance=Object.entries(mrpspPaymentCache.finance||{}).map(([key,v])=>({key,...v}));
-  return requests.filter(p=>(p.createdBy===uid||p.studentUid===uid)&&
+  const reqPayments = requests.filter(p=>(p.createdBy===uid||p.studentUid===uid)&&
       (p.status==="VERIFIED"||p.verified===true))
     .map(p=>{
       const linked=finance.find(f=>f.paymentRequestKey===p.key);
@@ -20332,7 +20467,9 @@ function mrpspBillApprovedPayments(uid){
         verifiedBy:p.verifiedBy||linked?.verifiedBy||"Administrator",
         amount:Number(linked?.amount||p.amount)||0,
         financeKey:linked?.key||p.creditEntryKey||""};
-    }).filter(p=>p.amount>0)
+    }).filter(p=>p.amount>0);
+  const dueSettlements = mrpspGetStudentDueSettlementPayments(uid);
+  return [...reqPayments, ...dueSettlements]
     .sort((a,b)=>Number(b.verifiedAt||b.createdAt||0)-Number(a.verifiedAt||a.createdAt||0));
 }
 window.mrpspRenderBillTab=function(){
@@ -20357,7 +20494,7 @@ window.mrpspRenderBillTab=function(){
   const payments=selectedUid?mrpspBillApprovedPayments(selectedUid):[];
   const oldPayment=paymentSel.value;
   paymentSel.innerHTML='<option value="">Select an approved payment</option>'+payments.map(p=>
-    `<option value="${mrpspBillEscape(p.key)}">${mrpspBillEscape(mrpspMoney(p.amount)+" | "+(p.purpose||"Project contribution")+" | Paid: "+(p.paymentDate?new Date(p.paymentDate+"T00:00:00").toLocaleDateString("en-IN"):"Date not recorded"))}</option>`).join("");
+    `<option value="${mrpspBillEscape(p.key)}">${mrpspBillEscape(mrpspMoney(p.amount)+" | "+(p.purpose||"Project contribution")+" | Paid: "+(p.paymentDate?new Date(p.paymentDate+"T00:00:00").toLocaleDateString("en-IN"):(p.createdAt?new Date(p.createdAt).toLocaleDateString("en-IN"):"Date not recorded")))}</option>`).join("");
   if(payments.some(p=>p.key===oldPayment))paymentSel.value=oldPayment;
   paymentSel.onchange=()=>window.mrpspRenderBillTab();
   const p=payments.find(x=>x.key===paymentSel.value);
@@ -20384,7 +20521,7 @@ window.mrpspRenderBillTab=function(){
     <div style="text-align:right;font-size:20px;font-weight:900;margin:18px 0">TOTAL RECEIVED: ${mrpspBillEscape(mrpspMoney(p.amount))}</div>
     <h4 style="margin:18px 0 8px;border-bottom:1px solid #d8dee8;padding-bottom:7px">Transaction & Approval Information</h4>
     <table style="width:100%;border-collapse:collapse">${[
-      ["Payment mode","UPI"],["Full UTR / Transaction ID",p.utr],["Actual payment date",paymentDateLabel],
+      ["Payment mode",p.paymentMode||"UPI"],["Full UTR / Transaction ID",p.utr],["Actual payment date",paymentDateLabel],
       ["Payment submitted for verification",p.createdAt?new Date(p.createdAt).toLocaleString("en-IN"):"Not recorded"],
       ["Admin approval date & time",p.verifiedAt?new Date(p.verifiedAt).toLocaleString("en-IN"):"Not recorded"],["Approved by",p.verifiedBy],
       ["Verification remarks",p.verificationNote||"Verified against receiving account"],["Master Balance Sheet reference",p.financeKey||"—"]
@@ -20413,7 +20550,7 @@ window.mrpspPrintSelectedBill=function(){
 window.mrpspDownloadPaidReceipt=function(requestKey){
   const d=window.mrpspCurrentReceipt||{};
   const p=(d.payments||[]).find(x=>String(x.key)===String(requestKey));
-  if(!p || (!p.legacyImported && !(p.status==="VERIFIED" && p.verified===true))){
+  if(!p || (!p.legacyImported && !p.dueSettlementPayment && !(p.status==="VERIFIED" && p.verified===true))){
     alert("A paid receipt is available only after Admin verification."); return;
   }
   const esc=window.mrpspBillEscape || (v=>String(v??"—").replace(/[&<>\"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[c])));
@@ -20421,7 +20558,10 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
   const dateTime=v=>v?new Date(v).toLocaleString("en-IN"):"Not recorded";
   const dateOnly=v=>v?new Date(String(v).length===10?String(v)+"T00:00:00":v).toLocaleDateString("en-IN"):"Not recorded";
   const isLegacy=!!p.legacyImported;
-  const receiptNo=isLegacy?`MRPSP-HIST-${String(p.legacyFinanceKey||p.key).slice(-10).toUpperCase()}`:`MRPSP-${String(p.key||"").slice(-10).toUpperCase()}`;
+  const isDueSettle=!!p.dueSettlementPayment;
+  const receiptNo=isLegacy
+    ? `MRPSP-HIST-${String(p.legacyFinanceKey||p.key).slice(-10).toUpperCase()}`
+    : (isDueSettle ? `MRPSP-SETTLE-${String(p.refundKey||p.financeKey||p.key).slice(-10).toUpperCase()}` : `MRPSP-${String(p.key||"").slice(-10).toUpperCase()}`);
   const rows=isLegacy?[
     ["Member name",d.studentName||p.studentName||"—"],["Student ID",d.uid||p.studentUid||"—"],["Email",d.email||"—"],
     ["Amount recorded",money(p.amount)],["Original ledger description",p.purpose||"Historical payment"],
@@ -20433,9 +20573,9 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
     ["Member name",d.studentName||p.studentName||p.payerName||"—"],["Student ID",d.uid||p.studentUid||p.createdBy||"—"],
     ["Email",d.email||p.createdByEmail||"—"],["Project",p.project||window.activeProject||"MRPSP"],
     ["Payment purpose",p.purpose||"Project contribution"],["Payer name",p.payerName||"—"],
-    ["Amount received",money(p.amount)],["Payment mode","UPI"],
+    ["Amount received",money(p.amount)],["Payment mode",p.paymentMode||"UPI"],
     ["Full UTR / Transaction ID",p.utr||p.transactionUtr||"Not recorded"],
-    ["Actual payment date",dateOnly(p.paymentDate)], ["Payment submitted for verification",dateTime(p.createdAt)],
+    ["Actual payment date",dateOnly(p.paymentDate||p.createdAt)], ["Payment submitted for verification",dateTime(p.createdAt)],
     ["Admin approval date & time",dateTime(p.verifiedAt)], ["Approved by",p.verifiedBy||"Administrator"],
     ["Verification remarks",p.verificationNote||"Verified against receiving account"],
     ["Master Balance Sheet reference",p.financeKey||p.creditEntryKey||"—"]
