@@ -2113,25 +2113,29 @@ tr:hover { background: #fcfcfd; }
     <div id="paymentMode-refund" class="hidden">
       <section class="pay-panel">
         <h3><i class="fas fa-money-bill-transfer"></i> Student Refunds</h3>
-        <p class="pay-muted">Refund sources are entered by Admin and automatically allocated in proportion to each member’s cumulative Admin-verified payments compared with everyone’s total Admin-verified payments. Pending, rejected, cancelled and unverified payments are excluded. Students upload their own QR. After Admin records the UTR and marks a refund sent, the student has exactly 8 hours to confirm receipt or report non-receipt.</p>
-        <div id="mrpspRefundStudentQrPanel" class="hidden">
+        <p class="pay-muted">Admin marks a student-wise refund amount from available Project Funds. The student then selects one final payment mode: <b>Due Clear (Fund Settlement)</b> to adjust the refund directly against dues, or <b>Credit to Account</b> to upload their UPI QR so Admin can transfer the amount and record the UTR ID to close the case. Refund amounts are validated against available Project Funds before deduction.</p>
+
+        <div id="mrpspRefundAdminPanel" class="hidden" style="border-top:1px solid #e5eaf2;margin-top:16px;padding-top:18px">
+          <div id="mrpspRefundFundSummary" class="pay-grid" style="margin-bottom:18px"></div>
+          <h4>1. Mark Student-Wise Refund Amount</h4>
           <div class="pay-grid">
-            <div><label for="mrpspRefundQrFile">Upload your personal UPI QR (PNG/JPG/WebP, max 300 KB)</label><input id="mrpspRefundQrFile" type="file" accept="image/png,image/jpeg,image/webp"></div>
-            <div><label>Current QR</label><div id="mrpspRefundQrPreview" class="pay-muted">No QR uploaded.</div></div>
+            <div>
+              <label for="mrpspRefundStudentSelect">Select student</label>
+              <select id="mrpspRefundStudentSelect"><option value="">Select student</option></select>
+            </div>
+            <div>
+              <label for="mrpspRefundAmountInput">Refund amount (₹)</label>
+              <input id="mrpspRefundAmountInput" type="number" min="0.01" step="0.01" placeholder="Enter refund amount">
+            </div>
+            <div style="grid-column:1/-1">
+              <label for="mrpspRefundRemarksInput">Reason / remarks (optional)</label>
+              <textarea id="mrpspRefundRemarksInput" rows="2" placeholder="e.g. Excess contribution refund / project balance refund"></textarea>
+            </div>
           </div>
-          <button class="info" style="margin-top:10px" onclick="window.mrpspSaveRefundQr()">SAVE MY REFUND QR</button>
+          <button type="button" class="success" style="margin-top:10px" onclick="window.mrpspAdminMarkStudentRefund()"><i class="fas fa-check-circle"></i> MARK STUDENT REFUND</button>
+          <div id="mrpspRefundAdminQueue" style="margin-top:22px"></div>
         </div>
-        <div id="mrpspRefundAdminPanel" class="hidden" style="border-top:1px solid #e5eaf2;margin-top:20px;padding-top:18px">
-          <h4>1. Add Refund Source</h4>
-          <div class="pay-grid">
-            <div><label for="mrpspRefundSourceName">Source / received from</label><input id="mrpspRefundSourceName" placeholder="Source name / funding source"></div>
-            <div><label for="mrpspRefundSourceAmount">Amount received (₹)</label><input id="mrpspRefundSourceAmount" type="number" min="0.01" step="0.01" placeholder="Amount received"></div>
-            <div style="grid-column:1/-1"><label for="mrpspRefundSourceReason">Source details / remarks</label><textarea id="mrpspRefundSourceReason" rows="2" placeholder="Reason and supporting details"></textarea></div>
-          </div>
-          <button class="success" style="margin-top:10px" onclick="window.mrpspCreateRefundPool()">SAVE SOURCE & CREATE ALLOCATION</button>
-          <div id="mrpspRefundAllocationEditor" style="margin-top:16px"></div>
-          <div id="mrpspRefundAdminQueue" style="margin-top:18px"></div>
-        </div>
+
         <div id="mrpspRefundStudentList" style="margin-top:18px"></div>
       </section>
     </div>
@@ -18628,8 +18632,7 @@ window.wfDownloadData=(wid,tid,type,taskId)=>{
 // All new records are project-aware and all payment credits require Admin verification.
 // ================================================================
 const MRPSP_MEMBER_PAYMENT_PATH = "memberPayment";
-const MRPSP_REFUND_ACK_MS = 8 * 60 * 60 * 1000;
-let mrpspPaymentCache = { users:{}, finance:{}, requests:{}, exemptions:{}, refundPools:{}, refunds:{}, qr:{} };
+let mrpspPaymentCache = { users:{}, finance:{}, requests:{}, exemptions:{}, studentRefunds:{} };
 // Expose the live cache to later classic-script event handlers.
 window.mrpspPaymentCache = mrpspPaymentCache;
 
@@ -18688,18 +18691,16 @@ window.mrpspSendPaymentEmail = async function(to,name,subject,payment,extra){
 window.mrpspLoadMemberPaymentDashboard = async function(mode){
   if(!auth.currentUser)return;
   try{
-    const [u,f,r,e,p,rf,q] = await Promise.all([
+    const [u,f,r,e,sr] = await Promise.all([
       get(projectAwareRef("users")),get(projectAwareRef("finance")),get(ref(db,"eoffice_requests")),
-      get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/exemptions`)),get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundPools`)),
-      get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`)),get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundQr`))
+      get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/exemptions`)),
+      get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds`))
     ]);
     mrpspPaymentCache.users=u.exists()?u.val():{};
     mrpspPaymentCache.finance=f.exists()?f.val():{};
     mrpspPaymentCache.requests=r.exists()?r.val():{};
     mrpspPaymentCache.exemptions=e.exists()?e.val():{};
-    mrpspPaymentCache.refundPools=p.exists()?p.val():{};
-    mrpspPaymentCache.refunds=rf.exists()?rf.val():{};
-    mrpspPaymentCache.qr=q.exists()?q.val():{};
+    mrpspPaymentCache.studentRefunds=sr.exists()?sr.val():{};
     mrpspRenderPaymentViews(mode);
   }catch(err){
     console.error("Member payment dashboard load failed",err);
@@ -18720,7 +18721,7 @@ function mrpspBuildDues(){
   const perStudent=liableCount>0?Math.max(0,assetTotal-exemptionTotal)/liableCount:0;
   const requests=Object.entries(mrpspPaymentCache.requests||{}).map(([key,v])=>({key,...v}));
   const approvedPayments={};
-  finance.filter(x=>x.source==="VERIFIED_MEMBER_PAYMENT"&&x.status==="Approved").forEach(x=>{
+  finance.filter(x=>(x.source==="VERIFIED_MEMBER_PAYMENT" || x.source==="STUDENT_REFUND_DUE_SETTLEMENT") && x.status==="Approved").forEach(x=>{
     if(x.studentUid)approvedPayments[x.studentUid]=(approvedPayments[x.studentUid]||0)+(Number(x.amount)||0);
   });
   // Include older verified requests if the linked finance entry predates studentUid tagging.
@@ -18747,7 +18748,6 @@ function mrpspRenderPaymentViews(mode){
   document.getElementById("btnPaymentBreakup")?.classList.toggle("hidden",!admin);
   document.getElementById("btnPaymentRequestAll")?.classList.toggle("hidden",!admin);
   document.getElementById("mrpspRefundAdminPanel")?.classList.toggle("hidden",!admin);
-  document.getElementById("mrpspRefundStudentQrPanel")?.classList.toggle("hidden",admin);
   if(admin){
     const opts='<option value="">Select student</option>'+model.students.map(s=>`<option value="${mrpspSafe(s.uid)}">${mrpspSafe(mrpspName(s))} (${mrpspSafe(s.email)})</option>`).join("");
     const picker=document.getElementById("mrpspDuesStudentPicker");if(picker){const old=picker.value;picker.innerHTML=opts;if(model.students.some(s=>s.uid===old))picker.value=old;else picker.value=model.students[0]?.uid||"";}
@@ -18760,7 +18760,6 @@ function mrpspRenderPaymentViews(mode){
   mrpspRenderSelectedDues();
   mrpspRenderDueBreakup(model);
   mrpspRenderRefunds();
-  if(mode==="refund")mrpspRenderOwnRefundQr();
 }
 
 window.mrpspSendPaymentRequestToAll = async function(){
@@ -18970,154 +18969,484 @@ window.mrpspCancelDuesExemption=async function(exemptionKey){
   }
 };
 
-window.mrpspSaveRefundQr=async function(){
-  if(!auth.currentUser)return alert("Sign in first.");
-  const file=document.getElementById("mrpspRefundQrFile")?.files?.[0];
-  if(!file)return alert("Choose your personal UPI QR image.");
-  if(!/^image\/(png|jpeg|webp)$/.test(file.type))return alert("Upload PNG, JPG or WebP only.");
-  if(file.size>300*1024)return alert("QR image must be under 300 KB.");
-  try{
-    const dataUrl=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(file);});
-    await set(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundQr/${auth.currentUser.uid}`),{dataUrl,fileName:file.name,updatedAt:Date.now(),updatedBy:auth.currentUser.uid});
-    alert("Your refund QR has been saved.");
-    await window.mrpspLoadMemberPaymentDashboard("refund");
-  }catch(e){alert("Could not save QR: "+(e.message||e));}
-};
-
-function mrpspRenderOwnRefundQr(){
-  const host=document.getElementById("mrpspRefundQrPreview");if(!host)return;
-  const qr=mrpspPaymentCache.qr?.[auth.currentUser?.uid];
-  host.innerHTML=qr?.dataUrl?`<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap"><img src="${qr.dataUrl}" alt="Your saved refund QR" style="max-width:180px;max-height:180px;object-fit:contain;border:1px solid #e2e8f0;border-radius:9px;padding:6px"><div><p class="pay-muted">Updated ${mrpspDate(qr.updatedAt)}</p><button type="button" class="danger" onclick="window.mrpspDeleteOwnRefundQr()">DELETE MY QR</button></div></div>`:"No QR uploaded yet.";
-}
-
-function mrpspBuildPaymentBasedRefundAllocation(){
-  const students=mrpspStudentUsers();
-  const totals=students.map(s=>{
-    const paid=Object.values(mrpspPaymentCache.requests||{}).reduce((sum,p)=>{
-      const belongs=(p.createdBy===s.uid||p.studentUid===s.uid);
-      const verified=p.type==="PROJECT_PAYMENT_VERIFICATION"&&p.status==="VERIFIED"&&p.verified===true;
-      return sum+(belongs&&verified?Math.max(0,Number(p.amount)||0):0);
-    },0);
-    return {uid:s.uid,name:mrpspName(s),email:mrpspUserEmail(s),paid};
+function mrpspComputeAvailableFundBalance(financeMap){
+  let totalCredit = 0;
+  let totalDebit = 0;
+  Object.values(financeMap || {}).forEach(t => {
+    if (!t) return;
+    const status = String(t.status || "Approved");
+    const amt = parseFloat(t.amount);
+    if (!Number.isFinite(amt) || amt <= 0) return;
+    if (t.type === "CREDIT") {
+      if (status === "Approved") totalCredit += amt;
+    } else if (t.type === "DEBIT" || t.type === "EXPENSE") {
+      if (status === "Approved") totalDebit += amt;
+    }
   });
-  const totalPaid=totals.reduce((sum,s)=>sum+s.paid,0);
-  if(totalPaid<=0)return {totalPaid,allocation:[]};
-  // Keep every active student in the allocation, including members with no
-  // verified payments. Their contribution and refund share are explicitly zero.
-  const allocation=totals.map(s=>({...s,percent:totalPaid>0?(s.paid/totalPaid)*100:0}));
-  return {totalPaid,allocation};
+  return { totalCredit, totalDebit, available: totalCredit - totalDebit };
 }
 
-window.mrpspCreateRefundPool=async function(){
-  if(!isAdmin)return alert("Administrator access required.");
-  const source=(document.getElementById("mrpspRefundSourceName")?.value||"").trim();
-  const amount=Number(document.getElementById("mrpspRefundSourceAmount")?.value);
-  const reason=(document.getElementById("mrpspRefundSourceReason")?.value||"").trim();
-  if(!source||!reason)return alert("Enter source and reason.");
-  if(!Number.isFinite(amount)||amount<=0)return alert("Enter a valid source amount.");
-  const result=mrpspBuildPaymentBasedRefundAllocation();
-  if(!result.allocation.length||result.totalPaid<=0)return alert("No Admin-verified payments are available for proportional refund allocation.");
-  const allocation=result.allocation;
-  const preview=allocation.map(a=>`${a.name}: ${a.percent.toFixed(4)}% (${mrpspMoney(amount*a.percent/100)})`).join("\n");
-  if(!confirm(`Create refund source of ${mrpspMoney(amount)}?\n\nAllocation is based on cumulative Admin-verified payments (${mrpspMoney(result.totalPaid)} total):\n${preview}`))return;
-  try{
-    const finance=await push(projectAwareRef("finance"),{type:"CREDIT",amount,desc:`Student refund source — ${source} — ${reason}`,mode:"Refund source",status:"Approved",by:auth.currentUser.email||"Admin",timestamp:Date.now(),source:"STUDENT_REFUND_SOURCE"});
-    const pool=await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundPools`),{source,amount,reason,financeEntryKey:finance.key,createdAt:Date.now(),createdBy:auth.currentUser.uid,status:"ALLOCATED",allocation,totalVerifiedPayments:result.totalPaid,allocationMethod:"VERIFIED_PAYMENT_PROPORTION"});
-    await update(projectAwareRef(`finance/${finance.key}`),{refundPoolKey:pool.key});
-    document.getElementById("mrpspRefundSourceName").value="";document.getElementById("mrpspRefundSourceAmount").value="";document.getElementById("mrpspRefundSourceReason").value="";
-    document.getElementById("mrpspRefundAllocationEditor").innerHTML="";
-    alert("Refund source saved. Allocation has been calculated automatically from each member’s share of total Admin-verified payments.");
-    await window.mrpspLoadMemberPaymentDashboard("refund");
-  }catch(e){alert("Could not create refund pool: "+(e.message||e));}
+function mrpspComputeReservedRefunds(refundsMap, excludeKey = ""){
+  return Object.entries(refundsMap || {}).reduce((sum, [k, r]) => {
+    if (!r || k === excludeKey) return sum;
+    if (["AWAITING_STUDENT_MODE", "AWAITING_QR_UPLOAD", "AWAITING_ADMIN_UTR"].includes(r.status) && !r.deductedFromFund) {
+      return sum + (Number(r.amount) || 0);
+    }
+    return sum;
+  }, 0);
+}
+
+window.mrpspOpenRefundQrModal = function(refundKey){
+  const r = mrpspPaymentCache.studentRefunds?.[refundKey];
+  if (!r || !r.qrDataUrl) return alert("Student has not uploaded a QR code yet.");
+  let modal = document.getElementById("mrpspRefundQrModal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "mrpspRefundQrModal";
+    modal.style.cssText = "display:none;position:fixed;inset:0;z-index:99999;background:rgba(10,20,35,.82);align-items:center;justify-content:center;padding:16px;";
+    modal.innerHTML = `<div style="position:relative;background:#fff;border-radius:14px;padding:22px;max-width:min(96vw,820px);max-height:96vh;box-shadow:0 20px 60px #0008;text-align:center"><button type="button" onclick="window.mrpspCloseRefundQrModal()" aria-label="Close QR preview" style="position:absolute;right:10px;top:10px;border:0;border-radius:50%;width:40px;height:40px;font-size:24px;background:#fee2e2;color:#991b1b;cursor:pointer">&times;</button><h3 id="mrpspRefundQrTitle" style="margin:8px 48px 14px">Student Refund QR</h3><img id="mrpspRefundQrLarge" alt="Student refund QR" style="display:block;max-width:85vw;max-height:78vh;width:auto;height:auto;object-fit:contain;margin:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px"></div>`;
+    modal.addEventListener("click", e => { if (e.target === modal) window.mrpspCloseRefundQrModal(); });
+    document.body.appendChild(modal);
+  }
+  document.getElementById("mrpspRefundQrTitle").textContent = `${r.studentName || "Student"} · Refund ${mrpspMoney(r.amount)}`;
+  document.getElementById("mrpspRefundQrLarge").src = r.qrDataUrl;
+  modal.style.display = "flex";
 };
 
-window.mrpspPreviewRefundAllocation=function(amount){
-  const students=mrpspStudentUsers();let total=0;
-  students.forEach(s=>{const pct=Number(document.getElementById(`mrpspRefundPct_${s.uid}`)?.value||0);total+=pct;const el=document.getElementById(`mrpspRefundAmt_${s.uid}`);if(el)el.textContent=mrpspMoney(Number(amount)*pct/100);});
-  const label=document.getElementById("mrpspRefundPctTotal");if(label)label.textContent=`Total allocation: ${total.toFixed(2)}% ${Math.abs(total-100)<0.001?"✓":"(must equal 100%)"}`;
+window.mrpspCloseRefundQrModal = function(){
+  const modal = document.getElementById("mrpspRefundQrModal");
+  if (modal) modal.style.display = "none";
+  const img = document.getElementById("mrpspRefundQrLarge");
+  if (img) img.removeAttribute("src");
 };
+
+window.mrpspAdminMarkStudentRefund = async function(){
+  if (!isAdmin || !auth.currentUser) return alert("Administrator access required.");
+  const uid = (document.getElementById("mrpspRefundStudentSelect")?.value || "").trim();
+  const amount = Number(document.getElementById("mrpspRefundAmountInput")?.value);
+  const remarks = (document.getElementById("mrpspRefundRemarksInput")?.value || "").trim();
+  const student = mrpspStudentUsers().find(s => s.uid === uid);
+  if (!student) return alert("Please select a student.");
+  if (!Number.isFinite(amount) || amount <= 0) return alert("Enter a valid refund amount greater than zero.");
+
+  try {
+    // Re-read live finance and open refunds to verify sufficient balance is present in Project Funds.
+    const [finSnap, refSnap] = await Promise.all([
+      get(projectAwareRef("finance")),
+      get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds`))
+    ]);
+    const liveFinance = finSnap.exists() ? finSnap.val() : {};
+    const liveRefunds = refSnap.exists() ? refSnap.val() : {};
+    const fundInfo = mrpspComputeAvailableFundBalance(liveFinance);
+    const reserved = mrpspComputeReservedRefunds(liveRefunds);
+    const usableFund = fundInfo.available - reserved;
+
+    if (fundInfo.available < amount) {
+      return alert(`Insufficient balance in Project Funds.\nAvailable Fund Balance: ${mrpspMoney(fundInfo.available)}\nRequested Refund: ${mrpspMoney(amount)}`);
+    }
+    if (usableFund < amount) {
+      return alert(`Insufficient unallocated Project Fund balance.\nAvailable Fund: ${mrpspMoney(fundInfo.available)}\nAlready Reserved for Open Refunds: ${mrpspMoney(reserved)}\nRemaining Available: ${mrpspMoney(Math.max(0, usableFund))}`);
+    }
+
+    if (!confirm(`Mark student-wise refund of ${mrpspMoney(amount)} for ${mrpspName(student)}?\n\nThe student will be asked to choose either Due Clear (Fund Settlement) or Credit to Account. Their selection will be final.`)) return;
+
+    const now = Date.now();
+    await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds`), {
+      studentUid: uid,
+      studentName: mrpspName(student),
+      studentEmail: mrpspUserEmail(student) || student.email || "",
+      amount: Number(amount.toFixed(2)),
+      remarks,
+      status: "AWAITING_STUDENT_MODE",
+      mode: null,
+      modeLocked: false,
+      qrDataUrl: null,
+      utr: null,
+      financeEntryKey: null,
+      deductedFromFund: false,
+      createdAt: now,
+      createdBy: auth.currentUser.uid,
+      createdByEmail: auth.currentUser.email || "Admin"
+    });
+
+    document.getElementById("mrpspRefundAmountInput").value = "";
+    document.getElementById("mrpspRefundRemarksInput").value = "";
+    alert(`Refund of ${mrpspMoney(amount)} marked for ${mrpspName(student)}. Awaiting student's final mode selection.`);
+    await window.mrpspLoadMemberPaymentDashboard("refund");
+  } catch (e) {
+    console.error("Failed to mark student refund", e);
+    alert("Could not mark refund: " + (e?.message || e));
+  }
+};
+
+window.mrpspAdminCancelStudentRefund = async function(refundKey){
+  if (!isAdmin || !auth.currentUser) return alert("Administrator access required.");
+  const r = mrpspPaymentCache.studentRefunds?.[refundKey];
+  if (!r) return alert("Refund record not found.");
+  if (r.status === "CLOSED" || r.deductedFromFund) return alert("A closed/deducted refund cannot be cancelled.");
+  if (r.status === "CANCELLED") return alert("This refund is already cancelled.");
+  const reason = prompt(`Cancel refund of ${mrpspMoney(r.amount)} for ${r.studentName}? Enter cancellation reason:`);
+  if (reason === null) return;
+  if (!reason.trim()) return alert("Cancellation reason is required.");
+  try {
+    await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds/${refundKey}`), {
+      status: "CANCELLED",
+      cancelledAt: Date.now(),
+      cancelledBy: auth.currentUser.email || auth.currentUser.uid,
+      cancellationReason: reason.trim()
+    });
+    alert("Refund case cancelled.");
+    await window.mrpspLoadMemberPaymentDashboard("refund");
+  } catch (e) {
+    alert("Could not cancel refund: " + (e?.message || e));
+  }
+};
+
+window.mrpspStudentSelectRefundMode = async function(refundKey, mode){
+  if (!auth.currentUser) return alert("Please sign in first.");
+  if (!["DUE_CLEAR", "CREDIT_TO_ACCOUNT"].includes(mode)) return alert("Invalid refund mode.");
+  try {
+    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds/${refundKey}`);
+    const [refSnap, finSnap] = await Promise.all([
+      get(refundRef),
+      get(projectAwareRef("finance"))
+    ]);
+    if (!refSnap.exists()) return alert("Refund record not found.");
+    const r = refSnap.val();
+    if (r.studentUid !== auth.currentUser.uid) return alert("This refund does not belong to your account.");
+    if (r.modeLocked || r.status !== "AWAITING_STUDENT_MODE") return alert("Your payment mode selection is already finalized and cannot be changed.");
+
+    const amount = Number(r.amount) || 0;
+    const liveFinance = finSnap.exists() ? finSnap.val() : {};
+    const fundInfo = mrpspComputeAvailableFundBalance(liveFinance);
+    if (fundInfo.available < amount) {
+      return alert(`Insufficient balance in Project Funds.\nAvailable Fund: ${mrpspMoney(fundInfo.available)}\nRefund Amount: ${mrpspMoney(amount)}\nPlease contact Admin.`);
+    }
+
+    const modeLabel = mode === "DUE_CLEAR" ? "DUE CLEAR (Fund Settlement — Adjust with Dues)" : "CREDIT TO ACCOUNT (Bank / UPI Transfer via QR)";
+    const extraWarn = mode === "DUE_CLEAR"
+      ? `${mrpspMoney(amount)} will be deducted from Project Funds and immediately adjusted against your dues, closing this refund case.`
+      : `You will next upload your UPI QR code so Admin can transfer ${mrpspMoney(amount)} and close the case with the UTR ID.`;
+    if (!confirm(`Confirm payment mode: ${modeLabel}?\n\nIMPORTANT: Once selected, this choice is FINAL and cannot be changed.\n\n${extraWarn}`)) return;
+
+    const now = Date.now();
+    if (mode === "DUE_CLEAR") {
+      // Deduct from Project Funds and adjust directly against the student's dues.
+      const finRef = await push(projectAwareRef("finance"), {
+        type: "DEBIT",
+        amount,
+        desc: `Student Refund (Due Settlement) — ${r.studentName}${r.remarks ? " — " + r.remarks : ""}`,
+        mode: "Fund Settlement (Due Clear)",
+        status: "Approved",
+        by: auth.currentUser.email || r.studentName || "Student",
+        timestamp: now,
+        source: "STUDENT_REFUND_DUE_SETTLEMENT",
+        refundKey,
+        studentUid: r.studentUid,
+        studentName: r.studentName
+      });
+      try {
+        await update(refundRef, {
+          mode: "DUE_CLEAR",
+          modeLocked: true,
+          modeSelectedAt: now,
+          status: "CLOSED",
+          settledAt: now,
+          closedAt: now,
+          closedBy: auth.currentUser.email || auth.currentUser.uid,
+          financeEntryKey: finRef.key,
+          deductedFromFund: true
+        });
+      } catch (updateErr) {
+        try { await remove(finRef); } catch (rbErr) { console.error("Rollback failed", rbErr); }
+        throw updateErr;
+      }
+      alert(`Due Clear selected (FINAL). ${mrpspMoney(amount)} has been deducted from Project Funds and adjusted with your dues. Case closed.`);
+      await window.mrpspLoadMemberPaymentDashboard("refund");
+      return;
+    }
+
+    // CREDIT_TO_ACCOUNT: lock selection as final and move to QR upload stage.
+    await update(refundRef, {
+      mode: "CREDIT_TO_ACCOUNT",
+      modeLocked: true,
+      modeSelectedAt: now,
+      status: "AWAITING_QR_UPLOAD"
+    });
+    alert("Credit to Account selected (FINAL). Please upload your UPI QR code below so Admin can transfer the refund and enter the UTR ID.");
+    await window.mrpspLoadMemberPaymentDashboard("refund");
+  } catch (e) {
+    console.error("Failed to select refund mode", e);
+    alert("Could not save selection: " + (e?.message || e));
+  }
+};
+
+window.mrpspStudentUploadRefundQr = async function(refundKey){
+  if (!auth.currentUser) return alert("Please sign in first.");
+  const file = document.getElementById(`mrpspStudentQrFile_${refundKey}`)?.files?.[0];
+  if (!file) return alert("Please choose your UPI QR image first.");
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return alert("Upload a PNG, JPG, or WebP image only.");
+  if (file.size > 300 * 1024) return alert("QR image must be under 300 KB.");
+
+  try {
+    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds/${refundKey}`);
+    const snap = await get(refundRef);
+    if (!snap.exists()) return alert("Refund record not found.");
+    const r = snap.val();
+    if (r.studentUid !== auth.currentUser.uid) return alert("This refund does not belong to your account.");
+    if (r.mode !== "CREDIT_TO_ACCOUNT" || !["AWAITING_QR_UPLOAD", "AWAITING_ADMIN_UTR"].includes(r.status)) {
+      return alert("QR upload is only available for open Credit to Account refund cases.");
+    }
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    await update(refundRef, {
+      qrDataUrl: dataUrl,
+      qrFileName: file.name,
+      qrUploadedAt: Date.now(),
+      status: "AWAITING_ADMIN_UTR"
+    });
+    alert("Your QR code has been uploaded. Admin will now transfer the refund and enter the UTR ID to close the case.");
+    await window.mrpspLoadMemberPaymentDashboard("refund");
+  } catch (e) {
+    console.error("QR upload failed", e);
+    alert("Could not upload QR: " + (e?.message || e));
+  }
+};
+
+window.mrpspAdminCloseCreditRefund = async function(refundKey){
+  if (!isAdmin || !auth.currentUser) return alert("Administrator access required.");
+  const utr = (document.getElementById(`mrpspRefundUtr_${refundKey}`)?.value || "").trim();
+  if (!utr || utr.length < 6) return alert("Enter a valid UTR / transaction reference ID (at least 6 characters).");
+
+  try {
+    const refundRef = projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/studentRefunds/${refundKey}`);
+    const [refSnap, finSnap] = await Promise.all([
+      get(refundRef),
+      get(projectAwareRef("finance"))
+    ]);
+    if (!refSnap.exists()) return alert("Refund record not found.");
+    const r = refSnap.val();
+    if (r.mode !== "CREDIT_TO_ACCOUNT") return alert("This refund is not a Credit to Account case.");
+    if (r.status !== "AWAITING_ADMIN_UTR") return alert("Student must upload their QR code before closing with a UTR ID.");
+    if (!r.qrDataUrl) return alert("Student QR code is missing.");
+
+    const amount = Number(r.amount) || 0;
+    const liveFinance = finSnap.exists() ? finSnap.val() : {};
+    const fundInfo = mrpspComputeAvailableFundBalance(liveFinance);
+    if (fundInfo.available < amount) {
+      return alert(`Insufficient balance in Project Funds to deduct this refund.\nAvailable Fund: ${mrpspMoney(fundInfo.available)}\nRefund Amount: ${mrpspMoney(amount)}`);
+    }
+
+    if (!confirm(`Record UTR "${utr}", deduct ${mrpspMoney(amount)} from Project Funds, and close this refund case for ${r.studentName}?`)) return;
+
+    const now = Date.now();
+    const finRef = await push(projectAwareRef("finance"), {
+      type: "DEBIT",
+      amount,
+      desc: `Student Refund (Credit to Account) — ${r.studentName}${r.remarks ? " — " + r.remarks : ""}`,
+      mode: `UPI Refund UTR ${utr}`,
+      status: "Approved",
+      by: auth.currentUser.email || "Admin",
+      timestamp: now,
+      source: "STUDENT_REFUND_CREDIT_PAYOUT",
+      refundKey,
+      studentUid: r.studentUid,
+      studentName: r.studentName,
+      utr
+    });
+    try {
+      await update(refundRef, {
+        utr,
+        status: "CLOSED",
+        closedAt: now,
+        closedBy: auth.currentUser.uid,
+        closedByEmail: auth.currentUser.email || "Admin",
+        financeEntryKey: finRef.key,
+        deductedFromFund: true
+      });
+    } catch (updateErr) {
+      try { await remove(finRef); } catch (rbErr) { console.error("Rollback failed", rbErr); }
+      throw updateErr;
+    }
+
+    try {
+      const email = r.studentEmail || mrpspUserEmail(mrpspStudentUsers().find(s => s.uid === r.studentUid));
+      if (email) {
+        await window.mrpspSendPaymentEmail(
+          email,
+          r.studentName,
+          "REFUND CREDITED & CASE CLOSED",
+          { amount, payerName: r.studentName, purpose: `Credit to Account Refund | UTR: ${utr}`, createdAt: now, transactionLast4: utr.slice(-4) },
+          `Your refund of ${mrpspMoney(amount)} has been credited to your account. UTR ID: ${utr}. This refund case is now closed.`
+        );
+      }
+    } catch (mailErr) { console.warn("Refund closure email skipped", mailErr); }
+
+    alert(`UTR ${utr} recorded, ${mrpspMoney(amount)} deducted from Project Funds, and case closed.`);
+    await window.mrpspLoadMemberPaymentDashboard("refund");
+  } catch (e) {
+    console.error("Failed to close credit refund", e);
+    alert("Could not close refund case: " + (e?.message || e));
+  }
+};
+
+function mrpspRefundStatusBadge(status){
+  const map = {
+    AWAITING_STUDENT_MODE: ["warn", "AWAITING STUDENT MODE"],
+    AWAITING_QR_UPLOAD: ["warn", "AWAITING STUDENT QR"],
+    AWAITING_ADMIN_UTR: ["warn", "AWAITING ADMIN UTR"],
+    CLOSED: ["ok", "CASE CLOSED"],
+    CANCELLED: ["bad", "CANCELLED"]
+  };
+  const [cls, label] = map[status] || ["", status || "UNKNOWN"];
+  return `<span class="pay-chip ${cls}">${mrpspSafe(label)}</span>`;
+}
+
+function mrpspRefundModeLabel(mode){
+  if (mode === "DUE_CLEAR") return '<span class="pay-chip ok">DUE CLEAR (FUND SETTLEMENT)</span>';
+  if (mode === "CREDIT_TO_ACCOUNT") return '<span class="pay-chip warn">CREDIT TO ACCOUNT</span>';
+  return '<span class="pay-chip">NOT SELECTED YET</span>';
+}
 
 function mrpspRenderRefunds(){
-  const adminHost=document.getElementById("mrpspRefundAdminQueue"),studentHost=document.getElementById("mrpspRefundStudentList");
-  const pools=Object.entries(mrpspPaymentCache.refundPools||{}).map(([key,v])=>({key,...v}));
-  const refunds=Object.entries(mrpspPaymentCache.refunds||{}).map(([key,v])=>({key,...v}));
-  if(isAdmin&&adminHost){
-    adminHost.innerHTML=`<h4>Refund Sources & Disbursement Queue</h4>${pools.map(pool=>`<div class="pay-panel" style="padding:14px;margin:10px 0"><b>${mrpspSafe(pool.source)}</b> · ${mrpspMoney(pool.amount)}<p class="pay-muted">${mrpspSafe(pool.reason)} · Created ${mrpspDate(pool.createdAt)}</p><div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Share</th><th>QR</th><th>UTR / Action</th></tr></thead><tbody>${(pool.allocation||[]).map(a=>{const qr=mrpspPaymentCache.qr?.[a.uid];const refund=refunds.find(x=>x.poolKey===pool.key&&x.studentUid===a.uid);return `<tr><td>${mrpspSafe(a.name)}</td><td>${a.percent}% · ${mrpspMoney(Number(pool.amount)*Number(a.percent)/100)}</td><td>${qr?.dataUrl?`<a href="${qr.dataUrl}" target="_blank" rel="noopener">View QR</a>`:'<span class="pay-chip warn">QR not uploaded</span>'}</td><td>${refund?.status==="AWAITING_STUDENT_CONFIRMATION"||refund?.status==="RECEIVED"||refund?.status==="NOT_RECEIVED"||refund?.status==="WINDOW_EXPIRED"?`<span class="pay-chip ${refund.status==="RECEIVED"?"ok":refund.status==="NOT_RECEIVED"?"bad":"warn"}">${mrpspSafe(refund.status)}</span><br>UTR: ${mrpspSafe(refund.utr||"—")}`: `<input id="mrpspUtr_${pool.key}_${a.uid}" placeholder="Enter UTR / bank reference"><button class="success" style="margin-top:5px" ${qr?.dataUrl?"":"disabled"} onclick="window.mrpspMarkRefundSent('${pool.key}','${a.uid}')">MARK SENT</button>`}</td></tr>`;}).join("")}</tbody></table></div></div>`).join("")||'<p class="pay-muted">No refund sources recorded.</p>'}`;
-  }
-  if(studentHost){
-    const own=refunds.filter(x=>x.studentUid===auth.currentUser?.uid);
-    studentHost.innerHTML=`<h4>My Refund Status</h4><div class="pay-table-wrap"><table><thead><tr><th>Source</th><th>Amount</th><th>UTR</th><th>Confirmation deadline</th><th>Action / Status</th></tr></thead><tbody>${own.map(r=>`<tr><td>${mrpspSafe(r.sourceName)}</td><td>${mrpspMoney(r.amount)}</td><td>${mrpspSafe(r.utr||"—")}</td><td>${r.ackDeadline?mrpspDate(r.ackDeadline):"—"}</td><td>${r.status==="AWAITING_STUDENT_CONFIRMATION"&&Date.now()<=Number(r.ackDeadline)?`<button class="success" onclick="window.mrpspConfirmRefund('${r.key}')">RECEIVED</button> <button class="danger" onclick="window.mrpspReportRefundNotReceived('${r.key}')">NOT RECEIVED</button>`:`<span class="pay-chip ${r.status==="RECEIVED"?"ok":r.status==="NOT_RECEIVED"?"bad":"warn"}">${mrpspSafe(r.status==="AWAITING_STUDENT_CONFIRMATION"?"CONFIRMATION WINDOW CLOSED":r.status)}</span>`}</td></tr>`).join("")||'<tr><td colspan="5">No refund allocated to you yet.</td></tr>'}</tbody></table></div>`;
-  }
-}
+  const adminHost = document.getElementById("mrpspRefundAdminQueue");
+  const studentHost = document.getElementById("mrpspRefundStudentList");
+  const summaryHost = document.getElementById("mrpspRefundFundSummary");
+  const studentSelect = document.getElementById("mrpspRefundStudentSelect");
 
-window.mrpspMarkRefundSent=async function(poolKey,uid){
-  if(!isAdmin)return alert("Administrator access required.");
-  const pool=mrpspPaymentCache.refundPools?.[poolKey];if(!pool)return alert("Refund source not found.");
-  const allocation=(pool.allocation||[]).find(x=>x.uid===uid);if(!allocation)return alert("Student allocation not found.");
-  const qr=mrpspPaymentCache.qr?.[uid];if(!qr?.dataUrl)return alert("Student has not uploaded a refund QR.");
-  const utr=(document.getElementById(`mrpspUtr_${poolKey}_${uid}`)?.value||"").trim();if(!utr)return alert("Enter UTR / bank reference before marking sent.");
-  const amount=Number(pool.amount)*Number(allocation.percent)/100;
-  if(!Number.isFinite(amount)||amount<=0)return alert("Refund allocation is zero.");
-  const now=Date.now();const refund={poolKey,sourceName:pool.source,studentUid:uid,studentName:allocation.name,studentEmail:allocation.email,amount,percentage:allocation.percent,utr,status:"AWAITING_STUDENT_CONFIRMATION",sentAt:now,ackDeadline:now+MRPSP_REFUND_ACK_MS,recordedBy:auth.currentUser.uid};
-  try{
-    const record=await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`),refund);
-    const fin=await push(projectAwareRef("finance"),{type:"DEBIT",amount,desc:`Student refund paid — ${allocation.name} — ${pool.source}`,mode:`UPI refund UTR ${utr}`,status:"Approved",by:auth.currentUser.email||"Admin",timestamp:now,source:"STUDENT_REFUND_PAYOUT",refundKey:record.key,studentUid:uid});
-    await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${record.key}`),{financeEntryKey:fin.key});
-    const email=allocation.email||mrpspUserEmail(mrpspStudentUsers().find(s=>s.uid===uid));
-    if(email)await window.mrpspSendPaymentEmail(email,allocation.name,"REFUND SENT",{amount,payerName:allocation.name,purpose:`Refund source: ${pool.source}; UTR: ${utr}; allocated percentage: ${allocation.percent}%`,createdAt:now,transactionLast4:utr.slice(-4)},`Refund of ${mrpspMoney(amount)} has been marked sent. UTR: ${utr}. Confirm receipt in the portal within 8 hours.`);
-    alert("Refund marked sent, payout DEBIT entered in the master balance sheet, and student confirmation window started (8 hours).");
-    await window.mrpspLoadMemberPaymentDashboard("refund");
-  }catch(e){alert("Could not record refund: "+(e.message||e));}
-};
+  const refunds = Object.entries(mrpspPaymentCache.studentRefunds || {})
+    .map(([key, v]) => ({ key, ...v }))
+    .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
 
-window.mrpspConfirmRefund=async function(key){
-  const r=mrpspPaymentCache.refunds?.[key];if(!r||r.studentUid!==auth.currentUser?.uid)return alert("This refund does not belong to your account.");
-  if(r.status!=="AWAITING_STUDENT_CONFIRMATION"||Date.now()>Number(r.ackDeadline))return alert("The 8-hour confirmation window has closed. Receipt is treated as accepted.");
-  await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${key}`),{status:"RECEIVED",confirmedAt:Date.now(),confirmedBy:auth.currentUser.uid});
-  alert("Refund receipt confirmed.");
-  await window.mrpspLoadMemberPaymentDashboard("refund");
-};
+  const model = mrpspBuildDues();
+  const fundInfo = mrpspComputeAvailableFundBalance(mrpspPaymentCache.finance);
+  const reserved = mrpspComputeReservedRefunds(mrpspPaymentCache.studentRefunds);
+  const usable = Math.max(0, fundInfo.available - reserved);
 
-window.mrpspReportRefundNotReceived=async function(key){
-  const r=mrpspPaymentCache.refunds?.[key];if(!r||r.studentUid!==auth.currentUser?.uid)return alert("This refund does not belong to your account.");
-  if(r.status!=="AWAITING_STUDENT_CONFIRMATION"||Date.now()>Number(r.ackDeadline))return alert("The 8-hour window has closed. A non-receipt report can no longer be submitted.");
-  const reason=prompt("Briefly state why the refund has not been received:");
-  if(reason===null)return;
-  if(!reason.trim())return alert("A reason is required.");
-  await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${key}`),{status:"NOT_RECEIVED",notReceivedAt:Date.now(),notReceivedReason:reason.trim(),reportedBy:auth.currentUser.uid});
-  alert("Non-receipt report submitted within the 8-hour window.");
-  await window.mrpspLoadMemberPaymentDashboard("refund");
-};
-
-// Add a live percentage allocation editor when the Refund tab opens for Admin.
-const mrpspOriginalLoadPaymentDashboard=window.mrpspLoadMemberPaymentDashboard;
-window.mrpspLoadMemberPaymentDashboard=async function(mode){
-  await mrpspOriginalLoadPaymentDashboard(mode);
-  if(mode==="refund"&&isAdmin){
-    const editor=document.getElementById("mrpspRefundAllocationEditor");
-    if(editor&&!editor.innerHTML.trim()){
-      const students=mrpspStudentUsers();
-      editor.innerHTML=`<p class="pay-muted">Enter the source and amount above, click “SAVE SOURCE & CREATE ALLOCATION”, then enter a percentage for every student. Percentages must total exactly 100%.</p>`;
+  if (isAdmin) {
+    if (summaryHost) {
+      summaryHost.innerHTML = [
+        ["Available Project Fund", mrpspMoney(fundInfo.available)],
+        ["Reserved for Open Refunds", mrpspMoney(reserved)],
+        ["Remaining Fund for New Refunds", mrpspMoney(usable)]
+      ].map(([label, val]) => `<div class="pay-stat"><span class="pay-muted">${label}</span><b>${val}</b></div>`).join("");
+    }
+    if (studentSelect) {
+      const prev = studentSelect.value;
+      studentSelect.innerHTML = '<option value="">Select student</option>' + model.rows.map(s => {
+        const balText = s.balance > 0 ? `Due: ${mrpspMoney(s.balance)}` : (s.balance < 0 ? `Credit: ${mrpspMoney(Math.abs(s.balance))}` : "No due");
+        return `<option value="${mrpspSafe(s.uid)}">${mrpspSafe(mrpspName(s))} (${balText})</option>`;
+      }).join("");
+      if (model.rows.some(s => s.uid === prev)) studentSelect.value = prev;
+    }
+    if (adminHost) {
+      adminHost.innerHTML = `<h4>2. Student-Wise Refund Cases</h4>
+        <div class="pay-table-wrap"><table><thead><tr>
+          <th>Student</th><th>Refund Amount</th><th>Selected Mode</th><th>QR / Settlement</th><th>Status</th><th>Admin Action</th>
+        </tr></thead><tbody>${refunds.length ? refunds.map(r => {
+          let qrCol = "—";
+          if (r.mode === "DUE_CLEAR") {
+            qrCol = '<span class="pay-chip ok">Adjusted with Dues</span>';
+          } else if (r.mode === "CREDIT_TO_ACCOUNT") {
+            qrCol = r.qrDataUrl
+              ? `<button type="button" class="secondary" onclick="window.mrpspOpenRefundQrModal('${mrpspSafe(r.key)}')">VIEW QR</button>`
+              : '<span class="pay-chip warn">QR not uploaded yet</span>';
+          }
+          let actionCol = "—";
+          if (r.status === "AWAITING_STUDENT_MODE") {
+            actionCol = `<span class="pay-muted">Waiting for student choice</span><br><button type="button" class="danger" style="margin-top:6px" onclick="window.mrpspAdminCancelStudentRefund('${mrpspSafe(r.key)}')">CANCEL</button>`;
+          } else if (r.status === "AWAITING_QR_UPLOAD") {
+            actionCol = `<span class="pay-muted">Waiting for student QR</span><br><button type="button" class="danger" style="margin-top:6px" onclick="window.mrpspAdminCancelStudentRefund('${mrpspSafe(r.key)}')">CANCEL</button>`;
+          } else if (r.status === "AWAITING_ADMIN_UTR") {
+            actionCol = `<input id="mrpspRefundUtr_${mrpspSafe(r.key)}" placeholder="Enter UTR / Transaction ID" style="margin-bottom:6px">
+              <button type="button" class="success" onclick="window.mrpspAdminCloseCreditRefund('${mrpspSafe(r.key)}')">SUBMIT UTR & CLOSE CASE</button>
+              <button type="button" class="danger" style="margin-top:6px" onclick="window.mrpspAdminCancelStudentRefund('${mrpspSafe(r.key)}')">CANCEL</button>`;
+          } else if (r.status === "CLOSED") {
+            actionCol = r.mode === "CREDIT_TO_ACCOUNT"
+              ? `<div><b>UTR:</b> ${mrpspSafe(r.utr || "—")}</div><small class="pay-muted">Closed ${mrpspDate(r.closedAt)}</small>`
+              : `<div><b>Due Adjusted</b></div><small class="pay-muted">Closed ${mrpspDate(r.closedAt)}</small>`;
+          } else if (r.status === "CANCELLED") {
+            actionCol = `<small class="pay-muted">${mrpspSafe(r.cancellationReason || "Cancelled")}</small>`;
+          }
+          return `<tr>
+            <td><b>${mrpspSafe(r.studentName || "Student")}</b><br><small class="pay-muted">${mrpspSafe(r.studentEmail || "")}</small></td>
+            <td><b>${mrpspMoney(r.amount)}</b>${r.remarks ? `<br><small class="pay-muted">${mrpspSafe(r.remarks)}</small>` : ""}<br><small class="pay-muted">${mrpspDate(r.createdAt)}</small></td>
+            <td>${mrpspRefundModeLabel(r.mode)}</td>
+            <td>${qrCol}</td>
+            <td>${mrpspRefundStatusBadge(r.status)}</td>
+            <td>${actionCol}</td>
+          </tr>`;
+        }).join("") : '<tr><td colspan="6">No student refunds marked yet.</td></tr>'}</tbody></table></div>`;
     }
   }
-};
 
-// Auto-close the 8-hour claim window in the UI and database once it has elapsed.
-async function mrpspExpireRefundWindows(){
-  if(!auth.currentUser)return;
-  const now=Date.now();
-  for(const [key,r] of Object.entries(mrpspPaymentCache.refunds||{})){
-    if(r.status==="AWAITING_STUDENT_CONFIRMATION"&&Number(r.ackDeadline)>0&&now>Number(r.ackDeadline)){
-      try{await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${key}`),{status:"WINDOW_EXPIRED",windowExpiredAt:now});}catch(e){console.warn("Could not close refund acknowledgement window",e);}
+  if (studentHost) {
+    const myUid = auth.currentUser?.uid;
+    const own = refunds.filter(r => r.studentUid === myUid);
+    const myRow = model.rows.find(s => s.uid === myUid);
+    const myDueSummary = myRow
+      ? (myRow.balance > 0 ? `Current outstanding due: <b>${mrpspMoney(myRow.balance)}</b>` : (myRow.balance < 0 ? `Current credit carried forward: <b>${mrpspMoney(Math.abs(myRow.balance))}</b>` : "Current outstanding due: <b>₹0.00</b>"))
+      : "";
+
+    if (isAdmin && !own.length) {
+      studentHost.innerHTML = "";
+      return;
     }
+
+    studentHost.innerHTML = `<h4>My Refund Cases</h4>
+      ${myDueSummary ? `<p class="pay-muted">${myDueSummary}</p>` : ""}
+      ${own.length ? own.map(r => {
+        let body = "";
+        if (r.status === "AWAITING_STUDENT_MODE") {
+          body = `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px;margin-top:10px">
+            <div style="font-weight:800;color:#92400e;margin-bottom:6px">Choose Mode of Payment (Final — Cannot Be Changed Later)</div>
+            <p class="pay-muted" style="margin:0 0 12px">Select how you want to receive your refund of <b>${mrpspMoney(r.amount)}</b>. Once confirmed, your choice is locked.</p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button type="button" class="success" onclick="window.mrpspStudentSelectRefundMode('${mrpspSafe(r.key)}','DUE_CLEAR')"><i class="fas fa-scale-balanced"></i> DUE CLEAR (ADJUST WITH DUES)</button>
+              <button type="button" class="info" onclick="window.mrpspStudentSelectRefundMode('${mrpspSafe(r.key)}','CREDIT_TO_ACCOUNT')"><i class="fas fa-university"></i> CREDIT TO ACCOUNT</button>
+            </div>
+          </div>`;
+        } else if (r.status === "AWAITING_QR_UPLOAD") {
+          body = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px;margin-top:10px">
+            <div style="font-weight:800;color:#1e40af;margin-bottom:6px">Step 2: Upload Your UPI QR Code</div>
+            <p class="pay-muted" style="margin:0 0 10px">You selected <b>Credit to Account</b> (Final). Upload your personal UPI QR (PNG/JPG/WebP, max 300 KB) so Admin can transfer ${mrpspMoney(r.amount)} and enter the UTR ID.</p>
+            <input id="mrpspStudentQrFile_${mrpspSafe(r.key)}" type="file" accept="image/png,image/jpeg,image/webp" style="max-width:360px">
+            <div style="margin-top:8px"><button type="button" class="success" onclick="window.mrpspStudentUploadRefundQr('${mrpspSafe(r.key)}')"><i class="fas fa-upload"></i> UPLOAD QR CODE</button></div>
+          </div>`;
+        } else if (r.status === "AWAITING_ADMIN_UTR") {
+          body = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px;margin-top:10px">
+            <div style="font-weight:800;color:#166534;margin-bottom:6px">QR Uploaded — Waiting for Admin Transfer & UTR ID</div>
+            <p class="pay-muted" style="margin:0 0 10px">Mode: <b>Credit to Account</b> (Final). Once Admin transfers ${mrpspMoney(r.amount)} and enters the UTR ID, this case will close automatically.</p>
+            ${r.qrDataUrl ? `<button type="button" class="secondary" onclick="window.mrpspOpenRefundQrModal('${mrpspSafe(r.key)}')">VIEW MY UPLOADED QR</button>` : ""}
+          </div>`;
+        } else if (r.status === "CLOSED") {
+          body = `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:14px;margin-top:10px">
+            <div style="font-weight:800;color:#166534">Case Closed</div>
+            ${r.mode === "CREDIT_TO_ACCOUNT"
+              ? `<p class="pay-muted" style="margin:6px 0 0">Credited to your account · <b>UTR ID:</b> ${mrpspSafe(r.utr || "—")} · Closed on ${mrpspDate(r.closedAt)}</p>`
+              : `<p class="pay-muted" style="margin:6px 0 0">Settled via <b>Due Clear (Fund Settlement)</b> · ${mrpspMoney(r.amount)} adjusted against your dues · Closed on ${mrpspDate(r.closedAt)}</p>`}
+          </div>`;
+        } else if (r.status === "CANCELLED") {
+          body = `<p class="pay-muted" style="margin-top:10px">Cancelled by Admin${r.cancellationReason ? `: ${mrpspSafe(r.cancellationReason)}` : ""}.</p>`;
+        }
+        return `<div class="pay-panel" style="padding:16px;margin:12px 0">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div>
+              <b style="font-size:17px">${mrpspMoney(r.amount)}</b>
+              <div class="pay-muted">${mrpspSafe(r.remarks || "Student refund marked by Admin")} · Marked on ${mrpspDate(r.createdAt)}</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">${mrpspRefundModeLabel(r.mode)} ${mrpspRefundStatusBadge(r.status)}</div>
+          </div>
+          ${body}
+        </div>`;
+      }).join("") : '<p class="pay-muted">No refund has been marked for your account yet.</p>'}`;
   }
 }
-const mrpspBasePaymentLoader=window.mrpspLoadMemberPaymentDashboard;
-window.mrpspLoadMemberPaymentDashboard=async function(mode){
-  await mrpspBasePaymentLoader(mode);
-  await mrpspExpireRefundWindows();
-  if(mode==="refund")mrpspRenderRefunds();
-};
+window.mrpspRenderRefunds = mrpspRenderRefunds;
 
 
 
@@ -20191,60 +20520,6 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
 })();
 </script>
 
-<script>
-// Refund queue enhancements: large QR lightbox, per-member refund cancellation, and student QR deletion.
-(function(){
-  function ensureQrModal(){
-    if(document.getElementById('mrpspRefundQrModal')) return;
-    const m=document.createElement('div');m.id='mrpspRefundQrModal';
-    m.style.cssText='display:none;position:fixed;inset:0;z-index:99999;background:rgba(10,20,35,.82);align-items:center;justify-content:center;padding:16px;';
-    m.innerHTML=`<div style="position:relative;background:#fff;border-radius:14px;padding:22px;max-width:min(96vw,850px);max-height:96vh;box-shadow:0 20px 60px #0008;text-align:center"><button type="button" onclick="window.mrpspCloseRefundQr()" aria-label="Close QR preview" style="position:absolute;right:10px;top:10px;border:0;border-radius:50%;width:42px;height:42px;font-size:27px;background:#fee2e2;color:#991b1b;cursor:pointer">×</button><h3 id="mrpspRefundQrTitle" style="margin:8px 54px 16px">Refund QR</h3><img id="mrpspRefundQrLarge" alt="Student refund QR" style="display:block;max-width:88vw;max-height:82vh;width:auto;height:auto;object-fit:contain;margin:auto"></div>`;
-    m.addEventListener('click',e=>{if(e.target===m)window.mrpspCloseRefundQr();});document.body.appendChild(m);
-    document.addEventListener('keydown',e=>{if(e.key==='Escape')window.mrpspCloseRefundQr();});
-  }
-  window.mrpspOpenRefundQr=function(uid,name){const q=window.mrpspPaymentCache.qr?.[uid];if(!q?.dataUrl)return alert('Student has not uploaded a refund QR.');ensureQrModal();document.getElementById('mrpspRefundQrTitle').textContent=(name||'Student')+' · Refund QR';document.getElementById('mrpspRefundQrLarge').src=q.dataUrl;document.getElementById('mrpspRefundQrModal').style.display='flex';};
-  window.mrpspCloseRefundQr=function(){const m=document.getElementById('mrpspRefundQrModal');if(m)m.style.display='none';const im=document.getElementById('mrpspRefundQrLarge');if(im)im.removeAttribute('src');};
-  window.mrpspDeleteOwnRefundQr=async function(){
-    if(!auth.currentUser)return alert('Sign in first.');
-    const uid=auth.currentUser.uid;const qr=window.mrpspPaymentCache.qr?.[uid];if(!qr)return alert('You have no saved refund QR.');
-    const active=Object.values(window.mrpspPaymentCache.refunds||{}).some(r=>r.studentUid===uid&&['AWAITING_STUDENT_CONFIRMATION','NOT_RECEIVED'].includes(r.status));
-    if(active)return alert('Your QR cannot be deleted while a refund is awaiting confirmation or has been reported as not received. Contact Admin.');
-    if(!confirm('Delete your uploaded refund QR? You can upload a new one later.'))return;
-    try{await remove(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refundQr/${uid}`));alert('Your refund QR has been deleted.');await window.mrpspLoadMemberPaymentDashboard('refund');}
-    catch(e){console.error('Refund QR deletion failed',e);alert('Could not delete QR: '+(e.message||e));}
-  };
-  window.mrpspCancelRefundPayout=async function(poolKey,uid){
-    if(!isAdmin)return alert('Administrator access required.');
-    const pool=window.mrpspPaymentCache.refundPools?.[poolKey];if(!pool)return alert('Refund source not found.');
-    const allocation=(pool.allocation||[]).find(a=>a.uid===uid);if(!allocation)return alert('Student allocation not found.');
-    const existing=Object.entries(window.mrpspPaymentCache.refunds||{}).find(([,r])=>r.poolKey===poolKey&&r.studentUid===uid);
-    const key=existing?.[0],r=existing?.[1];
-    if(r?.status==='CANCELLED')return alert('This refund allocation is already cancelled.');
-    if(r?.status==='RECEIVED')return alert('A refund confirmed as received cannot be cancelled.');
-    const reason=prompt('Enter the reason for cancelling this student refund allocation:');if(reason===null)return;if(!reason.trim())return alert('Cancellation reason is required.');
-    if(!confirm(`Cancel ${allocation.name}'s refund allocation of ${mrpspMoney(Number(pool.amount)*Number(allocation.percent)/100)}?`))return;
-    try{
-      const now=Date.now();
-      if(r){
-        await update(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds/${key}`),{status:'CANCELLED',cancelledAt:now,cancelledBy:auth.currentUser.uid,cancellationReason:reason.trim()});
-        if(r.financeEntryKey)await update(projectAwareRef(`finance/${r.financeEntryKey}`),{status:'Cancelled',cancelledAt:now,cancelledBy:auth.currentUser.email||auth.currentUser.uid,cancellationReason:`Refund payout cancelled: ${reason.trim()}`});
-      }else{
-        const amount=Number(pool.amount)*Number(allocation.percent)/100;
-        await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`),{poolKey,sourceName:pool.source,studentUid:uid,studentName:allocation.name,studentEmail:allocation.email||'',amount,percentage:allocation.percent,status:'CANCELLED',createdAt:now,cancelledAt:now,cancelledBy:auth.currentUser.uid,cancellationReason:reason.trim(),recordedBy:auth.currentUser.uid});
-      }
-      alert('Student refund allocation cancelled.');await window.mrpspLoadMemberPaymentDashboard('refund');
-    }catch(e){console.error('Refund cancellation failed',e);alert('Could not cancel refund: '+(e.message||e));}
-  };
-  window.mrpspRenderRefunds=function(){
-    const adminHost=document.getElementById('mrpspRefundAdminQueue'),studentHost=document.getElementById('mrpspRefundStudentList');
-    const pools=Object.entries(window.mrpspPaymentCache.refundPools||{}).map(([key,v])=>({key,...v}));
-    const refunds=Object.entries(window.mrpspPaymentCache.refunds||{}).map(([key,v])=>({key,...v}));
-    if(isAdmin&&adminHost){
-      adminHost.innerHTML=`<h4>Refund Sources & Disbursement Queue</h4>${pools.map(pool=>`<div class="pay-panel" style="padding:14px;margin:10px 0"><b>${mrpspSafe(pool.source)}</b> · ${mrpspMoney(pool.amount)}<p class="pay-muted">${mrpspSafe(pool.reason)} · Created ${mrpspDate(pool.createdAt)}</p><div class="pay-table-wrap"><table><thead><tr><th>Student</th><th>Share</th><th>QR</th><th>UTR / Action</th></tr></thead><tbody>${(pool.allocation||[]).map(a=>{const qr=window.mrpspPaymentCache.qr?.[a.uid];const refund=refunds.find(x=>x.poolKey===pool.key&&x.studentUid===a.uid);const qrCell=qr?.dataUrl?`<button type="button" class="secondary" onclick="window.mrpspOpenRefundQr('${a.uid}','${String(a.name||'Student').replace(/'/g,"\\'")}')">VIEW QR</button>`:'<span class="pay-chip warn">QR not uploaded</span>';const closed=refund&&['CANCELLED','RECEIVED','WINDOW_EXPIRED'].includes(refund.status);let action='';if(refund){action=`<span class="pay-chip ${refund.status==='RECEIVED'?'ok':refund.status==='CANCELLED'?'bad':'warn'}">${mrpspSafe(refund.status)}</span><br>UTR: ${mrpspSafe(refund.utr||'—')}`;if(!closed)action+=`<br><button type="button" class="danger" style="margin-top:6px" onclick="window.mrpspCancelRefundPayout('${pool.key}','${a.uid}')">CANCEL REFUND</button>`;}else{action=`<input id="mrpspUtr_${pool.key}_${a.uid}" placeholder="Enter UTR / bank reference"><button class="success" style="margin-top:5px" ${qr?.dataUrl?'':'disabled'} onclick="window.mrpspMarkRefundSent('${pool.key}','${a.uid}')">MARK SENT</button><br><button type="button" class="danger" style="margin-top:6px" onclick="window.mrpspCancelRefundPayout('${pool.key}','${a.uid}')">CANCEL ALLOCATION</button>`;}return `<tr><td>${mrpspSafe(a.name)}</td><td>${Number(a.percent||0).toFixed(2)}% · ${mrpspMoney(Number(pool.amount)*Number(a.percent)/100)}</td><td>${qrCell}</td><td>${action}</td></tr>`;}).join('')}</tbody></table></div></div>`).join('')||'<p class="pay-muted">No refund sources recorded.</p>'}`;
-    }
-    if(studentHost){const own=refunds.filter(x=>x.studentUid===auth.currentUser?.uid);studentHost.innerHTML=`<h4>My Refund Status</h4><div class="pay-table-wrap"><table><thead><tr><th>Source</th><th>Amount</th><th>UTR</th><th>Confirmation deadline</th><th>Action / Status</th></tr></thead><tbody>${own.map(r=>`<tr><td>${mrpspSafe(r.sourceName)}</td><td>${mrpspMoney(r.amount)}</td><td>${mrpspSafe(r.utr||'—')}</td><td>${r.ackDeadline?mrpspDate(r.ackDeadline):'—'}</td><td>${r.status==='AWAITING_STUDENT_CONFIRMATION'&&Date.now()<=Number(r.ackDeadline)?`<button class="success" onclick="window.mrpspConfirmRefund('${r.key}')">RECEIVED</button> <button class="danger" onclick="window.mrpspReportRefundNotReceived('${r.key}')">NOT RECEIVED</button>`:`<span class="pay-chip ${r.status==='RECEIVED'?'ok':r.status==='NOT_RECEIVED'||r.status==='CANCELLED'?'bad':'warn'}">${mrpspSafe(r.status==='AWAITING_STUDENT_CONFIRMATION'?'CONFIRMATION WINDOW CLOSED':r.status)}</span>`}</td></tr>`).join('')||'<tr><td colspan="5">No refund allocated to you yet.</td></tr>'}</tbody></table></div>`;}
-  };
-})();
-</script>
+
 </body>
 </html>
