@@ -2101,7 +2101,7 @@ tr:hover { background: #fcfcfd; }
           <div><label for="mrpspExemptStudent">Select student / Project Head</label><select id="mrpspExemptStudent"><option value="">Select student</option></select></div>
           <div><label for="mrpspExemptAmount">Fixed dues for this exemption period (₹)</label><input id="mrpspExemptAmount" type="number" min="0.01" step="0.01" placeholder="Current due will be suggested"></div>
           <div><label for="mrpspExemptStartDate">Exemption period starts</label><input id="mrpspExemptStartDate" type="date"></div>
-          <div><label for="mrpspExemptEndDate">Exemption period ends</label><input id="mrpspExemptEndDate" type="date"></div>
+          <div><label for="mrpspExemptEndDate">Exemption period ends (maximum 25 days)</label><input id="mrpspExemptEndDate" type="date"><small class="pay-muted">The system switches to dynamic dues after the 25-day limit.</small></div>
           <div style="grid-column:1/-1"><label for="mrpspExemptReason">Reason / Admin remarks</label><textarea id="mrpspExemptReason" rows="2" placeholder="Explain why this member has fixed dues for this period."></textarea></div>
         </div>
         <button class="success" style="margin-top:12px" onclick="window.mrpspAddExemptContribution()"><i class="fas fa-save"></i> APPLY DUES EXEMPTION</button>
@@ -2117,11 +2117,12 @@ tr:hover { background: #fcfcfd; }
 
         <div id="mrpspRefundAdminPanel" class="hidden" style="border-top:1px solid #e5eaf2;margin-top:16px;padding-top:18px">
           <div id="mrpspRefundFundSummary" class="pay-grid" style="margin-bottom:18px"></div>
-          <h4>1. Mark Student-Wise Refund Amount</h4>
+          <h4>1. Create Bill-wise Refund</h4>
+          <p class="pay-muted">Select an approved payment bill from the dropdown and enter the refund amount. The system verifies the bill balance and classifies the refund as FULL or PARTIAL. The refund cannot exceed the bill's remaining refundable amount or the student's total paid balance.</p>
           <div class="pay-grid">
-            <div>
-              <label for="mrpspRefundStudentSelect">Select student</label>
-              <select id="mrpspRefundStudentSelect"><option value="">Select student</option></select>
+            <div style="grid-column:1/-1">
+              <label for="mrpspRefundBillSelect">Approved bill number</label>
+              <select id="mrpspRefundBillSelect"><option value="">Loading approved bills…</option></select>
             </div>
             <div>
               <label for="mrpspRefundAmountInput">Refund amount (₹)</label>
@@ -2132,7 +2133,7 @@ tr:hover { background: #fcfcfd; }
               <textarea id="mrpspRefundRemarksInput" rows="2" placeholder="e.g. Excess contribution refund / project balance refund"></textarea>
             </div>
           </div>
-          <button type="button" class="success" style="margin-top:10px" onclick="window.mrpspAdminMarkStudentRefund()"><i class="fas fa-check-circle"></i> MARK STUDENT REFUND</button>
+          <button type="button" class="success" style="margin-top:10px" onclick="window.mrpspAdminMarkStudentRefund()"><i class="fas fa-check-circle"></i> VERIFY BILL & MARK REFUND</button>
           <div id="mrpspRefundAdminQueue" style="margin-top:22px"></div>
         </div>
 
@@ -19138,76 +19139,66 @@ window.mrpspCloseRefundQrModal = function(){
 };
 
 window.mrpspAdminMarkStudentRefund = async function(){
-  if (!isAdmin || !auth.currentUser) return alert("Administrator access required.");
-  const uid = (document.getElementById("mrpspRefundStudentSelect")?.value || "").trim();
-  const amount = Number(document.getElementById("mrpspRefundAmountInput")?.value);
-  const remarks = (document.getElementById("mrpspRefundRemarksInput")?.value || "").trim();
-  const student = mrpspStudentUsers().find(s => s.uid === uid);
-  if (!student) return alert("Please select a student.");
-  if (!Number.isFinite(amount) || amount <= 0) return alert("Enter a valid refund amount greater than zero.");
-
-  try {
-    // Re-read live finance, requests, and refunds to enforce both paid cap and Project Fund balance.
-    const [finSnap, reqSnap, refSnap] = await Promise.all([
-      get(projectAwareRef("finance")),
-      get(projectAwareRef("eoffice_requests")),
+  if(!isAdmin||!auth.currentUser)return alert("Administrator access required.");
+  const billKey=(document.getElementById("mrpspRefundBillSelect")?.value||"").trim();
+  const amount=Number(document.getElementById("mrpspRefundAmountInput")?.value);
+  const remarks=(document.getElementById("mrpspRefundRemarksInput")?.value||"").trim();
+  if(!billKey)return alert("Select an approved bill number from the dropdown.");
+  if(!Number.isFinite(amount)||amount<=0)return alert("Enter a valid refund amount greater than zero.");
+  try{
+    const [finSnap,reqSnap,refSnap]=await Promise.all([
+      get(projectAwareRef("finance")),get(projectAwareRef("eoffice_requests")),
       get(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`))
     ]);
-    const liveFinance = finSnap.exists() ? finSnap.val() : {};
-    const liveRequests = reqSnap.exists() ? reqSnap.val() : {};
-    const liveRefunds = refSnap.exists() ? refSnap.val() : {};
-
-    const actualPaid = mrpspComputeStudentActualPaid(uid, liveFinance, liveRequests);
-    const alreadyRefunded = mrpspComputeStudentRefundedTotal(uid, liveRefunds);
-    const remainingRefundable = Math.max(0, Number((actualPaid - alreadyRefunded).toFixed(2)));
-
-    if (actualPaid <= 0) {
-      return alert(`Cannot mark refund for ${mrpspName(student)}.\nVerified Amount Paid: ${mrpspMoney(0)}\nRefund amount cannot exceed the amount paid by the student.`);
-    }
-    if (amount > remainingRefundable + 0.001) {
-      return alert(`Refund amount cannot exceed the amount paid by ${mrpspName(student)}.\nTotal Amount Paid: ${mrpspMoney(actualPaid)}\nAlready Refunded / Open Refunds: ${mrpspMoney(alreadyRefunded)}\nMax Refundable Remaining: ${mrpspMoney(remainingRefundable)}\nRequested Refund: ${mrpspMoney(amount)}`);
-    }
-
-    const fundInfo = mrpspComputeAvailableFundBalance(liveFinance);
-    const reserved = mrpspComputeReservedRefunds(liveRefunds);
-    const usableFund = fundInfo.available - reserved;
-
-    if (fundInfo.available < amount) {
-      return alert(`Insufficient balance in Project Funds.\nAvailable Fund Balance: ${mrpspMoney(fundInfo.available)}\nRequested Refund: ${mrpspMoney(amount)}`);
-    }
-    if (usableFund < amount) {
-      return alert(`Insufficient unallocated Project Fund balance.\nAvailable Fund: ${mrpspMoney(fundInfo.available)}\nAlready Reserved for Open Refunds: ${mrpspMoney(reserved)}\nRemaining Available: ${mrpspMoney(Math.max(0, usableFund))}`);
-    }
-
-    if (!confirm(`Mark student-wise refund of ${mrpspMoney(amount)} for ${mrpspName(student)}?\n\nThe student will be asked to choose either Due Clear (Fund Settlement) or Credit to Account. Their selection will be final.`)) return;
-
-    const now = Date.now();
-    await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`), {
-      workflowType: "STUDENT_WISE_REFUND",
-      studentUid: uid,
-      studentName: mrpspName(student),
-      studentEmail: mrpspUserEmail(student) || student.email || "",
-      amount: Number(amount.toFixed(2)),
-      remarks,
-      status: "AWAITING_STUDENT_MODE",
-      mode: null,
-      modeLocked: false,
-      qrDataUrl: null,
-      utr: null,
-      financeEntryKey: null,
-      deductedFromFund: false,
-      createdAt: now,
-      createdBy: auth.currentUser.uid,
-      createdByEmail: auth.currentUser.email || "Admin"
+    const liveFinance=finSnap.exists()?finSnap.val():{};
+    const liveRequests=reqSnap.exists()?reqSnap.val():{};
+    const liveRefunds=refSnap.exists()?refSnap.val():{};
+    const bills=mrpspStudentUsers().flatMap(st=>mrpspBillApprovedPayments(st.uid).map(p=>({
+      ...p,studentUid:st.uid,studentName:mrpspName(st),
+      billNo:"MRPSP-RCPT-"+String(p.key).slice(-10).toUpperCase()
+    })));
+    const bill=bills.find(x=>x.key===billKey);
+    if(!bill)return alert("Selected bill is no longer available or is not approved. Refresh and select a current bill.");
+    const student=mrpspStudentUsers().find(x=>x.uid===bill.studentUid);
+    if(!student)return alert("The bill's student account could not be found.");
+    const billAmount=Number(bill.amount)||0;
+    if(billAmount<=0)return alert("The selected bill has no valid paid amount.");
+    const allRefunds=mrpspGetStudentWiseRefunds(liveRefunds).filter(r=>r.status!=="CANCELLED");
+    const billRefunded=allRefunds.filter(r=>r.studentUid===bill.studentUid&&(r.paymentKey===bill.key||r.billNo===bill.billNo))
+      .reduce((sum,r)=>sum+(Number(r.amount)||0),0);
+    const billRemaining=Math.max(0,Number((billAmount-billRefunded).toFixed(2)));
+    const actualPaid=mrpspComputeStudentActualPaid(bill.studentUid,liveFinance,liveRequests);
+    const studentRefunded=mrpspComputeStudentRefundedTotal(bill.studentUid,liveRefunds);
+    const studentRemaining=Math.max(0,Number((actualPaid-studentRefunded).toFixed(2)));
+    const maxRefund=Math.min(billRemaining,studentRemaining);
+    if(amount>maxRefund+0.001)return alert(`Refund exceeds verified refundable balance.\nBill No: ${bill.billNo}\nOriginal Bill: ${mrpspMoney(billAmount)}\nAlready Refunded Against Bill: ${mrpspMoney(billRefunded)}\nBill Balance: ${mrpspMoney(billRemaining)}\nStudent Remaining Refundable: ${mrpspMoney(studentRemaining)}\nMaximum Allowed: ${mrpspMoney(maxRefund)}`);
+    const fundInfo=mrpspComputeAvailableFundBalance(liveFinance);
+    const reserved=mrpspComputeReservedRefunds(liveRefunds);
+    const usable=fundInfo.available-reserved;
+    if(usable<amount)return alert(`Insufficient unallocated Project Funds.\nAvailable: ${mrpspMoney(fundInfo.available)}\nReserved: ${mrpspMoney(reserved)}\nRemaining: ${mrpspMoney(Math.max(0,usable))}`);
+    const refundType=billRefunded+amount>=billAmount-0.001?"FULL":"PARTIAL";
+    if(!confirm(`Verify bill-wise refund?\n\nBill No: ${bill.billNo}\nStudent: ${mrpspName(student)}\nOriginal Bill: ${mrpspMoney(billAmount)}\nPreviously Refunded: ${mrpspMoney(billRefunded)}\nThis Refund: ${mrpspMoney(amount)}\nClassification: ${refundType} REFUND\nRemaining After Refund: ${mrpspMoney(Math.max(0,billRemaining-amount))}\n\nContinue?`))return;
+    const now=Date.now();
+    await push(projectAwareRef(`${MRPSP_MEMBER_PAYMENT_PATH}/refunds`),{
+      workflowType:"STUDENT_WISE_REFUND",refundScope:"BILL",
+      studentUid:bill.studentUid,studentName:mrpspName(student),
+      studentEmail:mrpspUserEmail(student)||student.email||"",
+      paymentKey:bill.key,paymentId:bill.paymentId||bill.key,billNo:bill.billNo,
+      originalBillAmount:Number(billAmount.toFixed(2)),
+      previouslyRefundedAgainstBill:Number(billRefunded.toFixed(2)),
+      refundType,amount:Number(amount.toFixed(2)),remarks,
+      status:"AWAITING_STUDENT_MODE",mode:null,modeLocked:false,
+      qrDataUrl:null,utr:null,financeEntryKey:null,deductedFromFund:false,
+      createdAt:now,createdBy:auth.currentUser.uid,
+      createdByEmail:auth.currentUser.email||"Admin"
     });
-
-    document.getElementById("mrpspRefundAmountInput").value = "";
-    document.getElementById("mrpspRefundRemarksInput").value = "";
-    alert(`Refund of ${mrpspMoney(amount)} marked for ${mrpspName(student)}. Awaiting student's final mode selection.`);
+    document.getElementById("mrpspRefundAmountInput").value="";
+    document.getElementById("mrpspRefundRemarksInput").value="";
+    alert(`${refundType} bill-wise refund of ${mrpspMoney(amount)} marked for ${bill.billNo}. The student will now choose the refund method.`);
     await window.mrpspLoadMemberPaymentDashboard("refund");
-  } catch (e) {
-    console.error("Failed to mark student refund", e);
-    alert("Could not mark refund: " + (e?.message || e));
+  }catch(e){
+    console.error("Failed to mark bill-wise refund",e);
+    alert("Could not mark refund: "+(e?.message||e));
   }
 };
 
@@ -19505,7 +19496,7 @@ function mrpspRenderRefunds(){
   const adminHost = document.getElementById("mrpspRefundAdminQueue");
   const studentHost = document.getElementById("mrpspRefundStudentList");
   const summaryHost = document.getElementById("mrpspRefundFundSummary");
-  const studentSelect = document.getElementById("mrpspRefundStudentSelect");
+  const billSelect = document.getElementById("mrpspRefundBillSelect");
 
   const refunds = mrpspGetStudentWiseRefunds(mrpspPaymentCache.refunds)
     .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
@@ -19523,21 +19514,25 @@ function mrpspRenderRefunds(){
         ["Remaining Fund for New Refunds", mrpspMoney(usable)]
       ].map(([label, val]) => `<div class="pay-stat"><span class="pay-muted">${label}</span><b>${val}</b></div>`).join("");
     }
-    if (studentSelect) {
-      const prev = studentSelect.value;
-      studentSelect.innerHTML = '<option value="">Select student</option>' + model.rows.map(s => {
-        const actualPaid = mrpspComputeStudentActualPaid(s.uid, mrpspPaymentCache.finance, mrpspPaymentCache.requests);
-        const alreadyRefunded = mrpspComputeStudentRefundedTotal(s.uid, mrpspPaymentCache.refunds);
-        const maxRef = Math.max(0, Number((actualPaid - alreadyRefunded).toFixed(2)));
-        const balText = s.balance > 0 ? `Due: ${mrpspMoney(s.balance)}` : (s.balance < 0 ? `Credit: ${mrpspMoney(Math.abs(s.balance))}` : "No due");
-        return `<option value="${mrpspSafe(s.uid)}">${mrpspSafe(mrpspName(s))} (Paid: ${mrpspMoney(actualPaid)} | Max Refundable: ${mrpspMoney(maxRef)} | ${balText})</option>`;
+    if(billSelect){
+      const prev=billSelect.value;
+      const bills=mrpspStudentUsers().flatMap(st=>mrpspBillApprovedPayments(st.uid).map(p=>({
+        ...p,studentUid:st.uid,studentName:mrpspName(st),
+        billNo:"MRPSP-RCPT-"+String(p.key).slice(-10).toUpperCase()
+      })));
+      billSelect.innerHTML='<option value="">Select an approved bill number</option>'+bills.map(b=>{
+        const refunded=refunds.filter(r=>r.studentUid===b.studentUid&&(r.paymentKey===b.key||r.billNo===b.billNo)&&r.status!=="CANCELLED")
+          .reduce((sum,r)=>sum+(Number(r.amount)||0),0);
+        const remaining=Math.max(0,Number((Number(b.amount||0)-refunded).toFixed(2)));
+        return `<option value="${mrpspSafe(b.key)}">${mrpspSafe(b.billNo)} | ${mrpspSafe(b.studentName)} | Bill ${mrpspMoney(b.amount)} | Refundable ${mrpspMoney(remaining)}</option>`;
       }).join("");
-      if (model.rows.some(s => s.uid === prev)) studentSelect.value = prev;
+      if(bills.some(b=>b.key===prev))billSelect.value=prev;
+      if(!bills.length)billSelect.innerHTML='<option value="">No approved payment bills available</option>';
     }
     if (adminHost) {
-      adminHost.innerHTML = `<h4>2. Student-Wise Refund Cases</h4>
+      adminHost.innerHTML = `<h4>2. Bill-wise Refund Cases</h4>
         <div class="pay-table-wrap"><table><thead><tr>
-          <th>Student</th><th>Refund Amount</th><th>Selected Mode</th><th>QR / Settlement</th><th>Status</th><th>Admin Action</th>
+          <th>Student</th><th>Bill No.</th><th>Refund Type</th><th>Refund Amount</th><th>Selected Mode</th><th>QR / Settlement</th><th>Status</th><th>Admin Action</th>
         </tr></thead><tbody>${refunds.length ? refunds.map(r => {
           let qrCol = "—";
           if (r.mode === "DUE_CLEAR") {
@@ -19568,13 +19563,15 @@ function mrpspRenderRefunds(){
           }
           return `<tr>
             <td><b>${mrpspSafe(r.studentName || "Student")}</b><br><small class="pay-muted">${mrpspSafe(r.studentEmail || "")}</small></td>
+            <td>${mrpspSafe(r.billNo || "LEGACY / NOT LINKED")}<br><small class="pay-muted">${mrpspSafe(r.paymentId || "")}</small></td>
+            <td>${r.refundType==="FULL"?'<span class="pay-chip ok">FULL</span>':r.refundType==="PARTIAL"?'<span class="pay-chip warn">PARTIAL</span>':'<span class="pay-chip">LEGACY</span>'}</td>
             <td><b>${mrpspMoney(r.amount)}</b>${r.remarks ? `<br><small class="pay-muted">${mrpspSafe(r.remarks)}</small>` : ""}<br><small class="pay-muted">${mrpspDate(r.createdAt)}</small></td>
             <td>${mrpspRefundModeLabel(r.mode)}</td>
             <td>${qrCol}</td>
             <td>${mrpspRefundStatusBadge(r.status)}</td>
             <td>${actionCol}</td>
           </tr>`;
-        }).join("") : '<tr><td colspan="6">No student refunds marked yet.</td></tr>'}</tbody></table></div>`;
+         }).join("") : '<tr><td colspan="8">No bill-wise refunds marked yet.</td></tr>'}</tbody></table></div>`;
     }
   }
 
@@ -20263,15 +20260,18 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
 
   function mrpspExemptionWindow(x, now){
     if(x.status==="CANCELLED" || x.cancelled===true) return "CANCELLED";
-    const start = x.periodStartAt
-      ? Number(x.periodStartAt)
-      : (x.periodStartDate ? new Date(x.periodStartDate+"T00:00:00").getTime() : 0);
-    const end = x.periodEndAt
-      ? Number(x.periodEndAt)
-      : (x.periodEndDate ? new Date(x.periodEndDate+"T23:59:59.999").getTime() : 0);
-    if(start && now < start) return "SCHEDULED";
-    if(end && now > end) return "EXPIRED";
-    // Old active records without period dates remain active until Admin ends/cancels them.
+    const created=Number(x.createdAt||0);
+    const createdDate=created?new Date(created):null;
+    const start=x.periodStartAt?Number(x.periodStartAt):
+      (x.periodStartDate?new Date(x.periodStartDate+"T00:00:00").getTime():
+      (createdDate?new Date(createdDate.getFullYear(),createdDate.getMonth(),createdDate.getDate()).getTime():0));
+    if(!start||!Number.isFinite(start)) return "EXPIRED";
+    const hardLimit=start+25*24*60*60*1000-1;
+    const savedEnd=x.periodEndAt?Number(x.periodEndAt):
+      (x.periodEndDate?new Date(x.periodEndDate+"T23:59:59.999").getTime():hardLimit);
+    const end=Math.min(Number.isFinite(savedEnd)&&savedEnd>0?savedEnd:hardLimit,hardLimit);
+    if(now<start)return "SCHEDULED";
+    if(now>end)return "EXPIRED";
     return "ACTIVE";
   }
 
@@ -20341,11 +20341,21 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
     const today=new Date();
     const todayText=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
     const startInput=document.getElementById("mrpspExemptStartDate");
+    const endInput=document.getElementById("mrpspExemptEndDate");
     if(startInput&&!startInput.value)startInput.value=todayText;
+    const syncExemptionEndLimit=()=>{
+      if(!startInput||!endInput||!startInput.value)return;
+      const d=new Date(startInput.value+"T00:00:00");d.setDate(d.getDate()+24);
+      const max=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      endInput.min=startInput.value;endInput.max=max;
+      if(endInput.value&&endInput.value>max)endInput.value=max;
+    };
+    if(startInput&&!startInput.dataset.max25Bound){startInput.addEventListener("change",syncExemptionEndLimit);startInput.dataset.max25Bound="1";}
+    syncExemptionEndLimit();
 
     const records=model.allExemptions||[];
     list.innerHTML=`<h4>Period-based fixed dues</h4>
-      <p class="pay-muted">An active exemption member pays the fixed amount entered by Admin, not ₹0. Other payable members, including Project Head, share the remaining asset cost. At the end date, the member automatically returns to the dynamic calculation. Admin may cancel earlier.</p>
+      <p class="pay-muted">Admin may set fixed dues for up to 25 calendar days from the start date. At expiry, the member automatically returns to dynamic dues. The same 25-day cap also applies to previously saved exemption records.</p>
       <div class="pay-table-wrap"><table><thead><tr><th>Member</th><th>Fixed dues</th><th>Period</th><th>Reason</th><th>Status</th><th>Action</th></tr></thead><tbody>
       ${records.map(x=>{
         const state=mrpspExemptionWindow(x,Date.now());
@@ -20396,6 +20406,7 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
     const startAt=new Date(startDate+"T00:00:00").getTime();
     const endAt=new Date(endDate+"T23:59:59.999").getTime();
     if(!Number.isFinite(startAt)||!Number.isFinite(endAt)||endAt<startAt)return alert("Exemption end date must be on or after the start date.");
+    if(endAt>startAt+25*24*60*60*1000-1)return alert("A fixed-dues period can run for a maximum of 25 calendar days from its start date. After day 25, the member automatically returns to dynamic dues.");
     if(!reason)return alert("Reason is required.");
     const model=mrpspBuildDues();
     const existing=model.allExemptions||[];
