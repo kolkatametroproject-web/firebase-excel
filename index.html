@@ -18831,7 +18831,23 @@ window.mrpspRenderSelectedDues=function(){
   const payments=Object.entries(mrpspPaymentCache.requests||{}).map(([key,v])=>({key,...v}))
     .filter(p=>(p.createdBy===uid||p.studentUid===uid) && p.type==="PROJECT_PAYMENT_VERIFICATION" && p.status==="VERIFIED" && p.verified===true)
     .sort((a,b)=>(b.verifiedAt||b.createdAt||0)-(a.verifiedAt||a.createdAt||0));
-  const receiptData={studentName:mrpspName(student),email:mrpspUserEmail(student),uid:student.uid,due:student.due,paid:student.paid,balance:student.balance,exempt:student.exempt,assetTotal:model.assetTotal,exemptionTotal:model.exemptionTotal,perStudent:model.perStudent,payments};
+  // Show each approved bill with its cumulative bill-linked refunds. Cancelled refund cases are excluded.
+  const billRefunds=Object.entries(mrpspPaymentCache.refunds||{}).map(([key,r])=>({key,...r})).filter(r=>r && r.studentUid===uid && r.status!=="CANCELLED" && (r.refundScope==="BILL" || r.paymentKey || r.billNo));
+  const bills=mrpspBillApprovedPayments(uid).map(p=>{
+    const billNo="MRPSP-RCPT-"+String(p.key).slice(-10).toUpperCase();
+    const linked=billRefunds.filter(r=>r.paymentKey===p.key || r.billNo===billNo);
+    // Only CLOSED cases count as money actually refunded. Open cases are shown separately as processing.
+    const completed=Number(linked.filter(r=>r.status==="CLOSED").reduce((sum,r)=>sum+(Number(r.amount)||0),0).toFixed(2));
+    const pending=linked.filter(r=>r.status!=="CLOSED" && r.status!=="CANCELLED");
+    const pendingAmount=Number(pending.reduce((sum,r)=>sum+(Number(r.amount)||0),0).toFixed(2));
+    const amount=Number(p.amount)||0;
+    const refunded=Math.min(amount,completed);
+    const remaining=Math.max(0,Number((amount-refunded).toFixed(2)));
+    const full=amount>0 && remaining<=0.001;
+    const status=full?"FULL REFUNDED":refunded>0?"PARTIAL REFUNDED":pending.length?"REFUND IN PROCESS":"NOT REFUNDED";
+    return {...p,billNo,billAmount:amount,refundedAmount:refunded,remainingAmount:remaining,pendingRefundAmount:pendingAmount,refundStatus:status,refunds:linked};
+  }).sort((a,b)=>Number(b.verifiedAt||b.createdAt||0)-Number(a.verifiedAt||a.createdAt||0));
+  const receiptData={studentName:mrpspName(student),email:mrpspUserEmail(student),uid:student.uid,due:student.due,paid:student.paid,balance:student.balance,exempt:student.exempt,assetTotal:model.assetTotal,exemptionTotal:model.exemptionTotal,perStudent:model.perStudent,payments,bills,refunds:billRefunds};
   window.mrpspCurrentReceipt=receiptData;
   host.innerHTML=`<div class="pay-grid">
     <div class="pay-stat"><span class="pay-muted">Calculated dues</span><b>${mrpspMoney(student.due)}</b></div>
@@ -18843,7 +18859,23 @@ window.mrpspRenderSelectedDues=function(){
     <button class="success" onclick="window.mrpspDownloadStudentReceipt()"><i class="fas fa-file-pdf"></i> DOWNLOAD VERIFIED STATEMENT</button>
     <button class="info" onclick="window.mrpspEmailStudentStatement()"><i class="fas fa-envelope"></i> EMAIL STATEMENT</button>
   </div>`:`<p class="pay-muted" style="margin:16px 0">Paid receipts and payment history will appear here only after Admin verifies a payment.</p>`}
-  <h4>Verified payment history</h4><div class="pay-table-wrap"><table><thead><tr><th>Submitted</th><th>Amount</th><th>Purpose</th><th>Status</th><th>Admin note</th><th>Receipt</th></tr></thead><tbody>${payments.map(p=>`<tr><td>${mrpspDate(p.createdAt)}</td><td>${mrpspMoney(p.amount)}</td><td>${mrpspSafe(p.purpose||"—")}</td><td><span class="pay-chip ok">VERIFIED</span></td><td>${mrpspSafe(p.verificationNote||"—")}</td><td><button type="button" class="success" style="font-size:11px;padding:7px 9px" onclick="window.mrpspDownloadPaidReceipt('${p.key}')">DOWNLOAD PAID RECEIPT</button></td></tr>`).join("")||'<tr><td colspan="6">No Admin-approved payments yet.</td></tr>'}</tbody></table></div>
+  <h4>Bill-wise Refund Status</h4>
+  <p class="pay-muted">Each approved bill is tracked separately. Only completed (closed) refunds reduce the bill balance. Open refund requests are shown separately as in process.</p>
+  <div class="pay-table-wrap"><table><thead><tr><th>Bill No.</th><th>Bill Amount</th><th>Refunded Amount</th><th>Left Amount</th><th>Pending Refund</th><th>Refund Status</th></tr></thead><tbody>${bills.map(b=>{
+    const full=b.refundStatus.startsWith("FULL");
+    const partial=b.refundStatus.startsWith("PARTIAL");
+    const processing=b.refundStatus==="REFUND IN PROCESS";
+    const chip=full?'<span class="pay-chip ok">FULL REFUNDED</span>':partial?'<span class="pay-chip warn">PARTIAL REFUNDED</span>':processing?'<span class="pay-chip warn">REFUND IN PROCESS</span>':'<span class="pay-chip">NOT REFUNDED</span>';
+    return `<tr><td><b>${mrpspSafe(b.billNo)}</b><br><small class="pay-muted">${mrpspDate(b.createdAt)}</small></td><td>${mrpspMoney(b.billAmount)}</td><td>${mrpspMoney(b.refundedAmount)}</td><td><b>${mrpspMoney(b.remainingAmount)}</b></td><td>${mrpspMoney(b.pendingRefundAmount)}</td><td>${chip}</td></tr>`;
+  }).join("")||'<tr><td colspan="6">No approved bills found.</td></tr>'}</tbody></table></div>
+  <h4 style="margin-top:20px">Verified payment history</h4><div class="pay-table-wrap"><table><thead><tr><th>Submitted</th><th>Amount</th><th>Purpose</th><th>Status</th><th>Admin note</th><th>Receipt</th></tr></thead><tbody>${payments.map(p=>`<tr><td>${mrpspDate(p.createdAt)}</td><td>${mrpspMoney(p.amount)}</td><td>${mrpspSafe(p.purpose||"—")}</td><td><span class="pay-chip ok">VERIFIED</span></td><td>${mrpspSafe(p.verificationNote||"—")}</td><td><button type="button" class="success" style="font-size:11px;padding:7px 9px" onclick="window.mrpspDownloadPaidReceipt('${p.key}')">DOWNLOAD PAID RECEIPT</button></td></tr>`).join("")||'<tr><td colspan="6">No Admin-approved payments yet.</td></tr>'}</tbody></table></div>
+  <h4 style="margin-top:20px">Refund Bills & Transactions</h4>
+  <div class="pay-table-wrap"><table><thead><tr><th>Refund Receipt</th><th>Bill No.</th><th>Refund Date</th><th>Refund Amount</th><th>Mode</th><th>Status</th><th>Receipt</th></tr></thead><tbody>${billRefunds.map(r=>{
+    const billNo=r.billNo||"LEGACY / NOT LINKED";
+    const status=r.status==="CLOSED"?"REFUNDED":r.status==="CANCELLED"?"CANCELLED":"IN PROCESS";
+    const mode=r.mode==="DUE_CLEAR"?"Adjusted against dues":r.mode==="CREDIT_TO_ACCOUNT"?"Credit to account":"Awaiting student choice";
+    return `<tr><td><b>${mrpspSafe("MRPSP-REF-"+String(r.key).slice(-10).toUpperCase())}</b></td><td>${mrpspSafe(billNo)}</td><td>${mrpspDate(r.closedAt||r.createdAt)}</td><td>${mrpspMoney(r.amount)}</td><td>${mrpspSafe(mode)}</td><td><span class="pay-chip ${status==="REFUNDED"?"ok":status==="CANCELLED"?"bad":"warn"}">${status}</span></td><td>${status==="REFUNDED"?`<button type="button" class="success" onclick="window.mrpspDownloadRefundReceipt('${mrpspSafe(r.key)}')">DOWNLOAD REFUND BILL</button>`:"—"}</td></tr>`;
+  }).join("")||'<tr><td colspan="7">No refund bills or refund transactions found.</td></tr>'}</tbody></table></div>
   <p class="pay-muted" style="margin-top:12px">Due calculation: active exemption members pay their Admin-entered fixed amount for the selected period. The remaining approved asset purchase cost is divided equally among all other payable members, including Project Head. Your current due is ${mrpspMoney(student.due)}. Any verified payment above the calculated dues appears as a negative balance (credit) and is automatically carried forward against future dues as new approved asset costs are added.</p>`;
 };
 
@@ -18851,6 +18883,8 @@ window.mrpspDownloadStudentReceipt=function(){
   const d=window.mrpspCurrentReceipt;
   if(!d)return alert("Select a student statement first.");
   const rows=(d.payments||[]).map(p=>`<tr><td>${mrpspBillEscape(p.createdAt?new Date(p.createdAt).toLocaleString("en-IN"):"—")}</td><td>${mrpspBillEscape(mrpspMoney(p.amount))}</td><td>${mrpspBillEscape(p.purpose||"—")}</td><td>${mrpspBillEscape(p.status||"PENDING")}</td></tr>`).join("");
+  const billRows=(d.bills||[]).map(b=>`<tr><td>${mrpspBillEscape(b.billNo)}</td><td>${mrpspBillEscape(mrpspMoney(b.billAmount))}</td><td>${mrpspBillEscape(mrpspMoney(b.refundedAmount))}</td><td>${mrpspBillEscape(mrpspMoney(b.remainingAmount))}</td><td>${mrpspBillEscape(b.refundStatus)}</td></tr>`).join("");
+  const refundRows=(d.refunds||[]).map(r=>`<tr><td>${mrpspBillEscape("MRPSP-REF-"+String(r.key).slice(-10).toUpperCase())}</td><td>${mrpspBillEscape(r.billNo||"LEGACY / NOT LINKED")}</td><td>${mrpspBillEscape(mrpspMoney(r.amount))}</td><td>${mrpspBillEscape(r.mode||"Pending")}</td><td>${mrpspBillEscape(r.status==="CLOSED"?"REFUNDED":r.status==="CANCELLED"?"CANCELLED":"IN PROCESS")}</td></tr>`).join("");
   const balanceLabel=d.balance<0?"Credit carried forward":"Outstanding balance";
   const w=window.open("","_blank","width=900,height=750");
   if(!w)return alert("Your browser blocked the print window. Allow pop-ups for this site and try again.");
@@ -18859,8 +18893,10 @@ window.mrpspDownloadStudentReceipt=function(){
   <h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1><h2>STUDENT PAYMENT STATEMENT</h2>
   <p><b>Student:</b> ${mrpspBillEscape(d.studentName)}<br><b>Email:</b> ${mrpspBillEscape(d.email)}<br><b>Student ID:</b> ${mrpspBillEscape(d.uid)}</p>
   <div class="summary"><div>Calculated dues<br><b>${mrpspBillEscape(mrpspMoney(d.due))}</b></div><div>Verified payments<br><b>${mrpspBillEscape(mrpspMoney(d.paid))}</b></div><div>${mrpspBillEscape(balanceLabel)}<br><b>${d.balance<0?"-":""}${mrpspBillEscape(mrpspMoney(Math.abs(d.balance)))}</b></div><div>Asset purchase total<br><b>${mrpspBillEscape(mrpspMoney(d.assetTotal))}</b></div></div>
+  <h3>Bill-wise Refund Summary</h3><table><thead><tr><th>Bill No.</th><th>Bill Amount</th><th>Refunded</th><th>Left Amount</th><th>Refund Status</th></tr></thead><tbody>${billRows||"<tr><td colspan='5'>No approved bills</td></tr>"}</tbody></table>
   <h3>Admin-Verified Payment History</h3><table><thead><tr><th>Date</th><th>Amount</th><th>Purpose</th><th>Status</th></tr></thead><tbody>${rows||"<tr><td colspan='4'>No payments</td></tr>"}</tbody></table>
-  <p style="margin-top:30px;font-size:11px;color:#64748b">Computer-generated account statement. Individual paid receipts can be printed from the Print Payment Bill tab.</p>
+  <h3>Refund Bills & Transactions</h3><table><thead><tr><th>Refund Receipt</th><th>Bill No.</th><th>Amount</th><th>Mode</th><th>Status</th></tr></thead><tbody>${refundRows||"<tr><td colspan='5'>No refunds</td></tr>"}</tbody></table>
+  <p style="margin-top:30px,font-size:11px;color:#64748b">Computer-generated account statement. Individual paid receipts can be printed from the Print Payment Bill tab.</p>
   <script>window.onload=function(){setTimeout(function(){window.print()},300)};<\/script>
 
 </body></html>`);
@@ -18876,8 +18912,10 @@ window.mrpspEmailStudentStatement=async function(){
     `Student: ${d.studentName}`,`Email: ${d.email}`,`Total approved asset purchases: ${mrpspMoney(d.assetTotal)}`,
     `Dues waiver amounts: ${mrpspMoney(d.exemptionTotal)}`,`Calculated student dues: ${mrpspMoney(d.due)}`,
     `Admin-verified payments received: ${mrpspMoney(d.paid)}`,`Outstanding dues: ${mrpspMoney(d.balance)}`,
+    "", "Bill-wise refund summary:",...(d.bills||[]).map(b=>`${b.billNo} | Bill ${mrpspMoney(b.billAmount)} | Refunded ${mrpspMoney(b.refundedAmount)} | Left ${mrpspMoney(b.remainingAmount)} | ${b.refundStatus}`),
     "", "Payment history:",...d.payments.map(p=>`${mrpspDate(p.createdAt)} | ${mrpspMoney(p.amount)} | ${p.status||"PENDING"} | ${p.purpose||""}`),
-    "", "Only payments marked VERIFIED by the administrator are counted as received."
+    "", "Refund bills and transactions:",...(d.refunds||[]).map(r=>`${"MRPSP-REF-"+String(r.key).slice(-10).toUpperCase()} | ${r.billNo||"LEGACY / NOT LINKED"} | ${mrpspMoney(r.amount)} | ${r.mode||"Pending"} | ${r.status==="CLOSED"?"REFUNDED":r.status==="CANCELLED"?"CANCELLED":"IN PROCESS"}`),
+    "", "Only payments marked VERIFIED by the administrator are counted as received. Only CLOSED refunds are counted as refunded."
   ].join("\n");
   const fakePayment={payerName:d.studentName,amount:d.paid,purpose:`Dues statement | Total dues ${mrpspMoney(d.due)} | Outstanding ${mrpspMoney(d.balance)}`,createdAt:Date.now(),transactionLast4:"—"};
   try{await window.mrpspSendPaymentEmail(email,d.studentName,"DUES & PAYMENT STATEMENT",fakePayment,body);alert("Statement email request sent to "+email+".");}
@@ -20183,6 +20221,12 @@ window.mrpspRenderSelectedDues=function(){
     if(header&&!header.querySelector('[data-receipt-column="1"]')){
       const th=document.createElement("th");th.textContent="Receipt";th.dataset.receiptColumn="1";header.appendChild(th);
     }
+    if(header&&!header.querySelector('[data-refund-status-column="1"]')){
+      const th=document.createElement("th");th.textContent="REFUND STATUS";th.dataset.refundStatusColumn="1";header.appendChild(th);
+    }
+    if(header&&!header.querySelector('[data-refund-bill-column="1"]')){
+      const th=document.createElement("th");th.textContent="REFUND BILL";th.dataset.refundBillColumn="1";header.appendChild(th);
+    }
     const tbody=table.querySelector("tbody");
     if(tbody)tbody.innerHTML=combined.map(p=>{
       const financeEntries=Object.entries(mrpspPaymentCache.finance||{});
@@ -20197,16 +20241,36 @@ window.mrpspRenderSelectedDues=function(){
       else if(p.dueSettlementPayment) action='<span style="font-size:11px;font-weight:700;color:#15803d">REFUND SETTLEMENT</span>';
       const statusLabel = p.legacyImported ? "HISTORICAL PAYMENT" : (p.dueSettlementPayment ? "DUE SETTLEMENT (PAID)" : mrpspSafe(p.status||"VERIFIED"));
       const noteText = p.legacyImported ? "Imported from Master Balance Sheet. UTR shown only if present in original ledger." : (p.verificationNote||"—");
+      const bill=(d.bills||[]).find(b=>b.key===p.key || b.paymentId===p.paymentId);
+      const billRefunds=(bill?.refunds||[]);
+      const refundStatus=bill?.refundStatus||"NOT LINKED TO BILL";
+      const refundChip=refundStatus==="FULL REFUNDED"?'<span class="pay-chip ok">FULL REFUNDED</span>':refundStatus==="PARTIAL REFUNDED"?'<span class="pay-chip warn">PARTIAL REFUNDED</span>':refundStatus==="REFUND IN PROCESS"?'<span class="pay-chip warn">IN PROCESS</span>':'<span class="pay-chip">NOT REFUNDED</span>';
+      const refundBillButtons=billRefunds.filter(r=>r.status==="CLOSED").map(r=>`<button type="button" class="success" style="font-size:10px;padding:6px 8px;margin:2px" onclick="window.mrpspDownloadRefundReceipt('${mrpspSafe(r.key)}')">REFUND BILL</button>`).join("")||"—";
       return `<tr>
         <td>${mrpspDate(p.createdAt)}</td><td>${mrpspMoney(p.amount)}</td><td>${mrpspSafe(p.purpose||"—")}</td>
         <td><span class="pay-chip ${p.status==="CANCELLED"?"bad":"ok"}">${statusLabel}</span></td>
         <td>${mrpspSafe(noteText)}</td>
         <td><button class="success" onclick="window.mrpspDownloadPaidReceipt('${mrpspSafe(p.key)}')">Download Paid Receipt</button></td>
+        <td>${refundChip}<br><small class="pay-muted">Refunded ${mrpspMoney(bill?.refundedAmount||0)} | Left ${mrpspMoney(bill?.remainingAmount||0)}</small></td>
+        <td>${refundBillButtons}</td>
         ${isAdmin?`<td>${action||"—"}</td>`:""}
       </tr>`;
     }).join("");
     if(isAdmin && header && !header.querySelector('[data-cancel-column="1"]')){const th=document.createElement("th");th.textContent="CANCELLATION";th.dataset.cancelColumn="1";header.appendChild(th);}
   }
+};
+
+window.mrpspDownloadRefundReceipt=function(refundKey){
+  const d=window.mrpspCurrentReceipt;
+  const r=(d?.refunds||[]).find(x=>x.key===refundKey);
+  if(!r)return alert("Refund bill not found in the current statement.");
+  if(r.status!=="CLOSED")return alert("A refund bill is available only after the refund case is closed.");
+  const bill=(d.bills||[]).find(b=>b.key===r.paymentKey || b.billNo===r.billNo);
+  const receiptNo="MRPSP-REF-"+String(r.key).slice(-10).toUpperCase();
+  const w=window.open("","_blank","width=850,height=700");
+  if(!w)return alert("Your browser blocked the refund bill window. Allow pop-ups and try again.");
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Refund Bill ${mrpspBillEscape(receiptNo)}</title><style>body{font-family:Arial,sans-serif;color:#172033;padding:28px}h1{color:#17365d;font-size:20px}table{width:100%;border-collapse:collapse;margin-top:18px}td{border:1px solid #d8dee8;padding:10px}.amt{font-size:22px;font-weight:800;color:#15803d}@page{size:A4;margin:15mm}</style></head><body><h1>METRO RAILWAY PLATFORM SAFETY PROJECT</h1><h2>STUDENT REFUND BILL</h2><p><b>Refund Receipt:</b> ${mrpspBillEscape(receiptNo)}<br><b>Student:</b> ${mrpspBillEscape(d.studentName)}<br><b>Student ID:</b> ${mrpspBillEscape(d.uid)}<br><b>Refund Date:</b> ${mrpspBillEscape(mrpspDate(r.closedAt||r.createdAt))}</p><table><tr><td><b>Original Bill No.</b></td><td>${mrpspBillEscape(r.billNo||"LEGACY / NOT LINKED")}</td></tr><tr><td><b>Original Bill Amount</b></td><td>${mrpspBillEscape(mrpspMoney(r.originalBillAmount||bill?.billAmount||0))}</td></tr><tr><td><b>Refund Type</b></td><td>${mrpspBillEscape(r.refundType||"REFUND")}</td></tr><tr><td><b>Refund Method</b></td><td>${mrpspBillEscape(r.mode==="DUE_CLEAR"?"Adjusted against student dues":r.mode==="CREDIT_TO_ACCOUNT"?"Credit to account":"—")}</td></tr><tr><td><b>UTR / Transaction ID</b></td><td>${mrpspBillEscape(r.utr||"Not applicable")}</td></tr><tr><td><b>Remarks</b></td><td>${mrpspBillEscape(r.remarks||"—")}</td></tr></table><p class="amt">REFUNDED: ${mrpspBillEscape(mrpspMoney(r.amount))}</p><p><b>Status:</b> REFUNDED / CLOSED</p><p style="color:#64748b;font-size:11px;margin-top:30px">Computer-generated refund bill. This document confirms the recorded refund transaction or dues adjustment.</p><script>window.onload=function(){setTimeout(function(){window.print()},250)};<\/script></body></html>`);
+  w.document.close();
 };
 
 const _mrpspDownloadReceiptPrevious = window.mrpspDownloadPaidReceipt;
@@ -20353,28 +20417,8 @@ window.mrpspDownloadPaidReceipt=function(requestKey){
     if(startInput&&!startInput.dataset.max25Bound){startInput.addEventListener("change",syncExemptionEndLimit);startInput.dataset.max25Bound="1";}
     syncExemptionEndLimit();
 
-    // Read the complete saved collection directly from the cache so cancelled
-    // records are never lost if a dues-model filter only returns current items.
-    const records=Object.entries(mrpspPaymentCache.exemptions||{}).map(([key,value])=>({key,...(value||{})}));
-    records.sort((a,b)=>Number(b.createdAt||b.periodStartAt||0)-Number(a.createdAt||a.periodStartAt||0));
     list.innerHTML=`<h4>Period-based fixed dues</h4>
-      <p class="pay-muted">Admin may set fixed dues for up to 25 calendar days from the start date. At expiry, the member automatically returns to dynamic dues. The same 25-day cap also applies to previously saved exemption records.</p>
-      <div class="pay-table-wrap"><table><thead><tr><th>Member</th><th>Fixed dues</th><th>Period</th><th>Reason</th><th>Status</th><th>Action</th></tr></thead><tbody>
-      ${records.map(x=>{
-        const state=mrpspExemptionWindow(x,Date.now());
-        const name=x.studentName||mrpspName(model.students.find(s=>s.uid===x.studentUid))||"Member";
-        const period=`${x.periodStartDate||"Earlier"} to ${x.periodEndDate||"Until cancelled"}`;
-        const canCancel=state==="ACTIVE"||state==="SCHEDULED";
-        const statusLabel=state==="ACTIVE"?"ACTIVE":state==="SCHEDULED"?"SCHEDULED":state;
-        const statusClass=state==="ACTIVE"?"ok":state==="CANCELLED"||state==="EXPIRED"?"bad":"warn";
-        return `<tr>
-          <td>${mrpspSafe(name)}</td><td>${mrpspMoney(x.amount)}</td><td>${mrpspSafe(period)}</td>
-          <td>${mrpspSafe(x.reason||"—")}</td>
-          <td><span class="pay-chip ${statusClass}">${statusLabel}</span></td>
-          <td>${canCancel?`<button class="danger" type="button" onclick="window.mrpspCancelDuesExemption('${mrpspSafe(x.key)}')">CANCEL & RECALCULATE</button>`:"—"}</td>
-        </tr>`;
-      }).join("")||'<tr><td colspan="6">No period-based fixed dues recorded.</td></tr>'}
-      </tbody></table></div>`;
+      <p class="pay-muted">Admin may set fixed dues for up to 25 calendar days from the start date. At expiry, the member automatically returns to dynamic dues. The same 25-day cap also applies to previously saved exemption records.</p>`;
 
     table.innerHTML=`<table><thead><tr><th>Member</th><th>Current dues</th><th>Verified paid</th><th>Outstanding</th><th>Calculation</th></tr></thead><tbody>
       ${model.rows.map(s=>`<tr>
